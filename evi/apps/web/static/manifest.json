@@ -1,0 +1,18 @@
+{
+  "name": "Evi",
+  "short_name": "Evi",
+  "description": "Local-first personal AI assistant.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1419",
+  "theme_color": "#6cb6ff",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%230f1419'/><text x='50%' y='58%' text-anchor='middle' font-family='-apple-system,Segoe UI,system-ui' font-size='34' font-weight='700' fill='%236cb6ff'>e</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

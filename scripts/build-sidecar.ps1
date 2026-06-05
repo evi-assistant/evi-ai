@@ -1,0 +1,50 @@
+# Freeze the Evi web server into a single `evi-server.exe` (the desktop
+# "sidecar") with PyInstaller, then stage it for the Tauri bundle.
+#
+# MUST be run on Windows to produce a Windows sidecar — PyInstaller does not
+# cross-compile. See docs/desktop-bundling.md.
+#
+# Prereqs (in your venv):
+#   pip install -e '.[web]' pyinstaller
+$ErrorActionPreference = "Stop"
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = (Resolve-Path "$here\..").Path
+$py = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
+
+# Practical tier: bundle web + pdf + index. STT + computer-use stay opt-in
+# via a system Python. OCR works via a bundled tesseract binary.
+Write-Host ">> ensuring practical extras are installed in the build venv"
+& $py -m pip install -q -e "$root[web,pdf,index]"
+
+# --onedir (NOT --onefile): a folder with evi-server.exe + _internal/. It
+# launches near-instantly (no per-launch self-extraction), at the cost of
+# being a directory. Tauri bundles the whole folder via bundle.resources;
+# main.rs resolves evi-server.exe from the resource dir.
+Write-Host ">> PyInstaller build (--onedir; web + pdf + index)"
+& $py -m PyInstaller `
+    --onedir `
+    --noconfirm `
+    --name evi-server `
+    --collect-submodules evi `
+    --collect-data evi `
+    --collect-submodules uvicorn `
+    --collect-submodules fastapi `
+    --collect-all pymupdf `
+    --collect-all numpy `
+    --hidden-import fitz `
+    --hidden-import uvicorn.protocols.http.auto `
+    --hidden-import uvicorn.protocols.websockets.auto `
+    --hidden-import uvicorn.lifespan.on `
+    --distpath "$root\dist" `
+    --workpath "$root\build\pyinstaller" `
+    --specpath "$root\build" `
+    "$root\scripts\sidecar_entry.py"
+
+# Stage the whole onedir folder for the Tauri resources bundle.
+$src = "$root\dist\evi-server"
+$dst = "$root\desktop\src-tauri\binaries\evi-server"
+if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+Copy-Item $src $dst -Recurse -Force
+Write-Host ">> staged onedir: $dst"
+Write-Host ">> now build the app:  cd desktop; npm run tauri build -- --config src-tauri\tauri.standalone.conf.json"

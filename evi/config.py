@@ -1,0 +1,289 @@
+"""Configuration loading and paths.
+
+Config lives at %USERPROFILE%/.evi/config.toml. First run writes defaults.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Any
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover
+    import tomli as tomllib
+
+
+def _home_dir() -> Path:
+    return Path(os.environ.get("EVI_HOME") or (Path.home() / ".evi"))
+
+
+HOME = _home_dir()
+CONFIG_PATH = HOME / "config.toml"
+TOKEN_DIR = HOME / "tokens"
+IMAGE_DIR = HOME / "images"
+LOG_DIR = HOME / "logs"
+MCP_CONFIG_PATH = HOME / "mcp.json"
+SKILL_DIR = HOME / "skills"
+SCHEDULED_DIR = HOME / "scheduled"
+SCHEDULED_LOG_DIR = LOG_DIR / "scheduled"
+HOOKS_CONFIG_PATH = HOME / "hooks.toml"
+TRANSCRIPTS_DIR = HOME / "transcripts"
+DREAM_LOG_DIR = LOG_DIR / "dreams"
+SCREENSHOT_DIR = HOME / "screenshots"
+UPLOADS_DIR = HOME / "uploads"
+
+
+@dataclass
+class LLMSettings:
+    backend: str = "lmstudio"   # lmstudio | ollama | llamacpp | openai_compat
+    base_url: str = "http://localhost:1234/v1"
+    api_key: str = "lm-studio"  # LM Studio ignores this but the SDK requires a value
+    model: str = "qwen2.5-7b-instruct"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    request_timeout: float = 120.0
+    # Conversation grows boundless without compaction. When non-zero, the
+    # Agent summarises oldest turns into a single system note once the
+    # in-memory history exceeds this many messages. 0 = disabled.
+    compact_after_messages: int = 40
+    compact_keep_recent: int = 10  # leave this many turns un-summarised
+    # Approximate token ceiling for the active model. Used for the
+    # "X / Y" usage display and as the trigger for pre-emptive compaction
+    # at `compact_when_pct` capacity. 0 = unknown.
+    context_size: int = 32768
+    compact_when_pct: int = 85  # compact when usage exceeds this % of context
+    # Embeddings used for semantic file search. Default values are
+    # Ollama's stock; LM Studio users should override.
+    embed_model: str = "nomic-embed-text"
+    embed_dimensions: int = 768
+    # Reasoning effort knob, mirroring the OpenAI o-series + many local
+    # reasoning models (DeepSeek-R1, Qwen3 with `enable_thinking`, …). One
+    # of "low" | "medium" | "high" | "max". Passed via `extra_body` so
+    # backends that ignore it just drop it on the floor.
+    reasoning_effort: str = "medium"
+    # Fast mode — when on, swap to `fast_model` if set. Common pattern:
+    # main model is a 14B for daily work, fast_model is a 3B-7B for
+    # boilerplate. Empty fast_model = fast_mode is a no-op.
+    fast_mode: bool = False
+    fast_model: str = ""
+    # Sampling knobs. Defaults match OpenAI's "no-op" values; agent code
+    # only forwards them when they deviate.
+    top_p: float = 1.0
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
+    # 0 = unset; non-zero seeds the backend's RNG for reproducible runs.
+    seed: int = 0
+    # Optional hard-stop generation tokens. Empty list = no override.
+    stop_sequences: list[str] = field(default_factory=list)
+    # When False, the model may only request ONE tool per assistant turn
+    # (OpenAI `parallel_tool_calls=false`). Default True = let the model
+    # batch independent calls. Only forwarded when False AND tools are in
+    # play, so local backends that don't speak the flag never see it.
+    parallel_tool_calls: bool = True
+    # Reasoning models (o-series, some local R1 builds) reject `max_tokens`
+    # and want `max_completion_tokens` instead — it counts hidden reasoning
+    # tokens plus visible output. 0 = unset; when >0 we send THIS instead of
+    # max_tokens. Leave 0 for ordinary chat models.
+    max_completion_tokens: int = 0
+    # Token-id bias map as a JSON string (our flat TOML writer can't nest a
+    # dict). Shape: '{"123": -100, "456": 5}'. Values clamp to [-100, 100].
+    # Empty = no bias. You need the model's tokenizer to find ids, so this
+    # is mostly for programmatic / power use.
+    logit_bias: str = ""
+    # KV-cache prompt reuse hint. llama.cpp's server honours a `cache_prompt`
+    # request field to keep the shared prefix warm across turns; other
+    # backends ignore the unknown key. We forward it via extra_body when
+    # True. vLLM does the same thing server-side via --enable-prefix-caching.
+    cache_prompt: bool = False
+    # Per-token log probabilities. When `logprobs` is True we ask the backend
+    # for them and surface a confidence summary. `top_logprobs` (0-20) also
+    # requests the N most-likely alternates per position. Off by default —
+    # adds response weight and not every backend supports it.
+    logprobs: bool = False
+    top_logprobs: int = 0
+    # Multi-model routing — see evi/routing.py. When `router_enabled` is
+    # true, each user turn is matched against routes in `~/.evi/routes.json`
+    # and may swap `model` for that turn. `router_model` is an optional
+    # tiny classifier used when no keyword rule matches; empty disables
+    # the LLM fallback (keyword-only routing).
+    router_enabled: bool = False
+    router_model: str = ""
+
+
+@dataclass
+class ComfySettings:
+    base_url: str = "http://localhost:8188"
+    default_checkpoint: str = "sd_xl_base_1.0.safetensors"
+    default_steps: int = 25
+    default_width: int = 1024
+    default_height: int = 1024
+
+
+@dataclass
+class ObsidianSettings:
+    """Optional Obsidian-vault sync target. Empty `vault_path` = disabled."""
+
+    vault_path: str = ""
+    subdir: str = "Evi"
+
+
+@dataclass
+class GoogleSettings:
+    client_secrets_path: str = ""  # path to OAuth desktop client JSON
+    scopes: list[str] = field(
+        default_factory=lambda: ["https://www.googleapis.com/auth/gmail.readonly"]
+    )
+
+
+@dataclass
+class MicrosoftSettings:
+    client_id: str = ""
+    tenant_id: str = "common"
+    scopes: list[str] = field(default_factory=lambda: ["Mail.Read", "User.Read"])
+
+
+@dataclass
+class WebSettings:
+    """Web frontend security + behaviour.
+
+    `auth_token` empty disables auth entirely (current behaviour — open
+    access, fine for localhost-only). When set, every `/api/*` route
+    requires either an `Authorization: Bearer <token>` header OR a
+    `?token=<token>` query parameter (the latter is needed for `<img>`
+    src and streaming endpoints that can't carry custom headers).
+
+    Generate a token with `evi web token rotate`.
+    """
+
+    auth_token: str = ""
+
+
+@dataclass
+class ToolToggles:
+    fs: bool = True
+    code: bool = True
+    shell: bool = False
+    gmail: bool = False
+    outlook: bool = False
+    image: bool = False
+    memory: bool = True
+    subagent: bool = False
+    mcp: bool = False
+    skills: bool = True
+    web: bool = False        # network access — opt in
+    voice: bool = False      # local TTS — opt in
+    computer: bool = False   # mouse/keyboard control — never default
+    transcripts: bool = True # write session logs to ~/.evi/transcripts/
+    pdf: bool = False        # local PDF extraction
+    sqlite: bool = False     # read-only SQLite queries
+    index: bool = False      # semantic project search (needs embed model)
+    git: bool = False        # git read-only inspection tools
+    ocr: bool = False        # tesseract OCR — needs the binary installed
+    calendar: bool = False   # iCal / CalDAV calendar reading
+
+
+@dataclass
+class AutoSettings:
+    """Permission policy. Categories listed here run without prompting.
+
+    `subagent` and `shell` deliberately default to NOT auto-approved — they
+    spawn things you may want to see before they happen.
+    """
+
+    auto_approve: list[str] = field(
+        default_factory=lambda: ["fs", "code", "memory", "skills", "image"]
+    )
+
+
+@dataclass
+class Config:
+    llm: LLMSettings = field(default_factory=LLMSettings)
+    comfy: ComfySettings = field(default_factory=ComfySettings)
+    google: GoogleSettings = field(default_factory=GoogleSettings)
+    microsoft: MicrosoftSettings = field(default_factory=MicrosoftSettings)
+    obsidian: ObsidianSettings = field(default_factory=ObsidianSettings)
+    tools: ToolToggles = field(default_factory=ToolToggles)
+    auto: AutoSettings = field(default_factory=AutoSettings)
+    web: WebSettings = field(default_factory=WebSettings)
+
+    @classmethod
+    def load(cls) -> "Config":
+        if not CONFIG_PATH.exists():
+            cfg = cls()
+            cfg.save()
+            return cfg
+        with CONFIG_PATH.open("rb") as f:
+            data = tomllib.load(f)
+        # Profile overlay (cheap when none active — returns {}).
+        # Imported lazily to avoid the circular import at module load.
+        from evi.profiles import load_profile_overlay, merge_overlay
+
+        overlay = load_profile_overlay()
+        if overlay:
+            data = merge_overlay(data, overlay)
+        return cls(
+            llm=LLMSettings(**data.get("llm", {})),
+            comfy=ComfySettings(**data.get("comfy", {})),
+            google=GoogleSettings(**data.get("google", {})),
+            microsoft=MicrosoftSettings(**data.get("microsoft", {})),
+            obsidian=ObsidianSettings(**data.get("obsidian", {})),
+            tools=ToolToggles(**data.get("tools", {})),
+            auto=AutoSettings(**data.get("auto", {})),
+            web=WebSettings(**data.get("web", {})),
+        )
+
+    def save(self) -> None:
+        ensure_dirs()
+        CONFIG_PATH.write_text(_to_toml(asdict(self)), encoding="utf-8")
+
+
+MODELS_DIR = HOME / "models"
+PROFILES_DIR = HOME / "profiles"
+COMMANDS_DIR = HOME / "commands"
+INDICES_DIR = HOME / "indices"
+
+
+def ensure_dirs() -> None:
+    for d in (
+        HOME,
+        TOKEN_DIR,
+        IMAGE_DIR,
+        LOG_DIR,
+        SKILL_DIR,
+        SCHEDULED_DIR,
+        SCHEDULED_LOG_DIR,
+        MODELS_DIR,
+        PROFILES_DIR,
+        COMMANDS_DIR,
+        TRANSCRIPTS_DIR,
+        DREAM_LOG_DIR,
+        SCREENSHOT_DIR,
+        UPLOADS_DIR,
+        INDICES_DIR,
+    ):
+        d.mkdir(parents=True, exist_ok=True)
+
+
+def _to_toml(d: dict[str, Any]) -> str:
+    """Minimal TOML writer for our flat-section config (no nested tables)."""
+    lines: list[str] = []
+    for section, body in d.items():
+        lines.append(f"[{section}]")
+        for k, v in body.items():
+            lines.append(f"{k} = {_fmt(v)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _fmt(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_fmt(x) for x in v) + "]"
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'

@@ -1,0 +1,1650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%230f1419'/><text x='50%25' y='58%25' text-anchor='middle' font-family='system-ui' font-size='34' font-weight='700' fill='%236cb6ff'>e</text></svg>">
+<title>Evi</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+<script type="module">
+  // Markdown + syntax highlighting + Mermaid. Each load is independent —
+  // if a CDN is unreachable we degrade gracefully (raw text).
+  async function safeImport(url) {
+    try { return await import(url); } catch (e) { console.warn('cdn load failed:', url, e); return null; }
+  }
+  const [markedMod, hljsMod, mermaidMod] = await Promise.all([
+    safeImport('https://cdn.jsdelivr.net/npm/marked@14/lib/marked.esm.js'),
+    safeImport('https://cdn.jsdelivr.net/npm/highlight.js@11/es/index.js'),
+    safeImport('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs'),
+  ]);
+  if (markedMod) {
+    window.marked = markedMod;
+    window.marked.setOptions({
+      breaks: true,        // single newline → <br> (matches chat-style writing)
+      gfm: true,           // tables, strikethrough, task lists
+      headerIds: false,    // we don't want anchor links inside chat
+    });
+  }
+  if (hljsMod) {
+    window.hljs = hljsMod.default;
+  }
+  if (mermaidMod) {
+    window.mermaid = mermaidMod.default;
+    window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+  }
+</script>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161b22;
+    --border: #2a3038;
+    --fg: #d8dee9;
+    --dim: #7a8694;
+    --accent: #6cb6ff;
+    --user: #8ddb8d;
+    --tool: #e0af68;
+    --system: #b48ead;
+    --err: #f47174;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 16px; color: var(--accent); }
+  header .meta { color: var(--dim); font-size: 12px; }
+  header .chip {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 2px 8px; font-size: 11px; color: var(--dim);
+  }
+  header .chip.active { color: var(--accent); border-color: var(--accent); }
+  header button {
+    margin-left: auto; background: transparent; color: var(--dim);
+    border: 1px solid var(--border); padding: 4px 10px; border-radius: 4px;
+    cursor: pointer; font: inherit;
+  }
+  header button:hover { color: var(--fg); border-color: var(--fg); }
+  /* Tab bar — one row of conversation tabs above the chat log. */
+  .tabs {
+    display: flex; align-items: stretch; gap: 2px;
+    padding: 4px 10px 0; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto; white-space: nowrap;
+  }
+  .tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px 6px 12px; background: var(--panel);
+    border: 1px solid var(--border); border-bottom: none;
+    border-top-left-radius: 4px; border-top-right-radius: 4px;
+    color: var(--dim); cursor: pointer; font-size: 12px;
+    max-width: 200px;
+  }
+  .tab.active { color: var(--fg); background: var(--bg); border-color: var(--accent); }
+  .tab .label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 160px;
+  }
+  .tab .close {
+    background: transparent; border: none; color: var(--dim);
+    cursor: pointer; padding: 0 2px; font: inherit; font-size: 12px;
+    border-radius: 2px;
+  }
+  .tab .close:hover { color: var(--err); background: rgba(244,113,116,0.08); }
+  .tab.new-tab {
+    color: var(--accent); border-color: var(--border);
+    padding: 6px 10px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .tab.new-tab:hover { color: var(--fg); }
+
+  #log {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 90%; padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: #1f2a1f; border: 1px solid #2f4530; color: var(--user); }
+  .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+  /* Markdown inside assistant + system bubbles. Tight spacing — chat
+     bubbles aren't documents. */
+  .msg.assistant .md p,
+  .msg.system .md p { margin: 0.3em 0; }
+  .msg.assistant .md p:first-child,
+  .msg.system .md p:first-child { margin-top: 0; }
+  .msg.assistant .md p:last-child,
+  .msg.system .md p:last-child { margin-bottom: 0; }
+  .msg.assistant .md h1, .msg.system .md h1 { font-size: 17px; margin: 0.6em 0 0.3em; }
+  .msg.assistant .md h2, .msg.system .md h2 { font-size: 15px; margin: 0.5em 0 0.3em; }
+  .msg.assistant .md h3, .msg.system .md h3 { font-size: 14px; margin: 0.4em 0 0.2em; }
+  .msg.assistant .md ul, .msg.assistant .md ol,
+  .msg.system .md ul, .msg.system .md ol { margin: 0.3em 0; padding-left: 24px; }
+  .msg.assistant .md li, .msg.system .md li { margin: 0.15em 0; }
+  .msg.assistant .md a, .msg.system .md a { color: var(--accent); }
+  .msg.assistant .md blockquote, .msg.system .md blockquote {
+    border-left: 3px solid var(--border); padding-left: 10px;
+    margin: 0.4em 0; color: var(--dim);
+  }
+  .msg.assistant .md code, .msg.system .md code {
+    background: #0b0f15; padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .msg.assistant .md pre, .msg.system .md pre {
+    background: #0b0f15; padding: 8px 10px; border-radius: 4px;
+    overflow-x: auto; margin: 0.4em 0;
+  }
+  .msg.assistant .md pre code, .msg.system .md pre code {
+    background: transparent; padding: 0; font-size: 12px;
+  }
+  .msg.assistant .md table, .msg.system .md table {
+    border-collapse: collapse; margin: 0.4em 0;
+  }
+  .msg.assistant .md th, .msg.assistant .md td,
+  .msg.system .md th, .msg.system .md td {
+    border: 1px solid var(--border); padding: 4px 8px; font-size: 13px;
+  }
+  .msg.assistant .md th, .msg.system .md th { background: rgba(108,182,255,0.08); }
+  .msg.tool { align-self: flex-start; background: #2a2418; border: 1px solid #4a3f24; color: var(--tool); font-family: ui-monospace, monospace; font-size: 12px; }
+  .msg.tool .truncated-body { white-space: pre-wrap; }
+  .msg.tool .show-toggle {
+    background: transparent; border: none; color: var(--accent);
+    cursor: pointer; font: inherit; font-size: 11px; padding: 2px 0;
+    margin-top: 4px;
+  }
+  .msg.tool .show-toggle:hover { text-decoration: underline; }
+  .msg.system { align-self: stretch; background: #1f1c25; border: 1px solid #3a3245; color: var(--system); }
+  .msg.thinking {
+    align-self: flex-start; background: #1a1c20; border: 1px dashed var(--border);
+    color: var(--dim); font-size: 12px; font-style: italic; max-width: 90%;
+  }
+  .msg.thinking summary { cursor: pointer; user-select: none; color: var(--dim); }
+  .msg.thinking summary:hover { color: var(--fg); }
+  .msg.thinking .think-body { white-space: pre-wrap; margin-top: 6px; }
+  .msg.system code { background: #2a2530; padding: 0 4px; border-radius: 3px; }
+  .msg.error { align-self: stretch; background: #2a1818; border: 1px solid #4a2424; color: var(--err); }
+  .msg img { max-width: 100%; border-radius: 4px; margin-top: 6px; display: block; }
+  form {
+    display: flex; gap: 8px; padding: 12px 16px;
+    border-top: 1px solid var(--border); background: var(--panel);
+  }
+  textarea {
+    flex: 1; resize: none; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px;
+    font: inherit; min-height: 38px; max-height: 200px;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  button[type=submit] {
+    background: var(--accent); color: #0f1419; border: none;
+    padding: 0 16px; border-radius: 4px; cursor: pointer;
+    font: inherit; font-weight: 600;
+  }
+  button[type=submit]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Upload chip */
+  .upload-chip {
+    align-self: flex-start; padding: 4px 8px;
+    background: #1f2530; border: 1px solid var(--border);
+    border-radius: 4px; font-size: 12px; color: var(--dim);
+  }
+  .upload-chip code { color: var(--accent); }
+  /* Drop zone overlay */
+  .drop-overlay {
+    position: fixed; inset: 0;
+    background: rgba(108, 182, 255, 0.12);
+    border: 3px dashed var(--accent);
+    display: none; align-items: center; justify-content: center;
+    font-size: 22px; color: var(--accent); pointer-events: none; z-index: 5;
+  }
+  .drop-overlay.active { display: flex; }
+  .attach-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--dim); padding: 0 10px; border-radius: 4px;
+    cursor: pointer; font: inherit;
+  }
+  .attach-btn:hover { color: var(--fg); border-color: var(--fg); }
+
+  /* Hover toolbar on each chat bubble (edit / re-roll / branch / delete) */
+  .msg { position: relative; }
+  .msg-actions {
+    position: absolute; top: -10px; right: 6px;
+    display: none; gap: 2px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 2px;
+  }
+  .msg:hover > .msg-actions { display: flex; }
+  .msg-actions button {
+    background: transparent; border: none; color: var(--dim);
+    cursor: pointer; padding: 2px 6px; font: inherit; font-size: 11px;
+    border-radius: 3px;
+  }
+  .msg-actions button:hover { color: var(--accent); background: rgba(108,182,255,0.1); }
+  .msg-edit {
+    width: 100%; min-height: 60px; resize: vertical;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 6px 8px;
+    font: inherit;
+  }
+  .msg-edit-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+  .msg-edit-row button {
+    background: var(--accent); color: #0f1419; border: none;
+    padding: 4px 10px; border-radius: 4px; cursor: pointer; font: inherit;
+  }
+  .msg-edit-row button.cancel {
+    background: transparent; color: var(--dim); border: 1px solid var(--border);
+  }
+
+  /* Footer status bar (model · effort · fast) */
+  .footer-bar {
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 4px 16px 0; gap: 6px; font-size: 12px; color: var(--dim);
+  }
+  .model-btn {
+    background: var(--panel); border: 1px solid var(--border);
+    color: var(--fg); padding: 4px 10px; border-radius: 4px;
+    cursor: pointer; font: inherit; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .model-btn:hover { border-color: var(--accent); }
+  .model-btn .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); display: inline-block;
+  }
+
+  /* Model picker popup (the screenshot's look) */
+  .picker-overlay {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
+    display: none; align-items: flex-end; justify-content: flex-end; z-index: 20;
+  }
+  .picker-overlay.active { display: flex; }
+  .picker-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 0; margin: 0 16px 60px;
+    min-width: 260px; max-width: 320px; max-height: 70vh; overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .picker-section {
+    padding: 6px 14px; color: var(--dim); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .picker-section .keys { font-size: 10px; color: var(--dim); }
+  .picker-section .keys kbd {
+    background: #11151b; border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 4px; margin-left: 2px; color: var(--dim); font-family: ui-monospace, monospace;
+  }
+  .picker-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 14px; cursor: pointer; gap: 12px;
+    color: var(--fg);
+  }
+  .picker-row:hover { background: rgba(108, 182, 255, 0.08); }
+  .picker-row.selected { color: var(--accent); }
+  .picker-row .name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .picker-row .shortcut { font-size: 11px; color: var(--dim); }
+  .picker-row .check { color: var(--accent); font-size: 12px; }
+  .picker-divider { height: 1px; background: var(--border); margin: 6px 0; }
+  .picker-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; cursor: pointer;
+  }
+  .picker-toggle .switch {
+    width: 28px; height: 16px; border-radius: 8px;
+    background: #2a3038; position: relative; transition: background 0.15s;
+  }
+  .picker-toggle .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--dim);
+    transition: left 0.15s, background 0.15s;
+  }
+  .picker-toggle.on .switch { background: var(--accent); }
+  .picker-toggle.on .switch::after { left: 14px; background: #0f1419; }
+
+  /* Responsive / mobile */
+  @media (max-width: 640px) {
+    header { padding: 8px 12px; gap: 8px; }
+    header h1 { font-size: 14px; }
+    header .meta, header .chip { display: none; }
+    /* Keep the model chip + usage chip; hide minor decorations. */
+    header #chip-usage, header #chip-goal { display: inline-block; }
+    #log { padding: 10px; gap: 8px; }
+    .msg { max-width: 95%; font-size: 14px; }
+    form { padding: 8px 10px; gap: 6px; }
+    textarea { font-size: 16px; padding: 10px; }  /* 16px prevents iOS zoom */
+    button[type=submit] { padding: 0 12px; min-width: 60px; }
+    .attach-btn { font-size: 18px; padding: 4px 12px; }
+    /* Hover actions are awkward on touch — show them on tap (focus-within). */
+    .msg-actions { display: flex; opacity: 0.4; }
+    .msg-actions:focus-within, .msg:focus-within > .msg-actions { opacity: 1; }
+    .msg-actions button { padding: 6px 8px; font-size: 13px; }
+    .picker-card { margin: 0 8px 56px; min-width: 0; max-width: 92vw; }
+    .footer-bar { padding: 4px 12px 0; }
+  }
+
+  /* Permission overlay */
+  .perm-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  .perm-card {
+    background: var(--panel); border: 1px solid var(--accent);
+    border-radius: 8px; padding: 18px 20px; max-width: 540px; width: 90%;
+  }
+  .perm-card h3 { margin: 0 0 6px; color: var(--accent); font-size: 15px; }
+  .perm-card .perm-tool { font-family: ui-monospace, monospace; color: var(--tool); }
+  .perm-card .perm-args {
+    font-family: ui-monospace, monospace; font-size: 12px; color: var(--dim);
+    background: var(--bg); padding: 8px 10px; border-radius: 4px;
+    margin: 10px 0; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto;
+  }
+  .perm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .perm-actions button {
+    border: 1px solid var(--border); background: transparent; color: var(--fg);
+    padding: 6px 14px; border-radius: 4px; cursor: pointer; font: inherit;
+  }
+  .perm-actions button.approve { background: var(--user); color: #0f1419; border-color: var(--user); }
+  .perm-actions button.deny { background: var(--err); color: #fff; border-color: var(--err); }
+  /* Login overlay — full-screen modal shown when auth is required and no
+     valid token is in localStorage. */
+  .auth-overlay {
+    position: fixed; inset: 0; background: rgba(15,20,25,0.96);
+    display: none; align-items: center; justify-content: center; z-index: 2000;
+  }
+  .auth-overlay.shown { display: flex; }
+  .auth-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 24px 28px; min-width: 320px; max-width: 90vw;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  }
+  .auth-card h2 { margin: 0 0 8px; font-size: 16px; color: var(--accent); }
+  .auth-card .blurb { color: var(--dim); font-size: 12px; margin-bottom: 16px; }
+  .auth-card input[type=password] {
+    width: 100%; padding: 8px 10px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px; font: inherit;
+  }
+  .auth-card .err { color: var(--err); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .auth-card .actions { margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end; }
+  .auth-card button {
+    padding: 6px 14px; background: var(--accent); color: #0f1419;
+    border: 0; border-radius: 4px; cursor: pointer; font: inherit; font-weight: 600;
+  }
+  .auth-card button:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="auth-overlay" id="auth-overlay">
+  <form class="auth-card" id="auth-form" autocomplete="off">
+    <h2>Sign in to Evi</h2>
+    <div class="blurb">
+      This Evi instance requires an access token. Paste yours below — it stays in
+      your browser's local storage. Generate one with
+      <code>evi web token rotate</code>.
+    </div>
+    <input type="password" id="auth-token" placeholder="Access token" autocomplete="off" required>
+    <div class="err" id="auth-err"></div>
+    <div class="actions">
+      <button type="submit" id="auth-submit">Sign in</button>
+    </div>
+  </form>
+</div>
+<header>
+  <h1>Evi</h1>
+  <span class="meta" id="meta">connecting…</span>
+  <span class="chip" id="chip-usage" style="display:none"></span>
+  <span class="chip" id="chip-goal" style="display:none"></span>
+  <span class="chip" id="chip-plan" style="display:none">plan</span>
+  <span class="chip" id="chip-auto" style="display:none">auto</span>
+  <button id="speak-btn" type="button" title="Auto-speak replies (sentence-by-sentence TTS)">🔇</button>
+  <button id="reset" type="button">Reset</button>
+</header>
+<div class="tabs" id="tabs"></div>
+<div id="backend-banner" style="display:none;margin:10px 16px;padding:12px 14px;border:1px solid #b45309;background:#3b2a16;color:#fde68a;border-radius:8px;font-size:13px;line-height:1.5;"></div>
+<div id="log"></div>
+<form id="form">
+  <button type="button" id="attach" class="attach-btn" title="Attach a file">📎</button>
+  <input type="file" id="file-input" style="display:none">
+  <textarea id="input" placeholder="Talk to Evi… (Enter to send · Shift+Enter for newline · /help for commands · drop a file)" autofocus></textarea>
+  <button type="submit" id="send">Send</button>
+</form>
+<div class="footer-bar">
+  <button type="button" class="model-btn" id="model-btn" title="Switch model (Ctrl+I)">
+    <span class="dot"></span>
+    <span id="model-btn-label">model</span>
+  </button>
+</div>
+<div class="drop-overlay" id="drop-overlay">Drop file to attach</div>
+<div class="picker-overlay" id="picker-overlay">
+  <div class="picker-card" id="picker-card" role="menu" tabindex="-1"></div>
+</div>
+<script>
+// ----- auth -------------------------------------------------------------
+//
+// When `[web] auth_token` is set on the server, every /api request must
+// carry an `Authorization: Bearer <token>` header (or `?token=` query
+// param for streaming / image URLs that can't add headers).
+//
+// We monkeypatch `window.fetch` so the rest of the script (and any
+// future code) doesn't have to know about the token. If a request comes
+// back 401 we clear the cached token and pop the login overlay back up.
+
+const AUTH_KEY = 'evi.authToken';
+function getAuthToken() { return localStorage.getItem(AUTH_KEY) || ''; }
+function setAuthToken(t) { localStorage.setItem(AUTH_KEY, t); }
+function clearAuthToken() { localStorage.removeItem(AUTH_KEY); }
+
+const _origFetch = window.fetch.bind(window);
+window.fetch = async function(input, init) {
+  const url = typeof input === 'string' ? input : (input && input.url) || '';
+  // Only attach the token to same-origin requests so we don't leak it to
+  // CDNs or external APIs.
+  const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(location.origin);
+  if (sameOrigin) {
+    const tok = getAuthToken();
+    if (tok) {
+      init = init || {};
+      const h = new Headers(init.headers || {});
+      if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tok);
+      init.headers = h;
+    }
+  }
+  const resp = await _origFetch(input, init);
+  if (resp.status === 401 && sameOrigin) {
+    clearAuthToken();
+    showAuthOverlay('Session expired. Please sign in again.');
+  }
+  return resp;
+};
+
+// Encodes the auth token as a query param for URLs that need it (img src,
+// EventSource — anything where headers can't be set).
+function authQuery() {
+  const tok = getAuthToken();
+  return tok ? ('token=' + encodeURIComponent(tok)) : '';
+}
+
+function showAuthOverlay(msg) {
+  const ov = document.getElementById('auth-overlay');
+  if (!ov) return;
+  ov.classList.add('shown');
+  const err = document.getElementById('auth-err');
+  if (err) err.textContent = msg || '';
+  const input = document.getElementById('auth-token');
+  if (input) { input.value = ''; input.focus(); }
+}
+function hideAuthOverlay() {
+  const ov = document.getElementById('auth-overlay');
+  if (ov) ov.classList.remove('shown');
+}
+
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const tok = document.getElementById('auth-token').value.trim();
+  if (!tok) return;
+  const btn = document.getElementById('auth-submit');
+  btn.disabled = true;
+  try {
+    const r = await _origFetch('/api/auth/check', {
+      headers: { 'Authorization': 'Bearer ' + tok },
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.ok) {
+        setAuthToken(tok);
+        hideAuthOverlay();
+        // Re-bootstrap the parts of the UI that ran before we had a token.
+        location.reload();
+        return;
+      }
+    }
+    document.getElementById('auth-err').textContent =
+      'Invalid token. Try again or run `evi web token show`.';
+  } catch (err) {
+    document.getElementById('auth-err').textContent =
+      'Server unreachable: ' + (err && err.message || err);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Bootstrap: figure out whether the server requires auth. If yes and the
+// stored token doesn't validate, surface the overlay BEFORE the rest of
+// the script starts firing requests.
+(async function bootstrapAuth() {
+  try {
+    const tok = getAuthToken();
+    const headers = tok ? { 'Authorization': 'Bearer ' + tok } : {};
+    const r = await _origFetch('/api/auth/check', { headers });
+    if (!r.ok) {
+      showAuthOverlay('');
+      return;
+    }
+    const data = await r.json();
+    if (data.required && !data.ok) {
+      showAuthOverlay('');
+    }
+  } catch {
+    // Network errors leave the page in its default state — the chat
+    // bootstrap below will retry and the user can see the connection
+    // error in the meta line.
+  }
+})();
+
+const log = document.getElementById('log');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+const meta = document.getElementById('meta');
+const resetBtn = document.getElementById('reset');
+const chipUsage = document.getElementById('chip-usage');
+const chipGoal = document.getElementById('chip-goal');
+const chipPlan = document.getElementById('chip-plan');
+const chipAuto = document.getElementById('chip-auto');
+
+async function refreshUsage() {
+  try {
+    const r = await fetch(`/api/session/${sessionId}/usage`);
+    if (!r.ok) return;
+    const { used, ceiling } = await r.json();
+    if (!ceiling) { chipUsage.style.display = 'none'; return; }
+    const pct = Math.round((used / ceiling) * 100);
+    const k = n => Math.round(n / 1000) + 'k';
+    chipUsage.textContent = `${k(used)} / ${k(ceiling)} (${pct}%)`;
+    chipUsage.style.display = 'inline-block';
+    chipUsage.classList.toggle('active', pct >= 70);
+    chipUsage.style.color = pct >= 85 ? 'var(--err)' : (pct >= 70 ? 'var(--tool)' : 'var(--dim)');
+  } catch {}
+}
+
+// --- conversation tabs ---------------------------------------------------
+//
+// `tabs` is a list of {id, label}. `activeIdx` is the index of the current
+// tab. All persisted to localStorage so reloads preserve the workspace.
+// `sessionId` is kept in sync with tabs[activeIdx].id so the rest of the
+// script (which still references `sessionId` directly) sees the right id.
+
+const TABS_KEY = 'evi.tabs';
+const ACTIVE_KEY = 'evi.activeIdx';
+
+function loadTabsState() {
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    const idx = parseInt(localStorage.getItem(ACTIVE_KEY) || '0', 10);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || !arr.length) return null;
+    return { tabs: arr, activeIdx: Math.min(Math.max(0, idx), arr.length - 1) };
+  } catch { return null; }
+}
+function saveTabsState() {
+  try {
+    localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+    localStorage.setItem(ACTIVE_KEY, String(activeIdx));
+  } catch {}
+}
+
+const _loaded = loadTabsState();
+let tabs = _loaded ? _loaded.tabs : [{ id: crypto.randomUUID(), label: 'new chat' }];
+let activeIdx = _loaded ? _loaded.activeIdx : 0;
+let sessionId = tabs[activeIdx].id;
+let goalChipText = null;
+let planArmed = false;
+let autoOn = false;
+
+fetch('/api/health').then(r => r.json()).then(d => {
+  meta.textContent = `model=${d.model}`;
+}).catch(() => { meta.textContent = 'offline'; });
+
+// Surface context-window usage. Refresh on connect and after each turn.
+refreshUsage();
+
+// Tracks the history index of the next message bubble we'll create. The
+// server's history[0] is the system prompt; we never render that, so the
+// first bubble we ever create is index 1.
+let nextHistoryIndex = 1;
+
+function addBubble(cls) {
+  const div = document.createElement('div');
+  div.className = `msg ${cls}`;
+  // Only user/assistant/tool bubbles map to real history entries; the
+  // other classes (system, thinking, upload-chip, error) live outside the
+  // history-edit model.
+  if (cls === 'user' || cls === 'assistant' || cls === 'tool') {
+    div.dataset.index = String(nextHistoryIndex);
+    nextHistoryIndex += 1;
+    attachMessageActions(div, cls);
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function attachMessageActions(bubble, cls) {
+  const idx = bubble.dataset.index;
+  const actions = document.createElement('div');
+  actions.className = 'msg-actions';
+  // User can edit any role; only assistant gets re-roll.
+  const buttons = [
+    { label: '✏️', title: 'Edit', action: () => editBubble(bubble) },
+  ];
+  if (cls === 'assistant') {
+    buttons.push({ label: '🔄', title: 'Re-roll', action: () => rerollFromBubble() });
+  }
+  buttons.push({ label: '🌿', title: 'Branch', action: () => branchFromBubble(idx) });
+  buttons.push({ label: '🗑', title: 'Delete from here', action: () => truncateFromBubble(idx) });
+  for (const b of buttons) {
+    const btn = document.createElement('button');
+    btn.textContent = b.label;
+    btn.title = b.title;
+    btn.onclick = e => { e.stopPropagation(); b.action(); };
+    actions.appendChild(btn);
+  }
+  bubble.appendChild(actions);
+}
+
+async function rebuildHistory() {
+  try {
+    const r = await fetch(`/api/session/${sessionId}/history`);
+    if (!r.ok) return;
+    const { messages } = await r.json();
+    log.innerHTML = '';
+    nextHistoryIndex = 1;
+    for (const m of messages) {
+      if (m.role === 'system') {
+        nextHistoryIndex = m.index + 1; // skip the system slot
+        continue;
+      }
+      const cls = m.role === 'user' ? 'user'
+                : m.role === 'assistant' ? 'assistant'
+                : m.role === 'tool' ? 'tool'
+                : 'system';
+      // Ensure the bubble's data-index matches the server's index exactly.
+      nextHistoryIndex = m.index;
+      const bubble = addBubble(cls);
+      if (cls === 'tool') {
+        bubble.textContent = `← ${m.name || ''}: ${m.content || ''}`;
+      } else if (cls === 'assistant') {
+        // Assistant messages get full markdown + syntax highlighting.
+        renderMarkdownInto(bubble, m.content || '');
+        if (m.tool_calls) {
+          const note = document.createElement('div');
+          note.style.cssText = 'color:var(--dim);font-size:11px;margin-top:4px';
+          note.textContent = `(emitted ${m.tool_calls.length} tool call${m.tool_calls.length > 1 ? 's' : ''})`;
+          bubble.appendChild(note);
+        }
+      } else {
+        // User messages stay as plain text — they're what you typed.
+        bubble.textContent = m.content || '';
+      }
+    }
+  } catch (err) { console.error('history rebuild failed', err); }
+}
+
+function editBubble(bubble) {
+  const idx = parseInt(bubble.dataset.index, 10);
+  // Prefer the raw markdown source when we rendered it; fall back to
+  // textContent for tool / user bubbles that we never markdown-rendered.
+  const original = bubble.dataset.source || bubble.textContent;
+  let body = original;
+  if (bubble.classList.contains('tool')) {
+    body = body.replace(/^← [^:]+: /, '');
+  }
+  // Replace bubble children with a textarea + save/cancel.
+  bubble.innerHTML = '';
+  const ta = document.createElement('textarea');
+  ta.className = 'msg-edit';
+  ta.value = body;
+  const row = document.createElement('div');
+  row.className = 'msg-edit-row';
+  const cancel = document.createElement('button');
+  cancel.className = 'cancel'; cancel.textContent = 'Cancel';
+  cancel.onclick = () => rebuildHistory();
+  const save = document.createElement('button');
+  save.textContent = 'Save';
+  save.onclick = async () => {
+    save.disabled = true;
+    const r = await fetch(`/api/session/${sessionId}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ at_index: idx, content: ta.value }),
+    });
+    if (!r.ok) { addBubble('error').textContent = 'edit failed'; rebuildHistory(); return; }
+    // If we just edited a user message, the server truncated everything
+    // after it. Re-roll to regenerate from that point.
+    if (bubble.classList.contains('user')) {
+      await rebuildHistory();
+      await streamReroll();
+    } else {
+      await rebuildHistory();
+    }
+  };
+  row.appendChild(cancel); row.appendChild(save);
+  bubble.appendChild(ta); bubble.appendChild(row);
+  ta.focus();
+}
+
+async function rerollFromBubble() {
+  await streamReroll();
+}
+
+async function streamReroll() {
+  send.disabled = true;
+  let assistant = null;
+  try {
+    const r = await fetch(`/api/session/${sessionId}/reroll`, { method: 'POST' });
+    if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+    // Refresh history so any popped assistant/tool bubbles vanish.
+    await rebuildHistory();
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let done = false;
+    while (!done) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let ev; try { ev = JSON.parse(payload); } catch { continue; }
+          assistant = await handleEvent(ev, assistant);
+          if (ev.kind === 'Done' || ev.kind === 'Error') done = true;
+        }
+      }
+    }
+  } catch (err) {
+    addBubble('error').textContent = `re-roll failed: ${err.message}`;
+  } finally {
+    send.disabled = false;
+    refreshUsage();
+  }
+}
+
+async function branchFromBubble(idx) {
+  const r = await fetch(`/api/session/${sessionId}/branch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ at_index: parseInt(idx, 10) }),
+  });
+  if (!r.ok) { addBubble('error').textContent = 'branch failed'; return; }
+  const { new_session_id } = await r.json();
+  // Open the branch as a NEW tab so the parent conversation stays
+  // accessible. The parent's label is preserved; the branch inherits it
+  // with a "·branch" suffix so they're easy to tell apart.
+  const parentLabel = tabs[activeIdx]?.label || 'chat';
+  tabs.push({ id: new_session_id, label: parentLabel + ' · branch' });
+  activeIdx = tabs.length - 1;
+  sessionId = new_session_id;
+  saveTabsState();
+  renderTabs();
+  await rebuildHistory();
+}
+
+async function truncateFromBubble(idx) {
+  if (!confirm('Delete this and every message after it?')) return;
+  const r = await fetch(`/api/session/${sessionId}/truncate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ after_index: parseInt(idx, 10) - 1 }),
+  });
+  if (!r.ok) { addBubble('error').textContent = 'truncate failed'; return; }
+  await rebuildHistory();
+}
+
+// Render a tool result with a "show more" toggle when output is long.
+// Threshold matches what the model sees in the conversation history.
+const TOOL_PREVIEW_CHARS = 400;
+function renderToolResult(bubble, name, output, citations) {
+  // Keep label + actions intact while we swap the body.
+  bubble.innerHTML = '';
+  const label = document.createElement('div');
+  label.innerHTML = `← <strong>${escapeHtml(name)}</strong>:`;
+  bubble.appendChild(label);
+  const body = document.createElement('div');
+  body.className = 'truncated-body';
+  bubble.appendChild(body);
+  const isLong = output.length > TOOL_PREVIEW_CHARS;
+  let expanded = false;
+  function paint() {
+    body.textContent = (!isLong || expanded)
+      ? output
+      : output.slice(0, TOOL_PREVIEW_CHARS) + '…';
+  }
+  paint();
+  if (isLong) {
+    const toggle = document.createElement('button');
+    toggle.className = 'show-toggle';
+    toggle.textContent = `show full (${output.length.toLocaleString()} chars)`;
+    toggle.onclick = e => {
+      e.stopPropagation();
+      expanded = !expanded;
+      toggle.textContent = expanded ? 'collapse' : `show full (${output.length.toLocaleString()} chars)`;
+      paint();
+    };
+    bubble.appendChild(toggle);
+  }
+  // Citations footer — one chip per source.
+  if (Array.isArray(citations) && citations.length) {
+    const sources = document.createElement('div');
+    sources.className = 'citations';
+    sources.style.cssText =
+      'margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px;';
+    for (const c of citations) {
+      const chip = document.createElement('span');
+      const range = (c.start || c.end)
+        ? `:${c.start || ''}${c.end ? '-' + c.end : ''}`
+        : '';
+      const sid = c.source_id || '(source)';
+      chip.textContent = `[${c.id}] ${sid}${range}`;
+      chip.title = c.excerpt || '';
+      chip.style.cssText =
+        'border: 1px solid var(--border); border-radius: 10px; '
+        + 'padding: 2px 8px; color: var(--dim); cursor: default;';
+      sources.appendChild(chip);
+    }
+    bubble.appendChild(sources);
+  }
+  // Re-attach the hover toolbar (innerHTML wipe).
+  attachMessageActions(bubble, 'tool');
+}
+
+// Try to surface image paths produced by the generate_image tool.
+function maybeRenderImages(bubble, output) {
+  let data;
+  try { data = JSON.parse(output); } catch { return; }
+  const paths = data && data.paths;
+  if (!Array.isArray(paths)) return;
+  for (const p of paths) {
+    const name = p.split(/[\\/]/).pop();
+    const img = document.createElement('img');
+    img.src = `/images/${encodeURIComponent(name)}`;
+    img.alt = name;
+    bubble.appendChild(img);
+  }
+}
+
+// Render a markdown string into the given bubble. Uses marked.js + hljs
+// when available; falls back to escaped text + minimal substitutions when
+// the CDN didn't load.
+function renderMarkdownInto(bubble, src) {
+  bubble.dataset.source = src;  // preserved for Mermaid scanning + edits
+  let html;
+  if (window.marked) {
+    try {
+      html = window.marked.parse(src);
+    } catch {
+      html = escapeHtml(src);
+    }
+  } else {
+    // Tiny fallback so we still show something legible.
+    html = escapeHtml(src)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+  }
+  // The `.md` wrapper class scopes our spacing CSS to rendered content
+  // (without affecting tool / user / thinking bubbles).
+  bubble.innerHTML = `<div class="md">${html}</div>`;
+  // Syntax-highlight code blocks if highlight.js is available.
+  if (window.hljs) {
+    bubble.querySelectorAll('pre code').forEach(el => {
+      try { window.hljs.highlightElement(el); } catch {}
+    });
+  }
+  // Re-attach the message-action toolbar (innerHTML wiped it).
+  if (bubble.classList.contains('assistant') || bubble.classList.contains('user')
+      || bubble.classList.contains('tool')) {
+    const cls = bubble.classList.contains('user') ? 'user'
+              : bubble.classList.contains('tool') ? 'tool' : 'assistant';
+    attachMessageActions(bubble, cls);
+  }
+}
+
+// Permission overlay: returns a Promise<boolean> for approve / deny.
+function askPermission({ decision_id, tool_name, args, category }) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'perm-overlay';
+    overlay.innerHTML = `
+      <div class="perm-card">
+        <h3>Permission required</h3>
+        <p>The agent wants to run:</p>
+        <p><span class="perm-tool">${tool_name}</span>
+           <span style="color:var(--dim)">(${category})</span></p>
+        <div class="perm-args">${args.replace(/</g,'&lt;')}</div>
+        <div class="perm-actions">
+          <button class="deny">Deny</button>
+          <button class="approve">Approve</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.approve').onclick = () => { cleanup(); resolve(true); };
+    overlay.querySelector('.deny').onclick = () => { cleanup(); resolve(false); };
+    function cleanup() { overlay.remove(); }
+  });
+}
+
+async function postDecision(decision_id, approved) {
+  await fetch('/api/decide', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, decision_id, approved }),
+  });
+}
+
+function trackChipState(text) {
+  // Cheaply parse SystemMessage outputs from slash commands so chips reflect state.
+  const lower = text.toLowerCase();
+  if (lower.startsWith('goal set:')) {
+    goalChipText = text.replace(/^goal set:\s*/i, '').replace(/\*\*/g, '');
+    chipGoal.textContent = `goal: ${goalChipText.slice(0, 40)}${goalChipText.length > 40 ? '…' : ''}`;
+    chipGoal.classList.add('active');
+    chipGoal.style.display = 'inline-block';
+  } else if (lower === 'goal cleared') {
+    goalChipText = null;
+    chipGoal.style.display = 'none';
+  } else if (lower.includes('plan-only mode enabled')) {
+    planArmed = true;
+    chipPlan.classList.add('active');
+    chipPlan.style.display = 'inline-block';
+  } else if (lower.includes('auto mode on')) {
+    autoOn = true;
+    chipAuto.classList.add('active');
+    chipAuto.style.display = 'inline-block';
+  } else if (lower.startsWith('auto mode off')) {
+    autoOn = false;
+    chipAuto.style.display = 'none';
+  }
+}
+
+// ---- LLM backend availability ------------------------------------------
+var backendStatus = null;
+async function checkBackend() {
+  try {
+    const r = await fetch('/api/backend/status');
+    if (!r.ok) return null;
+    backendStatus = await r.json();
+  } catch { return null; }
+  renderBackendBanner(backendStatus);
+  return backendStatus;
+}
+function bkBtn(label, act, kind) {
+  return '<button class="bk-btn" data-act="' + act + '" data-kind="' + (kind||'') +
+    '" style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px">' +
+    label + '</button>';
+}
+function renderBackendBanner(st) {
+  const el = document.getElementById('backend-banner');
+  if (!st || st.any_reachable) { el.style.display = 'none'; return; }
+  const cfg = st.configured || {};
+  var html = '<b>⚠ No local LLM backend is running.</b> Evi needs a model server to reply. ' +
+    '<span style="opacity:.8">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>' +
+    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">';
+  html += st.ollama_installed ? bkBtn('Start Ollama', 'start', 'ollama')
+                              : bkBtn('Install Ollama', 'install', 'ollama');
+  html += bkBtn('Recheck', 'recheck');
+  html += '</div><div style="margin-top:6px;opacity:.75">Using LM Studio? Open it, load a model, ' +
+    'then Developer → Start Server (port 1234), and click Recheck.</div>';
+  el.innerHTML = html;
+  el.style.display = 'block';
+  el.querySelectorAll('.bk-btn').forEach(function (b) { b.onclick = onBackendAction; });
+}
+async function onBackendAction(e) {
+  const btn = e.currentTarget;
+  const act = btn.getAttribute('data-act');
+  const kind = btn.getAttribute('data-kind') || 'ollama';
+  if (act === 'recheck') { btn.textContent = 'Checking…'; await checkBackend(); return; }
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    if (act === 'start') {
+      await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
+      for (var i = 0; i < 10; i++) {
+        await new Promise(function (r) { setTimeout(r, 1200); });
+        const st = await checkBackend();
+        if (st && st.any_reachable) return;
+      }
+    } else if (act === 'install') {
+      await fetch('/api/backend/open-download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
+    }
+  } catch { }
+  await checkBackend();
+}
+
+async function sendMessage(text, images) {
+  // Don't fire a real LLM turn into the void. Slash commands (/help, /reset,
+  // …) are handled without a model, so only gate normal messages.
+  if (!text.startsWith('/')) {
+    const st = await checkBackend();
+    if (st && !st.any_reachable) {
+      input.value = text;  // keep what they typed
+      return;              // the banner (shown by checkBackend) explains how to fix it
+    }
+  }
+  // Auto-label this tab from the first user message we see.
+  if (tabs[activeIdx] && (!tabs[activeIdx].label || tabs[activeIdx].label === 'new chat')) {
+    setTabLabel(text);
+  }
+  // If the user is talking, stop the TTS — they want our attention.
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  addBubble('user').textContent = text;
+  let assistant = null;  // built lazily on first TextDelta
+  send.disabled = true;
+  // The plan badge is one-shot — clear it once a turn starts.
+  if (planArmed && !text.startsWith('/')) {
+    planArmed = false;
+    chipPlan.style.display = 'none';
+  }
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        message: text,
+        images: images && images.length ? images : null,
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let done = false;
+
+    while (!done) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let ev;
+          try { ev = JSON.parse(payload); } catch { continue; }
+          assistant = await handleEvent(ev, assistant);
+          if (ev.kind === 'Done' || ev.kind === 'Error') done = true;
+        }
+      }
+    }
+  } catch (err) {
+    addBubble('error').textContent = `error: ${err.message}`;
+  } finally {
+    send.disabled = false;
+    input.focus();
+    refreshUsage();
+    maybeAutoTitle();
+  }
+}
+
+// After the first complete exchange, ask the server for a nicer LLM-written
+// tab title (replaces the raw-first-message label). Attempted once per tab.
+async function maybeAutoTitle() {
+  const t = tabs[activeIdx];
+  if (!t || t.titled) return;
+  t.titled = true;
+  const sid = sessionId;
+  try {
+    const res = await fetch(`/api/session/${sid}/title`, { method: 'POST' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const title = (data.title || '').trim();
+    if (!title) return;
+    const idx = tabs.findIndex(x => x.id === sid);
+    if (idx >= 0) {
+      tabs[idx].label = title.slice(0, 60);
+      saveTabsState();
+      renderTabs();
+    }
+  } catch { /* best-effort; keep the first-message label */ }
+}
+
+async function handleEvent(ev, assistant) {
+  if (ev.kind === 'ThinkingDelta') {
+    let bubble = log.lastElementChild;
+    if (!bubble || !bubble.classList.contains('thinking') || !bubble.dataset.active) {
+      bubble = addBubble('thinking');
+      bubble.dataset.active = '1';
+      bubble.innerHTML = `<details open><summary>thinking…</summary><div class="think-body"></div></details>`;
+    }
+    bubble.querySelector('.think-body').textContent += ev.text;
+    return assistant;
+  }
+  // Any non-thinking event ends the current thinking block (collapsed by default).
+  const lastBubble = log.lastElementChild;
+  if (lastBubble && lastBubble.classList.contains('thinking') && lastBubble.dataset.active) {
+    delete lastBubble.dataset.active;
+    const details = lastBubble.querySelector('details');
+    if (details) details.open = false;
+  }
+  if (ev.kind === 'TextDelta') {
+    if (!assistant) assistant = addBubble('assistant');
+    const cur = assistant.dataset.source || '';
+    renderMarkdownInto(assistant, cur + ev.text);
+    // Stream completed sentences into the browser's TTS queue.
+    maybeSpeak(assistant);
+  } else if (ev.kind === 'ToolCall') {
+    const b = addBubble('tool');
+    b.textContent = `→ ${ev.name}(${ev.arguments})`;
+    assistant = null;  // next TextDelta starts a fresh bubble
+  } else if (ev.kind === 'ToolResult') {
+    const b = addBubble('tool');
+    renderToolResult(b, ev.name, ev.output, ev.citations || []);
+    maybeRenderImages(b, ev.output);
+  } else if (ev.kind === 'PermissionRequest') {
+    const approved = await askPermission(ev);
+    await postDecision(ev.decision_id, approved);
+  } else if (ev.kind === 'UsageStats') {
+    // Real numbers from the backend — overwrite the approximate chip.
+    const ceiling = pickerState && pickerState.active ? null : null; // keep ceiling untouched
+    chipUsage.textContent = `${ev.total_tokens.toLocaleString()} tokens (prompt ${ev.prompt_tokens.toLocaleString()})`;
+    chipUsage.style.display = 'inline-block';
+  } else if (ev.kind === 'Guardrail') {
+    const bubble = addBubble('system');
+    bubble.style.color = ev.blocked ? '#e05252' : '#d4a017';
+    bubble.textContent = `⚠ guardrail (${ev.direction}): ${ev.message}`;
+  } else if (ev.kind === 'LogProbs') {
+    // Append a small confidence line under the assistant bubble.
+    if (assistant) {
+      const conf = Math.round(Math.exp(ev.avg_logprob) * 100);
+      const color = conf >= 70 ? '#4caf50' : (conf >= 40 ? '#d4a017' : '#e05252');
+      const el = document.createElement('div');
+      el.style.cssText = `font-size:11px;opacity:.7;margin-top:4px;color:${color};`;
+      el.textContent = `confidence ${conf}% avg · ${ev.low_count} low-confidence token(s)`;
+      assistant.appendChild(el);
+    }
+  } else if (ev.kind === 'Done') {
+    // Flush any trailing partial sentence to the TTS queue.
+    flushSpeak(assistant);
+    // Scan the just-completed assistant bubble for ```mermaid blocks
+    // and render them inline.
+    if (assistant && window.mermaid) {
+      // marked.js stripped the fenced blocks into <pre><code> — easier to
+      // scan the raw source we stashed in dataset.source.
+      const text = assistant.dataset.source || assistant.textContent;
+      const re = /```mermaid\n([\s\S]*?)```/g;
+      let m;
+      const blocks = [];
+      while ((m = re.exec(text)) !== null) blocks.push(m[1]);
+      if (blocks.length) {
+        try {
+          for (const src of blocks) {
+            const id = 'mmd-' + Math.random().toString(36).slice(2, 8);
+            const { svg } = await window.mermaid.render(id, src);
+            const container = document.createElement('div');
+            container.innerHTML = svg;
+            container.style.cssText = 'margin-top:8px;background:#0b0f15;border-radius:4px;padding:8px';
+            assistant.appendChild(container);
+          }
+        } catch (err) {
+          // Bad diagram — leave the raw block visible.
+          console.warn('mermaid render failed', err);
+        }
+      }
+    }
+  } else if (ev.kind === 'SystemMessage') {
+    const b = addBubble('system');
+    renderMarkdownInto(b, ev.text);
+    trackChipState(ev.text);
+  } else if (ev.kind === 'Error') {
+    addBubble('error').textContent = ev.message;
+  }
+  log.scrollTop = log.scrollHeight;
+  return assistant;
+}
+
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  let text = input.value.trim();
+  if (!text && !attachedFile) return;
+
+  const images = [];
+  if (attachedFile) {
+    if (attachedIsImage) {
+      // For vision models, send the path via `images` so the backend can
+      // attach the file as a multipart image_url. For non-VL models the
+      // agent gracefully degrades on the server side.
+      images.push(attachedFile);
+      if (!text) text = "What's in this image?";
+    } else {
+      const ref = `\n\n[attached file: ${attachedFile}]`;
+      text = text ? text + ref : `I uploaded a file at ${attachedFile}. Please take a look.`;
+    }
+    attachedFile = null;
+    attachedIsImage = false;
+  }
+  input.value = '';
+  sendMessage(text, images);
+});
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+// --- tab bar rendering --------------------------------------------------
+
+const tabsEl = document.getElementById('tabs');
+
+function renderTabs() {
+  const parts = [];
+  tabs.forEach((t, i) => {
+    const cls = i === activeIdx ? 'tab active' : 'tab';
+    const label = (t.label || 'new chat').slice(0, 32);
+    parts.push(
+      `<div class="${cls}" data-i="${i}" title="${escapeAttr(t.id)}">
+         <span class="label">${escapeHtml(label)}</span>
+         <button class="close" data-close="${i}" title="Close">×</button>
+       </div>`
+    );
+  });
+  parts.push(`<div class="tab new-tab" data-new>＋</div>`);
+  tabsEl.innerHTML = parts.join('');
+}
+
+tabsEl.addEventListener('click', e => {
+  const closeBtn = e.target.closest('[data-close]');
+  if (closeBtn) {
+    closeTab(parseInt(closeBtn.dataset.close, 10));
+    return;
+  }
+  if (e.target.closest('[data-new]')) {
+    newTab();
+    return;
+  }
+  const tabEl = e.target.closest('[data-i]');
+  if (tabEl) switchTab(parseInt(tabEl.dataset.i, 10));
+});
+
+async function switchTab(i) {
+  if (i < 0 || i >= tabs.length || i === activeIdx) return;
+  activeIdx = i;
+  sessionId = tabs[i].id;
+  saveTabsState();
+  renderTabs();
+  await rebuildHistory();
+}
+
+function newTab() {
+  tabs.push({ id: crypto.randomUUID(), label: 'new chat' });
+  activeIdx = tabs.length - 1;
+  sessionId = tabs[activeIdx].id;
+  saveTabsState();
+  renderTabs();
+  log.innerHTML = '';
+  nextHistoryIndex = 1;
+  refreshUsage();
+}
+
+function closeTab(i) {
+  if (i < 0 || i >= tabs.length) return;
+  tabs.splice(i, 1);
+  if (!tabs.length) {
+    // Always keep at least one tab.
+    tabs.push({ id: crypto.randomUUID(), label: 'new chat' });
+    activeIdx = 0;
+  } else {
+    activeIdx = Math.max(0, Math.min(activeIdx, tabs.length - 1));
+    // If we closed the active tab, the index shifts naturally; otherwise
+    // adjust to keep the same logical selection.
+    if (i < activeIdx) activeIdx -= 1;
+  }
+  sessionId = tabs[activeIdx].id;
+  saveTabsState();
+  renderTabs();
+  log.innerHTML = '';
+  nextHistoryIndex = 1;
+  rebuildHistory();
+}
+
+function setTabLabel(label) {
+  if (!tabs[activeIdx]) return;
+  tabs[activeIdx].label = label.slice(0, 60);
+  saveTabsState();
+  renderTabs();
+}
+
+renderTabs();
+
+// --- model picker -------------------------------------------------------
+
+const modelBtn = document.getElementById('model-btn');
+const modelBtnLabel = document.getElementById('model-btn-label');
+const pickerOverlay = document.getElementById('picker-overlay');
+const pickerCard = document.getElementById('picker-card');
+
+let pickerState = {
+  active: '', fast_model: '', models: [],
+  effort: 'medium', effort_levels: ['low','medium','high','max'],
+  fast_mode: false, backend: '',
+};
+
+async function loadPicker() {
+  try {
+    const r = await fetch('/api/model-picker');
+    if (!r.ok) return;
+    pickerState = await r.json();
+    renderFooter();
+  } catch {}
+}
+
+function renderFooter() {
+  const m = pickerState.active || 'no model';
+  // Strip overlong tags so the chip stays compact.
+  const shortModel = m.length > 26 ? m.slice(0, 25) + '…' : m;
+  const effort = pickerState.effort && pickerState.effort !== 'medium'
+    ? ` · ${pickerState.effort}` : '';
+  const fast = pickerState.fast_mode ? ' · fast' : '';
+  modelBtnLabel.textContent = shortModel + effort + fast;
+}
+
+function renderPicker() {
+  const { active, models, effort, effort_levels, fast_mode } = pickerState;
+  const rows = [];
+  rows.push(`<div class="picker-section"><span>Models</span><span class="keys"><kbd>⇧</kbd><kbd>Ctrl</kbd><kbd>I</kbd></span></div>`);
+  // Show up to 9 models with number shortcuts; rest unnumbered.
+  models.slice(0, 30).forEach((id, i) => {
+    const isActive = id === active;
+    const num = i < 9 ? (i + 1) : '';
+    rows.push(
+      `<div class="picker-row${isActive ? ' selected' : ''}" data-action="model" data-value="${escapeAttr(id)}">
+        <span class="name">${escapeHtml(id)}</span>
+        <span>${isActive ? '<span class="check">✓</span> ' : ''}<span class="shortcut">${num}</span></span>
+      </div>`
+    );
+  });
+  rows.push(`<div class="picker-divider"></div>`);
+  rows.push(`<div class="picker-section"><span>Effort</span><span class="keys"><kbd>⇧</kbd><kbd>Ctrl</kbd><kbd>E</kbd></span></div>`);
+  effort_levels.forEach((lvl, i) => {
+    const isActive = lvl === effort;
+    rows.push(
+      `<div class="picker-row${isActive ? ' selected' : ''}" data-action="effort" data-value="${lvl}">
+        <span class="name">${capitalize(lvl)}</span>
+        <span>${isActive ? '<span class="check">✓</span>' : ''}</span>
+      </div>`
+    );
+  });
+  rows.push(`<div class="picker-divider"></div>`);
+  rows.push(`<div class="picker-section"><span>Fast mode</span></div>`);
+  rows.push(
+    `<div class="picker-toggle${fast_mode ? ' on' : ''}" data-action="fast">
+       <span class="name">Enable fast mode</span>
+       <span class="switch"></span>
+     </div>`
+  );
+  pickerCard.innerHTML = rows.join('');
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
+function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+
+async function applyPicker(patch) {
+  try {
+    const r = await fetch('/api/model-picker', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    pickerState.active = data.active;
+    pickerState.fast_model = data.fast_model;
+    pickerState.effort = data.effort;
+    pickerState.fast_mode = data.fast_mode;
+    renderFooter();
+    renderPicker();
+  } catch (err) {
+    console.error('picker apply failed', err);
+  }
+}
+
+function openPicker() {
+  renderPicker();
+  pickerOverlay.classList.add('active');
+  pickerCard.focus();
+}
+function closePicker() { pickerOverlay.classList.remove('active'); }
+
+modelBtn.addEventListener('click', () => {
+  loadPicker().then(openPicker);
+});
+pickerOverlay.addEventListener('click', e => {
+  if (e.target === pickerOverlay) closePicker();
+});
+pickerCard.addEventListener('click', e => {
+  const row = e.target.closest('[data-action]');
+  if (!row) return;
+  const action = row.dataset.action;
+  if (action === 'model') applyPicker({ model: row.dataset.value });
+  else if (action === 'effort') applyPicker({ effort: row.dataset.value });
+  else if (action === 'fast') applyPicker({ fast_mode: !pickerState.fast_mode });
+});
+
+// Keyboard shortcuts:
+//   Ctrl+I → open picker
+//   Esc → close
+//   1-9 (when picker open) → pick that model
+//   Shift+Ctrl+E → focus the Effort section (cycles low→medium→high→max)
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && pickerOverlay.classList.contains('active')) {
+    closePicker(); return;
+  }
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey && e.key.toLowerCase() === 'i') {
+    e.preventDefault();
+    loadPicker().then(openPicker);
+    return;
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
+    e.preventDefault();
+    const order = pickerState.effort_levels;
+    const i = order.indexOf(pickerState.effort);
+    const next = order[(i + 1) % order.length];
+    applyPicker({ effort: next });
+    return;
+  }
+  if (pickerOverlay.classList.contains('active') && /^[1-9]$/.test(e.key)) {
+    const n = parseInt(e.key, 10);
+    const id = pickerState.models[n - 1];
+    if (id) applyPicker({ model: id });
+  }
+});
+
+// Initial load: pick up the model picker state + restore the active tab's
+// history (when we have one from a previous visit).
+loadPicker();
+if (_loaded) {
+  rebuildHistory();
+}
+// Warn up front if no LLM backend is reachable (common on a fresh desktop
+// install before LM Studio / Ollama is started).
+checkBackend();
+
+// --- file upload (drag-drop + paperclip) ---------------------------------
+const attachBtn = document.getElementById('attach');
+const fileInput = document.getElementById('file-input');
+const dropOverlay = document.getElementById('drop-overlay');
+let attachedFile = null;
+
+attachBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleAttachment(fileInput.files[0]);
+});
+
+let dragCount = 0;
+window.addEventListener('dragenter', e => {
+  if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
+  dragCount++;
+  dropOverlay.classList.add('active');
+});
+window.addEventListener('dragleave', () => {
+  dragCount = Math.max(0, dragCount - 1);
+  if (dragCount === 0) dropOverlay.classList.remove('active');
+});
+window.addEventListener('dragover', e => { e.preventDefault(); });
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  dragCount = 0;
+  dropOverlay.classList.remove('active');
+  if (e.dataTransfer && e.dataTransfer.files.length) {
+    handleAttachment(e.dataTransfer.files[0]);
+  }
+});
+
+let attachedIsImage = false;
+
+async function handleAttachment(file) {
+  const chip = addBubble('upload-chip');
+  const mime = file.type || '';
+  // Audio? Send to the transcribe endpoint; the transcribed text drops
+  // straight into the chat input for the user to optionally edit + send.
+  if (mime.startsWith('audio/') || /\.(wav|mp3|m4a|ogg|flac|webm)$/i.test(file.name)) {
+    chip.textContent = `transcribing ${file.name}…`;
+    try {
+      const fd = new FormData();
+      fd.append('session_id', sessionId);
+      fd.append('file', file);
+      const r = await fetch('/api/transcribe', { method: 'POST', body: fd });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (!data.ok) {
+        chip.textContent = `transcription failed: ${data.error}`;
+        return;
+      }
+      chip.innerHTML = `transcribed <code>${file.name}</code>: <em>${data.text.slice(0, 200)}${data.text.length > 200 ? '…' : ''}</em>`;
+      // Drop the transcription into the input box so the user can review/send.
+      input.value = (input.value ? input.value + ' ' : '') + data.text;
+      input.focus();
+    } catch (err) {
+      chip.textContent = `transcription failed: ${err.message}`;
+    }
+    return;
+  }
+  chip.textContent = `uploading ${file.name}…`;
+  try {
+    const fd = new FormData();
+    fd.append('session_id', sessionId);
+    fd.append('file', file);
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    attachedFile = data.path;
+    attachedIsImage = mime.startsWith('image/');
+    const sizeStr = data.size.toLocaleString();
+    if (attachedIsImage) {
+      // Inline thumbnail for instant feedback that the right file came up.
+      const reader = new FileReader();
+      reader.onload = ev => {
+        chip.innerHTML = `image attached: <code>${data.filename}</code>
+          <span style="color:var(--dim)">(${sizeStr} bytes)</span>
+          <img src="${ev.target.result}" alt="" style="max-width:240px;max-height:160px;margin-top:6px;border-radius:4px">`;
+      };
+      reader.readAsDataURL(file);
+    } else {
+      chip.innerHTML = `attached: <code>${data.filename}</code>
+        <span style="color:var(--dim)">(${sizeStr} bytes)</span><br>
+        <span style="color:var(--dim)">path will be referenced in your next message</span>`;
+    }
+  } catch (err) {
+    chip.textContent = `upload failed: ${err.message}`;
+  }
+}
+
+// --- auto-speak (browser speechSynthesis) -------------------------------
+
+const speakBtn = document.getElementById('speak-btn');
+const SPEAK_KEY = 'evi.autoSpeak';
+let autoSpeak = localStorage.getItem(SPEAK_KEY) === '1';
+
+function updateSpeakButton() {
+  speakBtn.textContent = autoSpeak ? '🔊' : '🔇';
+  speakBtn.title = autoSpeak
+    ? 'Auto-speak ON — click to mute'
+    : 'Auto-speak OFF — click to enable';
+}
+updateSpeakButton();
+
+speakBtn.addEventListener('click', () => {
+  if (!('speechSynthesis' in window)) {
+    addBubble('error').textContent = 'Browser has no speechSynthesis support';
+    return;
+  }
+  autoSpeak = !autoSpeak;
+  localStorage.setItem(SPEAK_KEY, autoSpeak ? '1' : '0');
+  if (!autoSpeak) window.speechSynthesis.cancel();
+  updateSpeakButton();
+});
+
+// Per-assistant-bubble buffer: dataset.spokenIdx tracks how far we've
+// already enqueued for speech.
+const SENTENCE_RE = /[^.!?]+[.!?]+(\s+|$)/g;
+function cleanForTTS(s) {
+  return s
+    .replace(/```[\s\S]*?```/g, ' code block ')
+    .replace(/`[^`]+`/g, ' code ')
+    .replace(/https?:\/\/\S+/g, ' link ')
+    .replace(/[*_#>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function maybeSpeak(bubble) {
+  if (!autoSpeak || !('speechSynthesis' in window)) return;
+  const src = bubble.dataset.source || '';
+  const from = parseInt(bubble.dataset.spokenIdx || '0', 10);
+  const tail = src.slice(from);
+  let lastEnd = 0;
+  let m;
+  // Reset lastIndex since /g state persists between calls.
+  SENTENCE_RE.lastIndex = 0;
+  while ((m = SENTENCE_RE.exec(tail)) !== null) {
+    const sentence = cleanForTTS(m[0]);
+    if (sentence) {
+      const u = new SpeechSynthesisUtterance(sentence);
+      window.speechSynthesis.speak(u);
+    }
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd) bubble.dataset.spokenIdx = String(from + lastEnd);
+}
+function flushSpeak(bubble) {
+  if (!autoSpeak || !('speechSynthesis' in window) || !bubble) return;
+  const src = bubble.dataset.source || '';
+  const from = parseInt(bubble.dataset.spokenIdx || '0', 10);
+  const tail = cleanForTTS(src.slice(from));
+  if (tail) {
+    const u = new SpeechSynthesisUtterance(tail);
+    window.speechSynthesis.speak(u);
+    bubble.dataset.spokenIdx = String(src.length);
+  }
+}
+
+resetBtn.addEventListener('click', async () => {
+  await fetch('/api/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, message: '' }),
+  });
+  log.innerHTML = '';
+  nextHistoryIndex = 1;
+  // Reset the current tab's label too — it'll get re-named on the next user msg.
+  if (tabs[activeIdx]) setTabLabel('new chat');
+});
+</script>
+</body>
+</html>

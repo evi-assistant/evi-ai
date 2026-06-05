@@ -1,0 +1,19 @@
+# Normalize line endings to LF in the repo (and on checkout) so the project
+# moves cleanly across Windows / macOS / Linux without spurious CRLF diffs.
+* text=auto eol=lf
+
+# Keep shell scripts LF even on Windows checkouts.
+*.sh text eol=lf
+*.ps1 text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.wav binary
+*.pdf binary

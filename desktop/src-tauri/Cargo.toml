@@ -1,0 +1,25 @@
+[package]
+name = "evi-desktop"
+version = "0.1.0"
+description = "Evi — desktop shell"
+authors = ["Evi"]
+edition = "2021"
+rust-version = "1.77"
+
+# Desktop-only binary crate — the whole app is in src/main.rs. (No [lib]
+# target: that's the create-tauri-app mobile template's lib split, which we
+# don't use. A [lib] here would require a src/lib.rs that doesn't exist.)
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+url = "2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
