@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Evi</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #1e293b; color: #e2e8f0;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 20px;
+    }
+    .ring {
+      width: 54px; height: 54px;
+      border: 5px solid #334155; border-top-color: #22d3ee;
+      border-radius: 50%; animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #msg { font-size: 16px; }
+    .hint {
+      color: #94a3b8; font-size: 13px; max-width: 440px;
+      text-align: center; line-height: 1.5; min-height: 2.5em;
+    }
+    code { color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="ring"></div>
+  <div id="msg">Starting Evi…</div>
+  <div class="hint" id="hint"></div>
+  <script>
+    // The Rust shell injects window.__EVI_PORT__ via an initialization
+    // script. We poll the local server and redirect once it's accepting
+    // connections — this decouples the window from the (slow, variable)
+    // onefile cold start, so the user sees a loading page immediately
+    // instead of a connection-refused error.
+    var port = window.__EVI_PORT__ || 8000;
+    var base = "http://127.0.0.1:" + port + "/";
+    var tries = 0;
+    function poll() {
+      tries++;
+      // no-cors: resolves on ANY response (server is up), rejects on a
+      // connection error (server not up yet).
+      fetch(base + "api/health", { mode: "no-cors", cache: "no-store" })
+        .then(function () { window.location.replace(base); })
+        .catch(function () {
+          if (tries === 15) {
+            document.getElementById("hint").innerHTML =
+              "First launch unpacks the bundled Python server, which can take " +
+              "a bit. If this persists, check the logs at " +
+              "<code>%USERPROFILE%\\.evi\\logs\\desktop-server.log</code>.";
+          }
+          setTimeout(poll, 600);
+        });
+    }
+    poll();
+  </script>
+</body>
+</html>

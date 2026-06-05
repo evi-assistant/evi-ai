@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Tauri / Node
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+# PyInstaller sidecars staged by build-sidecar
+desktop/src-tauri/binaries/
+
+# Local-only secrets
+.env
+.env.local
+
+# User-level Evi state never belongs in the repo (lives in ~/.evi/)
+# but ignore stray test dumps just in case.
+.evi/

@@ -1,0 +1,239 @@
+"""Curated model registry + recommendation logic.
+
+The list is hand-curated, not pulled from a registry — there's no clean
+machine-readable source that scores models on tool-calling reliability
+(which is what actually matters for Evi). Bias is toward Qwen2.5 across
+the board because its tool calling is best-in-class for local models.
+
+The registry is intentionally short: too many entries paralyses choice.
+Add more as you go.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from evi.hardware import HardwareInfo
+
+
+@dataclass(frozen=True)
+class ModelRec:
+    """One curated recommendation.
+
+    `min_vram_mb` is the VRAM ceiling for the listed quantization; `min_ram_mb`
+    is the equivalent floor for CPU-only inference. The naming uses Ollama
+    tags where possible (`qwen2.5:14b`) since Ollama's pull API is the
+    smoothest path; LM Studio users can search for the same model under
+    its HuggingFace name.
+    """
+
+    id: str                  # canonical id (Ollama tag style)
+    family: str              # qwen2.5, llama3.1, hermes3, …
+    parameters: str          # "7B", "14B", "32B"
+    quantization: str        # "Q4_K_M", "Q5_K_M", …
+    min_vram_mb: int         # estimated VRAM at this quant
+    min_ram_mb: int          # estimated RAM for CPU-only fallback
+    tool_calling: str        # "excellent" | "good" | "ok" | "poor"
+    role: str                # "chat" | "coder" | "small"
+    notes: str = ""
+
+
+# The registry. Order matters: we prefer earlier entries within a tier.
+REGISTRY: list[ModelRec] = [
+    # --- 24+ GB VRAM (P40 / 5090 / dual-GPU) ----------------------------
+    ModelRec(
+        id="qwen2.5:32b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="32B",
+        quantization="Q4_K_M",
+        min_vram_mb=22000,
+        min_ram_mb=36000,
+        tool_calling="excellent",
+        role="chat",
+        notes="Sweet spot on P40 (24 GB). Best general local model with room for ~16K ctx.",
+    ),
+    ModelRec(
+        id="qwen2.5-coder:32b-instruct-q4_K_M",
+        family="qwen2.5-coder",
+        parameters="32B",
+        quantization="Q4_K_M",
+        min_vram_mb=22000,
+        min_ram_mb=36000,
+        tool_calling="excellent",
+        role="coder",
+        notes="Best local coding model that still has solid tool calling.",
+    ),
+    # --- 16 GB VRAM (5070 Ti / 4080) ------------------------------------
+    ModelRec(
+        id="qwen2.5:14b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="14B",
+        quantization="Q4_K_M",
+        min_vram_mb=10500,
+        min_ram_mb=18000,
+        tool_calling="excellent",
+        role="chat",
+        notes="Big jump in tool-calling reliability vs the 7B. Fits comfortably in 16 GB with 32K ctx.",
+    ),
+    ModelRec(
+        id="qwen2.5-coder:14b-instruct-q4_K_M",
+        family="qwen2.5-coder",
+        parameters="14B",
+        quantization="Q4_K_M",
+        min_vram_mb=10500,
+        min_ram_mb=18000,
+        tool_calling="excellent",
+        role="coder",
+        notes="Pair with `qwen2.5:14b` for chat; switch via `evi models use`.",
+    ),
+    # --- 8–12 GB VRAM (3060 Ti / 4060 Ti / 7B sweet spot) ---------------
+    ModelRec(
+        id="qwen2.5:7b-instruct-q5_K_M",
+        family="qwen2.5",
+        parameters="7B",
+        quantization="Q5_K_M",
+        min_vram_mb=6500,
+        min_ram_mb=10000,
+        tool_calling="excellent",
+        role="chat",
+        notes="Q5 quant if you have the VRAM — fewer arithmetic errors than Q4.",
+    ),
+    ModelRec(
+        id="qwen2.5:7b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="7B",
+        quantization="Q4_K_M",
+        min_vram_mb=5500,
+        min_ram_mb=8000,
+        tool_calling="excellent",
+        role="chat",
+    ),
+    ModelRec(
+        id="hermes3:8b-llama3.1-q4_K_M",
+        family="hermes3",
+        parameters="8B",
+        quantization="Q4_K_M",
+        min_vram_mb=6000,
+        min_ram_mb=9000,
+        tool_calling="good",
+        role="chat",
+        notes="Tool-calling fine-tune on Llama 3.1. Worth trying as a subagent model.",
+    ),
+    # --- 4–6 GB VRAM (1650 Super / 3050 / older laptops) ----------------
+    ModelRec(
+        id="qwen2.5:3b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="3B",
+        quantization="Q4_K_M",
+        min_vram_mb=3000,
+        min_ram_mb=5000,
+        tool_calling="ok",
+        role="chat",
+        notes="Tool calling gets shaky here. Watch for hallucinated tool calls.",
+    ),
+    # --- < 4 GB VRAM / CPU-only / 2 GB laptops --------------------------
+    ModelRec(
+        id="llama3.2:3b-instruct-q4_K_M",
+        family="llama3.2",
+        parameters="3B",
+        quantization="Q4_K_M",
+        min_vram_mb=2500,
+        min_ram_mb=4500,
+        tool_calling="ok",
+        role="chat",
+        notes="Solid small model. Tool calling works most of the time.",
+    ),
+    ModelRec(
+        id="qwen2.5:1.5b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="1.5B",
+        quantization="Q4_K_M",
+        min_vram_mb=1500,
+        min_ram_mb=2500,
+        tool_calling="poor",
+        role="small",
+        notes="Fits on 940MX / Pi-class hardware. Don't expect reliable tool calls.",
+    ),
+    ModelRec(
+        id="llama3.2:1b-instruct-q4_K_M",
+        family="llama3.2",
+        parameters="1B",
+        quantization="Q4_K_M",
+        min_vram_mb=900,
+        min_ram_mb=1500,
+        tool_calling="poor",
+        role="small",
+        notes="Absolute floor. Acceptable for plain chat only.",
+    ),
+]
+
+
+@dataclass
+class Recommendation:
+    mode: str             # "gpu" | "cpu" | "remote-only"
+    chat: ModelRec | None
+    coder: ModelRec | None
+    notes: list[str]
+
+
+def recommend(hw: HardwareInfo) -> Recommendation:
+    """Pick the best chat + coder model for the detected hardware.
+
+    Returns `mode="remote-only"` when neither GPU nor RAM is sufficient for
+    anything usable — caller should suggest pointing at a remote backend.
+    """
+    notes: list[str] = []
+    primary = hw.primary_gpu
+
+    if primary is None:
+        notes.append("No NVIDIA GPU detected — falling back to CPU.")
+        chat = _pick(REGISTRY, role="chat", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        coder = _pick(REGISTRY, role="coder", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        if chat is None:
+            return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes + [
+                "Even CPU inference would be slow with the available RAM.",
+                "Point Evi at a remote backend (your AI server) instead.",
+            ])
+        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
+
+    vram = primary.vram_total_mb
+    notes.append(f"Primary GPU: {primary.name} ({vram} MB VRAM).")
+    if vram < 2500:
+        notes.append(
+            "GPU VRAM is below the threshold where offload helps — system "
+            "RAM bandwidth will outperform PCIe-shuttled GPU inference. "
+            "Treat this as CPU-only."
+        )
+        # Fall through to CPU rec.
+        chat = _pick(REGISTRY, role="chat", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        coder = _pick(REGISTRY, role="coder", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        if chat is None:
+            return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes)
+        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
+
+    if primary.compute_capability and primary.compute_capability < "6.0":
+        notes.append(
+            "GPU compute capability is pre-Pascal — modern features (FP16, "
+            "flash attention) won't work. Stick to GGUF Q4/Q5 quants."
+        )
+
+    chat = _pick(REGISTRY, role="chat", vram_mb=vram)
+    coder = _pick(REGISTRY, role="coder", vram_mb=vram)
+    return Recommendation(mode="gpu", chat=chat, coder=coder, notes=notes)
+
+
+def _pick(
+    registry: list[ModelRec],
+    *,
+    role: str,
+    vram_mb: int | None = None,
+    ram_mb: int | None = None,
+) -> ModelRec | None:
+    """Return the largest model from `registry` that fits within budget."""
+    candidates = [m for m in registry if m.role == role]
+    for m in candidates:  # registry is roughly biggest-first
+        if vram_mb is not None and m.min_vram_mb <= vram_mb:
+            return m
+        if ram_mb is not None and m.min_ram_mb <= ram_mb:
+            return m
+    return None

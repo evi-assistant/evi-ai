@@ -1,0 +1,133 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Distribution name on PyPI is `evi-ai` (the bare `evi` is taken). The
+# import package and the CLI command both stay `evi` — install with
+# `pip install evi-ai`, then run `evi` and `import evi` as usual.
+name = "evi-ai"
+version = "0.21.2"
+description = "Local-first personal AI assistant — CLI, web, and desktop frontends over a shared agent core."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["ai", "assistant", "llm", "agent", "local", "ollama", "lm-studio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+]
+dependencies = [
+    "openai>=1.40.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "rich>=13.7",
+    "prompt_toolkit>=3.0",
+    "python-dotenv>=1.0",
+    "psutil>=5.9",
+    "tomli;python_version<'3.11'",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-user/evi"
+Source = "https://github.com/your-user/evi"
+Changelog = "https://github.com/your-user/evi/blob/main/CHANGELOG.md"
+Issues = "https://github.com/your-user/evi/issues"
+Documentation = "https://github.com/your-user/evi/tree/main/docs"
+
+[project.optional-dependencies]
+email = [
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.130",
+    "msal>=1.28",
+]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sse-starlette>=2.1",
+    "httpx>=0.27.0",
+]
+mcp = [
+    "mcp>=1.0",
+]
+scheduler = [
+    "apscheduler>=3.10",
+]
+downloads = [
+    "huggingface_hub>=0.24",
+]
+web-tools = [
+    "duckduckgo_search>=6.0",
+    "beautifulsoup4>=4.12",
+]
+computer = [
+    "pyautogui>=0.9.54",
+    "pillow>=10.0",
+]
+stt = [
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.26",
+]
+pdf = [
+    "PyMuPDF>=1.24",
+]
+index = [
+    "numpy>=1.26",
+]
+calendar = [
+    "icalendar>=5.0",
+    "recurring-ical-events>=2.1",
+    "caldav>=1.3",
+]
+rerank = [
+    "sentence-transformers>=3.0",
+]
+# Build-time only: freezing the desktop sidecar with PyInstaller. Not a
+# runtime dep — see docs/desktop-bundling.md.
+build-desktop = [
+    "pyinstaller>=6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+evi = "evi.apps.cli.main:app"
+
+[tool.setuptools.packages.find]
+# Everything ships under the single `evi` namespace — the CLI/web frontends
+# live at evi.apps.* (the Tauri desktop project is non-Python, in desktop/).
+include = ["evi*"]
+
+[tool.setuptools.package-data]
+"evi" = ["py.typed"]
+"evi.apps.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+timeout = 30   # hard ceiling so the permission tests don't hang forever
+timeout_method = "thread"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

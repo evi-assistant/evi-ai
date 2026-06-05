@@ -1,0 +1,97 @@
+"""Filesystem tools."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from evi.citations import Citation, ToolOutput, trim_excerpt
+from evi.tools.base import tool
+
+
+_MAX_READ_BYTES = 256 * 1024  # 256 KB cap so we don't dump huge files into context
+
+# Content cache keyed by resolved path → (mtime_ns, size, ToolOutput).
+# The agent often re-reads the same file across turns; when it hasn't
+# changed on disk we return the prior result instead of touching the disk
+# and rebuilding the citation. mtime_ns + size together invalidate on any
+# edit (mtime alone can miss same-second writes; size catches most of those
+# and the pair is what editors actually bump).
+_READ_CACHE: dict[str, tuple[int, int, ToolOutput]] = {}
+_READ_CACHE_MAX = 128
+
+
+def clear_read_cache() -> None:
+    """Drop the read_file content cache. Used by tests and could be wired to
+    a future `/reload`-style invalidation."""
+    _READ_CACHE.clear()
+
+
+@tool(
+    description="Read a UTF-8 text file from disk. Returns content or an error string.",
+    category="fs",
+)
+def read_file(path: str) -> ToolOutput | str:
+    p = Path(path).expanduser()
+    if not p.is_file():
+        return f"ERROR: not a file: {p}"
+    try:
+        st = p.stat()
+        key = str(p.resolve())
+    except OSError as exc:
+        return f"ERROR: cannot stat {p}: {exc}"
+
+    cached = _READ_CACHE.get(key)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2]
+
+    if st.st_size > _MAX_READ_BYTES:
+        return f"ERROR: file too large ({st.st_size} bytes, max {_MAX_READ_BYTES})"
+    data = p.read_bytes()
+    if len(data) > _MAX_READ_BYTES:
+        return f"ERROR: file too large ({len(data)} bytes, max {_MAX_READ_BYTES})"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"ERROR: not utf-8 text: {p}"
+    # Surface a citation so the web UI can render a chip pointing back to
+    # the file. `start`/`end` are 1-indexed line numbers covering the
+    # whole file.
+    line_count = text.count("\n") + 1
+    citation = Citation(
+        id="1",
+        source_type="file",
+        source_id=str(p),
+        excerpt=trim_excerpt(text),
+        start=1,
+        end=line_count,
+    )
+    output = ToolOutput(text=text, citations=[citation])
+
+    # Cache, evicting an arbitrary (oldest-inserted) entry when full.
+    if len(_READ_CACHE) >= _READ_CACHE_MAX:
+        _READ_CACHE.pop(next(iter(_READ_CACHE)))
+    _READ_CACHE[key] = (st.st_mtime_ns, st.st_size, output)
+    return output
+
+
+@tool(
+    description="Write UTF-8 text to a file, creating parent dirs if needed. Overwrites.",
+    category="fs",
+)
+def write_file(path: str, content: str) -> str:
+    p = Path(path).expanduser()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return f"wrote {len(content)} chars to {p}"
+
+
+@tool(
+    description="List entries in a directory. Returns one path per line.",
+    category="fs",
+)
+def list_dir(path: str = ".") -> str:
+    p = Path(path).expanduser()
+    if not p.is_dir():
+        return f"ERROR: not a directory: {p}"
+    entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+    return "\n".join(f"{'D' if e.is_dir() else 'F'} {e.name}" for e in entries)

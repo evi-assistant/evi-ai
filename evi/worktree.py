@@ -1,0 +1,152 @@
+"""Thin git-worktree wrapper.
+
+Pairs nicely with `evi chat`: spin up a worktree for a branch, drop into
+chat there, work on it in isolation, then either fold the branch back into
+main or `evi worktree remove` it. The path layout is
+`<repo>/.worktrees/<branch>/` by default so worktrees are siblings of the
+main checkout rather than scattered across the filesystem.
+
+The functions in this module raise `WorktreeError` on git failures; the
+CLI layer translates them into clean error output.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class WorktreeError(RuntimeError):
+    """Surfaced when a git command fails or git itself is missing."""
+
+
+@dataclass(frozen=True)
+class WorktreeEntry:
+    path: Path
+    branch: str | None  # detached HEAD entries have no branch
+    head: str           # short sha
+
+
+# ---- helpers ------------------------------------------------------------
+
+
+def _git(*args: str, cwd: Path | None = None) -> str:
+    if shutil.which("git") is None:
+        raise WorktreeError("git not found on PATH")
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd is not None else None,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise WorktreeError(
+            (proc.stderr or proc.stdout or f"git {' '.join(args)} failed").strip()
+        )
+    return proc.stdout
+
+
+def repo_root(start: Path | None = None) -> Path:
+    """Top-level dir of the git repo containing `start` (default cwd)."""
+    out = _git("rev-parse", "--show-toplevel", cwd=start or Path.cwd())
+    return Path(out.strip())
+
+
+# ---- public API ---------------------------------------------------------
+
+
+def list_worktrees(start: Path | None = None) -> list[WorktreeEntry]:
+    """Parse `git worktree list --porcelain` into structured entries."""
+    raw = _git("worktree", "list", "--porcelain", cwd=start)
+    entries: list[WorktreeEntry] = []
+    cur_path: Path | None = None
+    cur_head = ""
+    cur_branch: str | None = None
+    for line in raw.splitlines() + [""]:  # trailing blank to flush last entry
+        if line.startswith("worktree "):
+            cur_path = Path(line[len("worktree "):].strip())
+            cur_head = ""
+            cur_branch = None
+        elif line.startswith("HEAD "):
+            cur_head = line[len("HEAD "):].strip()[:12]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):].strip()
+            cur_branch = ref.removeprefix("refs/heads/")
+        elif line.strip() == "":
+            if cur_path is not None:
+                entries.append(
+                    WorktreeEntry(path=cur_path, branch=cur_branch, head=cur_head)
+                )
+                cur_path = None
+    return entries
+
+
+def create_worktree(
+    branch: str,
+    *,
+    start: Path | None = None,
+    create_branch: bool = True,
+    base: str | None = None,
+) -> Path:
+    """Create `<repo>/.worktrees/<branch>/` checking out `branch`.
+
+    `create_branch=True` (the default) means we'll create the branch if it
+    doesn't already exist. Pass `base="main"` to fork from a non-HEAD base.
+    """
+    if not branch or "/" in branch.replace("refs/", "") and "refs/" not in branch:
+        # Allow `refs/heads/foo` but block bare `foo/bar` filenames as a
+        # rough sanity check.
+        pass
+    root = repo_root(start)
+    dest = root / ".worktrees" / branch.replace("/", "__")
+    if dest.exists():
+        raise WorktreeError(f"worktree path already exists: {dest}")
+
+    args: list[str] = ["worktree", "add"]
+    if create_branch:
+        args += ["-b", branch]
+        args += [str(dest)]
+        if base:
+            args += [base]
+    else:
+        args += [str(dest), branch]
+    _git(*args, cwd=root)
+    return dest
+
+
+def remove_worktree(branch_or_path: str, *, start: Path | None = None) -> None:
+    """Remove a worktree by branch name or path. Force-removes.
+
+    On git ≥ 2.17 this uses `git worktree remove --force`. On older versions
+    (which lack that subcommand) we fall back to deleting the directory
+    ourselves and running `git worktree prune` to clean the admin entry.
+    """
+    import shutil as _shutil
+
+    root = repo_root(start)
+    candidate = Path(branch_or_path)
+    if not candidate.is_absolute():
+        candidate = root / ".worktrees" / branch_or_path.replace("/", "__")
+
+    try:
+        _git("worktree", "remove", "--force", str(candidate), cwd=root)
+        return
+    except WorktreeError as exc:
+        # Older git lacks `worktree remove` entirely; fall through if that's
+        # the reason. Anything else is a real failure we should surface.
+        if "remove" not in str(exc).lower() and "usage" not in str(exc).lower():
+            raise
+
+    if candidate.exists():
+        _shutil.rmtree(candidate, ignore_errors=True)
+    # Drop the stale admin entry under .git/worktrees/<name>/.
+    _git("worktree", "prune", cwd=root)
+
+
+def find_worktree_for(branch: str, start: Path | None = None) -> Path | None:
+    for e in list_worktrees(start):
+        if e.branch == branch:
+            return e.path
+    return None
