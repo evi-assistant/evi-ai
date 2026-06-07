@@ -66,18 +66,19 @@ memory tags, plugin loader, multi-user web mode.
 
 ### Releases (2026-06-07)
 
-- ✅ **Desktop `desktop-v0.2.0`** cut — a **draft** GitHub release with signed
-  installers (Win MSI+NSIS, macOS dmg/app [aarch64 only — add x86_64 target for
-  Intel], Linux deb/rpm/AppImage) + `latest.json` + `.sig`. **Publish the draft**
-  to make the in-app updater live (drafts aren't served at `/releases/latest/`).
-- ⏳ **PyPI not cut yet — dist renamed, awaiting Trusted Publishing.** The
-  original `evi-ai` PyPI name is owned by an **unrelated** project, so the
-  distribution was renamed to **`evi-assistant`** (available; `pyproject` +
-  all install hints + the self-updater's `DIST_NAME` updated; import/CLI stay
-  `evi`). Remaining before a `v*` tag publishes cleanly: the owner must set up
-  PyPI **Trusted Publishing** for `evi-assistant` pointing at this repo's
-  `release.yml` (a manual web step on pypi.org — can't be automated). Until
-  then `release.yml` would fail at the publish step.
+- ✅ **PyPI `v0.24.0` PUBLISHED** — `evi-assistant` 0.24.0 is live on PyPI
+  (`pip install evi-assistant`), via `release.yml` + Trusted Publishing. The
+  source repo stays **private** (Trusted Publishing is OIDC, visibility-agnostic;
+  only the package on PyPI is public). The `evi-ai` PyPI name was taken by an
+  unrelated project → renamed to `evi-assistant` (import/CLI stay `evi`).
+- ⏳ **Desktop updater → public channel (`dmang-dev/evi-ai-releases`).** A
+  PUBLIC releases repo was created; the in-app updater endpoint now points there
+  (private release assets 404 for end users). `desktop-release.yml` gained a
+  `mirror` job that copies signed installers + a URL-rewritten `latest.json` to
+  it. Desktop bumped to **0.2.1**. **NEEDS a one-time `RELEASES_TOKEN` secret**
+  (PAT with contents:write on `evi-ai-releases`) — see `docs/releasing.md` — then
+  cut a `desktop-v0.2.1` tag. The old `desktop-v0.2.0` (private, old endpoint)
+  won't auto-update; 0.2.1 is the first real updatable release.
 
 Near-term loose ends:
 
