@@ -8,12 +8,20 @@
 # Prereqs (in your venv):
 #   pip install -e '.[web]' pyinstaller
 #
-# Output: dist/evi-server  →  copied to desktop/src-tauri/binaries/evi-server-<triple>
+# Output: dist/evi-server/  →  copied to desktop/src-tauri/binaries/evi-server/
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
-py="${EVI_PYTHON:-python3}"
+# Prefer $EVI_PYTHON, then an isolated build venv (.venv-build), then .venv,
+# then python3. A fat dev .venv with the stt/computer/rerank extras would drag
+# torch + faster-whisper + sounddevice + av into the "practical tier" sidecar
+# (--collect-submodules evi pulls every evi.tools.* module), ballooning it from
+# ~75 MB to >1 GB. Create the isolated venv once with: python3 -m venv .venv-build
+if [ -n "${EVI_PYTHON:-}" ]; then py="$EVI_PYTHON"
+elif [ -x "$root/.venv-build/bin/python" ]; then py="$root/.venv-build/bin/python"
+elif [ -x "$root/.venv/bin/python" ]; then py="$root/.venv/bin/python"
+else py="python3"; fi
 
 # Practical tier: bundle web + pdf + index. STT (faster-whisper/PortAudio)
 # and computer-use stay opt-in via a system Python — they're large and
@@ -38,6 +46,8 @@ echo ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-all pymupdf \
     --collect-all numpy \
     --hidden-import fitz \
+    --hidden-import python_multipart \
+    --hidden-import multipart \
     --hidden-import uvicorn.protocols.http.auto \
     --hidden-import uvicorn.protocols.websockets.auto \
     --hidden-import uvicorn.lifespan.on \

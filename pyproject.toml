@@ -61,6 +61,11 @@ web = [
     "uvicorn[standard]>=0.29",
     "sse-starlette>=2.1",
     "httpx>=0.27.0",
+    # Required by the /api/transcribe + /api/upload endpoints (Form/UploadFile).
+    # FastAPI raises at route-registration time without it, so the server
+    # won't even start — not optional. Previously only present transitively
+    # via the `mcp` extra, which broke `pip install evi-ai[web]` on its own.
+    "python-multipart>=0.0.9",
 ]
 mcp = [
     "mcp>=1.0",
