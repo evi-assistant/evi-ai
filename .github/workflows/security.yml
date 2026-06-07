@@ -42,16 +42,19 @@ jobs:
         run: pip-audit --desc
 
   rust-audit:
-    name: cargo-deny (advisories)
+    name: cargo-audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Advisories-only gate (RustSec). License/ban/source policy lives in
-      # desktop/src-tauri/deny.toml for local `cargo deny check` and a future
-      # CI tightening, but is not enforced here yet to avoid first-run noise
-      # from Tauri's large dependency tree.
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # RustSec vulnerability gate for the desktop crate. cargo-audit fails the
+      # build on actual *vulnerabilities* but treats "unmaintained"/"unsound"
+      # advisories as warnings (exit 0) — important here because Tauri's Linux
+      # GTK3 binding tree (atk/gdk/gtk via gtk3-rs) is flagged unmaintained with
+      # no upgrade path. License/ban/duplicate policy lives in
+      # desktop/src-tauri/deny.toml for local `cargo deny check` / future use.
+      - uses: taiki-e/install-action@v2
         with:
-          manifest-path: desktop/src-tauri/Cargo.toml
-          command: check advisories
+          tool: cargo-audit
+      - name: cargo-audit (vulnerabilities only)
+        run: cargo audit --file desktop/src-tauri/Cargo.lock
