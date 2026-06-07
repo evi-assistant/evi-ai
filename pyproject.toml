@@ -71,7 +71,7 @@ mcp = [
     "mcp>=1.0",
 ]
 scheduler = [
-    "apscheduler>=3.10",
+    "apscheduler>=3.11.2",
 ]
 downloads = [
     "huggingface_hub>=0.24",
