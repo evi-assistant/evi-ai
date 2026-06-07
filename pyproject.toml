@@ -54,7 +54,7 @@ Documentation = "https://github.com/your-user/evi/tree/main/docs"
 email = [
     "google-auth-oauthlib>=1.2",
     "google-api-python-client>=2.130",
-    "msal>=1.28",
+    "msal>=1.37.0",
 ]
 web = [
     "fastapi>=0.110",
