@@ -59,9 +59,15 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phase 48 is complete.** The only remaining item is deferred:
+**Phase 48 is complete.** Remaining desktop/distribution work:
 
-1. Deferred (user said "not yet"): GitHub Actions desktop-release workflow.
+1. **Verify the desktop-release CI on macOS + Linux.** `.github/workflows/
+   desktop-release.yml` now exists (Win/mac/Linux matrix, `desktop-v*` tags).
+   Only the Windows path is proven; treat the first green mac/Linux run as
+   verification. Trigger via a `desktop-v*` tag or manual `workflow_dispatch`.
+2. **Code-sign the desktop installers** — they're unsigned, so SmartScreen /
+   Gatekeeper warn. Needs an Authenticode cert + Apple Developer ID wired
+   into `tauri-action`. See `docs/releasing.md`.
 
 **Done (2026-06-06):**
 

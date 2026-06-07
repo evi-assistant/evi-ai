@@ -1,0 +1,159 @@
+name: desktop-release
+
+# Builds the standalone Tauri desktop installers (the frozen-sidecar bundle,
+# no Python needed on the target) for Windows / macOS / Linux and attaches
+# them to a GitHub release.
+#
+# The desktop app versions INDEPENDENTLY of the Python package (tauri.conf.json
+# `version`, currently 0.1.0) — so this is driven by its own `desktop-v*` tags,
+# not the PyPI `v*.*.*` tags that `release.yml` watches. Cut a desktop release:
+#
+#     git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
+#
+# Or run it manually from the Actions tab (workflow_dispatch) to produce
+# downloadable build artifacts without creating a release.
+#
+# NOTE: only the Windows path is verified end-to-end (2026-06-06). The macOS
+# and Linux jobs use the standard Tauri 2 setup but are unverified here; treat
+# their first green run as the verification. `fail-fast: false` keeps a working
+# OS's artifacts even if another OS's job fails.
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to publish a draft release to (e.g. desktop-v0.1.0). Leave blank for an artifacts-only build."
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # create the GitHub release + upload installers
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # Tauri's Linux runtime/build deps (WebView via webkit2gtk). Tauri 2
+      # needs the 4.1 series; ubuntu-latest carries it.
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libayatana-appindicator3-dev \
+            build-essential
+
+      # Build the frozen "practical tier" sidecar in an ISOLATED venv so a
+      # fat dev env can't drag torch/av/sounddevice into it (see
+      # docs/desktop-bundling.md). The build scripts auto-prefer .venv-build.
+      - name: Build sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .venv-build
+          .\.venv-build\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-build\Scripts\python.exe -m pip install -e ".[web,pdf,index,build-desktop]"
+          .\scripts\build-sidecar.ps1
+          .\desktop\src-tauri\binaries\evi-server\evi-server.exe --check
+
+      - name: Build sidecar (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python -m venv .venv-build
+          ./.venv-build/bin/python -m pip install --upgrade pip
+          ./.venv-build/bin/python -m pip install -e ".[web,pdf,index,build-desktop]"
+          chmod +x scripts/build-sidecar.sh
+          ./scripts/build-sidecar.sh
+          ./desktop/src-tauri/binaries/evi-server/evi-server --check
+
+      - name: Install desktop npm deps
+        working-directory: desktop
+        run: npm install
+
+      # Resolve the release tag: the pushed tag on a tag event, or the manual
+      # input on workflow_dispatch (empty -> tauri-action builds without
+      # creating a release; we still upload artifacts below).
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build app + (maybe) publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          # Standalone overlay: ships the onedir sidecar via bundle.resources.
+          args: --config src-tauri/tauri.standalone.conf.json
+          # Empty tagName => build only, no release (artifacts uploaded below).
+          tagName: ${{ steps.tag.outputs.name }}
+          releaseName: "Evi Desktop ${{ steps.tag.outputs.name }}"
+          releaseDraft: true
+          prerelease: false
+          releaseBody: |
+            Standalone Evi Desktop installers (frozen server bundled — no Python
+            required on the target machine). Built by `desktop-release.yml`.
+
+            > Installers are currently **unsigned**: Windows SmartScreen / macOS
+            > Gatekeeper will warn on first run. Code-signing is tracked in
+            > docs/releasing.md.
+
+      # Always upload the built bundles as workflow artifacts too, so manual
+      # (untagged) runs still produce something downloadable.
+      - name: Upload installers as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evi-desktop-${{ matrix.os }}
+          if-no-files-found: warn
+          path: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/macos/*.app
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/rpm/*.rpm
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
