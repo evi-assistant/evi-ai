@@ -77,7 +77,7 @@ app (not pip-installed) needs its own updater pointed at the
   Apple Developer ID) to silence SmartScreen/Gatekeeper. Code-signing needs
   paid certs → track separately; the updater works unsigned-by-OS today.
 
-### Phase 52 — Crash / error reporting — **M**
+### Phase 52 — Crash / error reporting — **✅ shipped (0.23.0)**
 
 Opt-in, privacy-first telemetry so we learn about crashes.
 

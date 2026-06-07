@@ -103,6 +103,11 @@ calendar = [
 rerank = [
     "sentence-transformers>=3.0",
 ]
+telemetry = [
+    # Opt-in, off by default — crash reporting to a Sentry-compatible endpoint
+    # (self-hosted GlitchTip or hosted Sentry). See evi/reporting.py.
+    "sentry-sdk>=2.0",
+]
 # Build-time only: freezing the desktop sidecar with PyInstaller. Not a
 # runtime dep — see docs/desktop-bundling.md.
 build-desktop = [

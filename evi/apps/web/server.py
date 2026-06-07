@@ -316,6 +316,13 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
 def create_app() -> FastAPI:
     ensure_dirs()
 
+    # Opt-in crash reporting (inert unless [telemetry] crash_reports + dsn).
+    # Initialised before the FastAPI app so sentry-sdk's Starlette/FastAPI
+    # integration auto-captures server errors. Covers the frozen desktop
+    # sidecar too, since it runs this same app.
+    from evi.reporting import init_reporting
+    init_reporting()
+
     mcp_manager: MCPManager | None = None
     scheduler_obj: object | None = None
 

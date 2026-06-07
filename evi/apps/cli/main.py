@@ -144,6 +144,12 @@ def _global_options(
     if debug:
         from evi.debug import set_enabled
         set_enabled(True)
+    # Opt-in crash reporting — a no-op NullReporter unless [telemetry]
+    # crash_reports is true AND a dsn is set (or the env overrides). Installs a
+    # chained sys.excepthook so uncaught CLI errors are reported (scrubbed),
+    # then still printed normally.
+    from evi.reporting import init_reporting, install_excepthook
+    install_excepthook(init_reporting())
 
 
 def _cli_permission_prompt(name: str, args: str, category: str) -> bool:

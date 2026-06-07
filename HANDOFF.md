@@ -59,9 +59,10 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phases 48–51 complete.** See `docs/roadmap.md` for the full forward plan; the
-proposed next is **52** opt-in crash reporting (sentry-sdk → GlitchTip,
-scrubbed, behind a swappable Reporter).
+**Phases 48–52 complete** (the distribution-polish arc). See `docs/roadmap.md`
+for what's next — the biggest lever is **MCP-server-publish** (expose Evi's
+tools as an MCP server), then Responses API migration / cross-machine sync /
+`evi recipe`.
 
 Near-term loose ends:
 
@@ -80,6 +81,10 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **Phase 52 — opt-in crash reporting.** `evi/reporting.py` (Reporter seam +
+  shared PII scrubber + sentry-sdk), `[telemetry]` config (OFF by default,
+  inert until a DSN is set), CLI excepthook + web `create_app` hook. Optional
+  extra `evi-ai[telemetry]`. 603 tests green.
 - ✅ **Phase 51 — desktop auto-update (desktop 0.2.0).** Tauri updater plugin in
   the Rust shell checks `releases/latest/download/latest.json` and self-installs
   signed updates (opt out: `EVI_AUTO_UPDATE=0`). Updater keypair generated;
