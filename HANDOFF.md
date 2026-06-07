@@ -59,17 +59,31 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phase 48 is complete.** Remaining desktop/distribution work:
+**Phases 48 + 49 complete.** See `docs/roadmap.md` (rewritten 2026-06-06) for
+the full forward plan; the proposed next sequence is **50** frictionless
+first-run (one-click Ollama + auto-pull qwen2.5:3b; do NOT bundle a runtime),
+**51** desktop auto-update vs GitHub releases (Tauri updater plugin + updater
+signing), **52** opt-in crash reporting (sentry-sdk → GlitchTip, scrubbed).
 
-1. **Verify the desktop-release CI on macOS + Linux.** `.github/workflows/
-   desktop-release.yml` now exists (Win/mac/Linux matrix, `desktop-v*` tags).
-   Only the Windows path is proven; treat the first green mac/Linux run as
-   verification. Trigger via a `desktop-v*` tag or manual `workflow_dispatch`.
-2. **Code-sign the desktop installers** — they're unsigned, so SmartScreen /
-   Gatekeeper warn. Needs an Authenticode cert + Apple Developer ID wired
-   into `tauri-action`. See `docs/releasing.md`.
+Near-term loose ends:
+
+1. **Code-sign the desktop installers** — unsigned, so SmartScreen / Gatekeeper
+   warn. Needs an Authenticode cert + Apple Developer ID wired into
+   `tauri-action`. Pairs with Phase 51's updater signing. See `docs/releasing.md`.
+2. **License + visibility for evi-ai** — repo is private, LICENSE still
+   unchosen (README says "pick when publishing"). Decide before any public
+   release (per the publishing policy: ask for non-internal-tooling repos).
 
 **Done (2026-06-06):**
+
+- ✅ **Phase 49 — vuln checking.** `.github/dependabot.yml` (pip + cargo +
+  actions), `.github/workflows/security.yml` (pip-audit + cargo-deny
+  advisories), `desktop/src-tauri/deny.toml`; Dependabot alerts + security
+  updates enabled. (CodeQL/secret-scanning not free on private → deferred.)
+- ✅ **desktop-release CI verified on all 3 OS** (first-run green): Windows
+  (MSI+NSIS, 105 MB artifact), macOS (DMG+.app, 159 MB), Linux
+  (deb/rpm/AppImage, 396 MB). `desktop-v*` tag or manual dispatch.
+- ✅ **roadmap rewritten** (`docs/roadmap.md`) to reflect reality + phases 49+.
 
 - ✅ **Desktop rebuild track verified end-to-end.** Rebuilt the onedir sidecar
   with the new portprobe/server code (127.9 MB; `evi-server --check` OK),
