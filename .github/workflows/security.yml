@@ -1,0 +1,57 @@
+name: security
+
+# Dependency vulnerability scanning. Complements Dependabot (which opens
+# upgrade PRs): this gates the build on known advisories and re-scans weekly
+# so newly-disclosed CVEs in unchanged deps still surface.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"   # weekly Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Audit the resolved runtime surface (core + the commonly-installed
+      # extras). The heavy GPU extras (stt/computer/rerank → torch/av/…) are
+      # intentionally excluded to keep the job fast; revisit if we want them
+      # covered. setuptools/wheel are upgraded so the venv's bundled build
+      # tools don't generate stale, non-runtime advisories.
+      - name: Install project + extras
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index,pdf,calendar,email]"
+          python -m pip install pip-audit
+
+      - name: pip-audit
+        run: pip-audit --desc
+
+  rust-audit:
+    name: cargo-deny (advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Advisories-only gate (RustSec). License/ban/source policy lives in
+      # desktop/src-tauri/deny.toml for local `cargo deny check` and a future
+      # CI tightening, but is not enforced here yet to avoid first-run noise
+      # from Tauri's large dependency tree.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: desktop/src-tauri/Cargo.toml
+          command: check advisories
