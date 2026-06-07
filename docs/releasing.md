@@ -50,7 +50,7 @@ get confused and PyPI rejects duplicates.
 .venv/Scripts/python -m pytest -q --timeout=30
 
 # Lint
-.venv/Scripts/python -m ruff check evi apps tests
+.venv/Scripts/python -m ruff check evi tests scripts
 
 # Build
 .venv/Scripts/python -m build
@@ -61,6 +61,40 @@ python -m venv /tmp/wheel-check
 /tmp/wheel-check/bin/python -m pip install ./dist/evi_ai-X.Y.Z-py3-none-any.whl
 /tmp/wheel-check/bin/evi --version
 ```
+
+## Desktop installers (separate pipeline)
+
+The Tauri desktop app versions **independently** of the Python package
+(`desktop/src-tauri/tauri.conf.json` → `version`, currently `0.1.0`), so it
+has its own workflow — `.github/workflows/desktop-release.yml` — driven by
+`desktop-v*` tags, not the PyPI `v*.*.*` tags above.
+
+```bash
+# Bump desktop/src-tauri/tauri.conf.json "version" first if needed, then:
+git tag desktop-v0.1.0
+git push origin desktop-v0.1.0
+```
+
+The workflow (Windows / macOS / Linux matrix, `fail-fast: false`):
+
+1. Freezes the practical-tier sidecar in an isolated `.venv-build`
+   (`build-sidecar.{ps1,sh}`) and runs `evi-server --check`.
+2. Builds the standalone app via `tauri-action` with
+   `--config src-tauri/tauri.standalone.conf.json` (ships the onedir sidecar
+   through `bundle.resources`).
+3. Creates a **draft** GitHub release for the tag and attaches the installers
+   (`.msi`/`-setup.exe` on Windows, `.dmg`/`.app` on macOS,
+   `.deb`/`.rpm`/`.AppImage` on Linux). Also uploads them as workflow
+   artifacts, so a manual `workflow_dispatch` run (no tag) still produces
+   downloadables.
+
+Caveats:
+
+- Installers are **unsigned** — Windows SmartScreen and macOS Gatekeeper warn
+  on first run. Code-signing is still TODO (see *Roadmap* below).
+- Only the **Windows** path is verified end-to-end (2026-06-06); the macOS and
+  Linux jobs use the standard Tauri 2 setup but are unverified — treat their
+  first green run as the verification.
 
 ## Docker
 
@@ -94,5 +128,8 @@ clearly in the CHANGELOG under a `### Breaking` heading.
 
 - Optional Docker push step in `release.yml` (commented out for now).
 - Signing wheels with sigstore (post-1.0).
-- macOS/Windows code-signing for the Tauri desktop bundle (separate
-  release pipeline).
+- macOS/Windows code-signing for the Tauri desktop bundle — the build
+  pipeline now exists (`desktop-release.yml`); signing the artifacts (so
+  SmartScreen/Gatekeeper don't warn) is the remaining gap. Needs an
+  Authenticode cert (Windows) and an Apple Developer ID (macOS), wired into
+  `tauri-action` via its signing inputs / env.

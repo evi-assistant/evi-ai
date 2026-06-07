@@ -35,7 +35,7 @@ jobs:
           python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index]"
 
       - name: Ruff
-        run: python -m ruff check evi apps tests
+        run: python -m ruff check evi tests scripts
 
       - name: Pytest
         run: python -m pytest -q --timeout=30
