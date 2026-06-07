@@ -99,3 +99,85 @@ def test_build_server_smoke():
     server = publish.build_server(("git",))
     assert server is not None
     assert getattr(server, "name", "evi") == "evi"
+
+
+# --- per-tool allow-list (Phase 54) -------------------------------------
+
+
+def test_allow_list_narrows_to_named_tools():
+    only = publish.selected_tools(("git",), allow=("git_status",))
+    assert [t.name for t in only] == ["git_status"]
+
+
+def test_allow_list_outside_category_excluded():
+    assert publish.selected_tools(("memory",), allow=("git_status",)) == []
+
+
+# --- resources: long-term memory ----------------------------------------
+
+
+def test_memory_resource_specs_and_read(monkeypatch):
+    import evi.memory as mem
+    from evi.memory import MemoryEntry
+
+    class FakeStore:
+        def __init__(self, root=None):
+            pass
+
+        def list(self):
+            return [MemoryEntry(name="foo", summary="about foo")]
+
+        def read(self, name):
+            if name == "foo":
+                return "# foo\nbody"
+            raise KeyError(name)
+
+    monkeypatch.setattr(mem, "MemoryStore", FakeStore)
+    specs = publish.memory_resource_specs()
+    assert specs == [{
+        "uri": "evi://memory/foo", "name": "foo",
+        "description": "about foo", "mimeType": "text/markdown",
+    }]
+    assert publish.read_memory_resource("evi://memory/foo") == "# foo\nbody"
+
+
+def test_read_memory_resource_rejects_bad_uri():
+    with pytest.raises(ValueError):
+        publish.read_memory_resource("http://example.com/x")
+
+
+# --- prompts: saved slash-command templates -----------------------------
+
+
+def test_command_prompt_specs_and_expand(monkeypatch):
+    import evi.commands as cmds
+    from pathlib import Path
+
+    from evi.commands import SlashCommandEntry
+
+    class FakeCmds:
+        def __init__(self, root=None):
+            pass
+
+        def list(self):
+            return [SlashCommandEntry(name="commit", path=Path("x"), summary="make a commit")]
+
+        def expand(self, name, args=""):
+            return f"do {name} {args}".strip() if name == "commit" else None
+
+    monkeypatch.setattr(cmds, "CommandStore", FakeCmds)
+    specs = publish.command_prompt_specs()
+    assert specs[0]["name"] == "commit"
+    assert specs[0]["arguments"][0]["name"] == "args"
+    assert publish.expand_command_prompt("commit", {"args": "now"}) == "do commit now"
+    assert publish.expand_command_prompt("missing", {}) is None
+
+
+# --- HTTP transport ------------------------------------------------------
+
+
+def test_build_http_app_smoke():
+    pytest.importorskip("mcp")
+    pytest.importorskip("starlette")
+    app = publish.build_http_app(("git",), token="secret")
+    assert app is not None
