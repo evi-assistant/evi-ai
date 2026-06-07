@@ -1,10 +1,11 @@
 # cargo-deny config for the Evi desktop crate.
 #
-# CI (.github/workflows/security.yml) runs `cargo deny check advisories` — the
-# RustSec vulnerability gate. The licenses / bans / sources sections below are
-# here for local `cargo deny check` and a future CI tightening; they are not
-# enforced in CI yet (Tauri's dep tree is large and license/duplicate gating
-# is noisy until tuned).
+# CI's RustSec *vulnerability* gate uses `cargo-audit` (see
+# .github/workflows/security.yml) — it ignores the "unmaintained" advisories
+# that Tauri's transitive GTK3 tree (atk/gdk/gtk) trips, with no upgrade path.
+# This deny.toml is for local `cargo deny check` and a FUTURE CI tightening
+# (license + duplicate-version + source gating, which is noisier and needs
+# tuning against Tauri's large dep tree before enforcing). Not used by CI yet.
 
 [advisories]
 version = 2
