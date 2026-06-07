@@ -13,7 +13,7 @@ on first call to the HuggingFace cache.
 
 This tool is category `index` — it shares the toggle with
 `find_in_project` since they're used together. Install
-`pip install 'evi-ai[rerank]'` to enable.
+`pip install 'evi-assistant[rerank]'` to enable.
 
 Usage from the LLM side: first run `find_in_project(query, path, k=20)`
 to get a broad set, then `rerank(query, candidates, top_k=5)` to pick
@@ -44,7 +44,7 @@ def _load_encoder(model_name: str):
     except ImportError as exc:
         raise RuntimeError(
             "rerank needs sentence-transformers — "
-            "install with: pip install 'evi-ai[rerank]'"
+            "install with: pip install 'evi-assistant[rerank]'"
         ) from exc
     _CROSS_ENCODER = CrossEncoder(model_name)
     _CROSS_ENCODER_NAME = model_name

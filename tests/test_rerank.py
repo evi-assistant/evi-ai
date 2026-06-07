@@ -129,7 +129,7 @@ def test_rerank_missing_dep_returns_clear_error() -> None:
     """When sentence-transformers isn't installed, the lazy loader raises
     RuntimeError. The tool should surface that as a clean ERROR: line."""
     def boom(name):
-        raise RuntimeError("rerank needs sentence-transformers — pip install evi-ai[rerank]")
+        raise RuntimeError("rerank needs sentence-transformers — pip install evi-assistant[rerank]")
 
     with patch("evi.tools.rerank._load_encoder", side_effect=boom):
         out = REGISTRY["rerank"].call_rich(json.dumps({

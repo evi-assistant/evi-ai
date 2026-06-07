@@ -10,7 +10,7 @@ starts the scheduler in its lifespan context, so a single `evi web` process
 covers both jobs.
 
 Dependency is kept optional: `evi/scheduler.py` imports `apscheduler` only
-inside `Scheduler.start()`. Users who don't `pip install 'evi-ai[scheduler]'`
+inside `Scheduler.start()`. Users who don't `pip install 'evi-assistant[scheduler]'`
 get a clear error there instead of an ImportError at top of the module.
 """
 
@@ -63,7 +63,7 @@ class Scheduler:
         except ImportError as exc:
             raise RuntimeError(
                 "scheduler requires apscheduler — "
-                "install with: pip install 'evi-ai[scheduler]'"
+                "install with: pip install 'evi-assistant[scheduler]'"
             ) from exc
         ensure_dirs()
         self._bg = BackgroundScheduler(daemon=True)

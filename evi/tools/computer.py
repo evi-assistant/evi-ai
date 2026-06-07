@@ -34,7 +34,7 @@ def _import_pyautogui():
     except ImportError as exc:
         raise RuntimeError(
             "computer-use tools require pyautogui — "
-            "install with: pip install 'evi-ai[computer]'"
+            "install with: pip install 'evi-assistant[computer]'"
         ) from exc
     # Belt-and-braces: enforce the failsafe even if a user disabled it.
     pyautogui.FAILSAFE = True

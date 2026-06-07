@@ -3,10 +3,10 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# Distribution name on PyPI is `evi-ai` (the bare `evi` is taken). The
+# Distribution name on PyPI is `evi-assistant` (the bare `evi` is taken). The
 # import package and the CLI command both stay `evi` — install with
-# `pip install evi-ai`, then run `evi` and `import evi` as usual.
-name = "evi-ai"
+# `pip install evi-assistant`, then run `evi` and `import evi` as usual.
+name = "evi-assistant"
 version = "0.24.0"
 description = "Local-first personal AI assistant — CLI, web, and desktop frontends over a shared agent core."
 requires-python = ">=3.11"
@@ -64,7 +64,7 @@ web = [
     # Required by the /api/transcribe + /api/upload endpoints (Form/UploadFile).
     # FastAPI raises at route-registration time without it, so the server
     # won't even start — not optional. Previously only present transitively
-    # via the `mcp` extra, which broke `pip install evi-ai[web]` on its own.
+    # via the `mcp` extra, which broke `pip install evi-assistant[web]` on its own.
     "python-multipart>=0.0.9",
 ]
 mcp = [

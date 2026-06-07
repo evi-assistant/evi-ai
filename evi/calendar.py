@@ -165,7 +165,7 @@ def _need_icalendar():
     except ImportError as exc:
         raise CalendarError(
             "calendar reading needs icalendar + recurring-ical-events — "
-            "install with: pip install 'evi-ai[calendar]'"
+            "install with: pip install 'evi-assistant[calendar]'"
         ) from exc
 
 
@@ -264,7 +264,7 @@ def _need_caldav():
     except ImportError as exc:
         raise CalendarError(
             "CalDAV reading needs the caldav package — "
-            "install with: pip install 'evi-ai[calendar]'"
+            "install with: pip install 'evi-assistant[calendar]'"
         ) from exc
 
 

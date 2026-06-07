@@ -44,7 +44,7 @@ def web_search(query: str, limit: int = 5) -> str:
     except ImportError:
         return (
             "ERROR: duckduckgo_search not installed — "
-            "install with: pip install 'evi-ai[web-tools]'"
+            "install with: pip install 'evi-assistant[web-tools]'"
         )
     try:
         with DDGS() as ddgs:

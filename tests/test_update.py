@@ -111,9 +111,9 @@ def _pip_show_proc(stdout: str, returncode: int = 0) -> SimpleNamespace:
 
 def test_detect_install_kind_editable(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd, **_):
-        if cmd[-1] == "evi-ai":
+        if cmd[-1] == "evi-assistant":
             return _pip_show_proc(
-                "Name: evi-ai\nVersion: 0.11.0\nEditable project location: /home/u/evi\n"
+                "Name: evi-assistant\nVersion: 0.11.0\nEditable project location: /home/u/evi\n"
             )
         return _pip_show_proc("")
 
@@ -143,12 +143,12 @@ def test_detect_install_kind_pipx_via_env(
 def test_detect_install_kind_pipx_via_path_marker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Even without PIPX_HOME, pipx's default layout (~/.local/pipx/venvs/evi-ai/...)
+    """Even without PIPX_HOME, pipx's default layout (~/.local/pipx/venvs/evi-assistant/...)
     should be detected from sys.executable's path."""
     monkeypatch.delenv("PIPX_HOME", raising=False)
     monkeypatch.setattr(
         "evi.update.sys",
-        SimpleNamespace(executable="/home/u/.local/pipx/venvs/evi-ai/bin/python"),
+        SimpleNamespace(executable="/home/u/.local/pipx/venvs/evi-assistant/bin/python"),
     )
     monkeypatch.setattr(
         "evi.update.subprocess.run",

@@ -29,7 +29,7 @@ def _import_fitz():
         import fitz  # type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError(
-            "PDF reading requires PyMuPDF — install with: pip install 'evi-ai[pdf]'"
+            "PDF reading requires PyMuPDF — install with: pip install 'evi-assistant[pdf]'"
         ) from exc
     return fitz
 

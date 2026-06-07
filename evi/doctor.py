@@ -123,7 +123,7 @@ def _check_optional_deps() -> list[Check]:
         if _have_module(import_name):
             out.append(Check(f"dep: {import_name}", "ok", what))
         else:
-            hint = "core dep missing!" if extra == "(core)" else f"pip install 'evi-ai[{extra}]'"
+            hint = "core dep missing!" if extra == "(core)" else f"pip install 'evi-assistant[{extra}]'"
             status = "fail" if extra == "(core)" else "warn"
             out.append(Check(f"dep: {import_name}", status, f"{what} — {hint}"))
     return out

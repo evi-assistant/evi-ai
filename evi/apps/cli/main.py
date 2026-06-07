@@ -91,7 +91,7 @@ def _ensure_mcp(config: Config) -> MCPManager | None:
     except ImportError:
         console.print(
             "[yellow]MCP enabled but `mcp` package not installed — "
-            "run: pip install 'evi-ai[mcp]'[/yellow]"
+            "run: pip install 'evi-assistant[mcp]'[/yellow]"
         )
         return None
     _mcp_manager = manager
@@ -2360,7 +2360,7 @@ def web(host: str = "127.0.0.1", port: int = 8000) -> None:
     try:
         import uvicorn
     except ImportError:
-        console.print("[red]uvicorn not installed[/red] — run: pip install 'evi-ai[web]'")
+        console.print("[red]uvicorn not installed[/red] — run: pip install 'evi-assistant[web]'")
         raise typer.Exit(1)
     cfg = Config.load()
     if cfg.web.auth_token:
@@ -3195,7 +3195,7 @@ def mcp_list_tools() -> None:
         manager = MCPManager(servers)
         manager.start()
     except ImportError:
-        console.print("[red]`mcp` package not installed — run: pip install 'evi-ai[mcp]'[/red]")
+        console.print("[red]`mcp` package not installed — run: pip install 'evi-assistant[mcp]'[/red]")
         raise typer.Exit(1)
     try:
         names = manager.registered_tool_names()
@@ -3225,7 +3225,7 @@ def mcp_serve(
     try:
         from evi.mcp.publish import serve
     except ImportError:
-        console.print("[red]`mcp` package not installed — run: pip install 'evi-ai[mcp]'[/red]")
+        console.print("[red]`mcp` package not installed — run: pip install 'evi-assistant[mcp]'[/red]")
         raise typer.Exit(1)
     cats = tuple(c.strip() for c in categories.split(",") if c.strip())
     serve(cats)

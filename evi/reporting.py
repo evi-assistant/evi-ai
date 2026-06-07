@@ -11,7 +11,7 @@ GitHub-issue backend — is a config change, not a code change) and one shared
 because exception messages and stack-frame locals in an AI assistant can carry
 prompt text, file paths with usernames, and API keys.
 
-`sentry-sdk` is an optional dep (`pip install 'evi-ai[telemetry]'`); when it's
+`sentry-sdk` is an optional dep (`pip install 'evi-assistant[telemetry]'`); when it's
 absent or reporting is off, you get a no-op `NullReporter`.
 """
 

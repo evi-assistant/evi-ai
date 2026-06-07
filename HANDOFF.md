@@ -18,7 +18,7 @@ Local-first personal AI assistant living at `C:\evi`.
   - Desktop — Tauri 2 shell in `desktop/` that wraps the web UI
 - Talks to **local LLM backends**: LM Studio (`:1234`), Ollama (`:11434`),
   llama.cpp (`:8080`), or any OpenAI-compatible server.
-- Distributed as PyPI package **`evi-ai`**; the import package stays **`evi`**.
+- Distributed as PyPI package **`evi-assistant`**; the import package stays **`evi`**.
 - Big feature set already built across Phases 1–47: memory, MCP bridge, skills,
   scheduler, multi-backend model management, hooks/permissions, worktrees,
   dream engine, web+computer+voice(STT/TTS)+vision+OCR+PDF+SQLite tools,
@@ -70,13 +70,14 @@ HTTP transport, per-tool auth).
   installers (Win MSI+NSIS, macOS dmg/app [aarch64 only — add x86_64 target for
   Intel], Linux deb/rpm/AppImage) + `latest.json` + `.sig`. **Publish the draft**
   to make the in-app updater live (drafts aren't served at `/releases/latest/`).
-- ⛔ **PyPI `v0.23.0` NOT cut — blocked.** The `evi-ai` name on PyPI is owned by
-  an **unrelated** project ("multi-agent framework code generator",
-  github.com/yourusername/evi-ai, v0.1.0). `pyproject` `name = "evi-ai"` can't
-  be published. **Decide a new dist name** (e.g. `evi-assistant`, `evi-local`,
-  `local-evi`), update `pyproject`, then the owner sets up PyPI **Trusted
-  Publishing** (a manual web step — can't be automated) before tagging `v*`.
-  Until then `release.yml` would fail at the publish step.
+- ⏳ **PyPI not cut yet — dist renamed, awaiting Trusted Publishing.** The
+  original `evi-ai` PyPI name is owned by an **unrelated** project, so the
+  distribution was renamed to **`evi-assistant`** (available; `pyproject` +
+  all install hints + the self-updater's `DIST_NAME` updated; import/CLI stay
+  `evi`). Remaining before a `v*` tag publishes cleanly: the owner must set up
+  PyPI **Trusted Publishing** for `evi-assistant` pointing at this repo's
+  `release.yml` (a manual web step on pypi.org — can't be automated). Until
+  then `release.yml` would fail at the publish step.
 
 Near-term loose ends:
 
@@ -103,7 +104,7 @@ Near-term loose ends:
 - ✅ **Phase 52 — opt-in crash reporting.** `evi/reporting.py` (Reporter seam +
   shared PII scrubber + sentry-sdk), `[telemetry]` config (OFF by default,
   inert until a DSN is set), CLI excepthook + web `create_app` hook. Optional
-  extra `evi-ai[telemetry]`. 603 tests green.
+  extra `evi-assistant[telemetry]`. 603 tests green.
 - ✅ **Phase 51 — desktop auto-update (desktop 0.2.0).** Tauri updater plugin in
   the Rust shell checks `releases/latest/download/latest.json` and self-installs
   signed updates (opt out: `EVI_AUTO_UPDATE=0`). Updater keypair generated;
@@ -187,7 +188,7 @@ Near-term loose ends:
 | WebView2 runtime | desktop run (preinstalled on Win10/11) |
 | tesseract / ffmpeg (optional) | OCR / audio tools (else those tools degrade) |
 
-The PyPI package name is `evi-ai`; optional extras:
+The PyPI package name is `evi-assistant`; optional extras:
 `email, web, mcp, scheduler, downloads, web-tools, computer, stt, pdf, index,
 calendar, rerank, build-desktop, dev`.
 
@@ -303,7 +304,7 @@ C:\evi
 ├─ scripts/                 build-sidecar.*, evi-tools.*, sidecar_entry.py, install.*
 ├─ docs/                    desktop-bundling.md, sdk-coverage.md, etc.
 ├─ tests/                   pytest suite
-└─ pyproject.toml           dist name evi-ai, import evi
+└─ pyproject.toml           dist name evi-assistant, import evi
 ```
 ```
 %USERPROFILE%\.evi\         user data (config, tokens, models, transcripts, …)

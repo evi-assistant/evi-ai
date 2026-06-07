@@ -13,7 +13,7 @@ Critical invariants:
   checkouts.
 - For locked envs (poetry/uv/pipenv), we refuse and suggest the right
   tool unless `--force` is passed.
-- For pipx, we forward to `pipx upgrade evi-ai` because pipx manages its
+- For pipx, we forward to `pipx upgrade evi-assistant` because pipx manages its
   own isolated venvs.
 - Rollback restores the FULL `pip freeze`, not just Evi. A transitive
   dep bump can break Evi just as easily as a direct one; only restoring
@@ -43,7 +43,7 @@ from evi.config import HOME, ensure_dirs
 
 
 # PyPI distribution name (differs from the import package, which is `evi`).
-DIST_NAME = "evi-ai"
+DIST_NAME = "evi-assistant"
 PYPI_URL = f"https://pypi.org/pypi/{DIST_NAME}/json"
 SNAPSHOTS_DIR = HOME / "snapshots"
 DEFAULT_KEEP = 5
@@ -149,7 +149,7 @@ def detect_install_kind() -> InstallKind:
     `editable` and `pipx` win because they're certain; `locked` is a
     cwd-walk heuristic that the user can override with `--force`.
     """
-    # 1) editable — parse `pip show evi-ai`
+    # 1) editable — parse `pip show evi-assistant`
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pip", "show", DIST_NAME],
@@ -178,7 +178,7 @@ def detect_install_kind() -> InstallKind:
         except ValueError:
             pass
     if not is_pipx:
-        # Pipx default layout: ~/.local/pipx/venvs/evi-ai/{bin,Scripts}/python
+        # Pipx default layout: ~/.local/pipx/venvs/evi-assistant/{bin,Scripts}/python
         for marker in (f"pipx/venvs/{DIST_NAME}", f"pipx\\venvs\\{DIST_NAME}"):
             if marker in str(exe):
                 is_pipx = True
@@ -410,7 +410,7 @@ def apply_upgrade(
 ) -> UpgradeResult:
     """Run `pip install --upgrade <spec>`.
 
-    `spec` is either `evi-ai`, `evi-ai==X.Y.Z`, or a local path to a wheel /
+    `spec` is either `evi-assistant`, `evi-assistant==X.Y.Z`, or a local path to a wheel /
     sdist. Never raises — pack the failure into the result.
     """
     try:

@@ -42,7 +42,7 @@ npm run build
 Produces a platform-native installer under `src-tauri/target/release/bundle/`.
 
 By default this bundle does **not** ship Python — the target machine needs
-Python 3.11+ with `pip install evi-ai[web]` (local mode falls back to system
+Python 3.11+ with `pip install evi-assistant[web]` (local mode falls back to system
 Python). For a **standalone** installer that embeds a frozen server (no
 Python prerequisite), freeze the sidecar first and build with the standalone
 config — see [docs/desktop-bundling.md](../docs/desktop-bundling.md):

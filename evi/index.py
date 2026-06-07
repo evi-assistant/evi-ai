@@ -66,7 +66,7 @@ def _import_numpy():
     except ImportError as exc:
         raise RuntimeError(
             "semantic-search index requires numpy — "
-            "install with: pip install 'evi-ai[index]'"
+            "install with: pip install 'evi-assistant[index]'"
         ) from exc
     return np
 
