@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 7 * * 1"   # weekly full cross-platform sweep (Mon 07:00 UTC)
+  workflow_dispatch:
 
 jobs:
   test:
@@ -12,9 +15,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Every push to main runs ONE cheap Ubuntu/py3.12 job; the full
+      # 3-OS × 2-Python matrix runs on PRs, the weekly schedule, and manual
+      # dispatch. macOS bills at ~10×, so full-matrix-on-every-push was the
+      # bulk of our Actions minutes — this keeps coverage where it matters
+      # (PRs + weekly) at a fraction of the cost.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.11", "3.12"]
+        os: ${{ (github.event_name == 'push') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+        python: ${{ (github.event_name == 'push') && fromJSON('["3.12"]') || fromJSON('["3.11", "3.12"]') }}
 
     steps:
       - uses: actions/checkout@v4
