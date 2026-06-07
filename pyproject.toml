@@ -109,7 +109,7 @@ build-desktop = [
     "pyinstaller>=6.0",
 ]
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
     "ruff>=0.4",
