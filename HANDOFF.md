@@ -59,44 +59,47 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Still open — the desktop rebuild track (needs cargo + node + MSVC + the venv):**
+**Phase 48 is complete.** The only remaining item is deferred:
 
-1. **Rebuild the sidecar** with the new `portprobe.py` / `server.py` code. The
-   currently-staged frozen exe (`desktop/src-tauri/binaries/evi-server/`) was
-   built from the **old** probe code (May 29, pre-portprobe). Run
-   `scripts/build-sidecar.ps1`.
-2. **Re-verify the desktop app** end-to-end: stage `binaries/evi-server/` →
-   `desktop/src-tauri/target/release/evi-server/`, launch
-   `target\release\evi-desktop.exe`, confirm ~2–3 s launch + the no-backend
-   banner appears.
-3. **Regenerate installers:** `cd desktop && npm run tauri build -- --config src-tauri/tauri.standalone.conf.json`. Confirm Tauri places the resource
-   folder where `main.rs` looks (`<resources>/evi-server/`).
-
-**Deferred:**
-
-4. GitHub Actions desktop-release workflow (user said "not yet").
+1. Deferred (user said "not yet"): GitHub Actions desktop-release workflow.
 
 **Done (2026-06-06):**
 
+- ✅ **Desktop rebuild track verified end-to-end.** Rebuilt the onedir sidecar
+  with the new portprobe/server code (127.9 MB; `evi-server --check` OK),
+  regenerated both installers (`Evi_0.1.0_x64_en-US.msi` 59.5 MB,
+  `Evi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
+  `evi-desktop.exe` resolves + spawns the sidecar, which serves
+  `/api/health` 200 and the no-backend banner. Toolchain installed: Rust
+  stable 1.96 (was a 2022 nightly), via the existing rustup; MSVC 2022 +
+  WebView2 + Tauri CLI 2.11 were already present.
+- ✅ **Fixed: `python-multipart` missing from the `web` extra** — the
+  `/api/transcribe` + `/api/upload` endpoints need it at route-registration
+  time, so the standalone server crashed on boot. Was only present via the
+  `mcp` extra. Now declared + a PyInstaller `--hidden-import`.
+- ✅ **Fixed: sidecar build bloat** — `build-sidecar.{ps1,sh}` now prefer an
+  isolated **`.venv-build`** so a fat dev `.venv` (stt/computer/rerank) can't
+  drag torch/av/sounddevice into the practical-tier sidecar.
 - ✅ **Version bump → 0.22.0** (`evi/__init__.py`, `pyproject.toml`) + a
   Phase-48 **CHANGELOG** entry + **`docs/desktop-bundling.md`** updated
   (onedir/`bundle.resources`, pywebview all-Python fallback, llama.cpp
-  8080–8090 port fallback). Memory refreshed.
+  8080–8090 port fallback, the build-venv + multipart notes). Memory refreshed.
 - ✅ **`git init`** — initial commit on `main` (was the old item #5).
 - ✅ **`apps/` namespace** — verified resolved; no stray top-level `apps/`
   (frontends live under `evi/apps/`).
-- ✅ **`.venv` recreated** on this machine (`py -3.11`, all extras).
+- ✅ **`.venv` recreated** on this machine (`py -3.11`, all extras) +
+  **`.venv-build`** created (web/pdf/index/build-desktop only, for the sidecar).
 
 ## 4. Known issues & gotchas
 
-- **No git.** Everything is on-disk only; nothing is committed anywhere.
-- **Two Pythons on this box.** System `python` (`AppData\Local\Programs\Python\
-  Python312`) lacks the web deps. Use **`.venv`** (Python 3.12.10) — it has
-  `evi` installed editable plus all extras. Run tests/tools via
-  `.venv\Scripts\python.exe`.
-- **`py -3.11` launcher is not installed** here, though `main.rs` prefers it for
-  the dev-mode Python spawn. Harmless: it falls back, and the bundled build uses
-  the frozen sidecar, not `py`.
+- **Use the venv Python.** System `python` lacks the web deps. Use **`.venv`**
+  (Python 3.11.9 on this machine) — it has `evi` installed editable plus all
+  extras. Run tests/tools via `.venv\Scripts\python.exe`. A second
+  **`.venv-build`** (web/pdf/index/build-desktop only) exists purely for
+  freezing the sidecar — do NOT add the heavy extras to it.
+- **Sidecar build venv must stay lean.** `build-sidecar.{ps1,sh}` prefer
+  `.venv-build`; building from the fat `.venv` pulls torch/av/sounddevice into
+  the practical-tier sidecar (>1 GB). See `docs/desktop-bundling.md`.
 - **Windows `localhost` IPv6 stall:** connecting to a closed `::1` port is
   *dropped* (SYN filtered), not refused, so it blocks for the full timeout.
   `portprobe` pins probes to `127.0.0.1` to avoid multi-second stalls. Keep this

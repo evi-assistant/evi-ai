@@ -59,6 +59,29 @@ tells you (and helps you fix it) when no local LLM backend is running.
   the full timeout. Probes and connections now pin to `127.0.0.1`.
 - **Time-bomb transcript test** — `tests/test_transcripts.py` used a fixed
   date that would eventually fail; made it relative.
+- **`python-multipart` missing from the `web` extra** — the `/api/transcribe`
+  and `/api/upload` endpoints use `Form`/`UploadFile`, which FastAPI requires
+  `python-multipart` for *at route-registration time*, so `create_app()`
+  raised and the server wouldn't start. It was only ever present transitively
+  via the `mcp` extra, so `pip install evi-ai[web]` (and the standalone
+  sidecar) shipped a server that crashed on boot. Now a declared `web` dep.
+
+### Build — standalone sidecar
+
+- **Isolated build venv.** `build-sidecar.{ps1,sh}` now prefer a `.venv-build`
+  if present. `--collect-submodules evi` pulls every `evi.tools.*` module, so
+  building from a dev `.venv` that has the `stt`/`computer`/`rerank` extras
+  installed dragged torch + faster-whisper + sounddevice + av into the
+  "practical tier" sidecar (~75 MB → >1 GB). Build from a venv with only
+  `web,pdf,index,build-desktop` for the lean ~128 MB onedir.
+- Added `--hidden-import python_multipart` (FastAPI imports it lazily, so
+  PyInstaller's static analysis misses it) and a `python_multipart` line to
+  `evi-server --check`.
+- **Verified end-to-end on Windows (2026-06-06):** rebuilt the onedir sidecar
+  (127.9 MB, `--check` OK), built both installers (`Evi_0.1.0_x64_en-US.msi`
+  59.5 MB, `Evi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
+  `evi-desktop.exe` resolves + spawns the sidecar, which serves
+  `/api/health` 200 and the no-backend banner.
 
 ### Tests
 

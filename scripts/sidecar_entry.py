@@ -41,6 +41,7 @@ def _selfcheck() -> int:
     checks = {
         "fitz (pymupdf / read_pdf)": "fitz",
         "numpy (index / embeddings)": "numpy",
+        "python_multipart (upload / transcribe forms)": "python_multipart",
         "uvicorn http protocol": "uvicorn.protocols.http.auto",
         "uvicorn websockets protocol": "uvicorn.protocols.websockets.auto",
         "uvicorn lifespan": "uvicorn.lifespan.on",

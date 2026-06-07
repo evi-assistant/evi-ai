@@ -9,7 +9,12 @@
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = (Resolve-Path "$here\..").Path
-$py = if (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
+# Prefer an isolated build venv (.venv-build) if present. A fat dev .venv with
+# the stt/computer/rerank extras installed would drag torch + faster-whisper +
+# sounddevice + av into the "practical tier" sidecar (--collect-submodules evi
+# pulls every evi.tools.* module), ballooning it from ~75 MB to >1 GB. Create
+# the isolated venv once with: py -3.11 -m venv .venv-build
+$py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 
 # Practical tier: bundle web + pdf + index. STT + computer-use stay opt-in
 # via a system Python. OCR works via a bundled tesseract binary.
@@ -32,6 +37,8 @@ Write-Host ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-all pymupdf `
     --collect-all numpy `
     --hidden-import fitz `
+    --hidden-import python_multipart `
+    --hidden-import multipart `
     --hidden-import uvicorn.protocols.http.auto `
     --hidden-import uvicorn.protocols.websockets.auto `
     --hidden-import uvicorn.lifespan.on `

@@ -42,9 +42,20 @@ macOS, etc.):
 ### 1. Freeze the server into a sidecar
 
 ```
-pip install -e '.[web,pdf,index,build-desktop]'
+# Build from an ISOLATED venv — see the warning below.
+python -m venv .venv-build         # py -3.11 -m venv .venv-build on Windows
+.venv-build/bin/pip install -e '.[web,pdf,index,build-desktop]'
 scripts/build-sidecar.sh          # or scripts\build-sidecar.ps1 on Windows
 ```
+
+> **⚠ Build from an isolated venv, not your fat dev `.venv`.** The build
+> scripts pass `--collect-submodules evi`, which pulls *every* `evi.tools.*`
+> module into the analysis. If your `.venv` has the `stt`/`computer`/`rerank`
+> extras installed, that drags **torch + faster-whisper + sounddevice + av**
+> into the supposedly-"practical" sidecar and balloons it from ~128 MB to
+> >1 GB. `build-sidecar.{ps1,sh}` therefore prefer a **`.venv-build`** if one
+> exists (then `.venv`, then system Python). Create `.venv-build` with only
+> `web,pdf,index,build-desktop` installed and the sidecar stays lean.
 
 This runs PyInstaller over `scripts/sidecar_entry.py` (which imports the
 FastAPI `app` object directly and runs uvicorn) in **`--onedir`** mode,
@@ -134,12 +145,16 @@ before building.
 
 ## Verification status
 
-- **0.22.0 — switched to `--onedir` + `bundle.resources`.** The onedir
-  sidecar launches the app window in ~2–3 s (was ~13–16 s with onefile).
-  ⚠ The standalone installers below were built from the **0.21.x**
-  onefile/old-probe sidecar; regenerate them with the 0.22.0 server code
-  (`build-sidecar.ps1` → stage `binaries/evi-server/` → `npm run tauri
-  build -- --config src-tauri/tauri.standalone.conf.json`) before shipping.
+- **0.22.0 — verified end-to-end on Windows (2026-06-06).** Switched to
+  `--onedir` + `bundle.resources`. Rebuilt the sidecar from an isolated
+  `.venv-build` (127.9 MB; `evi-server --check` passes including
+  `python_multipart`), built both installers
+  (`Evi_0.1.0_x64_en-US.msi` 59.5 MB, `Evi_0.1.0_x64-setup.exe` 46.0 MB),
+  and confirmed the built `evi-desktop.exe` resolves + spawns the sidecar,
+  which serves `/api/health` 200 and the no-backend banner on a free port.
+  Toolchain: Rust stable 1.96, MSVC BuildTools 2022, Tauri CLI 2.11,
+  WebView2 148. (Installers are smaller than the 0.21.x onefile ones because
+  the onedir folder's many small Python files compress better in MSI/NSIS.)
 - **Sidecar build: verified on Windows (2026-05-29).**
   `scripts/build-sidecar.ps1` froze a working 72.7 MB `evi-server.exe`
   (practical tier: web+pdf+index). `evi-server.exe --check` loads all
