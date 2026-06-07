@@ -5,7 +5,29 @@ All notable user-visible changes to Evi. Format loosely follows
 
 ## [0.23.0] — 2026-06-07
 
-Phases 49–50 — supply-chain hygiene + a frictionless first run.
+Phases 49–52 — supply-chain hygiene, a frictionless first run, desktop
+auto-update, and opt-in crash reporting.
+
+### Added — Phase 52: opt-in crash reporting
+
+Privacy-first error reporting, **OFF by default and inert until configured**.
+
+- **`evi/reporting.py`** — a swappable `Reporter` seam (`NullReporter` default;
+  `SentryReporter` via the optional `sentry-sdk`) plus a shared **scrubber**
+  applied to every event: rewrites home dir → `<HOME>` + username → `<USER>`,
+  redacts API-key/token patterns, and **drops stack-frame locals, env,
+  request/headers/cookies** — critical for an AI app where those can carry
+  prompt text or keys. Anonymises `server_name`, drops the user/IP block.
+- **`[telemetry]` config** (`crash_reports` off, `dsn`, `backend`) with env
+  overrides `EVI_CRASH_REPORTS` / `EVI_TELEMETRY_DSN`. Point `dsn` at a
+  self-hosted GlitchTip or hosted Sentry whenever you want — no code change.
+- **Hooks:** a chained `sys.excepthook` (CLI) and `init_reporting()` at web
+  `create_app()` (so sentry-sdk's FastAPI integration captures server errors —
+  and the frozen desktop sidecar, which runs the same app). New optional extra
+  `evi-ai[telemetry]` (`sentry-sdk`).
+- A "log a GitHub issue" backend was evaluated and deferred — it needs a
+  token-holding relay and re-implements dedup/scrub/rate-limit that the SDK
+  gives free; the `Reporter` seam leaves room for it later.
 
 ### Added — Phase 50: one-click first-run setup
 

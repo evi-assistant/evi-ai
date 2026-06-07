@@ -163,6 +163,23 @@ class WebSettings:
 
 
 @dataclass
+class TelemetrySettings:
+    """Opt-in crash/error reporting. **OFF by default.**
+
+    Reports are sent only when `crash_reports` is true AND a `dsn` is set, to a
+    Sentry-compatible endpoint (self-hosted GlitchTip or hosted Sentry). Every
+    event is heavily scrubbed first (home/user paths, env, API keys, and —
+    crucially for an AI app — exception messages + frame locals that may carry
+    prompt text). Nothing is sent without a DSN, so this is inert until you opt
+    in. Env overrides: `EVI_CRASH_REPORTS` (0/1), `EVI_TELEMETRY_DSN`.
+    """
+
+    crash_reports: bool = False
+    dsn: str = ""
+    backend: str = "sentry"   # "sentry" | "none"
+
+
+@dataclass
 class ToolToggles:
     fs: bool = True
     code: bool = True
@@ -209,6 +226,7 @@ class Config:
     tools: ToolToggles = field(default_factory=ToolToggles)
     auto: AutoSettings = field(default_factory=AutoSettings)
     web: WebSettings = field(default_factory=WebSettings)
+    telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -234,6 +252,7 @@ class Config:
             tools=ToolToggles(**data.get("tools", {})),
             auto=AutoSettings(**data.get("auto", {})),
             web=WebSettings(**data.get("web", {})),
+            telemetry=TelemetrySettings(**data.get("telemetry", {})),
         )
 
     def save(self) -> None:
