@@ -1,0 +1,38 @@
+name: e2e
+
+# Browser-driven UI regression tests (tests/e2e/, Playwright). The unit suite
+# (ci.yml) can't catch UI rendering bugs — this can. Heavier than unit (browser
+# install + a real server), so it runs on PRs + weekly + manual dispatch, not
+# on every push. Ubuntu only.
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1"   # weekly Monday 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    name: playwright UI e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Evi + e2e deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index,e2e]"
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run UI e2e
+        run: python -m pytest tests/e2e -m e2e --timeout=120 -q
