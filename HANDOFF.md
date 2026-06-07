@@ -1,6 +1,6 @@
 # Evi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-06 · version 0.22.0_
+_Last updated: 2026-06-07 · version 0.23.0_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -59,31 +59,36 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phases 48 + 49 complete.** See `docs/roadmap.md` (rewritten 2026-06-06) for
-the full forward plan; the proposed next sequence is **50** frictionless
-first-run (one-click Ollama + auto-pull qwen2.5:3b; do NOT bundle a runtime),
-**51** desktop auto-update vs GitHub releases (Tauri updater plugin + updater
-signing), **52** opt-in crash reporting (sentry-sdk → GlitchTip, scrubbed).
+**Phases 48–50 complete.** See `docs/roadmap.md` for the full forward plan; the
+proposed next sequence is **51** desktop auto-update vs GitHub releases (Tauri
+updater plugin + updater signing), then **52** opt-in crash reporting
+(sentry-sdk → GlitchTip, scrubbed).
 
 Near-term loose ends:
 
 1. **Code-sign the desktop installers** — unsigned, so SmartScreen / Gatekeeper
    warn. Needs an Authenticode cert + Apple Developer ID wired into
    `tauri-action`. Pairs with Phase 51's updater signing. See `docs/releasing.md`.
-2. **License + visibility for evi-ai** — repo is private, LICENSE still
-   unchosen (README says "pick when publishing"). Decide before any public
-   release (per the publishing policy: ask for non-internal-tooling repos).
+2. **First-run wizard UI click-through** — the Python side (install/pull/status
+   endpoints, model picker) is unit-tested + live-verified; the JS wizard in
+   `static/index.html` is code-review-verified only (no browser in this env).
+   A real click-through actually installs Ollama — verify on a clean machine.
 
-**Done (2026-06-06):**
+**Done (2026-06-07):**
 
-- ✅ **Phase 49 — vuln checking.** `.github/dependabot.yml` (pip + cargo +
-  actions), `.github/workflows/security.yml` (pip-audit + cargo-deny
-  advisories), `desktop/src-tauri/deny.toml`; Dependabot alerts + security
-  updates enabled. (CodeQL/secret-scanning not free on private → deferred.)
+- ✅ **Phase 50 — frictionless first run (0.23.0).** `evi/firstrun.py` (per-OS
+  Ollama install), `recommend.first_run_model` (auto-pull qwen2.5:3b),
+  `POST /api/backend/install` + SSE `GET /api/backend/pull`, status hints, and
+  the web banner → setup wizard. Do NOT bundle a runtime; vLLM excluded.
+- ✅ **MIT license** confirmed (LICENSE present) — was the old open item.
+- ✅ **Phase 49 — vuln checking (0.23.0).** `dependabot.yml`, `security.yml`
+  (pip-audit + cargo-audit), `deny.toml`; Dependabot alerts + security updates
+  enabled. cargo-audit (not cargo-deny) so Tauri's transitive "unmaintained"
+  GTK3 advisories stay warnings, not failures.
 - ✅ **desktop-release CI verified on all 3 OS** (first-run green): Windows
   (MSI+NSIS, 105 MB artifact), macOS (DMG+.app, 159 MB), Linux
   (deb/rpm/AppImage, 396 MB). `desktop-v*` tag or manual dispatch.
-- ✅ **roadmap rewritten** (`docs/roadmap.md`) to reflect reality + phases 49+.
+- ✅ **roadmap rewritten** (`docs/roadmap.md`); **CI red-since-init fixed**.
 
 - ✅ **Desktop rebuild track verified end-to-end.** Rebuilt the onedir sidecar
   with the new portprobe/server code (127.9 MB; `evi-server --check` OK),

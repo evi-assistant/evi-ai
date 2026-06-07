@@ -28,7 +28,7 @@ This is a *proposed* order, weighted toward finishing the distribution story
 (so new users have a smooth install → first-chat → stay-updated path) before
 expanding surface area.
 
-### Phase 49 — Supply-chain hygiene / vuln checking — **S, in progress**
+### Phase 49 — Supply-chain hygiene / vuln checking — **✅ shipped (0.23.0)**
 
 Make dependency vulnerabilities visible and gated in CI.
 
@@ -41,7 +41,7 @@ Make dependency vulnerabilities visible and gated in CI.
   free on private repos (need paid GitHub Advanced Security) — deferred; a
   self-hosted `gitleaks`/CodeQL-CLI step is a possible later add.
 
-### Phase 50 — Frictionless first run (time-to-first-chat) — **M**
+### Phase 50 — Frictionless first run (time-to-first-chat) — **✅ shipped (0.23.0)**
 
 A fresh user has no LLM backend → today they hit the "no backend" banner.
 **Decision (from research): do NOT bundle a runtime** — the multi-GB *model*

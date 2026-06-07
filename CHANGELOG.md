@@ -3,6 +3,62 @@
 All notable user-visible changes to Evi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.23.0] — 2026-06-07
+
+Phases 49–50 — supply-chain hygiene + a frictionless first run.
+
+### Added — Phase 50: one-click first-run setup
+
+A brand-new user has no LLM backend, so the web/desktop UI showed a dead-end
+"no backend" banner. That banner is now a **setup wizard**:
+
+- **`evi/firstrun.py`** — per-OS, package-manager-first Ollama install planning
+  (`winget` on Windows, Homebrew on macOS, the official `install.sh` on Linux),
+  with a graceful manual-download fallback when no unattended path exists, plus
+  an `install_ollama()` runner (with `dry_run`).
+- **`recommend.first_run_model(hw)`** — picks a small, fast default to auto-pull
+  (`qwen2.5:3b-instruct-q4_K_M`, ~1.9 GB), capped at 3B even on big GPUs so the
+  *first* download is quick; `recommend()` still surfaces the bigger
+  hardware-optimal model as an upgrade.
+- **New endpoints:** `POST /api/backend/install` (unattended Ollama install) and
+  SSE `GET /api/backend/pull` (streams model-pull progress). `GET
+  /api/backend/status` now also reports `recommended_model` +
+  `can_auto_install_ollama`.
+- **Web UI wizard:** the banner's "⚡ Set up Evi automatically" button chains
+  install → start → pull (with a live progress bar) → recheck, so a fresh user
+  reaches first chat without manual backend setup. Manual fallbacks remain.
+- **Decisions (from research):** we deliberately do **not** bundle a runtime
+  (the multi-GB model download is the real cost; bundling balloons the installer
+  5–10×), and **vLLM is excluded** for first-run (GPU/CUDA/Linux server-grade).
+
+### Added — Phase 49: dependency vulnerability scanning
+
+- CI **`security.yml`**: `pip-audit` (OSV) for Python + `cargo-audit` (RustSec)
+  for the desktop crate, weekly + on push/PR. cargo-audit gates on real
+  vulnerabilities only (Tauri's transitive GTK3 tree trips "unmaintained"
+  notices with no upgrade path — those stay warnings).
+- **`.github/dependabot.yml`** for pip + cargo + github-actions (weekly,
+  grouped, Conventional-Commit prefixes); **`deny.toml`** for local
+  `cargo deny` / future license+ban gating.
+- GitHub-native **Dependabot alerts + security updates** enabled. (CodeQL /
+  secret-scanning aren't free on private repos → deferred.)
+
+### Added — desktop-release CI
+
+- **`.github/workflows/desktop-release.yml`** builds the standalone Tauri
+  installers (Windows/macOS/Linux) on `desktop-v*` tags or manual dispatch and
+  attaches them to a draft release. Verified end-to-end on all three OSes.
+
+### Fixed
+
+- **CI was red since the initial commit** — `ci.yml` ran `ruff check evi apps
+  tests`, but the top-level `apps/` had moved under `evi/apps/`, so the lint
+  step errored before tests ran. Now `evi tests scripts`. CI is green.
+
+### License
+
+- The project is now explicitly **MIT** (LICENSE present; was already drafted).
+
 ## [0.22.0] — 2026-06-06
 
 Phase 48 — desktop standalone launch is now fast, and the web/desktop UI

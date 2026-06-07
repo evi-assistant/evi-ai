@@ -237,3 +237,41 @@ def _pick(
         if ram_mb is not None and m.min_ram_mb <= ram_mb:
             return m
     return None
+
+
+# First-run default is capped at this many billion params so the very first
+# download is small (~2 GB) and the first reply is quick — even on a big GPU,
+# where a 14B/32B is *better* but a 20 GB pull is a terrible first impression.
+# `recommend()` still surfaces the bigger hardware-optimal model as an upgrade.
+_FIRST_RUN_MAX_PARAMS_B = 3.0
+
+
+def _params_b(parameters: str) -> float:
+    """Parse a `ModelRec.parameters` string like '7B' / '1.5B' to a float."""
+    try:
+        return float(parameters.strip().upper().rstrip("B"))
+    except ValueError:
+        return 0.0
+
+
+def first_run_model(hw: HardwareInfo) -> str:
+    """Pick the model to auto-pull on first run: the largest chat/small model
+    at or under `_FIRST_RUN_MAX_PARAMS_B` that fits the detected hardware.
+
+    Returns an Ollama-style tag (e.g. ``qwen2.5:3b-instruct-q4_K_M``). Always
+    returns *something* — the smallest known model as a last resort — so a fresh
+    user can always get to a first chat.
+    """
+    small_first = [
+        m for m in REGISTRY
+        if m.role in ("chat", "small") and _params_b(m.parameters) <= _FIRST_RUN_MAX_PARAMS_B
+    ]
+    # REGISTRY is biggest-first, so the first entry that fits is the best pick.
+    vram_mb = hw.primary_gpu.vram_total_mb if hw.primary_gpu else None
+    ram_mb = hw.ram_total_bytes // (1024 * 1024)
+    for m in small_first:
+        if vram_mb is not None and vram_mb >= 2500 and m.min_vram_mb <= vram_mb:
+            return m.id
+        if m.min_ram_mb <= ram_mb:
+            return m.id
+    return small_first[-1].id  # smallest known model, last resort

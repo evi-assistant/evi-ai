@@ -146,3 +146,54 @@ def test_open_download(client, monkeypatch):
     body = client.post("/api/backend/open-download", json={"kind": "ollama"}).json()
     assert body["opened"] is True
     assert "ollama.com" in body["url"]
+
+
+# --- first-run wizard: status hints + install + pull (Phase 50) -----------
+
+
+def test_status_includes_firstrun_hints(client, monkeypatch):
+    import evi.firstrun as fr
+
+    monkeypatch.setattr(server_mod, "_probe_candidate", lambda k, u: (False, u))
+    monkeypatch.setattr("shutil.which", lambda _n: None)
+    monkeypatch.setattr(fr, "recommended_model", lambda: "qwen2.5:3b-instruct-q4_K_M")
+    monkeypatch.setattr(
+        fr, "ollama_install_plan",
+        lambda **k: fr.OllamaInstallPlan(available=True, method="winget"),
+    )
+    body = client.get("/api/backend/status").json()
+    assert body["recommended_model"] == "qwen2.5:3b-instruct-q4_K_M"
+    assert body["can_auto_install_ollama"] is True
+
+
+def test_install_endpoint_delegates_to_firstrun(client, monkeypatch):
+    import evi.firstrun as fr
+
+    monkeypatch.setattr(
+        fr, "install_ollama",
+        lambda **k: {"ok": True, "method": "winget", "message": "Ollama installed."},
+    )
+    body = client.post("/api/backend/install", json={"kind": "ollama"}).json()
+    assert body["ok"] is True and body["method"] == "winget"
+
+
+def test_install_endpoint_rejects_non_ollama(client):
+    body = client.post("/api/backend/install", json={"kind": "lmstudio"}).json()
+    assert body["ok"] is False
+
+
+def test_pull_endpoint_streams_progress(client, monkeypatch):
+    import evi.backends.ollama as ol
+    from evi.backends.base import PullProgress
+
+    def fake_pull(self, model_id):
+        yield PullProgress(status="pulling manifest", downloaded=50, total=100, detail="d")
+        yield PullProgress(status="success", downloaded=100, total=100, detail="d")
+
+    monkeypatch.setattr(ol.OllamaBackend, "pull_model", fake_pull)
+    r = client.get("/api/backend/pull?model=test:1b")
+    assert r.status_code == 200
+    text = r.text
+    assert "progress" in text          # progress events streamed
+    assert '"pct": 50.0' in text       # halfway computed from completed/total
+    assert "done" in text              # terminal event

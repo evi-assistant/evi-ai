@@ -984,36 +984,113 @@ function renderBackendBanner(st) {
   const el = document.getElementById('backend-banner');
   if (!st || st.any_reachable) { el.style.display = 'none'; return; }
   const cfg = st.configured || {};
+  const model = st.recommended_model || 'a small model';
   var html = '<b>⚠ No local LLM backend is running.</b> Evi needs a model server to reply. ' +
-    '<span style="opacity:.8">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>' +
-    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">';
-  html += st.ollama_installed ? bkBtn('Start Ollama', 'start', 'ollama')
-                              : bkBtn('Install Ollama', 'install', 'ollama');
+    '<span style="opacity:.7">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>' +
+    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+  // Primary one-click path: install (if needed) + start + pull a small model.
+  if (st.ollama_installed) {
+    html += bkBtn('⚡ Set up Evi (start + download ' + model + ')', 'auto', 'ollama');
+    html += bkBtn('Start only', 'start', 'ollama');
+  } else if (st.can_auto_install_ollama) {
+    html += bkBtn('⚡ Set up Evi automatically (install Ollama + ' + model + ')', 'auto', 'ollama');
+    html += bkBtn('Download manually', 'download', 'ollama');
+  } else {
+    html += bkBtn('Download Ollama', 'download', 'ollama');
+  }
   html += bkBtn('Recheck', 'recheck');
-  html += '</div><div style="margin-top:6px;opacity:.75">Using LM Studio? Open it, load a model, ' +
+  html += '</div>';
+  html += '<div id="bk-progress" style="margin-top:8px;display:none"></div>';
+  html += '<div style="margin-top:6px;opacity:.7">Using LM Studio? Open it, load a model, ' +
     'then Developer → Start Server (port 1234), and click Recheck.</div>';
   el.innerHTML = html;
   el.style.display = 'block';
   el.querySelectorAll('.bk-btn').forEach(function (b) { b.onclick = onBackendAction; });
+}
+function bkProgress(text, pct) {
+  const p = document.getElementById('bk-progress');
+  if (!p) return;
+  p.style.display = 'block';
+  var bar = '';
+  if (typeof pct === 'number') {
+    var w = Math.max(0, Math.min(100, pct));
+    bar = '<div style="height:8px;background:#1f2937;border-radius:4px;overflow:hidden;margin-top:5px">' +
+      '<div style="height:100%;width:' + w + '%;background:#22d3ee;transition:width .2s"></div></div>';
+  }
+  p.innerHTML = '<div>' + text + '</div>' + bar;
+}
+async function pollReachable(tries, delayMs) {
+  for (var i = 0; i < tries; i++) {
+    await new Promise(function (r) { setTimeout(r, delayMs); });
+    const st = await fetch('/api/backend/status').then(function (r) { return r.json(); }).catch(function () { return null; });
+    if (st && st.any_reachable) { backendStatus = st; return true; }
+  }
+  return false;
+}
+function pullModelSSE(model) {
+  // EventSource can't set headers, so the auth token rides as a query param.
+  return new Promise(function (resolve) {
+    var qs = (model ? ('model=' + encodeURIComponent(model) + '&') : '') + authQuery();
+    var es = new EventSource('/api/backend/pull?' + qs);
+    es.onmessage = function (ev) {
+      var d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+      if (d.kind === 'progress') {
+        var label = d.status || 'downloading';
+        bkProgress('Downloading model — ' + label + (d.pct != null ? ' (' + d.pct + '%)' : ''),
+                   d.pct != null ? d.pct : undefined);
+      } else if (d.kind === 'done') { es.close(); resolve(true); }
+      else if (d.kind === 'error') { bkProgress('Model download error: ' + (d.message || ''));  es.close(); resolve(false); }
+    };
+    es.onerror = function () { es.close(); resolve(false); };
+  });
+}
+async function autoSetup(st) {
+  st = st || {};
+  // 1. Install Ollama if it isn't here yet.
+  if (!st.ollama_installed) {
+    bkProgress('Installing Ollama… this can take a minute.');
+    var res = await fetch('/api/backend/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama' }) })
+      .then(function (r) { return r.json(); }).catch(function () { return { ok: false }; });
+    if (!res.ok) {
+      if (res.needs_manual) {
+        bkProgress("Couldn't auto-install here — opening the download page. Install Ollama, then click Recheck.");
+        await fetch('/api/backend/open-download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama' }) }).catch(function () {});
+      } else {
+        bkProgress('Install failed: ' + (res.message || 'unknown error') + ' — you can install Ollama manually, then Recheck.');
+      }
+      return;
+    }
+  }
+  // 2. Start the server and wait for it.
+  bkProgress('Starting Ollama…');
+  await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama' }) }).catch(function () {});
+  var up = await pollReachable(15, 1200);
+  if (!up) { bkProgress("Ollama didn't come up in time. Give it a moment and click Recheck."); return; }
+  // 3. Pull the recommended default model (idempotent if already present).
+  bkProgress('Downloading model' + (st.recommended_model ? (' ' + st.recommended_model) : '') + '…', 0);
+  var ok = await pullModelSSE(st.recommended_model || '');
+  bkProgress(ok ? 'All set — Evi is ready to chat!' : "Model download didn't finish. Retry from the model menu, then chat.");
+  // 4. Re-check: hides the banner once a backend + model are live.
+  await checkBackend();
 }
 async function onBackendAction(e) {
   const btn = e.currentTarget;
   const act = btn.getAttribute('data-act');
   const kind = btn.getAttribute('data-kind') || 'ollama';
   if (act === 'recheck') { btn.textContent = 'Checking…'; await checkBackend(); return; }
-  btn.disabled = true; btn.textContent = '…';
+  btn.disabled = true;
   try {
-    if (act === 'start') {
+    if (act === 'auto') {
+      await autoSetup(backendStatus || {});
+      return;  // autoSetup ends with checkBackend()
+    } else if (act === 'start') {
+      btn.textContent = 'Starting…';
       await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
-      for (var i = 0; i < 10; i++) {
-        await new Promise(function (r) { setTimeout(r, 1200); });
-        const st = await checkBackend();
-        if (st && st.any_reachable) return;
-      }
-    } else if (act === 'install') {
+      await pollReachable(10, 1200);
+    } else if (act === 'download') {
       await fetch('/api/backend/open-download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
     }
-  } catch { }
+  } catch (_) { }
   await checkBackend();
 }
 
