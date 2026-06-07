@@ -1,6 +1,6 @@
 # Evi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-07 · version 0.24.1 (desktop app 0.2.2)_
+_Last updated: 2026-06-07 · version 0.24.2 (desktop app 0.2.3)_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -97,6 +97,11 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **0.24.2 fix — chat now renders replies (SSE CRLF bug).** Frontend split
+  SSE frames on `\n\n` but sse-starlette 3.4.x emits `\r\n\r\n` → zero events
+  parsed → no reply. Both SSE readers now use `/\r?\n\r?\n/`. Broke all chat in
+  0.23.0–0.24.1; verified fixed live in a browser. Desktop → 0.2.3. (Gap: no
+  browser/e2e test of the chat stream — worth adding.)
 - ✅ **0.24.1 fix — first-run wizard activates the backend it sets up.** New
   `POST /api/backend/use` writes `{backend,base_url,model}` + rebuilds live
   clients; wizard now does install→start→pull→**use**; banner keys off the

@@ -3,6 +3,23 @@
 All notable user-visible changes to Evi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.2] — 2026-06-07
+
+### Fixed — chat showed no response (SSE frames split on the wrong separator)
+
+Chat sent your message but never rendered a reply — no assistant bubble, no
+error, Send just re-enabled. The frontend split the streamed SSE event frames
+on `\n\n`, but `sse-starlette` (3.4.x, pulled into the fresh build) separates
+them with `\r\n\r\n`. Since `\r\n\r\n` contains no `\n\n`, the parser found
+**zero** frame boundaries and dispatched **zero** events. Both SSE readers (the
+chat stream and session re-roll) now split on `/\r?\n\r?\n/` and tolerate CRLF
+within frames. Affected all chat (web + desktop) in 0.23.0–0.24.1. Desktop →
+0.2.3.
+
+> Slipped through because there's no browser/e2e test of the chat stream — the
+> Python tests assert the server *emits* events (parsed by code that handles
+> both separators), never that the JS *renders* them.
+
 ## [0.24.1] — 2026-06-07
 
 ### Fixed — first-run wizard now actually activates the backend it sets up
