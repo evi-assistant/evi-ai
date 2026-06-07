@@ -97,11 +97,13 @@ Opt-in, privacy-first telemetry so we learn about crashes.
 
 ## Larger backlog (unsequenced — L unless noted)
 
-- ✅ **MCP-server-publish** — **shipped (0.24.0, Phase 53)**: `evi mcp serve`
-  exposes Evi's tools (memory/index/calendar/git by default) as an MCP server
-  for Claude Desktop / Cursor / Cline / Continue. Possible follow-ups: expose
-  MCP *resources* + *prompts* (not just tools), an HTTP/SSE transport (currently
-  stdio only), and per-tool allow-listing / auth for untrusted clients.
+- ✅ **MCP-server-publish** — **shipped (0.24.0, Phases 53–54)**: `evi mcp serve`
+  exposes Evi's tools (memory/index/calendar/git by default) **+ memory
+  resources + command prompts** as an MCP server for Claude Desktop / Cursor /
+  Cline / Continue. Transports: stdio + streamable **HTTP** (`--http`, bearer
+  `--token`); per-tool allow-list (`--tools`). Remaining nice-to-haves: an
+  OAuth flow for HTTP (vs static token), and exposing index/calendar data as
+  resources too.
 - **Responses API migration** — adopt OpenAI's newer shape; future-proofs core.
 - **Cross-machine sync** of `~/.evi/` (git/rclone) — **M**; fits the documented
   3-machine setup (memory/skills/profiles/routes move with you).

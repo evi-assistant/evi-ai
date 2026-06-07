@@ -3217,18 +3217,36 @@ def mcp_serve(
         "-c",
         help="Comma-separated tool categories to expose to MCP clients.",
     ),
+    tools: str = typer.Option(
+        "", "--tools",
+        help="Optional allow-list of exact tool names (comma-separated) within the categories.",
+    ),
+    http: bool = typer.Option(
+        False, "--http",
+        help="Serve over streamable HTTP instead of stdio (for remote clients).",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind host (with --http)."),
+    port: int = typer.Option(8765, "--port", help="HTTP bind port (with --http)."),
+    token: str = typer.Option(
+        "", "--token",
+        help="Require this bearer token (with --http). Strongly recommended for non-localhost.",
+    ),
 ) -> None:
-    """Run Evi AS an MCP server (stdio), exposing Evi's tools to Claude Desktop /
-    Cursor / Cline / Continue. This speaks the MCP protocol on stdin/stdout —
-    it's spawned by an MCP client, not run interactively. See `mcp serve-config`
-    for a ready-to-paste client config."""
+    """Run Evi AS an MCP server, exposing Evi's tools + memory resources +
+    command prompts to Claude Desktop / Cursor / Cline / Continue. Default
+    transport is stdio (spawned by the client); use --http for a remote,
+    optionally token-gated, streamable-HTTP server. See `mcp serve-config`."""
     try:
         from evi.mcp.publish import serve
     except ImportError:
         console.print("[red]`mcp` package not installed — run: pip install 'evi-assistant[mcp]'[/red]")
         raise typer.Exit(1)
     cats = tuple(c.strip() for c in categories.split(",") if c.strip())
-    serve(cats)
+    allow = tuple(t.strip() for t in tools.split(",") if t.strip()) or None
+    if http and not token:
+        console.print("[yellow]⚠ --http without --token: the server is unauthenticated. "
+                      "Bind to localhost only, or pass --token.[/yellow]")
+    serve(cats, allow, http=http, host=host, port=port, token=token)
 
 
 @mcp_app.command("serve-config")

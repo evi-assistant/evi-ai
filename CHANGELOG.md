@@ -26,6 +26,23 @@ each app, the app's existing MCP client connects to Evi.
   Verified end-to-end: a real MCP client initializes the server, lists tools,
   and calls one (input-schema validation enforced).
 
+### Added — Phase 54: MCP server follow-ups (resources, prompts, HTTP, auth)
+
+Builds on Phase 53's `evi mcp serve`:
+
+- **Resources** — your long-term memory entries are exposed as MCP resources
+  (`evi://memory/<name>`); clients can list + read them.
+- **Prompts** — your saved slash-command templates (`~/.evi/commands/*.md`)
+  are exposed as MCP prompts (with an optional `args` argument substituted into
+  `{args}`).
+- **Streamable HTTP transport** — `evi mcp serve --http [--host --port]` for
+  remote clients (default stays stdio). `--token` gates it with a bearer token
+  (constant-time compare); serving non-localhost without one warns.
+- **Per-tool allow-list** — `--tools a,b,c` narrows the exposed set to exact
+  tool names within the chosen `--categories`.
+- Verified end-to-end: stdio lists tools/resources/prompts; HTTP rejects
+  missing/bad tokens (401) and admits the right one.
+
 ### Changed — PyPI distribution renamed to `evi-assistant`
 
 The intended `evi-ai` name is taken on PyPI by an unrelated project, so the

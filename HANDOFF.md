@@ -96,11 +96,14 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
-- ✅ **Phase 53 — MCP-server-publish (0.24.0).** `evi mcp serve` runs Evi as an
-  MCP server (stdio) exposing curated tools (memory/index/calendar/git) to
-  Claude Desktop / Cursor / Cline; `evi mcp serve-config` prints the client
-  config; `python -m evi` added. `evi/mcp/publish.py`. Verified end-to-end with
-  a real MCP client (init → list → call). 613 tests green.
+- ✅ **Phase 53–54 — MCP-server-publish (0.24.0).** `evi mcp serve` runs Evi as
+  an MCP server exposing curated **tools** (memory/index/calendar/git) +
+  **memory resources** (`evi://memory/<name>`) + **command prompts** to Claude
+  Desktop / Cursor / Cline. Transports: **stdio** + streamable **HTTP**
+  (`--http`, bearer `--token`); per-tool allow-list (`--tools`).
+  `evi mcp serve-config` prints the client config; `python -m evi` added.
+  `evi/mcp/publish.py`. Verified end-to-end (stdio list tools/resources/prompts;
+  HTTP 401/auth). 619 tests green.
 - ✅ **Phase 52 — opt-in crash reporting.** `evi/reporting.py` (Reporter seam +
   shared PII scrubber + sentry-sdk), `[telemetry]` config (OFF by default,
   inert until a DSN is set), CLI excepthook + web `create_app` hook. Optional
