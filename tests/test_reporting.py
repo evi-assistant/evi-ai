@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from evi import reporting  # noqa: E402
@@ -113,7 +115,7 @@ def test_init_reporting_degrades_when_sentry_init_raises(monkeypatch):
 
 
 def test_sentry_reporter_inits_with_scrubber(monkeypatch):
-    import sentry_sdk
+    sentry_sdk = pytest.importorskip("sentry_sdk")  # optional [telemetry] extra
 
     captured = {}
     monkeypatch.setattr(sentry_sdk, "init", lambda **kw: captured.update(kw))
