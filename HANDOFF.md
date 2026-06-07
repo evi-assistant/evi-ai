@@ -1,6 +1,6 @@
-# Evi — Project Handoff & Migration Notes
+# eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-07 · version 0.24.2 (desktop app 0.2.3)_
+_Last updated: 2026-06-07 · version 0.24.3 (desktop app 0.2.4)_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -8,7 +8,7 @@ Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
 
 ---
 
-## 1. What Evi is
+## 1. What eVi is
 
 Local-first personal AI assistant living at `C:\evi`.
 
@@ -31,7 +31,7 @@ Local-first personal AI assistant living at `C:\evi`.
 - **Desktop:** standalone Tauri build works end-to-end on Windows — produces MSI
   + NSIS installers (~78–79 MB) embedding a ~72 MB PyInstaller sidecar.
 - **Under version control now.** `git init` done — initial commit `208ea02`
-  ("Evi v0.21.2", 235 files) on `main` (origin/main set). Working tree clean.
+  ("eVi v0.21.2", 235 files) on `main` (origin/main set). Working tree clean.
 - **Migrated to this machine (`dusti`).** The old `.venv` (base interpreter
   under `C:\Users\Dustin Kost\…`) was dead on arrival; recreated with
   `py -3.11` (3.11.9) + all extras. cargo/node/npm are present here.
@@ -46,7 +46,7 @@ Local-first personal AI assistant living at `C:\evi`.
 | Sidecar launch | `--onefile` → `--onedir` in `scripts/build-sidecar.*` → ~2.7 s launch (was ~16 s) |
 | `desktop/src-tauri/src/main.rs` | Loading-shim pattern (non-blocking), `resource_dir()` sidecar resolution + adjacent-exe fallbacks, `CREATE_NO_WINDOW`, server log to `~/.evi/logs/desktop-server.log`, `app.windows: []` fix, tesseract env wiring |
 | `desktop/src-tauri/tauri.standalone.conf.json` | `externalBin` → `bundle.resources` (ships the onedir folder) |
-| `desktop/dist-shim/index.html` | "Starting Evi…" spinner that polls `/api/health` and redirects |
+| `desktop/dist-shim/index.html` | "Starting eVi…" spinner that polls `/api/health` and redirects |
 | **NEW `evi/portprobe.py`** | Socket-first port check, OpenAI-`/models`-shape validation, **llama.cpp 8080→8090 discovery**, `localhost`→`127.0.0.1` normalization |
 | `evi/backends/llamacpp.py` | Auto-discovers a live llama.cpp on 8080–8090 when the configured port isn't one (`discover_ports=True`, cached) |
 | `evi/apps/web/server.py` | `/api/backend/status` now probes **concurrently**, **caches 3 s**, validates OpenAI shape (kills 8080 false-positives), and reports llama.cpp's resolved port; `/api/backend/start` (ollama auto-start), `/api/backend/open-download` |
@@ -97,9 +97,15 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **0.24.3 — rebranded to eVi + desktop updater lock fix.** Display name is
+  now **eVi** everywhere shown (productName, window title, web/PWA title, CLI,
+  docs); lowercase `evi`/`EVI_`/`evi-assistant`/`dmang-dev/evi-ai` unchanged.
+  ⚠ productName change ⇒ eVi installs to a NEW dir; one-time clean switch
+  (uninstall Evi, install eVi 0.2.4). Updater now kills the sidecar before
+  installing (fixes the "Error opening file for writing" lock). Desktop → 0.2.4.
 - ✅ **UI regression testing set up** (closes the gap that let the chat bug
   ship). Playwright e2e harness in `tests/e2e/` (fake streaming LLM backend +
-  real Evi server subprocess + headless chromium); `test_chat_renders_reply`
+  real eVi server subprocess + headless chromium); `test_chat_renders_reply`
   guards the SSE-render regression. `e2e` extra, `e2e` pytest marker (excluded
   from default run), `.github/workflows/e2e.yml` (PR + weekly). Process +
   full feature inventory + the "new UI feature ⇒ e2e test" rule in **TESTING.md**.
@@ -121,7 +127,7 @@ Near-term loose ends:
   stream adapter that keeps `agent.py`'s loop unchanged). NOT a migration —
   local backends stay on Chat Completions. Unit-tested; not verified against a
   live Responses endpoint (no cloud in CI). 627 tests green.
-- ✅ **Phase 53–54 — MCP-server-publish (0.24.0).** `evi mcp serve` runs Evi as
+- ✅ **Phase 53–54 — MCP-server-publish (0.24.0).** `evi mcp serve` runs eVi as
   an MCP server exposing curated **tools** (memory/index/calendar/git) +
   **memory resources** (`evi://memory/<name>`) + **command prompts** to Claude
   Desktop / Cursor / Cline. Transports: **stdio** + streamable **HTTP**
@@ -156,8 +162,8 @@ Near-term loose ends:
 
 - ✅ **Desktop rebuild track verified end-to-end.** Rebuilt the onedir sidecar
   with the new portprobe/server code (127.9 MB; `evi-server --check` OK),
-  regenerated both installers (`Evi_0.1.0_x64_en-US.msi` 59.5 MB,
-  `Evi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
+  regenerated both installers (`eVi_0.1.0_x64_en-US.msi` 59.5 MB,
+  `eVi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
   `evi-desktop.exe` resolves + spawns the sidecar, which serves
   `/api/health` 200 and the no-backend banner. Toolchain installed: Rust
   stable 1.96 (was a 2022 nightly), via the existing rustup; MSVC 2022 +
@@ -194,7 +200,7 @@ Near-term loose ends:
   `portprobe` pins probes to `127.0.0.1` to avoid multi-second stalls. Keep this
   in mind for any new local-port code.
 - **This machine has a flaky non-LLM server on `:8080`** (returns 404 HTML /
-  `RemoteProtocolError`, variable latency). That's environment noise, not an Evi
+  `RemoteProtocolError`, variable latency). That's environment noise, not an eVi
   bug — the probe correctly rejects it now.
 - **Desktop runtime details:** Tauri picks a random free port and injects it via
   `window.__EVI_PORT__`; the sidecar logs to `~/.evi/logs/desktop-server.log`

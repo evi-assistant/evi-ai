@@ -211,7 +211,7 @@ def test_manager_start_skips_disabled_servers() -> None:
 
 
 def test_manager_tolerates_failed_connect(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A bad server shouldn't take down Evi."""
+    """A bad server shouldn't take down eVi."""
 
     def _boom(self, server):  # pylint: disable=unused-argument
         raise RuntimeError("could not spawn")

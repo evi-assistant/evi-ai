@@ -1,7 +1,7 @@
 """Generic OpenAI-compatible backend — catchall for unknown servers.
 
 Use this when pointing at a hosted endpoint we don't recognise: a remote
-Evi web server, a vLLM/OpenLLM/llamafile instance someone else stood up,
+eVi web server, a vLLM/OpenLLM/llamafile instance someone else stood up,
 or a SaaS gateway. Only the chat client is functional; model management
 falls back to the `/models` endpoint (and only if it exists).
 """

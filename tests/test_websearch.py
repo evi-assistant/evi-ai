@@ -35,13 +35,13 @@ def _install_fake_ddgs(monkeypatch: pytest.MonkeyPatch, results: list[dict]) -> 
 
 def test_web_search_returns_json_list(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_ddgs(monkeypatch, [
-        {"title": "Evi", "href": "https://example.com", "body": "snippet"},
+        {"title": "eVi", "href": "https://example.com", "body": "snippet"},
         {"title": "Two", "href": "https://example.org", "body": "second"},
     ])
     out = REGISTRY["web_search"].call(json.dumps({"query": "evi", "limit": 5}))
     data = json.loads(out)
     assert len(data) == 2
-    assert data[0]["title"] == "Evi"
+    assert data[0]["title"] == "eVi"
     assert data[0]["url"] == "https://example.com"
     assert data[0]["snippet"] == "snippet"
 

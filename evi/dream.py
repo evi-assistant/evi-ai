@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 _DREAM_SYSTEM_PROMPT = (
-    "You are the Evi dream agent. Your job is to review recent Evi "
+    "You are the eVi dream agent. Your job is to review recent eVi "
     "conversation transcripts and update long-term memory so durable facts "
     "survive across sessions.\n\n"
     "Guidelines:\n"
@@ -160,7 +160,7 @@ def run_dream(
     transcript_block = _format_transcripts(transcript_entries)
 
     task = (
-        f"Here are the Evi conversations from the past {hours} hours. "
+        f"Here are the eVi conversations from the past {hours} hours. "
         f"Review them and curate long-term memory.\n\n"
         f"--- transcripts ({len(transcript_entries)} entries) ---\n\n"
         f"{transcript_block}"

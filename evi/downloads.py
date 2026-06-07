@@ -73,7 +73,7 @@ def download_gguf(
         ggufs = [f for f in files if f.lower().endswith(".gguf")]
         if not ggufs:
             raise RuntimeError(f"no GGUF files found in {ref.repo}")
-        # Prefer Q4_K_M (the recommended tier for Evi); else first file.
+        # Prefer Q4_K_M (the recommended tier for eVi); else first file.
         q4 = [f for f in ggufs if "q4_k_m" in f.lower()]
         filename = (q4 or ggufs)[0]
 

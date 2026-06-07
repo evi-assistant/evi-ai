@@ -1,4 +1,4 @@
-# Evi install script — Windows PowerShell
+# eVi install script — Windows PowerShell
 #
 # Usage:
 #   .\scripts\install.ps1                  # core install
@@ -27,7 +27,7 @@ if ($All) {
     $Extras = "dev,web,mcp,scheduler,downloads,web-tools,stt,computer"
 }
 
-Write-Host "==> Evi install" -ForegroundColor Cyan
+Write-Host "==> eVi install" -ForegroundColor Cyan
 Write-Host "    repo:    $repoRoot"
 Write-Host "    extras:  $Extras"
 

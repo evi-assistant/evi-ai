@@ -1,4 +1,4 @@
-"""Persistent memory for Evi — markdown files under %USERPROFILE%/.evi/memory/.
+"""Persistent memory for eVi — markdown files under %USERPROFILE%/.evi/memory/.
 
 Memory is intentionally simple: one markdown file per topic, listed in an
 auto-maintained index that the Agent embeds into its system prompt so the
@@ -161,7 +161,7 @@ class MemoryStore:
             if index_path.exists():
                 index_path.unlink()
             return
-        lines = ["# Evi memory index", ""]
+        lines = ["# eVi memory index", ""]
         for e in entries:
             lines.append(f"- `{e.name}` — {e.summary}")
         index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

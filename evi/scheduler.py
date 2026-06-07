@@ -158,7 +158,7 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> str:
     skills = SkillStore() if toggles.get("skills") else None
 
     base_prompt = (
-        "You are Evi, a personal AI assistant running locally. "
+        "You are eVi, a personal AI assistant running locally. "
         "You have access to tools — call them when they would help, but "
         "answer directly when you don't need them. " + _SCHEDULED_SYSTEM_SUFFIX
     )

@@ -15,9 +15,9 @@ Critical invariants:
   tool unless `--force` is passed.
 - For pipx, we forward to `pipx upgrade evi-assistant` because pipx manages its
   own isolated venvs.
-- Rollback restores the FULL `pip freeze`, not just Evi. A transitive
-  dep bump can break Evi just as easily as a direct one; only restoring
-  Evi wouldn't recover.
+- Rollback restores the FULL `pip freeze`, not just eVi. A transitive
+  dep bump can break eVi just as easily as a direct one; only restoring
+  eVi wouldn't recover.
 
 The module is structured so that the CLI calls into a handful of
 top-level functions that all return dataclasses. Nothing here prints
@@ -75,7 +75,7 @@ def check_pypi(
     transport: httpx.BaseTransport | None = None,
     current: str | None = None,
 ) -> LatestInfo:
-    """Hit pypi.org for the latest Evi version.
+    """Hit pypi.org for the latest eVi version.
 
     `current` defaults to `evi.__version__`. Passing it lets tests pin a
     value without monkeypatching the import. Raises `UpdateError` on
@@ -132,7 +132,7 @@ def _version_lt(a: str, b: str) -> bool:
 
 @dataclass(frozen=True)
 class InstallKind:
-    """How Evi was installed. Drives whether `update` can run."""
+    """How eVi was installed. Drives whether `update` can run."""
 
     kind: str   # "venv" | "editable" | "pipx" | "locked" | "unknown"
     location: str = ""
@@ -441,7 +441,7 @@ def apply_rollback(
     """Restore a snapshot by re-running pip install -r <requirements>.
 
     See module-level rationale: we restore the FULL freeze, not just
-    Evi, so transitive bumps get undone too.
+    eVi, so transitive bumps get undone too.
     """
     req = snapshot.dir / "requirements.txt"
     if not req.is_file():

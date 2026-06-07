@@ -1,4 +1,4 @@
-# Evi Desktop
+# eVi Desktop
 
 Tauri 2 shell. On launch it spawns the web server
 (`evi.apps.web.server`) as a child process on a free local port, waits for
@@ -9,7 +9,7 @@ close the child server is killed.
 
 - Rust toolchain (`rustup`, stable, 1.77+)
 - Node 18+ (only used to invoke the Tauri CLI)
-- Python 3.11+ with the Evi package installed in editable mode:
+- Python 3.11+ with the eVi package installed in editable mode:
   `pip install -e '.[web]'` from the repo root
 - Platform deps for Tauri 2: see <https://tauri.app/start/prerequisites/>
 

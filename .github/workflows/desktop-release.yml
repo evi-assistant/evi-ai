@@ -135,7 +135,7 @@ jobs:
           args: --config src-tauri/tauri.standalone.conf.json
           # Empty tagName => build only, no release (artifacts uploaded below).
           tagName: ${{ steps.tag.outputs.name }}
-          releaseName: "Evi Desktop ${{ steps.tag.outputs.name }}"
+          releaseName: "eVi Desktop ${{ steps.tag.outputs.name }}"
           # Published (not draft) so the `mirror` job below can read the merged
           # latest.json + signed assets and copy them to the PUBLIC releases
           # repo (the channel the in-app updater actually fetches from — private
@@ -143,7 +143,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           releaseBody: |
-            Standalone Evi Desktop installers (frozen server bundled — no Python
+            Standalone eVi Desktop installers (frozen server bundled — no Python
             required on the target machine). Built by `desktop-release.yml`.
 
             > Updater-signed (minisign) but NOT OS-code-signed yet, so Windows
@@ -206,7 +206,7 @@ jobs:
             GH_TOKEN="$PUB_TOKEN" gh release upload "$TAG" -R "$DST" ./* --clobber
           else
             GH_TOKEN="$PUB_TOKEN" gh release create "$TAG" -R "$DST" \
-              --title "Evi Desktop $TAG" \
+              --title "eVi Desktop $TAG" \
               --notes "Installers + auto-update manifest, mirrored from the private build." \
               ./*
           fi

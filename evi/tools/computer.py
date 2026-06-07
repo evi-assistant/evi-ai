@@ -1,6 +1,6 @@
 """Computer-use tools — let the agent drive the mouse, keyboard, and screen.
 
-This is the riskiest tool category in Evi. The defaults reflect that:
+This is the riskiest tool category in eVi. The defaults reflect that:
 
 - Category `computer` is **never** in `auto_approve_categories` — every
   call goes through the permission callback so a human sees the proposed

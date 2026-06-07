@@ -1,7 +1,7 @@
 """LLM backend abstraction — one interface, three transports.
 
 All four backend implementations expose an OpenAI-compatible chat endpoint
-(that's the whole point — Evi's `Agent` loop only knows the OpenAI SDK),
+(that's the whole point — eVi's `Agent` loop only knows the OpenAI SDK),
 but they differ on:
 
 - default port and API-key handling

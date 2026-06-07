@@ -4,7 +4,7 @@ Drop-in samples you can copy into `~/.evi/`.
 
 ## `EVI.md`
 
-Project-context file. Copy to a project root; Evi auto-loads it when you
+Project-context file. Copy to a project root; eVi auto-loads it when you
 `evi chat` from that tree.
 
 ## `skills/`
@@ -63,7 +63,7 @@ veto_on_nonzero = true
 [[after_tool_call]]
 name = "image-done"
 match = "generate_image"
-command = ["notify-send", "Evi", "Image generated"]
+command = ["notify-send", "eVi", "Image generated"]
 ```
 
 ## MCP server examples (in-line)

@@ -278,7 +278,7 @@ def export_html(path: Path) -> str:
     body = "\n".join(html_parts)
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
-        f"<title>Evi session {path.stem}</title>"
+        f"<title>eVi session {path.stem}</title>"
         "<style>body{font:14px/1.5 -apple-system,Segoe UI,system-ui,sans-serif;"
         "max-width:720px;margin:30px auto;padding:0 16px;color:#222}"
         "h1{font-size:18px}pre{background:#f4f4f4;padding:8px 10px;border-radius:4px;"

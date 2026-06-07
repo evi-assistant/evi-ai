@@ -1,6 +1,6 @@
 # Development notes
 
-For people working on Evi itself.
+For people working on eVi itself.
 
 ## Setting up
 

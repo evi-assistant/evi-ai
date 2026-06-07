@@ -1,6 +1,6 @@
 # Example project context
 
-Drop a file named `EVI.md` at the root of any project. Evi auto-loads
+Drop a file named `EVI.md` at the root of any project. eVi auto-loads
 the **nearest** one walking up from your cwd, and appends its content
 to every system prompt.
 

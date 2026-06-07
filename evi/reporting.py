@@ -1,6 +1,6 @@
 """Opt-in, privacy-first crash/error reporting (Phase 52).
 
-Evi is local-first, so reporting is **OFF by default** and inert until you set
+eVi is local-first, so reporting is **OFF by default** and inert until you set
 both `[telemetry] crash_reports = true` and a `dsn` (a Sentry-compatible
 endpoint — self-hosted GlitchTip or hosted Sentry). The DSN is a write-only
 ingest key, safe to ship.

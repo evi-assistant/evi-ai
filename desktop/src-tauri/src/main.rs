@@ -35,7 +35,7 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Directory for the spawned server's log, under the Evi home dir. Created
+/// Directory for the spawned server's log, under the eVi home dir. Created
 /// on demand; None if it can't be set up.
 fn server_log_dir() -> Option<PathBuf> {
     let base = std::env::var("EVI_HOME").ok().map(PathBuf::from).or_else(|| {
@@ -202,6 +202,14 @@ fn spawn_update_check(handle: tauri::AppHandle) {
         match updater.check().await {
             Ok(Some(update)) => {
                 eprintln!("evi: update {} available — downloading…", update.version);
+                // Stop the sidecar BEFORE installing: the NSIS updater overwrites
+                // its onedir files (e.g. _internal/VCRUNTIME140.dll), which
+                // Windows keeps locked while evi-server is running — otherwise
+                // the installer fails with "Error opening file for writing".
+                if let Some(mut child) = handle.state::<ServerHandle>().0.lock().unwrap().take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
                 match update.download_and_install(|_chunk, _total| {}, || {}).await {
                     Ok(_) => {
                         eprintln!("evi: update installed — restarting");
@@ -272,7 +280,7 @@ fn main() {
             };
 
             let mut builder = WebviewWindowBuilder::new(app, "main", target)
-                .title("Evi")
+                .title("eVi")
                 .inner_size(1100.0, 800.0)
                 .min_inner_size(600.0, 400.0)
                 .resizable(true);

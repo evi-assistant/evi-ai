@@ -1,6 +1,6 @@
 """Opt-in OpenAI **Responses API** path for the agent loop (Phase 55).
 
-Evi's default — and the only shape its local backends (LM Studio / Ollama /
+eVi's default — and the only shape its local backends (LM Studio / Ollama /
 llama.cpp) speak — is **Chat Completions**. This module adds an *optional*
 Responses API path, enabled with `[llm] api = "responses"` (or `EVI_LLM_API`),
 for endpoints that implement it (e.g. OpenAI cloud). Local-first is unaffected:

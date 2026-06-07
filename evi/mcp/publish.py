@@ -1,12 +1,12 @@
-"""Expose Evi's own tools, memory, and commands as an MCP server (Phases 53–54).
+"""Expose eVi's own tools, memory, and commands as an MCP server (Phases 53–54).
 
-Evi has long been an MCP *client* (it consumes other servers — see
-`evi/mcp/bridge.py`). This is the inverse: run Evi as an MCP *server* so other
-agents — Claude Desktop, Cursor, Cline, Continue — can reach into Evi. It flips
+eVi has long been an MCP *client* (it consumes other servers — see
+`evi/mcp/bridge.py`). This is the inverse: run eVi as an MCP *server* so other
+agents — Claude Desktop, Cursor, Cline, Continue — can reach into eVi. It flips
 the integration story: instead of building one bridge per app, the app's
-existing MCP client connects to Evi.
+existing MCP client connects to eVi.
 
-What's exposed (all from Evi's own single sources of truth):
+What's exposed (all from eVi's own single sources of truth):
 - **Tools** — entries from `evi.tools.base.REGISTRY` (same name/description/
   JSON-schema the agent already uses), filtered by category + optional
   allow-list. shell/computer/code-write are NOT in the default set.
@@ -73,8 +73,8 @@ def selected_tools(
 
 
 def mcp_tool_specs(tools: list[Tool]) -> list[dict]:
-    """Map Evi tools to MCP tool spec dicts (name/description/inputSchema).
-    Pure + JSON-able — the schema is reused verbatim from the Evi tool."""
+    """Map eVi tools to MCP tool spec dicts (name/description/inputSchema).
+    Pure + JSON-able — the schema is reused verbatim from the eVi tool."""
     return [
         {"name": t.name, "description": t.description, "inputSchema": t.parameters}
         for t in tools
@@ -266,7 +266,7 @@ def serve(
     port: int = 8765,
     token: str = "",
 ) -> None:
-    """Run the Evi MCP server. Default transport is **stdio** (what a desktop
+    """Run the eVi MCP server. Default transport is **stdio** (what a desktop
     MCP client spawns). With `http=True`, serve streamable HTTP on host:port
     (optionally bearer-token gated)."""
     if http:

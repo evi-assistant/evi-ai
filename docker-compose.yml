@@ -1,10 +1,10 @@
-# Evi + Ollama, glued together for a self-hosted AI server.
+# eVi + Ollama, glued together for a self-hosted AI server.
 #
 # Bring it up:
 #   docker compose up -d
 # Then pull a model into Ollama (once):
 #   docker compose exec ollama ollama pull qwen2.5:14b-instruct-q4_K_M
-# And point Evi at it:
+# And point eVi at it:
 #   docker compose exec evi evi models use qwen2.5:14b-instruct-q4_K_M
 #
 # State lives in named volumes so it survives `docker compose down`.
@@ -40,7 +40,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Evi configures via ~/.evi/config.toml — but env can override common bits.
+      # eVi configures via ~/.evi/config.toml — but env can override common bits.
       # See evi/config.py for the full list.
       EVI_HOME: /root/.evi
     volumes:

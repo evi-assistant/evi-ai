@@ -1,4 +1,4 @@
-"""E2E UI smoke tests — a real browser (Playwright) against the real Evi web
+"""E2E UI smoke tests — a real browser (Playwright) against the real eVi web
 server + a fake streaming LLM backend.
 
 Run: `pytest tests/e2e -m e2e` (needs `pip install -e '.[e2e]'` +
@@ -28,7 +28,7 @@ def _console_errors(page: Page) -> list[str]:
 def test_app_loads(page: Page, evi_base_url: str):
     errors = _console_errors(page)
     page.goto(evi_base_url)
-    expect(page).to_have_title("Evi")
+    expect(page).to_have_title("eVi")
     expect(page.locator("#input")).to_be_visible()
     expect(page.locator("#send")).to_be_visible()
     assert errors == [], f"console errors on load: {errors}"

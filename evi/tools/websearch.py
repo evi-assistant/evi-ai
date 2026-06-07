@@ -20,7 +20,7 @@ import httpx
 from evi.tools.base import tool
 
 
-_USER_AGENT = "Evi/0.1 (+local personal assistant)"
+_USER_AGENT = "eVi/0.1 (+local personal assistant)"
 _FETCH_MAX_BYTES = 1_000_000   # 1 MB cap on raw page download
 _FETCH_MAX_TEXT = 16_000       # ~16 KB of extracted text to the LLM
 _HTTP_TIMEOUT = 30.0

@@ -1,4 +1,4 @@
-"""Evi web frontend — FastAPI + Server-Sent Events.
+"""eVi web frontend — FastAPI + Server-Sent Events.
 
 One `WebSession` is held per session id; each owns an `Agent` plus a small
 registry of pending permission decisions. The browser POSTs to `/api/chat`
@@ -371,7 +371,7 @@ def create_app() -> FastAPI:
             if mcp_manager is not None:
                 mcp_manager.stop()
 
-    app = FastAPI(title="Evi", lifespan=lifespan)
+    app = FastAPI(title="eVi", lifespan=lifespan)
 
     sessions: dict[str, WebSession] = {}
     cmd_store = CommandStore()  # rescans the dir per call, safe to share
@@ -689,7 +689,7 @@ def create_app() -> FastAPI:
         """Switch the active LLM backend (+ model) and persist it.
 
         This is what makes the first-run wizard actually *work*: after
-        install→serve→pull we call this so Evi talks to the backend it just set
+        install→serve→pull we call this so eVi talks to the backend it just set
         up, instead of the shipped default. Also backs the banner's
         'Use <backend>' action. When no model is given we pick one that's
         actually installed on the backend (preferring the recommended one), so

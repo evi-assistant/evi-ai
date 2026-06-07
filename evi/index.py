@@ -49,7 +49,7 @@ _SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", "__pycache__", "node_modules",
     ".venv", "venv", "env", "dist", "build", "target",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
-    ".evi",  # never index Evi's own state
+    ".evi",  # never index eVi's own state
 })
 
 _MAX_FILE_BYTES = 10 * 1024 * 1024

@@ -132,7 +132,7 @@ Ranked by user value, smallest delta first:
 | 9 | ✅ `logprobs` / `top_logprobs` + confidence surfacing | OpenAI | shipped 0.19.0 | Medium |
 | 10 | ✅ Audio content input parts (+ STT degrade) | OpenAI | shipped 0.19.0 | Medium |
 | 11 | ✅ Guardrails layer (regex content filter) | Bedrock/Gemini | shipped 0.19.0 | Medium (shared installs) |
-| 12 | ⬜ Evi-as-MCP-server publish | cross-cutting | L | High (integration story) |
+| 12 | ⬜ eVi-as-MCP-server publish | cross-cutting | L | High (integration story) |
 | 13 | ⬜ Responses API migration | OpenAI | XL | High (future-proof) |
 
 **Score: 11 / 13 shipped.** Only the two big-ticket items remain:
@@ -144,10 +144,10 @@ S=small (≤200 LOC), M=medium (≤500 LOC), L=large (≤1000 LOC), XL=larger.
 
 Cloud-side state (Files / Assistants / Threads / Vector Stores / Batch
 / Moderation / Realtime / DALL-E / built-in cloud tools) is
-deliberately out of scope. Evi is local-first; pushing user data into a
+deliberately out of scope. eVi is local-first; pushing user data into a
 vendor's cloud-state surface defeats that.
 
-If a user wants any of those, they can already point Evi at a
+If a user wants any of those, they can already point eVi at a
 cloud-OpenAI-compatible endpoint via the `openai_compat` backend. That
 gives access to the underlying provider's hosted features without
 needing us to re-implement them.

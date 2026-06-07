@@ -1,6 +1,6 @@
 # Roadmap
 
-Forward plan for Evi. **Shipped** work lives in `CHANGELOG.md` + project
+Forward plan for eVi. **Shipped** work lives in `CHANGELOG.md` + project
 memory; this file is what's *next* and why. Items carry a rough size
 (S = an afternoon, M = a day, L = a phase) and a one-line rationale.
 
@@ -45,7 +45,7 @@ Make dependency vulnerabilities visible and gated in CI.
 
 A fresh user has no LLM backend → today they hit the "no backend" banner.
 **Decision (from research): do NOT bundle a runtime** — the multi-GB *model*
-download is the real blocker, bundling balloons the installer 5–10×, and Evi
+download is the real blocker, bundling balloons the installer 5–10×, and eVi
 is already built around Ollama. Instead:
 
 - True **one-click Ollama install** in `/api/backend/start` (winget /
@@ -98,7 +98,7 @@ Opt-in, privacy-first telemetry so we learn about crashes.
 ## Larger backlog (unsequenced — L unless noted)
 
 - ✅ **MCP-server-publish** — **shipped (0.24.0, Phases 53–54)**: `evi mcp serve`
-  exposes Evi's tools (memory/index/calendar/git by default) **+ memory
+  exposes eVi's tools (memory/index/calendar/git by default) **+ memory
   resources + command prompts** as an MCP server for Claude Desktop / Cursor /
   Cline / Continue. Transports: stdio + streamable **HTTP** (`--http`, bearer
   `--token`); per-tool allow-list (`--tools`). Remaining nice-to-haves: an
@@ -117,7 +117,7 @@ Opt-in, privacy-first telemetry so we learn about crashes.
 - **Memory tags** (`recall_by_tag`), **plugin loader** (`~/.evi/plugins/`),
   **background tool execution** (progress events for long tools). **M** each.
 - **Multi-user web mode** — per-user auth/paths/permissions for small teams.
-- **Federation / inter-agent protocol** — Evi-to-Evi delegation across machines
+- **Federation / inter-agent protocol** — eVi-to-eVi delegation across machines
   (pairs with profiles + remote backend).
 - Smaller: long-context model awareness in the registry; `/recent` prompt
   history in the REPL.
@@ -135,7 +135,7 @@ each tool by hand).
 
 - **Agentic browser via Playwright** — deprioritised in favour of MCP browser
   servers (big surface area).
-- **Fine-tune Evi from transcripts** — niche; dream engine already curates.
+- **Fine-tune eVi from transcripts** — niche; dream engine already curates.
 - **Voice cloning for AutoSpeaker** (Bark/Tortoise/F5-TTS) — heavy deps + huge
   models.
 - **CodeQL / secret-scanning on the private repo** — not free; revisit if the

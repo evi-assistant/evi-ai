@@ -1,6 +1,6 @@
 # Releasing
 
-How to cut a new version of Evi.
+How to cut a new version of eVi.
 
 ## One-time setup
 
@@ -148,7 +148,7 @@ docker tag evi:0.8.0 evi:latest
 ```
 
 The `Dockerfile` is set up for the headless web-server use case — pair it
-with `docker-compose.yml` for an Ollama + Evi stack out of the box.
+with `docker-compose.yml` for an Ollama + eVi stack out of the box.
 
 ## Versioning
 

@@ -2,7 +2,7 @@
 
 The list is hand-curated, not pulled from a registry — there's no clean
 machine-readable source that scores models on tool-calling reliability
-(which is what actually matters for Evi). Bias is toward Qwen2.5 across
+(which is what actually matters for eVi). Bias is toward Qwen2.5 across
 the board because its tool calling is best-in-class for local models.
 
 The registry is intentionally short: too many entries paralyses choice.
@@ -192,7 +192,7 @@ def recommend(hw: HardwareInfo) -> Recommendation:
         if chat is None:
             return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes + [
                 "Even CPU inference would be slow with the available RAM.",
-                "Point Evi at a remote backend (your AI server) instead.",
+                "Point eVi at a remote backend (your AI server) instead.",
             ])
         return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
 
