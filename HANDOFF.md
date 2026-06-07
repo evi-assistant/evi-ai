@@ -1,6 +1,6 @@
 # Evi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-07 · version 0.23.0_
+_Last updated: 2026-06-07 · version 0.24.0 (desktop app 0.2.0)_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -59,10 +59,24 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phases 48–52 complete** (the distribution-polish arc). See `docs/roadmap.md`
-for what's next — the biggest lever is **MCP-server-publish** (expose Evi's
-tools as an MCP server), then Responses API migration / cross-machine sync /
-`evi recipe`.
+**Phases 48–53 complete.** Distribution-polish arc (48–52) + **MCP-server-publish
+(53)**. See `docs/roadmap.md` for what's next: Responses API migration,
+cross-machine sync, `evi recipe`, plus MCP follow-ups (resources/prompts, an
+HTTP transport, per-tool auth).
+
+### Releases (2026-06-07)
+
+- ✅ **Desktop `desktop-v0.2.0`** cut — a **draft** GitHub release with signed
+  installers (Win MSI+NSIS, macOS dmg/app [aarch64 only — add x86_64 target for
+  Intel], Linux deb/rpm/AppImage) + `latest.json` + `.sig`. **Publish the draft**
+  to make the in-app updater live (drafts aren't served at `/releases/latest/`).
+- ⛔ **PyPI `v0.23.0` NOT cut — blocked.** The `evi-ai` name on PyPI is owned by
+  an **unrelated** project ("multi-agent framework code generator",
+  github.com/yourusername/evi-ai, v0.1.0). `pyproject` `name = "evi-ai"` can't
+  be published. **Decide a new dist name** (e.g. `evi-assistant`, `evi-local`,
+  `local-evi`), update `pyproject`, then the owner sets up PyPI **Trusted
+  Publishing** (a manual web step — can't be automated) before tagging `v*`.
+  Until then `release.yml` would fail at the publish step.
 
 Near-term loose ends:
 
@@ -81,6 +95,11 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **Phase 53 — MCP-server-publish (0.24.0).** `evi mcp serve` runs Evi as an
+  MCP server (stdio) exposing curated tools (memory/index/calendar/git) to
+  Claude Desktop / Cursor / Cline; `evi mcp serve-config` prints the client
+  config; `python -m evi` added. `evi/mcp/publish.py`. Verified end-to-end with
+  a real MCP client (init → list → call). 613 tests green.
 - ✅ **Phase 52 — opt-in crash reporting.** `evi/reporting.py` (Reporter seam +
   shared PII scrubber + sentry-sdk), `[telemetry]` config (OFF by default,
   inert until a DSN is set), CLI excepthook + web `create_app` hook. Optional

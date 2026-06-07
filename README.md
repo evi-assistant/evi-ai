@@ -82,6 +82,7 @@ evi worktree create <branch>       Spin up a git worktree for parallel work
 evi profile add home --backend …   Per-machine config overlays
 evi voice listen / speak           STT + TTS
 evi mcp list-tools                 Show MCP server-provided tools
+evi mcp serve                      Run Evi AS an MCP server (other agents use Evi's tools)
 ```
 
 ## What's built

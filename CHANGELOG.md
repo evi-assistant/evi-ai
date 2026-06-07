@@ -3,6 +3,29 @@
 All notable user-visible changes to Evi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] — 2026-06-07
+
+### Added — Phase 53: Evi as an MCP server (`mcp-server-publish`)
+
+Evi has always been an MCP *client*; now it can run as an MCP *server* too, so
+other agents (Claude Desktop, Cursor, Cline, Continue) can reach into Evi's
+tools. This flips the integration story — instead of bridging into Evi from
+each app, the app's existing MCP client connects to Evi.
+
+- **`evi mcp serve`** — runs Evi as an MCP server over stdio, exposing a
+  curated set of tools (default categories: `memory, index, calendar, git`;
+  widen with `--categories`). Each MCP tool is a thin wrapper over the existing
+  `evi.tools.base.REGISTRY` entry — same name, description, and JSON-schema, so
+  there's one source of truth. Shell/computer/code-write are **not** exposed by
+  default.
+- **`evi mcp serve-config`** — prints a ready-to-paste `mcpServers` config
+  snippet for Claude Desktop / Cursor.
+- **`python -m evi`** now works (new `evi/__main__.py`) — the portable way an
+  MCP client spawns the server.
+- New `evi/mcp/publish.py` (`build_server`, `selected_tools`, `dispatch`).
+  Verified end-to-end: a real MCP client initializes the server, lists tools,
+  and calls one (input-schema validation enforced).
+
 ## [0.23.0] — 2026-06-07
 
 Phases 49–52 — supply-chain hygiene, a frictionless first run, desktop
