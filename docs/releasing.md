@@ -98,10 +98,21 @@ Caveats:
 
 ### In-app auto-update (Tauri updater)
 
-The desktop app self-updates from its GitHub releases (Phase 51). On launch the
-Rust shell checks `releases/latest/download/latest.json`, and if a newer
-**signed** build exists it downloads, installs, and restarts. Opt out by
-running with `EVI_AUTO_UPDATE=0`.
+The desktop app self-updates from a **public** GitHub release channel
+(`dmang-dev/evi-ai-releases`) — the source repo `dmang-dev/evi-ai` stays
+private, but private release assets 404 for unauthenticated end users, so the
+updater can't read them. On launch the Rust shell checks the public repo's
+`releases/latest/download/latest.json`, and if a newer **signed** build exists
+it downloads, installs, and restarts. Opt out with `EVI_AUTO_UPDATE=0`.
+
+- **Public channel setup (one-time).** `desktop-release.yml`'s `mirror` job
+  copies the signed installers + a URL-rewritten `latest.json` from the private
+  build release to `dmang-dev/evi-ai-releases`. It needs a **`RELEASES_TOKEN`**
+  secret on the private repo — a PAT (classic: `repo` scope; or fine-grained:
+  **Contents: Read and write** on `evi-ai-releases`). Create it at
+  github.com/settings/tokens, then `gh secret set RELEASES_TOKEN -R
+  dmang-dev/evi-ai`. Without it the build still succeeds; the mirror just warns
+  and skips (so the updater stays on the last published manifest).
 
 - **Signing keys.** The updater only installs bundles signed with our key. The
   **public** key lives in `tauri.conf.json` (`plugins.updater.pubkey`); the
