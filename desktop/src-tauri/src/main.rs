@@ -175,11 +175,53 @@ fn wait_for_health_url(base: &str, timeout: Duration) -> bool {
     false
 }
 
+/// Background self-update: ask our GitHub releases (the signed bundles +
+/// `latest.json` that `desktop-release.yml` publishes) whether a newer version
+/// exists; if so, download, install, and restart. Runs on the async runtime so
+/// it never blocks the window. Opt out with `EVI_AUTO_UPDATE=0`. The updater
+/// only accepts bundles signed with our key (pubkey in tauri.conf.json), so a
+/// tampered release can't be installed.
+fn spawn_update_check(handle: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    if std::env::var("EVI_AUTO_UPDATE")
+        .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let updater = match handle.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("evi: updater unavailable: {e}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                eprintln!("evi: update {} available — downloading…", update.version);
+                match update.download_and_install(|_chunk, _total| {}, || {}).await {
+                    Ok(_) => {
+                        eprintln!("evi: update installed — restarting");
+                        handle.restart();
+                    }
+                    Err(e) => eprintln!("evi: update install failed: {e}"),
+                }
+            }
+            Ok(None) => eprintln!("evi: already up to date"),
+            Err(e) => eprintln!("evi: update check failed: {e}"),
+        }
+    });
+}
+
 fn main() {
     let server = ServerHandle(Mutex::new(None));
 
     let app = tauri::Builder::default()
         .manage(server)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // `local_port` is Some in local mode; the loading shim polls that
             // port and redirects once the server is up.
@@ -241,6 +283,14 @@ fn main() {
             let window = builder.build()?;
             window.show()?;
             window.set_focus()?;
+
+            // Background self-update against our signed GitHub releases (built
+            // by desktop-release.yml). Never blocks launch. Skipped in remote
+            // mode — there's no local app bundle to replace — and opt-out via
+            // EVI_AUTO_UPDATE=0.
+            if std::env::var("EVI_REMOTE_URL").is_err() {
+                spawn_update_check(app.handle().clone());
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

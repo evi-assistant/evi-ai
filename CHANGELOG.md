@@ -31,6 +31,24 @@ A brand-new user has no LLM backend, so the web/desktop UI showed a dead-end
   (the multi-GB model download is the real cost; bundling balloons the installer
   5–10×), and **vLLM is excluded** for first-run (GPU/CUDA/Linux server-grade).
 
+### Added — Phase 51: desktop in-app auto-update
+
+The desktop app now updates itself from its signed GitHub releases (the CLI/pip
+path already self-updates via `evi update`; this is the desktop analog).
+
+- **Tauri updater plugin** wired into the Rust shell: on launch it checks
+  `releases/latest/download/latest.json` and, if a newer **signed** build
+  exists, downloads + installs + restarts. Background — never blocks launch.
+  Opt out with `EVI_AUTO_UPDATE=0`; skipped in remote mode.
+- **Signing:** updater minisign keypair generated; public key in
+  `tauri.conf.json`, private key + password as repo secrets consumed by
+  `desktop-release.yml` (`createUpdaterArtifacts: true` → `.sig` + `latest.json`
+  attached to releases). Only bundles signed with our key install.
+- Desktop app version bumped **0.1.0 → 0.2.0** (the updater compares this to
+  the latest release). OS code-signing (Authenticode/Apple) is still separate +
+  TODO — minisign signing ≠ SmartScreen/Gatekeeper trust. Key handling + the
+  release flow are documented in `docs/releasing.md`.
+
 ### Added — Phase 49: dependency vulnerability scanning
 
 - CI **`security.yml`**: `pip-audit` (OSV) for Python + `cargo-audit` (RustSec)
