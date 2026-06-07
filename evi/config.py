@@ -42,6 +42,11 @@ class LLMSettings:
     backend: str = "lmstudio"   # lmstudio | ollama | llamacpp | openai_compat
     base_url: str = "http://localhost:1234/v1"
     api_key: str = "lm-studio"  # LM Studio ignores this but the SDK requires a value
+    # Which OpenAI API shape the agent loop uses. "chat" (Chat Completions) is
+    # the default and the ONLY one local backends (LM Studio/Ollama/llama.cpp)
+    # support. "responses" opts into the newer Responses API — only for
+    # endpoints that implement it (e.g. OpenAI cloud). Env: EVI_LLM_API.
+    api: str = "chat"           # "chat" | "responses"
     model: str = "qwen2.5-7b-instruct"
     temperature: float = 0.7
     max_tokens: int = 4096

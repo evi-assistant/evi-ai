@@ -958,7 +958,14 @@ class Agent:
                     create_kwargs["extra_body"] = turn_extra
                 elif extra_body:
                     create_kwargs["extra_body"] = extra_body
-                stream = self.client.chat.completions.create(**create_kwargs)
+                # Opt-in Responses API path (default "chat" keeps every local
+                # backend working). Env override wins for quick experiments.
+                import os as _os
+                if (_os.environ.get("EVI_LLM_API") or self.config.llm.api) == "responses":
+                    from evi.llm.responses import stream_chat_via_responses
+                    stream = stream_chat_via_responses(self.client, **create_kwargs)
+                else:
+                    stream = self.client.chat.completions.create(**create_kwargs)
             except Exception as e:  # network / model not loaded / etc.
                 dlog("llm.error", {"type": type(e).__name__, "msg": str(e)})
                 yield Error(f"LLM request failed: {type(e).__name__}: {e}")
