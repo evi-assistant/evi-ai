@@ -1,6 +1,6 @@
 [package]
 name = "evi-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Evi — desktop shell"
 authors = ["Evi"]
 edition = "2021"
@@ -16,6 +16,7 @@ tauri-build = { version = "2.0", features = [] }
 [dependencies]
 tauri = { version = "2.0", features = [] }
 tauri-plugin-shell = "2.0"
+tauri-plugin-updater = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "2"

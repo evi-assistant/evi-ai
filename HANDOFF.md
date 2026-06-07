@@ -59,22 +59,33 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phases 48–50 complete.** See `docs/roadmap.md` for the full forward plan; the
-proposed next sequence is **51** desktop auto-update vs GitHub releases (Tauri
-updater plugin + updater signing), then **52** opt-in crash reporting
-(sentry-sdk → GlitchTip, scrubbed).
+**Phases 48–51 complete.** See `docs/roadmap.md` for the full forward plan; the
+proposed next is **52** opt-in crash reporting (sentry-sdk → GlitchTip,
+scrubbed, behind a swappable Reporter).
 
 Near-term loose ends:
 
 1. **Code-sign the desktop installers** — unsigned, so SmartScreen / Gatekeeper
    warn. Needs an Authenticode cert + Apple Developer ID wired into
-   `tauri-action`. Pairs with Phase 51's updater signing. See `docs/releasing.md`.
-2. **First-run wizard UI click-through** — the Python side (install/pull/status
-   endpoints, model picker) is unit-tested + live-verified; the JS wizard in
-   `static/index.html` is code-review-verified only (no browser in this env).
-   A real click-through actually installs Ollama — verify on a clean machine.
+   `tauri-action`. (Separate from the Phase 51 updater's minisign signing,
+   which is done.) See `docs/releasing.md`.
+2. **First-run wizard UI click-through** — Python side unit-tested +
+   live-verified; the JS wizard in `static/index.html` is code-review-verified
+   only (no browser in this env). A real click-through installs Ollama — verify
+   on a clean machine.
+3. **Updater end-to-end** — the updater compiles + the workflow emits signed
+   artifacts, but a true self-update needs two published `desktop-v*` releases
+   to compare. The signing keys live in repo secrets + `~/.evi/evi-updater.*`
+   (back them up — losing them breaks future update verification).
 
 **Done (2026-06-07):**
+
+- ✅ **Phase 51 — desktop auto-update (desktop 0.2.0).** Tauri updater plugin in
+  the Rust shell checks `releases/latest/download/latest.json` and self-installs
+  signed updates (opt out: `EVI_AUTO_UPDATE=0`). Updater keypair generated;
+  pubkey in `tauri.conf.json`, private key + password in repo secrets
+  (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`) used by `desktop-release.yml`.
+  `cargo check` clean.
 
 - ✅ **Phase 50 — frictionless first run (0.23.0).** `evi/firstrun.py` (per-OS
   Ollama install), `recommend.first_run_model` (auto-pull qwen2.5:3b),

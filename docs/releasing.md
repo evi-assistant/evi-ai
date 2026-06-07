@@ -96,6 +96,35 @@ Caveats:
   Linux jobs use the standard Tauri 2 setup but are unverified — treat their
   first green run as the verification.
 
+### In-app auto-update (Tauri updater)
+
+The desktop app self-updates from its GitHub releases (Phase 51). On launch the
+Rust shell checks `releases/latest/download/latest.json`, and if a newer
+**signed** build exists it downloads, installs, and restarts. Opt out by
+running with `EVI_AUTO_UPDATE=0`.
+
+- **Signing keys.** The updater only installs bundles signed with our key. The
+  **public** key lives in `tauri.conf.json` (`plugins.updater.pubkey`); the
+  **private** key + its password are repo secrets `TAURI_SIGNING_PRIVATE_KEY`
+  and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, consumed by `desktop-release.yml`.
+  A local backup is in `~/.evi/evi-updater.key` (+ `.pub`) and
+  `~/.evi/evi-updater.pass` — **keep these safe; losing them means no client
+  can verify future updates** (you'd have to ship a new pubkey + re-onboard).
+- **Cutting an updatable release.** Bump `desktop/src-tauri/tauri.conf.json`
+  `version` (and `Cargo.toml` / `package.json` to match), then push a
+  `desktop-v<version>` tag. `createUpdaterArtifacts: true` makes the build emit
+  the `.sig` files; `tauri-action` (with the signing env) attaches them plus a
+  generated `latest.json` to the release. The updater compares the running
+  app's version to `latest.json`, so the **version must increase** for clients
+  to update.
+- **Rotating the key.** `npx tauri signer generate -w ~/.evi/evi-updater.key -f`,
+  update the pubkey in `tauri.conf.json`, and reset the two repo secrets
+  (`gh secret set …`). Clients on the old pubkey won't auto-update across the
+  rotation — they'll need a manual reinstall once.
+- **OS code-signing is separate** (and still TODO): the updater's minisign
+  signature is not Authenticode/Apple notarization, so SmartScreen/Gatekeeper
+  still warn until those are added.
+
 ## Docker
 
 The CI workflow doesn't push images by default. To do it manually after a

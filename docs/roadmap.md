@@ -62,7 +62,7 @@ is already built around Ollama. Instead:
   small, clean MIT, one binary for cross-vendor GPU + CPU; avoid the 373 MB
   CUDA pack and Ollama's redistribution notice debt.)
 
-### Phase 51 — Desktop auto-update against GitHub releases — **M**
+### Phase 51 — Desktop auto-update against GitHub releases — **✅ shipped (desktop 0.2.0)**
 
 The CLI/pip path already self-updates (`evi update` → PyPI). The **desktop**
 app (not pip-installed) needs its own updater pointed at the
