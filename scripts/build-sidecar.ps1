@@ -36,6 +36,7 @@ Write-Host ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-submodules fastapi `
     --collect-all pymupdf `
     --collect-all numpy `
+    --add-data "$root\docs;docs" `
     --hidden-import fitz `
     --hidden-import python_multipart `
     --hidden-import multipart `
