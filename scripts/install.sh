@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Evi install script — Linux / macOS
+# eVi install script — Linux / macOS
 #
 # Usage:
 #   ./scripts/install.sh                       # core install
@@ -26,7 +26,7 @@ if [[ "$all" == "1" ]]; then
     extras="dev,web,mcp,scheduler,downloads,web-tools,stt,computer"
 fi
 
-echo "==> Evi install"
+echo "==> eVi install"
 echo "    repo:    $repo_root"
 echo "    extras:  $extras"
 

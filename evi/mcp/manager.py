@@ -1,4 +1,4 @@
-"""MCPManager — boot the MCP servers and expose their tools to the Evi agent.
+"""MCPManager — boot the MCP servers and expose their tools to the eVi agent.
 
 For each enabled server in `~/.evi/mcp.json`:
 
@@ -9,12 +9,12 @@ For each enabled server in `~/.evi/mcp.json`:
    back through the bridge so the synchronous tool dispatch in `Agent.chat`
    can drive an async SDK.
 
-Servers that fail to start are logged once and skipped — the rest of Evi
+Servers that fail to start are logged once and skipped — the rest of eVi
 keeps working. On shutdown we close every server session and unregister
 the tools we added.
 
 The `mcp` package is imported lazily so users without that extra installed
-can still run the rest of Evi.
+can still run the rest of eVi.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class MCPManager:
     # --- internals -------------------------------------------------------
 
     def _connect(self, server: MCPServer) -> None:
-        # Lazy import so the rest of Evi runs without the mcp extra installed.
+        # Lazy import so the rest of eVi runs without the mcp extra installed.
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 

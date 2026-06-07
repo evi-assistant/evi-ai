@@ -1,6 +1,6 @@
 """First-run helpers: get a brand-new user from zero to first chat.
 
-A fresh Evi install has no LLM backend, so the web/desktop UI shows a
+A fresh eVi install has no LLM backend, so the web/desktop UI shows a
 "no backend" banner. This module powers the one-click setup path behind it:
 install Ollama (per-OS, package-manager-first), then auto-pull a small default
 model. We deliberately do NOT bundle a runtime — the multi-GB *model* download

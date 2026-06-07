@@ -149,7 +149,7 @@ before building.
   `--onedir` + `bundle.resources`. Rebuilt the sidecar from an isolated
   `.venv-build` (127.9 MB; `evi-server --check` passes including
   `python_multipart`), built both installers
-  (`Evi_0.1.0_x64_en-US.msi` 59.5 MB, `Evi_0.1.0_x64-setup.exe` 46.0 MB),
+  (`eVi_0.1.0_x64_en-US.msi` 59.5 MB, `eVi_0.1.0_x64-setup.exe` 46.0 MB),
   and confirmed the built `evi-desktop.exe` resolves + spawns the sidecar,
   which serves `/api/health` 200 and the no-backend banner on a free port.
   Toolchain: Rust stable 1.96, MSVC BuildTools 2022, Tauri CLI 2.11,
@@ -166,7 +166,7 @@ before building.
   installing the MSVC C++ Build Tools, `npm run tauri build -- --config
   src-tauri/tauri.standalone.conf.json` compiled (469 crates), linked, and
   produced both installers with the `evi-server` sidecar embedded:
-  `Evi_0.1.0_x64_en-US.msi` (~79 MB) and `Evi_0.1.0_x64-setup.exe` (NSIS,
+  `eVi_0.1.0_x64_en-US.msi` (~79 MB) and `eVi_0.1.0_x64-setup.exe` (NSIS,
   ~78 MB). Two fixes were needed and are now in the repo:
   - `Cargo.toml` declared a `[lib] evi_desktop_lib` with no `src/lib.rs`
     (leftover from the create-tauri-app mobile template) — removed; it's a

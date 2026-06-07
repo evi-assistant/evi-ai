@@ -87,11 +87,11 @@ def test_format_for_prompt_empty(store: MemoryStore) -> None:
 
 
 def test_format_for_prompt_lists_entries(store: MemoryStore) -> None:
-    store.write("project", "Evi notes")
+    store.write("project", "eVi notes")
     out = store.format_for_prompt()
     assert "Memory index" in out
     assert "project" in out
-    assert "Evi notes" in out
+    assert "eVi notes" in out
 
 
 def test_index_file_kept_in_sync(tmp_path: Path) -> None:

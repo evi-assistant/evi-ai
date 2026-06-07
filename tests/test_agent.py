@@ -145,7 +145,7 @@ def test_memory_injected_into_system_prompt(tmp_path) -> None:
     from evi.memory import MemoryStore
 
     store = MemoryStore(root=tmp_path)
-    store.write("project", "Evi lives at C:/evi")
+    store.write("project", "eVi lives at C:/evi")
 
     script = [[_text_chunk("ok", finish="stop")]]
     agent = Agent(
@@ -155,10 +155,10 @@ def test_memory_injected_into_system_prompt(tmp_path) -> None:
         memory=store,
     )
     system = agent.history[0]["content"]
-    assert "You are Evi" in system
+    assert "You are eVi" in system
     assert "Memory index" in system
     assert "project" in system
-    assert "Evi lives at C:/evi" in system
+    assert "eVi lives at C:/evi" in system
 
 
 def test_memory_absent_when_store_empty(tmp_path) -> None:

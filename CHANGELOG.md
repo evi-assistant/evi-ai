@@ -1,7 +1,31 @@
 # Changelog
 
-All notable user-visible changes to Evi. Format loosely follows
+All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [0.24.3] — 2026-06-07
+
+### Changed — rebranded to **eVi**
+
+The product is now stylized **eVi** (lowercase-e, capital-V, lowercase-i)
+everywhere it's shown: the app/installer name (`productName`), window title,
+web/PWA title + header, CLI help/output, and the docs. The lowercase `evi`
+import package, the `evi` CLI command, `EVI_*` env vars, the `evi-assistant`
+PyPI name, and the `dmang-dev/evi-ai` repo are unchanged (code/identifier
+surfaces).
+
+> **Desktop note:** because the app's `productName` changed, the eVi installer
+> installs to a new location (`…\eVi\`) — it does **not** upgrade an existing
+> **Evi** install in place. Do a one-time clean switch: finish/skip the Evi
+> update, uninstall **Evi**, then install **eVi** 0.2.4. From eVi onward,
+> auto-update works in place again.
+
+### Fixed — desktop updater failed with "Error opening file for writing"
+
+The auto-updater's NSIS installer closed the main app but not the spawned
+`evi-server` sidecar, which kept `_internal\*.dll` (e.g. `VCRUNTIME140.dll`)
+locked → the install aborted. The updater now **kills the sidecar before
+installing**, releasing the locks. Desktop → 0.2.4.
 
 ## [0.24.2] — 2026-06-07
 
@@ -26,7 +50,7 @@ within frames. Affected all chat (web + desktop) in 0.23.0–0.24.1. Desktop →
 
 A fresh Ollama user could finish the setup wizard, watch the "no backend"
 banner clear, and still get **no reply** — because the wizard installed Ollama
-and pulled a model but never pointed Evi's config at it, so chats kept hitting
+and pulled a model but never pointed eVi's config at it, so chats kept hitting
 the shipped default (LM Studio / a 7B that wasn't installed).
 
 - **New `POST /api/backend/use`** persists `{backend, base_url, model}` to
@@ -45,14 +69,14 @@ the shipped default (LM Studio / a 7B that wasn't installed).
 
 ## [0.24.0] — 2026-06-07
 
-### Added — Phase 53: Evi as an MCP server (`mcp-server-publish`)
+### Added — Phase 53: eVi as an MCP server (`mcp-server-publish`)
 
-Evi has always been an MCP *client*; now it can run as an MCP *server* too, so
-other agents (Claude Desktop, Cursor, Cline, Continue) can reach into Evi's
-tools. This flips the integration story — instead of bridging into Evi from
-each app, the app's existing MCP client connects to Evi.
+eVi has always been an MCP *client*; now it can run as an MCP *server* too, so
+other agents (Claude Desktop, Cursor, Cline, Continue) can reach into eVi's
+tools. This flips the integration story — instead of bridging into eVi from
+each app, the app's existing MCP client connects to eVi.
 
-- **`evi mcp serve`** — runs Evi as an MCP server over stdio, exposing a
+- **`evi mcp serve`** — runs eVi as an MCP server over stdio, exposing a
   curated set of tools (default categories: `memory, index, calendar, git`;
   widen with `--categories`). Each MCP tool is a thin wrapper over the existing
   `evi.tools.base.REGISTRY` entry — same name, description, and JSON-schema, so
@@ -90,7 +114,7 @@ disturbing local-first defaults.
 
 - New **`[llm] api`** setting (`"chat"` default | `"responses"`), env override
   `EVI_LLM_API`. `"chat"` (Chat Completions) stays the default and the only
-  shape Evi's local backends (LM Studio/Ollama/llama.cpp) support; `"responses"`
+  shape eVi's local backends (LM Studio/Ollama/llama.cpp) support; `"responses"`
   is for endpoints that implement it (e.g. OpenAI cloud).
 - New `evi/llm/responses.py`: chat↔responses request conversion (messages →
   `input` incl. tool-call/tool-result round-trips; tools flattened) and a stream
@@ -153,7 +177,7 @@ A brand-new user has no LLM backend, so the web/desktop UI showed a dead-end
   SSE `GET /api/backend/pull` (streams model-pull progress). `GET
   /api/backend/status` now also reports `recommended_model` +
   `can_auto_install_ollama`.
-- **Web UI wizard:** the banner's "⚡ Set up Evi automatically" button chains
+- **Web UI wizard:** the banner's "⚡ Set up eVi automatically" button chains
   install → start → pull (with a live progress bar) → recheck, so a fresh user
   reaches first chat without manual backend setup. Manual fallbacks remain.
 - **Decisions (from research):** we deliberately do **not** bundle a runtime
@@ -223,7 +247,7 @@ tells you (and helps you fix it) when no local LLM backend is running.
   the sidecar from Tauri's `resource_dir()` (`<resources>/evi-server/`),
   with adjacent-exe fallbacks for dev/staged layouts.
 - The non-blocking loading shim (`desktop/dist-shim/index.html`, "Starting
-  Evi…" spinner polling `/api/health`) added in 0.21.2 still covers any
+  eVi…" spinner polling `/api/health`) added in 0.21.2 still covers any
   residual startup time and now almost always flashes by.
 
 ### Added — "No local LLM backend" UX (web + desktop)
@@ -281,8 +305,8 @@ tells you (and helps you fix it) when no local LLM backend is running.
   PyInstaller's static analysis misses it) and a `python_multipart` line to
   `evi-server --check`.
 - **Verified end-to-end on Windows (2026-06-06):** rebuilt the onedir sidecar
-  (127.9 MB, `--check` OK), built both installers (`Evi_0.1.0_x64_en-US.msi`
-  59.5 MB, `Evi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
+  (127.9 MB, `--check` OK), built both installers (`eVi_0.1.0_x64_en-US.msi`
+  59.5 MB, `eVi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
   `evi-desktop.exe` resolves + spawns the sidecar, which serves
   `/api/health` 200 and the no-backend banner.
 
@@ -296,7 +320,7 @@ tells you (and helps you fix it) when no local LLM backend is running.
 ### Desktop — fixed: app launched the sidecar but no window appeared
 
 Running the built app spawned `evi-server.exe` (with a stray console
-window) but showed no Evi window. Two `main.rs`/config bugs:
+window) but showed no eVi window. Two `main.rs`/config bugs:
 
 - **Duplicate window label.** `tauri.conf.json` declared a window
   (auto-labeled `main`) *and* `main.rs` creates a `main` window at runtime
@@ -318,10 +342,10 @@ window) but showed no Evi window. Two `main.rs`/config bugs:
   blocks — it shows a loading page **immediately** and injects the chosen
   port (`window.__EVI_PORT__`); the shim (`dist-shim/index.html`) polls
   `/api/health` and redirects to the server once it's up. Robust to any
-  cold-start time, with a "Starting Evi…" spinner and a log-path hint.
+  cold-start time, with a "Starting eVi…" spinner and a log-path hint.
 
 Verified headlessly: the app stays alive (no crash), the sidecar binds,
-and the root Evi UI serves HTTP 200 — the shim redirects into it. No
+and the root eVi UI serves HTTP 200 — the shim redirects into it. No
 console window.
 
 ## [0.21.1] — 2026-05-29
@@ -334,7 +358,7 @@ build scripts are no longer "verified-by-construction" only.
 - **Verified:** PyInstaller froze a 72.7 MB `evi-server.exe` sidecar
   (`--check` self-test passes; the frozen server boots + answers
   `/api/health`), and `tauri build --config tauri.standalone.conf.json`
-  produced `Evi_0.1.0_x64_en-US.msi` (~79 MB) and `Evi_0.1.0_x64-setup.exe`
+  produced `eVi_0.1.0_x64_en-US.msi` (~79 MB) and `eVi_0.1.0_x64-setup.exe`
   (~78 MB) with the sidecar embedded.
 - **Fixed `desktop/src-tauri/Cargo.toml`:** removed a `[lib]
   evi_desktop_lib` target with no `src/lib.rs` (create-tauri-app mobile
@@ -357,7 +381,7 @@ The `evi-assistant` wheel is functionally unchanged (these live in `desktop/` +
 ### Changed — self-contained desktop bundle (practical tier)
 
 - The desktop sidecar now freezes **web + pdf + index** (was core + web).
-  A standalone Evi Desktop build covers chat, tools, image-gen, the web UI,
+  A standalone eVi Desktop build covers chat, tools, image-gen, the web UI,
   PDF reading, and semantic search with no Python on the machine. STT
   (`faster-whisper`/PortAudio) and computer-use stay opt-in via a system
   Python — they'd bloat the binary and drag in fiddly native deps.
@@ -389,7 +413,7 @@ path for CLI / web / server / library use.
 ### Added — external-binary provisioner + standalone desktop scaffold
 
 - **`scripts/evi_tools.py`** (+ `evi-tools.ps1` / `.sh` wrappers) — a
-  bootstrap helper *outside* the package for the programs Evi shells out
+  bootstrap helper *outside* the package for the programs eVi shells out
   to. **Package-manager-first** (winget/choco/scoop → brew →
   apt/dnf/pacman/zypper), falling back to a direct download into
   `~/.evi/tools/bin/` only where a clean prebuilt exists (ffmpeg).
@@ -487,7 +511,7 @@ MCP-server-publish and the Responses API migration.
   invalidates the entry. Bounded at 128 files. `clear_read_cache()` for
   tests / future explicit invalidation.
 - **Permission batching** — when one assistant turn proposes multiple tool
-  calls that need approval, Evi now prompts **once** instead of N times.
+  calls that need approval, eVi now prompts **once** instead of N times.
   New optional `Agent(permission_batch_callback=...)`. The CLI batch
   prompt lists every call and accepts `a` (all) / `n` (none) /
   comma-separated indices (e.g. `1,3`) / `s` (allow all this session).
@@ -642,7 +666,7 @@ Closes out the cheap pass-through parameters from `docs/sdk-coverage.md`.
 
 ### Added — Phase 29: self-update + rollback
 
-- **`evi update`** checks PyPI for a newer Evi, snapshots the current
+- **`evi update`** checks PyPI for a newer eVi, snapshots the current
   `pip freeze` state, runs `pip install --upgrade evi==<version>` via
   `sys.executable -m pip` (so the upgrade lands in the same venv we're
   running from), and verifies the result by spawning a fresh python and
@@ -658,7 +682,7 @@ Closes out the cheap pass-through parameters from `docs/sdk-coverage.md`.
   GC fires automatically after a successful upgrade.
 - **`evi update rollback [N|<dir>]`** restores a snapshot by running
   `pip install -r requirements.txt`. Defaults to the newest. We
-  restore the FULL freeze, not just Evi, because a transitive bump
+  restore the FULL freeze, not just eVi, because a transitive bump
   can break the import just as easily as a direct one.
 - **`evi update history`** lists snapshots newest-first.
   **`evi update prune --keep N`** is the manual GC.
@@ -717,7 +741,7 @@ No new runtime deps (uses stdlib `subprocess` + httpx, both already in core).
   via Whisper, optionally gated on a wake phrase, and handed to a
   callback. The new `voice loop` CLI orchestrates listener + Agent +
   AutoSpeaker so you can keep talking without typing. `pause()`/`resume()`
-  on the listener prevents Evi from transcribing its own TTS echo.
+  on the listener prevents eVi from transcribing its own TTS echo.
   - Flags: `--wake "<phrase>"`, `--model tiny.en`, `--device cpu`,
     `--no-speak`, `--rms-threshold`, `--debug`.
   - Needs `pip install 'evi[stt]'` for sounddevice + faster-whisper.
@@ -790,7 +814,7 @@ No new runtime deps (uses stdlib `subprocess` + httpx, both already in core).
   frontend files.
 - **`Dockerfile` + `docker-compose.yml`** for the headless-server case.
   Two-stage build (no compiler in the runtime image); compose stack
-  wires Evi to a sibling Ollama container with named volumes.
+  wires eVi to a sibling Ollama container with named volumes.
 - **CI + release workflows.** `.github/workflows/ci.yml` runs pytest +
   ruff across macOS / Linux / Windows × Py 3.11 / 3.12 on every PR.
   `release.yml` is tag-triggered, sanity-checks the version, publishes
@@ -811,7 +835,7 @@ No new runtime deps (uses stdlib `subprocess` + httpx, both already in core).
   Dataview / Bases queries can find them. Pull strips frontmatter
   before storage; safe-name validation rejects invalid filenames. Sync
   is bidirectional with last-modified-time conflict resolution. New
-  config block `[obsidian] vault_path = "..."`, `subdir = "Evi"`.
+  config block `[obsidian] vault_path = "..."`, `subdir = "eVi"`.
 - **Multi-conversation tabs in the web UI.** Tab bar above the chat
   log; each tab is a separate session id. Click to switch (rebuilds
   history from `/api/session/{id}/history`), `+` to start a new one,

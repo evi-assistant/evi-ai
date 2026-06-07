@@ -33,7 +33,7 @@ def get_backend(settings) -> Backend:
     """Construct a backend from `LLMSettings`.
 
     Falls back to OpenAI-compatible if the kind is unrecognised, so a typo
-    in config.toml doesn't crash Evi at startup — just produces something
+    in config.toml doesn't crash eVi at startup — just produces something
     that still works for chat against the configured URL.
     """
     kind = (getattr(settings, "backend", None) or "lmstudio").strip().lower()

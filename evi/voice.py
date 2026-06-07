@@ -320,7 +320,7 @@ class AutoListener:
 
     Energy-based VAD is a deliberate choice — no native deps, works in a
     quiet room, and the wake-phrase gate compensates for false positives
-    (anyone who isn't talking *to* Evi gets ignored). For noisy
+    (anyone who isn't talking *to* eVi gets ignored). For noisy
     environments, swap in webrtcvad or silero-vad behind the same shape.
 
     Lifecycle:
@@ -400,7 +400,7 @@ class AutoListener:
     def pause(self) -> None:
         """Temporarily stop capturing utterances.
 
-        Useful while Evi is speaking — without a pause the listener would
+        Useful while eVi is speaking — without a pause the listener would
         transcribe its own TTS output and re-fire. Frames still flow into
         the underlying sounddevice queue; they're discarded on resume.
         """

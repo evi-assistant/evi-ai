@@ -1,6 +1,6 @@
 # Testing
 
-How Evi is tested, and the process for keeping it working as phases land.
+How eVi is tested, and the process for keeping it working as phases land.
 
 ## Why this exists
 
@@ -43,7 +43,7 @@ dir when Playwright isn't installed (so the default CI job never trips on it).
 
 - A **fake OpenAI-compatible backend** (Starlette, in-thread) streams a canned
   chat-completion — so e2e needs **no Ollama/LM Studio** and runs in CI.
-- The **real Evi web server** runs as a subprocess with an isolated `EVI_HOME`
+- The **real eVi web server** runs as a subprocess with an isolated `EVI_HOME`
   whose `config.toml` points at the fake backend.
 - **Playwright** (headless chromium) drives the page like a user.
 

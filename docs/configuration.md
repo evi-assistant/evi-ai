@@ -1,6 +1,6 @@
 # Configuration
 
-All Evi state lives under `~/.evi/` (Windows: `%USERPROFILE%\.evi\`). The
+All eVi state lives under `~/.evi/` (Windows: `%USERPROFILE%\.evi\`). The
 primary file is `config.toml`. First launch writes a default. Hand-edit it
 when you need to change something; nothing else holds machine-wide state.
 

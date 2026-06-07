@@ -44,7 +44,7 @@ class SkillStore:
     """Read-only loader for `~/.evi/skills/`.
 
     Cheap to construct. Every public call rescans the directory so freshly
-    added skills appear without an Evi restart (relevant for the long-lived
+    added skills appear without an eVi restart (relevant for the long-lived
     web/desktop processes).
     """
 

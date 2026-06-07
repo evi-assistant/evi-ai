@@ -1,11 +1,11 @@
 # Future integrations — backlog
 
-A scratch list of third-party app/service integrations Evi could grow.
+A scratch list of third-party app/service integrations eVi could grow.
 Nothing here is committed; the point is to capture ideas as they come
 up so we don't lose them. When we pick one up, it gets its own phase
 entry in `CHANGELOG.md` and the project memory.
 
-Each entry has a one-line sketch of the integration shape: which Evi
+Each entry has a one-line sketch of the integration shape: which eVi
 surfaces would expand (tool category + maybe a CLI subcommand) and what
 sort of dependency it'd pull in.
 
@@ -21,7 +21,7 @@ chose to defer in favour of calendar reading first.
 | **Spotify** | Now-playing, search, queue + playback control | `spotipy` + OAuth (refresh-token flow). Tools: `spotify_now_playing()`, `spotify_search(q, type)`, `spotify_play(uri)`, `spotify_queue(uri)`. |
 | **Plex** | Library search, what's playing, history | `plexapi`. Server URL + token (Plex.tv). Tools: `plex_search(q)`, `plex_recently_added(days)`, `plex_playback_state()`. |
 | **Slack** | Read DMs/channels, search history, send messages | `slack_sdk` bot token or user token. Tools: `slack_search(q)`, `slack_read_channel(id, n)`, `slack_send(channel, text)`. Permission-gated send. |
-| **VS Code** | Open files, see what user is editing, run tasks | Two paths: (a) Evi MCP server consumed by Cline/Continue, (b) VS Code extension that posts cursor + active-file context to Evi. Probably (a). |
+| **VS Code** | Open files, see what user is editing, run tasks | Two paths: (a) eVi MCP server consumed by Cline/Continue, (b) VS Code extension that posts cursor + active-file context to eVi. Probably (a). |
 | **JetBrains** | Same as VS Code | JetBrains has Beta MCP support; (a) above covers it. |
 
 ## Other candidates (not yet asked, but reasonable)
@@ -79,25 +79,25 @@ they're fresh.
 | **News headlines** | NewsAPI / GDELT | API key needed for most. RSS is the no-key fallback. |
 | **Wikipedia** | Article excerpts | `wikipedia-api`. No key. Useful retrieval target. |
 | **arXiv / Semantic Scholar** | Paper search + abstracts | Both have free REST APIs. |
-| **GitHub Copilot / Cursor / Cody** | AI-to-AI bridge | If you have a paid Copilot/Cursor seat, the bridge is mostly novelty — you already have Evi. |
+| **GitHub Copilot / Cursor / Cody** | AI-to-AI bridge | If you have a paid Copilot/Cursor seat, the bridge is mostly novelty — you already have eVi. |
 | **Vault / 1Password CLI / Bitwarden CLI** | Secret retrieval | `op` / `bw` CLIs. Permission-gated heavily. Useful for hooks that need credentials. |
 | **Browser history** | What did I look at yesterday | SQLite reads against Chromium / Firefox profiles. Privacy considerations. |
 | **Browser bookmarks** | Search saved links | Same shape as history. |
 | **Shell command palette** | Recent commands + frequency | `~/.zsh_history` / `~/.bash_history` parse. |
 | **`fzf` / `ripgrep` / `fd`** | Better local search than `find_in_project` | Subprocess wrappers; faster for non-semantic queries. |
 
-## Bridges (Evi as MCP server)
+## Bridges (eVi as MCP server)
 
 Rather than building N integrations one at a time, we could publish an
-Evi MCP server that exposes Evi's tools (memory, index, calendar, etc.)
+eVi MCP server that exposes eVi's tools (memory, index, calendar, etc.)
 so that *other* agents — Claude Desktop, Cline, Continue, Cursor — can
 consume them. This flips the integration story: you don't bridge into
-Evi from each editor, the editor's agent reaches out to Evi's tool
+eVi from each editor, the editor's agent reaches out to eVi's tool
 surface.
 
 Tracked separately as a possible Phase 31-ish item.
 
 ## How to add to this list
 
-Just edit this file and open a PR (or paste in chat — Evi will edit it).
+Just edit this file and open a PR (or paste in chat — eVi will edit it).
 The table is plain markdown; new rows go anywhere.

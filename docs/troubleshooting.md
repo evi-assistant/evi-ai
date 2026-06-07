@@ -14,7 +14,7 @@ The venv isn't on PATH. Either activate it
 
 ## "LLM request failed: APIConnectionError"
 
-Evi can't reach the backend. Check, in order:
+eVi can't reach the backend. Check, in order:
 
 1. Is the backend actually running?
    - LM Studio: open the app, Developer tab, **Start Server**.
@@ -66,7 +66,7 @@ get unstuck. Check:
 
 ## MCP server says "spawned but no tools registered"
 
-The server probably failed to start. Tail Evi's stderr or check
+The server probably failed to start. Tail eVi's stderr or check
 `~/.evi/logs/`:
 
 - `npx` is missing → install Node.js.
@@ -127,7 +127,7 @@ Run a quick `evi chat`, exit, then `ls ~/.evi/transcripts/<today>/`.
 Multi-monitor or HiDPI scaling. Get a known-good baseline:
 
 ```bash
-# In Evi chat:
+# In eVi chat:
 > take a screenshot and read the file path back to me
 > use screen_size to tell me the resolution
 ```

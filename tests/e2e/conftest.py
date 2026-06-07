@@ -1,4 +1,4 @@
-"""E2E test harness: run the REAL Evi web server (with a fake streaming LLM
+"""E2E test harness: run the REAL eVi web server (with a fake streaming LLM
 backend) and drive its UI in a real browser via Playwright.
 
 This is the layer the unit tests can't reach — it would have caught the
@@ -6,7 +6,7 @@ This is the layer the unit tests can't reach — it would have caught the
 the browser's parser never rendered it.
 
 The fake backend is a tiny OpenAI-compatible server that streams a canned
-chat-completion, so no Ollama/LM Studio is needed (works in CI). The Evi server
+chat-completion, so no Ollama/LM Studio is needed (works in CI). The eVi server
 runs as a SUBPROCESS so EVI_HOME (bound at import) points at an isolated tmp
 config aimed at the fake backend.
 """

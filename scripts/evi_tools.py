@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""evi-tools — provision the external binaries Evi can use.
+"""evi-tools — provision the external binaries eVi can use.
 
 This lives OUTSIDE the `evi` package on purpose: it's a bootstrap / ops
 helper, not part of the importable library. It manages the helper programs
-some Evi tools shell out to:
+some eVi tools shell out to:
 
     - tesseract   (OCR tool)
     - ffmpeg      (audio decode for some STT paths)

@@ -8,7 +8,7 @@ multi-GB downloaded weights.
 Default excludes:
 
 - `models/`       — multi-GB GGUFs you'd just re-pull
-- `transcripts/`  — per-machine, often large, regenerated as you use Evi
+- `transcripts/`  — per-machine, often large, regenerated as you use eVi
 - `logs/`         — purely operational
 - `images/`       — per-machine outputs
 - `screenshots/`  — per-machine outputs
@@ -59,7 +59,7 @@ def create_backup(
     home: Path | None = None,
     includes: set[str] | None = None,
 ) -> BackupSummary:
-    """Create a `.tar.gz` of the Evi home directory and return a summary.
+    """Create a `.tar.gz` of the eVi home directory and return a summary.
 
     `includes` overrides specific default excludes (e.g. `{"models"}` to
     pack the downloaded weights).
@@ -115,7 +115,7 @@ def restore_backup(
     home: Path | None = None,
     overwrite: bool = False,
 ) -> RestoreSummary:
-    """Extract a backup archive into the Evi home dir.
+    """Extract a backup archive into the eVi home dir.
 
     By default we refuse to overwrite an existing non-empty HOME. Pass
     `overwrite=True` to merge — files in the archive replace existing

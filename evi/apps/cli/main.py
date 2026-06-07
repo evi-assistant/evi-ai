@@ -99,7 +99,7 @@ def _ensure_mcp(config: Config) -> MCPManager | None:
     return manager
 
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="Evi — personal AI assistant.")
+app = typer.Typer(add_completion=False, no_args_is_help=True, help="eVi — personal AI assistant.")
 console = Console()
 
 
@@ -698,7 +698,7 @@ def _run_repl(agent: Agent) -> None:
     repl_in = ReplInput(agent)
 
     header_bits = [
-        ("Evi ", "bold cyan"),
+        ("eVi ", "bold cyan"),
         (f"· model={agent.config.llm.model} ", "dim"),
         (f"· {len(agent.tools)} tools ", "dim"),
     ]
@@ -1040,7 +1040,7 @@ def edit(
     console.print(
         Panel.fit(
             Text.assemble(
-                ("Evi edit ", "bold cyan"),
+                ("eVi edit ", "bold cyan"),
                 (f"· {p.name} ", "dim"),
                 (f"· {len(original)} bytes prediction", "dim"),
             ),
@@ -1193,7 +1193,7 @@ def review(
     console.print(
         Panel.fit(
             Text.assemble(
-                ("Evi review ", "bold cyan"),
+                ("eVi review ", "bold cyan"),
                 (f"· {len(tools)} tools ", "dim"),
                 (f"· {len(diff)} byte diff", "dim"),
             ),
@@ -1378,7 +1378,7 @@ def voice_loop(
 
     wake_phrase = wake.strip() or None
     header = (
-        f"[bold cyan]Evi voice loop[/bold cyan] · model={agent.config.llm.model}"
+        f"[bold cyan]eVi voice loop[/bold cyan] · model={agent.config.llm.model}"
         f" · stt={model}"
     )
     if wake_phrase:
@@ -2071,7 +2071,7 @@ def setup() -> None:
     cfg = Config.load()
 
     console.print(Panel.fit(
-        "[bold cyan]Evi setup[/bold cyan]\n"
+        "[bold cyan]eVi setup[/bold cyan]\n"
         "[dim]Detects local LLM backends, recommends a model for your hardware, "
         "and writes ~/.evi/config.toml.[/dim]",
         border_style="cyan",
@@ -2267,7 +2267,7 @@ def tail(
         0.5, help="Poll interval in seconds for new transcript lines.",
     ),
 ) -> None:
-    """Live-tail today's transcripts as Evi writes them.
+    """Live-tail today's transcripts as eVi writes them.
 
     Useful for watching a scheduled task fire, or observing a long-running
     chat from another terminal. Polls each session's `.jsonl` file for
@@ -2373,7 +2373,7 @@ def web(host: str = "127.0.0.1", port: int = 8000) -> None:
             "[cyan]web auth:[/cyan] [yellow]disabled[/yellow] "
             "[dim](run `evi web token rotate` to require a token)[/dim]"
         )
-    console.print(f"[cyan]Evi web →[/cyan] http://{host}:{port}")
+    console.print(f"[cyan]eVi web →[/cyan] http://{host}:{port}")
     uvicorn.run("evi.apps.web.server:app", host=host, port=port, reload=False)
 
 
@@ -2631,7 +2631,7 @@ def models_recommend() -> None:
 
     if rec.mode == "remote-only":
         console.print(
-            "[yellow]Recommendation: point Evi at a remote backend instead "
+            "[yellow]Recommendation: point eVi at a remote backend instead "
             "of running local.[/yellow]"
         )
         console.print(
@@ -2702,7 +2702,7 @@ def models_backend(kind: str | None = typer.Argument(None)) -> None:
     )
 
 
-obsidian_app = typer.Typer(help="Sync Evi memory with an Obsidian vault.")
+obsidian_app = typer.Typer(help="Sync eVi memory with an Obsidian vault.")
 app.add_typer(obsidian_app, name="obsidian")
 
 
@@ -2716,7 +2716,7 @@ def _obsidian_vault() -> tuple[str, str] | None:
             "Set it in ~/.evi/config.toml:\n\n"
             "  [obsidian]\n"
             '  vault_path = "C:/Users/me/Documents/MyVault"\n'
-            '  subdir = "Evi"\n'
+            '  subdir = "eVi"\n'
         )
         return None
     return vault, cfg.obsidian.subdir
@@ -2775,7 +2775,7 @@ def obsidian_push(
 def obsidian_pull(
     dry_run: bool = typer.Option(False, "--dry-run", help="Don't write — just report."),
 ) -> None:
-    """Read vault entries into Evi memory (overwrites)."""
+    """Read vault entries into eVi memory (overwrites)."""
     from evi.memory import MemoryStore
     from evi.obsidian import pull
 
@@ -2803,7 +2803,7 @@ def obsidian_sync(
     _print_stats(stats, "sync (dry-run)" if dry_run else "sync")
 
 
-backup_app = typer.Typer(help="Backup and restore Evi state.")
+backup_app = typer.Typer(help="Backup and restore eVi state.")
 app.add_typer(backup_app, name="backup")
 
 
@@ -3232,7 +3232,7 @@ def mcp_serve(
         help="Require this bearer token (with --http). Strongly recommended for non-localhost.",
     ),
 ) -> None:
-    """Run Evi AS an MCP server, exposing Evi's tools + memory resources +
+    """Run eVi AS an MCP server, exposing eVi's tools + memory resources +
     command prompts to Claude Desktop / Cursor / Cline / Continue. Default
     transport is stdio (spawned by the client); use --http for a remote,
     optionally token-gated, streamable-HTTP server. See `mcp serve-config`."""
@@ -3280,7 +3280,7 @@ app.add_typer(schedule_app, name="schedule")
 def schedule_add(
     name: str = typer.Option(..., help="Human-friendly task name."),
     cron: str = typer.Option(..., help='Crontab string, e.g. "0 9 * * *".'),
-    prompt: str = typer.Option(..., help="The prompt to send to Evi."),
+    prompt: str = typer.Option(..., help="The prompt to send to eVi."),
     disabled: bool = typer.Option(False, help="Create the task in disabled state."),
 ) -> None:
     """Save a new scheduled task."""
@@ -3355,7 +3355,7 @@ def scheduler(reload_interval: int = 60) -> None:
     except RuntimeError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
-    console.print("[cyan]Evi scheduler running.[/cyan] Ctrl-C to stop.")
+    console.print("[cyan]eVi scheduler running.[/cyan] Ctrl-C to stop.")
     try:
         import time
 

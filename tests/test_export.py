@@ -61,7 +61,7 @@ def test_html_export_wraps_in_doc(tmp_path: Path) -> None:
     f = _seed_session(tmp_path, "2026-05-27", "s3")
     html = export_html(f)
     assert html.startswith("<!doctype html>")
-    assert "<title>Evi session s3</title>" in html
+    assert "<title>eVi session s3</title>" in html
     # Bold markdown surfaces as <strong>.
     assert "<strong>hello</strong>" in html
     # Tool result in a code block.

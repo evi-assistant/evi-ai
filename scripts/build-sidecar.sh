@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Freeze the Evi web server into a single `evi-server` binary (the desktop
+# Freeze the eVi web server into a single `evi-server` binary (the desktop
 # "sidecar") with PyInstaller, then stage it for the Tauri bundle.
 #
 # MUST be run on the SAME OS you're building the desktop app for —

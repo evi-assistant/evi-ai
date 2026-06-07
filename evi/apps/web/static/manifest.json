@@ -1,6 +1,6 @@
 {
-  "name": "Evi",
-  "short_name": "Evi",
+  "name": "eVi",
+  "short_name": "eVi",
   "description": "Local-first personal AI assistant.",
   "start_url": "/",
   "display": "standalone",

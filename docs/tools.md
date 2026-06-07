@@ -1,6 +1,6 @@
 # Tool reference
 
-Every tool Evi ships with, grouped by category. Each tool is enabled via
+Every tool eVi ships with, grouped by category. Each tool is enabled via
 `tools.<category> = true` in `~/.evi/config.toml`. Whether the agent can
 invoke it *without prompting* depends on `auto.auto_approve` (see
 [configuration.md](configuration.md#tools)).

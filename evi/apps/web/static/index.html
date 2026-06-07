@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f1419">
 <link rel="manifest" href="/static/manifest.json">
 <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%230f1419'/><text x='50%25' y='58%25' text-anchor='middle' font-family='system-ui' font-size='34' font-weight='700' fill='%236cb6ff'>e</text></svg>">
-<title>Evi</title>
+<title>eVi</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
 <script type="module">
   // Markdown + syntax highlighting + Mermaid. Each load is independent —
@@ -378,9 +378,9 @@
 <body>
 <div class="auth-overlay" id="auth-overlay">
   <form class="auth-card" id="auth-form" autocomplete="off">
-    <h2>Sign in to Evi</h2>
+    <h2>Sign in to eVi</h2>
     <div class="blurb">
-      This Evi instance requires an access token. Paste yours below — it stays in
+      This eVi instance requires an access token. Paste yours below — it stays in
       your browser's local storage. Generate one with
       <code>evi web token rotate</code>.
     </div>
@@ -392,7 +392,7 @@
   </form>
 </div>
 <header>
-  <h1>Evi</h1>
+  <h1>eVi</h1>
   <span class="meta" id="meta">connecting…</span>
   <span class="chip" id="chip-usage" style="display:none"></span>
   <span class="chip" id="chip-goal" style="display:none"></span>
@@ -407,7 +407,7 @@
 <form id="form">
   <button type="button" id="attach" class="attach-btn" title="Attach a file">📎</button>
   <input type="file" id="file-input" style="display:none">
-  <textarea id="input" placeholder="Talk to Evi… (Enter to send · Shift+Enter for newline · /help for commands · drop a file)" autofocus></textarea>
+  <textarea id="input" placeholder="Talk to eVi… (Enter to send · Shift+Enter for newline · /help for commands · drop a file)" autofocus></textarea>
   <button type="submit" id="send">Send</button>
 </form>
 <div class="footer-bar">
@@ -995,20 +995,20 @@ function renderBackendBanner(st) {
   var html, actions = '', hint = '';
   if (live.length) {
     // State B — a non-configured backend is running; offer to switch to it.
-    html = '<b>⚠ Evi is set to ' + (cfg.backend || '?') + ' (' + (cfg.base_url || '?') +
+    html = '<b>⚠ eVi is set to ' + (cfg.backend || '?') + ' (' + (cfg.base_url || '?') +
       '), which isn\'t running</b> — but ' + live.map(function (c) { return c.kind; }).join(', ') +
-      ' is. Point Evi at it:';
+      ' is. Point eVi at it:';
     actions = live.map(function (c) { return bkBtn('Use ' + c.kind, 'use', c.kind); }).join('');
   } else {
     // State C — nothing reachable; first-run setup wizard.
     const model = st.recommended_model || 'a small model';
-    html = '<b>⚠ No local LLM backend is running.</b> Evi needs a model server to reply. ' +
+    html = '<b>⚠ No local LLM backend is running.</b> eVi needs a model server to reply. ' +
       '<span style="opacity:.7">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>';
     if (st.ollama_installed) {
-      actions = bkBtn('⚡ Set up Evi (start + download ' + model + ')', 'auto', 'ollama') +
+      actions = bkBtn('⚡ Set up eVi (start + download ' + model + ')', 'auto', 'ollama') +
                 bkBtn('Start only', 'start', 'ollama');
     } else if (st.can_auto_install_ollama) {
-      actions = bkBtn('⚡ Set up Evi automatically (install Ollama + ' + model + ')', 'auto', 'ollama') +
+      actions = bkBtn('⚡ Set up eVi automatically (install Ollama + ' + model + ')', 'auto', 'ollama') +
                 bkBtn('Download manually', 'download', 'ollama');
     } else {
       actions = bkBtn('Download Ollama', 'download', 'ollama');
@@ -1095,11 +1095,11 @@ async function autoSetup(st) {
   bkProgress('Downloading model' + (st.recommended_model ? (' ' + st.recommended_model) : '') + '…', 0);
   var ok = await pullModelSSE(st.recommended_model || '');
   if (!ok) { bkProgress("Model download didn't finish. Give it a moment and click Recheck."); return; }
-  // 4. Activate it: point Evi's config at Ollama + this model (the step the
+  // 4. Activate it: point eVi's config at Ollama + this model (the step the
   //    old wizard skipped — without it chat kept hitting the default backend).
-  bkProgress('Configuring Evi to use Ollama…', undefined, true);
+  bkProgress('Configuring eVi to use Ollama…', undefined, true);
   await fetch('/api/backend/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama', model: st.recommended_model || undefined }) }).catch(function () {});
-  bkProgress('All set — Evi is ready to chat!');
+  bkProgress('All set — eVi is ready to chat!');
   // 5. Re-check: now the *configured* backend is reachable, so the banner hides.
   await checkBackend();
 }
@@ -1118,7 +1118,7 @@ async function onBackendAction(e) {
       await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
       await pollReachable(10, 1200);
     } else if (act === 'use') {
-      // Switch Evi to a running backend (auto-picks an installed model).
+      // Switch eVi to a running backend (auto-picks an installed model).
       btn.textContent = 'Switching…';
       await fetch('/api/backend/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
     } else if (act === 'download') {

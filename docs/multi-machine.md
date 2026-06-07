@@ -1,6 +1,6 @@
 # Multi-machine setup
 
-How to wire Evi across a workstation, a laptop, and a headless AI server
+How to wire eVi across a workstation, a laptop, and a headless AI server
 on the same LAN — what most people actually want once they have a
 "server class" GPU.
 
@@ -34,7 +34,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:32b-instruct-q4_K_M     # ~22 GB, the P40 sweet spot
 ```
 
-Install Evi:
+Install eVi:
 
 ```bash
 git clone <repo> /opt/evi && cd /opt/evi
@@ -42,7 +42,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[web,mcp,scheduler]'
 ```
 
-Tell Evi to use Ollama and start the web server bound to your LAN:
+Tell eVi to use Ollama and start the web server bound to your LAN:
 
 ```bash
 evi models backend ollama                       # auto-bumps base_url to :11434/v1
@@ -55,7 +55,7 @@ For "always on", run it as a systemd service:
 ```ini
 # /etc/systemd/system/evi-web.service
 [Unit]
-Description=Evi web UI
+Description=eVi web UI
 After=network.target
 
 [Service]
@@ -170,5 +170,5 @@ is on a network you don't control, you should:
   Cloudflare Access).
 - Or just keep it on a LAN you trust.
 
-Evi has no built-in auth on the web UI by design — it assumes a trusted
+eVi has no built-in auth on the web UI by design — it assumes a trusted
 network.

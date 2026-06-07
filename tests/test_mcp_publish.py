@@ -1,4 +1,4 @@
-"""Tests for exposing Evi's tools as an MCP server (Phase 53).
+"""Tests for exposing eVi's tools as an MCP server (Phase 53).
 
 Asserts only on tool categories that don't need optional extras (`git`,
 `memory`) so the suite passes in CI, which doesn't install every extra.

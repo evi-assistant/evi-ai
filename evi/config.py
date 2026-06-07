@@ -133,7 +133,7 @@ class ObsidianSettings:
     """Optional Obsidian-vault sync target. Empty `vault_path` = disabled."""
 
     vault_path: str = ""
-    subdir: str = "Evi"
+    subdir: str = "eVi"
 
 
 @dataclass

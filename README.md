@@ -1,4 +1,4 @@
-# Evi — personal AI assistant
+# eVi — personal AI assistant
 
 Local-first personal assistant. Chat with a model on **your** hardware,
 let it use tools, generate images, automate scheduled tasks, drive your
@@ -32,7 +32,7 @@ native desktop window.
 
 ## Quickstart
 
-> **Package name:** the project is **Evi**, but the PyPI distribution is
+> **Package name:** the project is **eVi**, but the PyPI distribution is
 > **`evi-assistant`** (the bare `evi` name was taken). Once published you'll
 > `pip install evi-assistant`; the import package and CLI command are both still
 > `evi` (`import evi`, run `evi`). The steps below use an editable install
@@ -58,7 +58,7 @@ mode, auto-approve, model switching, user-defined templates).
 
 ## Three-machine setup
 
-Evi is built to span machines. A typical setup:
+eVi is built to span machines. A typical setup:
 
 | Machine          | Role                | Backend           |
 |------------------|---------------------|-------------------|
@@ -82,7 +82,7 @@ evi worktree create <branch>       Spin up a git worktree for parallel work
 evi profile add home --backend …   Per-machine config overlays
 evi voice listen / speak           STT + TTS
 evi mcp list-tools                 Show MCP server-provided tools
-evi mcp serve                      Run Evi AS an MCP server (other agents use Evi's tools)
+evi mcp serve                      Run eVi AS an MCP server (other agents use eVi's tools)
 ```
 
 ## What's built

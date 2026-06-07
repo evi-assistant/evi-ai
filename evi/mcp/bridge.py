@@ -1,6 +1,6 @@
 """Async-to-sync bridge — runs an asyncio event loop on a daemon thread.
 
-The MCP Python SDK is all-async; Evi's tool layer is sync. Rather than wedge
+The MCP Python SDK is all-async; eVi's tool layer is sync. Rather than wedge
 async everywhere, we keep one long-lived loop running on a side thread and
 let sync code submit coroutines via `run_coroutine_threadsafe`. The loop is
 private to the bridge — never touch it directly from caller code.

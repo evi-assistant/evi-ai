@@ -1,4 +1,4 @@
-# Freeze the Evi web server into a single `evi-server.exe` (the desktop
+# Freeze the eVi web server into a single `evi-server.exe` (the desktop
 # "sidecar") with PyInstaller, then stage it for the Tauri bundle.
 #
 # MUST be run on Windows to produce a Windows sidecar — PyInstaller does not

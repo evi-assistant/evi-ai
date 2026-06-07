@@ -1,6 +1,6 @@
 # Architecture
 
-A walk through how Evi's pieces fit together. Read this once when you join
+A walk through how eVi's pieces fit together. Read this once when you join
 the project; refer back to the per-module docs when you need detail.
 
 ## One core, three frontends
@@ -60,7 +60,7 @@ dream agent. Prevents tool-call ping-pong loops.
 
 `Agent._compose_system_prompt()` stitches together:
 
-1. The base prompt ("You are Evi, …").
+1. The base prompt ("You are eVi, …").
 2. `## Memory index` — one-line summaries of every entry in
    `~/.evi/memory/`. Pulled live so dreaming + manual edits show up.
 3. `## Available skills` — name + description of every

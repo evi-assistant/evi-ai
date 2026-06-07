@@ -1,4 +1,4 @@
-"""Sync Evi's memory with an Obsidian vault.
+"""Sync eVi's memory with an Obsidian vault.
 
 Obsidian is just a folder of markdown files. We treat a sub-directory of
 the vault (`<vault>/<subdir>/`) as the mirror of `~/.evi/memory/`. Each
@@ -16,12 +16,12 @@ filter them:
 
     The body of the memory entry…
 
-`push` is the safe default — Evi memory is the source of truth, vault
+`push` is the safe default — eVi memory is the source of truth, vault
 entries are overwritten / created. `pull` does the reverse. `sync` runs
 both directions and resolves conflicts by last-modified time.
 
 `.attic/` (soft-deleted memory) is never pushed to the vault. If you've
-deleted a memory in Evi and pull from a vault that still has it, the
+deleted a memory in eVi and pull from a vault that still has it, the
 entry is restored to live memory — recovering a previously soft-deleted
 file.
 """
@@ -66,7 +66,7 @@ class SyncStats:
 
 
 def _vault_target_dir(vault_path: Path, subdir: str) -> Path:
-    """Resolve the directory where Evi files live inside the vault."""
+    """Resolve the directory where eVi files live inside the vault."""
     return (vault_path / subdir).expanduser().resolve()
 
 
@@ -118,7 +118,7 @@ def _vault_files(target_dir: Path) -> list[Path]:
 def push(
     store: MemoryStore,
     vault_path: str | Path,
-    subdir: str = "Evi",
+    subdir: str = "eVi",
     *,
     dry_run: bool = False,
 ) -> SyncStats:
@@ -168,7 +168,7 @@ def push(
 def pull(
     store: MemoryStore,
     vault_path: str | Path,
-    subdir: str = "Evi",
+    subdir: str = "eVi",
     *,
     dry_run: bool = False,
 ) -> SyncStats:
@@ -212,7 +212,7 @@ def pull(
 def sync(
     store: MemoryStore,
     vault_path: str | Path,
-    subdir: str = "Evi",
+    subdir: str = "eVi",
     *,
     dry_run: bool = False,
 ) -> SyncStats:
@@ -287,7 +287,7 @@ def sync(
 def status(
     store: MemoryStore,
     vault_path: str | Path,
-    subdir: str = "Evi",
+    subdir: str = "eVi",
 ) -> dict[str, list[str]]:
     """Report what's where without changing anything. Useful for inspection."""
     target_dir = _vault_target_dir(Path(vault_path), subdir)

@@ -1,6 +1,6 @@
 # Self-update design (Phase 29 proposal)
 
-`evi update` lets a user pull a newer Evi version, verify it works, and
+`evi update` lets a user pull a newer eVi version, verify it works, and
 roll back if it doesn't. This doc is the design — none of it is built
 yet. Once approved, it becomes Phase 29.
 
@@ -22,7 +22,7 @@ yet. Once approved, it becomes Phase 29.
 
 - Auto-updating the Tauri desktop binary — Tauri has its own updater;
   that's a separate phase.
-- Updating dependencies independently of Evi (only pinned-via-extras
+- Updating dependencies independently of eVi (only pinned-via-extras
   matter for our use cases).
 - Background / daemon checks. Update is always user-initiated.
 
@@ -170,7 +170,7 @@ If that fails or returns the OLD version, we either:
 
 This catches the case where pip happily "succeeded" but the installed
 package can't import (e.g. a dep version conflict that pip didn't catch
-because Evi doesn't pin it strictly).
+because eVi doesn't pin it strictly).
 
 ## Rollback
 
@@ -183,9 +183,9 @@ subprocess.run(
 
 Then re-verify the import.
 
-Note: we restore ALL frozen packages, not just Evi. That's intentional
+Note: we restore ALL frozen packages, not just eVi. That's intentional
 — if the failure was caused by a transitive bump, just reinstalling
-Evi at the old version won't help. Restoring the full `pip freeze` is
+eVi at the old version won't help. Restoring the full `pip freeze` is
 the only way to get a deterministic rollback.
 
 Risk: if the user installed something else in the venv between the
@@ -231,7 +231,7 @@ evi/apps/cli/main.py
 ## Open questions
 
 1. **Should rollback be one-step or stepped?** Right now I propose
-   "restore the full pip freeze". Alternative: only downgrade Evi
+   "restore the full pip freeze". Alternative: only downgrade eVi
    itself, leave deps alone. Cleaner but doesn't recover from
    transitive bumps. I lean toward "full freeze, with a confirmation".
 2. **Where do PyPI release notes come from?** The PyPI JSON API exposes
