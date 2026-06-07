@@ -108,6 +108,12 @@ telemetry = [
     # (self-hosted GlitchTip or hosted Sentry). See evi/reporting.py.
     "sentry-sdk>=2.0",
 ]
+e2e = [
+    # Browser-driven UI regression tests (tests/e2e/). See TESTING.md.
+    # After install: `playwright install chromium`.
+    "playwright>=1.40",
+    "pytest-playwright>=0.5",
+]
 # Build-time only: freezing the desktop sidecar with PyInstaller. Not a
 # runtime dep — see docs/desktop-bundling.md.
 build-desktop = [
@@ -137,6 +143,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 timeout = 30   # hard ceiling so the permission tests don't hang forever
 timeout_method = "thread"
+# e2e (browser) tests are opt-in: excluded from the default run, selected with
+# `pytest tests/e2e -m e2e` (which overrides this -m). See TESTING.md.
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: browser-driven UI end-to-end tests (needs the e2e extra + a browser)",
+]
 
 [tool.ruff]
 line-length = 100

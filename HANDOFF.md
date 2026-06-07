@@ -97,6 +97,13 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **UI regression testing set up** (closes the gap that let the chat bug
+  ship). Playwright e2e harness in `tests/e2e/` (fake streaming LLM backend +
+  real Evi server subprocess + headless chromium); `test_chat_renders_reply`
+  guards the SSE-render regression. `e2e` extra, `e2e` pytest marker (excluded
+  from default run), `.github/workflows/e2e.yml` (PR + weekly). Process +
+  full feature inventory + the "new UI feature ⇒ e2e test" rule in **TESTING.md**.
+  Run: `pytest tests/e2e -m e2e --timeout=120`.
 - ✅ **0.24.2 fix — chat now renders replies (SSE CRLF bug).** Frontend split
   SSE frames on `\n\n` but sse-starlette 3.4.x emits `\r\n\r\n` → zero events
   parsed → no reply. Both SSE readers now use `/\r?\n\r?\n/`. Broke all chat in
