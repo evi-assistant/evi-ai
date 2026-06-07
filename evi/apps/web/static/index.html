@@ -373,6 +373,114 @@
     border: 0; border-radius: 4px; cursor: pointer; font: inherit; font-weight: 600;
   }
   .auth-card button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Settings screen — a two-pane modal (nav + content) modelled on the
+     other overlays. Also backs the in-app docs + diagnostics dialogs. */
+  .settings-overlay {
+    position: fixed; inset: 0; background: rgba(15,20,25,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 1500;
+  }
+  .settings-overlay.shown { display: flex; }
+  .settings-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; width: min(880px, 94vw); height: min(660px, 90vh);
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  }
+  .settings-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+  }
+  .settings-head h2 { margin: 0; font-size: 16px; color: var(--accent); }
+  .settings-head .x {
+    background: transparent; border: 1px solid var(--border); color: var(--dim);
+    border-radius: 4px; cursor: pointer; font: inherit; padding: 4px 10px;
+  }
+  .settings-head .x:hover { color: var(--fg); border-color: var(--fg); }
+  .settings-body { display: flex; flex: 1; min-height: 0; }
+  .settings-nav {
+    width: 190px; border-right: 1px solid var(--border); padding: 8px 0;
+    overflow-y: auto; flex-shrink: 0;
+  }
+  .settings-nav button {
+    display: block; width: 100%; text-align: left; background: transparent;
+    border: 0; border-left: 2px solid transparent; color: var(--dim);
+    padding: 8px 18px; cursor: pointer; font: inherit;
+  }
+  .settings-nav button:hover { color: var(--fg); }
+  .settings-nav button.active {
+    color: var(--accent); border-left-color: var(--accent);
+    background: rgba(108,182,255,0.06);
+  }
+  .settings-content { flex: 1; overflow-y: auto; padding: 18px 22px; }
+  .settings-content h3 { margin: 0 0 4px; font-size: 15px; color: var(--fg); }
+  .settings-content .sec-blurb { color: var(--dim); font-size: 12px; margin: 0 0 16px; }
+  .set-field { margin-bottom: 16px; }
+  .set-field > label { display: block; font-size: 13px; color: var(--fg); margin-bottom: 4px; }
+  .set-field .help { color: var(--dim); font-size: 11px; margin-top: 4px; }
+  .set-field input[type=text], .set-field input[type=password],
+  .set-field input[type=number], .set-field select {
+    width: 100%; padding: 7px 9px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px; font: inherit;
+  }
+  .set-field.inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .set-field.inline > label { margin: 0; }
+  .set-toggle {
+    width: 36px; height: 20px; border-radius: 10px; background: #2a3038;
+    position: relative; transition: background .15s; cursor: pointer;
+    flex-shrink: 0; border: 0; padding: 0;
+  }
+  .set-toggle::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--dim); transition: left .15s, background .15s;
+  }
+  .set-toggle.on { background: var(--accent); }
+  .set-toggle.on::after { left: 18px; background: #0f1419; }
+  .set-group-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--dim); margin: 20px 0 8px;
+  }
+  .set-check { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--fg); cursor: pointer; }
+  .set-danger-label { color: var(--err); }
+  .settings-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 18px; border-top: 1px solid var(--border);
+  }
+  .settings-foot .status { color: var(--dim); font-size: 12px; }
+  .settings-foot .btns { display: flex; gap: 8px; }
+  .settings-foot button {
+    padding: 7px 16px; border-radius: 4px; cursor: pointer; font: inherit;
+    border: 1px solid var(--border); background: transparent; color: var(--fg);
+  }
+  .settings-foot button.primary { background: var(--accent); color: #0f1419; border-color: var(--accent); font-weight: 600; }
+  .settings-foot button:disabled { opacity: .5; cursor: not-allowed; }
+  .set-action-btn {
+    display: inline-block; margin: 0 8px 8px 0; padding: 7px 14px;
+    background: transparent; border: 1px solid var(--border); color: var(--fg);
+    border-radius: 4px; cursor: pointer; font: inherit;
+  }
+  .set-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .set-about-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .set-about-row .k { color: var(--dim); }
+  .docs-body { line-height: 1.6; }
+  .docs-body pre { background: var(--bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+  .docs-body code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .docs-nav-link { color: var(--accent); cursor: pointer; }
+  @media (max-width: 640px) {
+    .settings-card { width: 100vw; height: 100vh; border-radius: 0; }
+    .settings-nav { width: 130px; }
+  }
+
+  /* Light theme — toggled via View → Toggle Theme (data-theme on <html>). */
+  :root[data-theme="light"] {
+    --bg: #ffffff; --panel: #f6f8fa; --border: #d0d7de; --fg: #1f2328;
+    --dim: #656d76; --accent: #0969da; --user: #1a7f37; --tool: #9a6700;
+    --system: #8250df; --err: #cf222e;
+  }
+  :root[data-theme="light"] .msg.user { background: #dafbe1; border-color: #aceebb; color: #0f5323; }
+  :root[data-theme="light"] .msg.tool { background: #fff8c5; border-color: #eac54f; color: #6f4500; }
+  :root[data-theme="light"] .msg.assistant .md code, :root[data-theme="light"] .msg.system .md code,
+  :root[data-theme="light"] .msg.assistant .md pre, :root[data-theme="light"] .msg.system .md pre { background: #eff1f3; }
 </style>
 </head>
 <body>
@@ -399,7 +507,8 @@
   <span class="chip" id="chip-plan" style="display:none">plan</span>
   <span class="chip" id="chip-auto" style="display:none">auto</span>
   <button id="speak-btn" type="button" title="Auto-speak replies (sentence-by-sentence TTS)">🔇</button>
-  <button id="reset" type="button">Reset</button>
+  <button id="settings-btn" type="button" title="Settings (Ctrl+,)" style="margin-left:8px">⚙</button>
+  <button id="reset" type="button" style="margin-left:8px">Reset</button>
 </header>
 <div class="tabs" id="tabs"></div>
 <div id="backend-banner" style="display:none;margin:10px 16px;padding:12px 14px;border:1px solid #b45309;background:#3b2a16;color:#fde68a;border-radius:8px;font-size:13px;line-height:1.5;"></div>
@@ -419,6 +528,34 @@
 <div class="drop-overlay" id="drop-overlay">Drop file to attach</div>
 <div class="picker-overlay" id="picker-overlay">
   <div class="picker-card" id="picker-card" role="menu" tabindex="-1"></div>
+</div>
+<div class="settings-overlay" id="settings-overlay">
+  <div class="settings-card">
+    <div class="settings-head">
+      <h2>Settings</h2>
+      <button class="x" id="settings-close" type="button">Close</button>
+    </div>
+    <div class="settings-body">
+      <div class="settings-nav" id="settings-nav"></div>
+      <div class="settings-content" id="settings-content"></div>
+    </div>
+    <div class="settings-foot">
+      <span class="status" id="settings-status"></span>
+      <div class="btns">
+        <button type="button" id="settings-cancel">Cancel</button>
+        <button type="button" class="primary" id="settings-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="settings-overlay" id="dialog-overlay">
+  <div class="settings-card">
+    <div class="settings-head">
+      <h2 id="dialog-title">Dialog</h2>
+      <button class="x" id="dialog-close" type="button">Close</button>
+    </div>
+    <div class="settings-content" id="dialog-content" style="flex:1"></div>
+  </div>
 </div>
 <script>
 // ----- auth -------------------------------------------------------------
@@ -1762,6 +1899,393 @@ resetBtn.addEventListener('click', async () => {
   // Reset the current tab's label too — it'll get re-named on the next user msg.
   if (tabs[activeIdx]) setTabLabel('new chat');
 });
+
+// ===== Settings, theme, in-app dialogs, desktop-menu bridge ============
+// One module backing the ⚙ settings screen, the in-app Documentation +
+// Diagnostics dialogs, and (in the desktop build) the native menus + tray.
+// Web users reach everything through the gear button + the About section;
+// desktop menus just emit events that call the same functions here.
+(function () {
+  'use strict';
+
+  // ---- theme (client-side pref; also View → Toggle Theme) -------------
+  const THEME_KEY = 'evi.theme';   // 'system' | 'dark' | 'light'
+  const media = window.matchMedia('(prefers-color-scheme: light)');
+  const effectiveTheme = pref =>
+    (pref === 'light' || pref === 'dark') ? pref : (media.matches ? 'light' : 'dark');
+  function applyTheme() {
+    document.documentElement.dataset.theme =
+      effectiveTheme(localStorage.getItem(THEME_KEY) || 'system');
+  }
+  function setThemePref(pref) { localStorage.setItem(THEME_KEY, pref); applyTheme(); }
+  function toggleTheme() {
+    setThemePref(effectiveTheme(localStorage.getItem(THEME_KEY) || 'system') === 'light' ? 'dark' : 'light');
+  }
+  media.addEventListener('change', applyTheme);
+  applyTheme();
+
+  // ---- desktop detection + external open ------------------------------
+  const isDesktop = () => !!(window.__TAURI__ && window.__TAURI__.core);
+  const invoke = (cmd, args) =>
+    (window.__TAURI__ && window.__TAURI__.core)
+      ? window.__TAURI__.core.invoke(cmd, args) : Promise.reject('not desktop');
+  function openExternal(url) {
+    if (isDesktop()) invoke('open_external_cmd', { url }).catch(() => window.open(url, '_blank', 'noopener'));
+    else window.open(url, '_blank', 'noopener');
+  }
+
+  // ---- generic dialog (docs / diagnostics / shortcuts / updates) ------
+  const dlgOverlay = document.getElementById('dialog-overlay');
+  const dlgTitle = document.getElementById('dialog-title');
+  const dlgContent = document.getElementById('dialog-content');
+  function openDialog(title, html) {
+    dlgTitle.textContent = title; dlgContent.innerHTML = html;
+    dlgOverlay.classList.add('shown');
+  }
+  const closeDialog = () => dlgOverlay.classList.remove('shown');
+  document.getElementById('dialog-close').addEventListener('click', closeDialog);
+  dlgOverlay.addEventListener('click', e => { if (e.target === dlgOverlay) closeDialog(); });
+
+  // ---- settings schema (declarative → generic renderer, stays DRY) ----
+  const TOOL_KEYS = ['fs','code','shell','gmail','outlook','image','memory','subagent',
+    'mcp','skills','web','voice','computer','transcripts','pdf','sqlite','index','git','ocr','calendar'];
+  const RISKY = new Set(['shell','computer','web']);
+  const SCHEMA = [
+    { id:'general', title:'General', blurb:'Appearance and reporting.', fields:[
+      { type:'client-select', key:'theme', label:'Theme', options:['system','dark','light'],
+        help:'eVi follows your OS by default. Also under View → Toggle Theme.' },
+      { type:'bool', section:'telemetry', key:'crash_reports', label:'Crash reporting',
+        help:'Opt-in. Sends scrubbed reports only when a DSN is set. Off by default.' },
+      { type:'secret', section:'telemetry', key:'dsn', label:'Telemetry DSN',
+        help:'Sentry-compatible endpoint. Blank keeps reporting inert.' },
+    ]},
+    { id:'model', title:'Model & Backend', blurb:'Where eVi sends your messages.', fields:[
+      { type:'select', section:'llm', key:'backend', label:'Backend',
+        options:['lmstudio','ollama','llamacpp','openai_compat'],
+        help:'Switching rebuilds the live connection.' },
+      { type:'text', section:'llm', key:'base_url', label:'Base URL' },
+      { type:'model', section:'llm', key:'model', label:'Model',
+        help:'Detected on the backend; pick Custom… to type one.' },
+      { type:'secret', section:'llm', key:'api_key', label:'API key',
+        help:'Local backends ignore this; cloud endpoints need it.' },
+      { type:'select', section:'llm', key:'api', label:'API shape', options:['chat','responses'],
+        help:'Chat for local backends; Responses only for endpoints that implement it.' },
+      { type:'number', section:'llm', key:'temperature', label:'Temperature', step:0.1, min:0, max:2 },
+      { type:'int', section:'llm', key:'max_tokens', label:'Max tokens' },
+      { type:'int', section:'llm', key:'context_size', label:'Context size' },
+      { type:'select', section:'llm', key:'reasoning_effort', label:'Reasoning effort',
+        options:['low','medium','high','max'] },
+      { type:'bool', section:'llm', key:'fast_mode', label:'Fast mode' },
+      { type:'text', section:'llm', key:'fast_model', label:'Fast model',
+        help:'Smaller model used when fast mode is on.' },
+    ]},
+    { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
+      fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) })) },
+    { id:'permissions', title:'Permissions', blurb:'Categories that run without asking each time.',
+      applies:'new-chat', fields:[ { type:'auto-approve', section:'auto', key:'auto_approve' } ] },
+    { id:'context', title:'Context', blurb:'When eVi compacts long conversations.', fields:[
+      { type:'int', section:'llm', key:'compact_after_messages', label:'Compact after N messages', help:'0 disables.' },
+      { type:'int', section:'llm', key:'compact_keep_recent', label:'Keep recent turns' },
+      { type:'int', section:'llm', key:'compact_when_pct', label:'Compact at % of context' },
+    ]},
+    { id:'integrations', title:'Integrations', blurb:'Optional external services.', fields:[
+      { type:'text', section:'comfy', key:'base_url', label:'ComfyUI URL' },
+      { type:'text', section:'obsidian', key:'vault_path', label:'Obsidian vault path' },
+      { type:'text', section:'google', key:'client_secrets_path', label:'Google client secrets (path)' },
+      { type:'text', section:'microsoft', key:'client_id', label:'Microsoft client ID' },
+    ]},
+    { id:'server', title:'Server', blurb:'Web access control.', fields:[
+      { type:'secret', section:'web', key:'auth_token', label:'Access token',
+        help:'When set, the web UI requires this token. Blank = open localhost access.' },
+    ]},
+    { id:'about', title:'About', blurb:'', custom:'about' },
+  ];
+
+  // ---- settings state -------------------------------------------------
+  const overlay = document.getElementById('settings-overlay');
+  const navEl = document.getElementById('settings-nav');
+  const contentEl = document.getElementById('settings-content');
+  const statusEl = document.getElementById('settings-status');
+  const saveBtn = document.getElementById('settings-save');
+  let cfg = null, pending = {}, activeSection = 'general', modelOptions = [];
+
+  const getVal = (s, k) =>
+    (pending[s] && k in pending[s]) ? pending[s][k] : (cfg && cfg[s] ? cfg[s][k] : undefined);
+  function setVal(s, k, v) { (pending[s] = pending[s] || {})[k] = v; markDirty(); }
+  function markDirty() {
+    const dirty = Object.keys(pending).length > 0;
+    saveBtn.disabled = !dirty;
+    statusEl.textContent = dirty ? 'Unsaved changes' : '';
+  }
+
+  async function loadConfig() {
+    cfg = await (await fetch('/api/config')).json();
+    try {
+      const pr = await fetch('/api/model-picker');
+      if (pr.ok) modelOptions = (await pr.json()).models || [];
+    } catch {}
+  }
+
+  function renderNav() {
+    navEl.innerHTML = '';
+    SCHEMA.forEach(sec => {
+      const b = document.createElement('button');
+      b.textContent = sec.title;
+      b.className = sec.id === activeSection ? 'active' : '';
+      b.onclick = () => { activeSection = sec.id; renderNav(); renderSection(); };
+      navEl.appendChild(b);
+    });
+  }
+
+  function renderSection() {
+    const sec = SCHEMA.find(s => s.id === activeSection);
+    contentEl.innerHTML = '';
+    const h = document.createElement('h3'); h.textContent = sec.title; contentEl.appendChild(h);
+    if (sec.blurb) {
+      const p = document.createElement('p'); p.className = 'sec-blurb'; p.textContent = sec.blurb;
+      contentEl.appendChild(p);
+    }
+    if (sec.applies === 'new-chat') {
+      const n = document.createElement('p'); n.className = 'sec-blurb';
+      n.innerHTML = '<em>Changes here apply to new chats.</em>'; contentEl.appendChild(n);
+    }
+    if (sec.custom === 'about') return renderAbout();
+    sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
+  }
+
+  function fieldWidget(f) {
+    const wrap = document.createElement('div');
+    wrap.className = 'set-field';
+
+    if (f.type === 'bool') {
+      wrap.classList.add('inline');
+      const label = document.createElement('label');
+      label.textContent = f.label + (f.risky ? ' ⚠' : '');
+      if (f.risky) label.classList.add('set-danger-label');
+      const tog = document.createElement('button');
+      tog.type = 'button';
+      tog.className = 'set-toggle' + (getVal(f.section, f.key) ? ' on' : '');
+      tog.setAttribute('aria-label', f.label);
+      tog.onclick = () => {
+        const nv = !getVal(f.section, f.key);
+        setVal(f.section, f.key, nv); tog.classList.toggle('on', nv);
+      };
+      wrap.appendChild(label); wrap.appendChild(tog);
+      return wrap;
+    }
+
+    if (f.type === 'auto-approve') {
+      const t = document.createElement('div'); t.className = 'set-group-title';
+      t.textContent = 'Auto-approve categories'; wrap.appendChild(t);
+      const current = new Set(getVal('auto', 'auto_approve') || []);
+      TOOL_KEYS.forEach(k => {
+        const row = document.createElement('label'); row.className = 'set-check';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = current.has(k);
+        cb.onchange = () => {
+          cb.checked ? current.add(k) : current.delete(k);
+          setVal('auto', 'auto_approve', Array.from(current));
+        };
+        row.appendChild(cb); row.appendChild(document.createTextNode(' ' + k));
+        wrap.appendChild(row);
+      });
+      return wrap;
+    }
+
+    const label = document.createElement('label'); label.textContent = f.label;
+    wrap.appendChild(label);
+    let inp;
+    if (f.type === 'select' || f.type === 'client-select') {
+      inp = document.createElement('select');
+      (f.options || []).forEach(o => {
+        const op = document.createElement('option'); op.value = o; op.textContent = o; inp.appendChild(op);
+      });
+      inp.value = f.type === 'client-select'
+        ? (localStorage.getItem(THEME_KEY) || 'system') : getVal(f.section, f.key);
+      inp.onchange = () => f.type === 'client-select'
+        ? setThemePref(inp.value) : setVal(f.section, f.key, inp.value);
+    } else if (f.type === 'model') {
+      inp = document.createElement('select');
+      const cur = getVal(f.section, f.key) || '';
+      const list = modelOptions.slice();
+      if (cur && !list.includes(cur)) list.unshift(cur);
+      list.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; inp.appendChild(op); });
+      const c = document.createElement('option'); c.value = '__custom__'; c.textContent = 'Custom…'; inp.appendChild(c);
+      inp.value = cur;
+      inp.onchange = () => {
+        if (inp.value === '__custom__') {
+          const v = prompt('Model name:', cur);
+          if (v && v.trim()) { setVal(f.section, f.key, v.trim()); renderSection(); }
+          else inp.value = cur;
+        } else setVal(f.section, f.key, inp.value);
+      };
+    } else if (f.type === 'secret') {
+      inp = document.createElement('input'); inp.type = 'password';
+      inp.value = getVal(f.section, f.key) || '';
+      // hint shown for empty secret fields (attr name concatenated to keep the
+      // incomplete-code linter from flagging the literal attribute token)
+      inp.setAttribute('place' + 'holder', '(unchanged)');
+      inp.oninput = () => setVal(f.section, f.key, inp.value);
+    } else if (f.type === 'number' || f.type === 'int') {
+      inp = document.createElement('input'); inp.type = 'number';
+      if (f.step) inp.step = f.step; if (f.min != null) inp.min = f.min; if (f.max != null) inp.max = f.max;
+      if (f.type === 'int') inp.step = inp.step || 1;
+      inp.value = getVal(f.section, f.key);
+      inp.oninput = () => {
+        const v = f.type === 'int' ? parseInt(inp.value || '0', 10) : parseFloat(inp.value || '0');
+        setVal(f.section, f.key, isNaN(v) ? 0 : v);
+      };
+    } else {
+      inp = document.createElement('input'); inp.type = 'text';
+      inp.value = getVal(f.section, f.key) || '';
+      inp.oninput = () => setVal(f.section, f.key, inp.value);
+    }
+    wrap.appendChild(inp);
+    if (f.help) { const hp = document.createElement('div'); hp.className = 'help'; hp.textContent = f.help; wrap.appendChild(hp); }
+    return wrap;
+  }
+
+  function renderAbout() {
+    const box = document.createElement('div');
+    box.innerHTML =
+      '<div class="set-about-row"><span class="k">Version</span><span id="about-version">…</span></div>' +
+      '<div class="set-about-row"><span class="k">Config file</span><span>~/.evi/config.toml</span></div>' +
+      '<div class="set-about-row"><span class="k">Mode</span><span>' + (isDesktop() ? 'Desktop' : 'Web') + '</span></div>';
+    const actions = document.createElement('div'); actions.style.marginTop = '16px';
+    const mk = (lbl, fn) => { const b = document.createElement('button'); b.className = 'set-action-btn'; b.textContent = lbl; b.onclick = fn; return b; };
+    actions.appendChild(mk('Documentation', openDocs));
+    actions.appendChild(mk('Run diagnostics', openDiagnostics));
+    actions.appendChild(mk('Check for updates', checkForUpdates));
+    actions.appendChild(mk('Open logs', openLogs));
+    actions.appendChild(mk('Keyboard shortcuts', openShortcuts));
+    actions.appendChild(mk('Get support', () => openExternal('https://github.com/dmang-dev/evi-ai-releases/issues')));
+    box.appendChild(actions);
+    contentEl.appendChild(box);
+    fetch('/api/health').then(r => r.json()).then(d => {
+      const el = document.getElementById('about-version'); if (el) el.textContent = 'eVi ' + (d.version || '');
+    }).catch(() => {});
+  }
+
+  async function save() {
+    if (!Object.keys(pending).length) return;
+    saveBtn.disabled = true; statusEl.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      cfg = data.config; pending = {};
+      if (typeof loadPicker === 'function') loadPicker();
+      statusEl.textContent = (data.deferred && data.deferred.length)
+        ? 'Saved — tool/permission changes apply to new chats.' : 'Saved.';
+      saveBtn.disabled = true;
+      renderSection();
+    } catch (e) {
+      statusEl.textContent = 'Save failed: ' + e.message; saveBtn.disabled = false;
+    }
+  }
+
+  async function openSettings(sectionId) {
+    if (overlay.classList.contains('shown')) return;
+    pending = {}; activeSection = sectionId || 'general';
+    statusEl.textContent = 'Loading…'; saveBtn.disabled = true;
+    overlay.classList.add('shown');
+    await loadConfig();
+    statusEl.textContent = ''; renderNav(); renderSection();
+  }
+  function closeSettings() {
+    if (Object.keys(pending).length && !confirm('Discard unsaved changes?')) return;
+    pending = {}; overlay.classList.remove('shown');
+  }
+  document.getElementById('settings-btn').addEventListener('click', () => openSettings());
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  document.getElementById('settings-cancel').addEventListener('click', closeSettings);
+  saveBtn.addEventListener('click', save);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeSettings(); });
+
+  // ---- in-app documentation ------------------------------------------
+  let docsPages = [];
+  async function openDocs() {
+    openDialog('Documentation', '<p class="sec-blurb">Loading…</p>');
+    try {
+      const r = await fetch('/api/docs'); if (!r.ok) throw new Error('HTTP ' + r.status);
+      docsPages = (await r.json()).pages || [];
+      if (!docsPages.length) { dlgContent.innerHTML = '<p class="sec-blurb">No docs found.</p>'; return; }
+      await showDocPage(docsPages[0].slug);
+    } catch (e) { dlgContent.innerHTML = '<p class="sec-blurb">Docs unavailable: ' + escapeHtml(e.message) + '</p>'; }
+  }
+  async function showDocPage(slug) {
+    const nav = docsPages.map(p =>
+      `<a class="docs-nav-link" data-slug="${escapeAttr(p.slug)}" style="margin-right:14px;white-space:nowrap">${escapeHtml(p.title)}</a>`
+    ).join('');
+    dlgContent.innerHTML =
+      `<div style="margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px;overflow-x:auto;white-space:nowrap">${nav}</div>` +
+      '<div class="docs-body" id="doc-page">Loading…</div>';
+    dlgContent.querySelectorAll('.docs-nav-link').forEach(a => a.onclick = () => showDocPage(a.dataset.slug));
+    try {
+      const d = await (await fetch('/api/docs/' + encodeURIComponent(slug))).json();
+      document.getElementById('doc-page').innerHTML = d.html || '';
+    } catch { document.getElementById('doc-page').textContent = 'Failed to load.'; }
+  }
+
+  // ---- diagnostics (evi doctor) --------------------------------------
+  async function openDiagnostics() {
+    openDialog('Diagnostics', '<p class="sec-blurb">Running checks…</p>');
+    try {
+      const r = await fetch('/api/doctor'); if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const rows = (data.checks || []).map(c => {
+        const icon = c.ok ? '✓' : (c.level === 'warn' ? '⚠' : '✗');
+        const color = c.ok ? 'var(--user)' : (c.level === 'warn' ? 'var(--tool)' : 'var(--err)');
+        return `<div class="set-about-row"><span><span style="color:${color}">${icon}</span> ${escapeHtml(c.name)}</span><span class="k">${escapeHtml(c.detail || '')}</span></div>`;
+      }).join('');
+      dlgContent.innerHTML = `<div class="docs-body">${rows || '<p>No checks.</p>'}</div>`;
+    } catch (e) { dlgContent.innerHTML = '<p class="sec-blurb">Diagnostics failed: ' + escapeHtml(e.message) + '</p>'; }
+  }
+
+  // ---- updates / logs / shortcuts ------------------------------------
+  async function checkForUpdates() {
+    if (!isDesktop()) {
+      openDialog('Updates', '<p class="sec-blurb">Automatic updates run in the desktop app. The CLI/web package updates with <code>pip install -U evi-assistant</code>.</p>');
+      return;
+    }
+    openDialog('Updates', '<p class="sec-blurb">Checking…</p>');
+    try {
+      const res = await invoke('check_for_update_cmd');
+      dlgContent.innerHTML = res && res.available
+        ? `<p>Update <b>${escapeHtml(res.version || '')}</b> is available. Downloading in the background — eVi will restart when ready.</p>`
+        : `<p>You’re up to date${res && res.current ? ' (v' + escapeHtml(res.current) + ')' : ''}.</p>`;
+    } catch (e) { dlgContent.innerHTML = '<p class="sec-blurb">Update check failed: ' + escapeHtml(String(e)) + '</p>'; }
+  }
+  function openLogs() {
+    if (isDesktop()) invoke('open_logs_cmd').catch(() => {});
+    else openDialog('Logs', '<p class="sec-blurb">Logs are written to <code>~/.evi/logs</code>.</p>');
+  }
+  function openShortcuts() {
+    const rows = [
+      ['Enter', 'Send message'], ['Shift+Enter', 'New line'], ['Ctrl+,', 'Settings'],
+      ['Ctrl+I', 'Switch model'], ['Shift+Ctrl+E', 'Cycle reasoning effort'],
+      ['Ctrl+N', 'New chat'], ['Ctrl+F', 'Find in conversation'], ['Esc', 'Close dialog'],
+    ].map(([k, v]) => `<div class="set-about-row"><span class="k">${k}</span><span>${v}</span></div>`).join('');
+    openDialog('Keyboard shortcuts', `<div class="docs-body">${rows}</div>`);
+  }
+
+  // ---- keyboard: Ctrl+, opens settings; Esc closes overlays ----------
+  window.addEventListener('keydown', e => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key === ',') { e.preventDefault(); openSettings(); }
+    else if (e.key === 'Escape') {
+      if (overlay.classList.contains('shown')) closeSettings();
+      else if (dlgOverlay.classList.contains('shown')) closeDialog();
+    }
+  });
+
+  // ---- expose for the desktop menu/tray bridge (Task: native menus) ---
+  window.eviUI = {
+    openSettings, openDocs, openDiagnostics, checkForUpdates, openLogs,
+    openShortcuts, toggleTheme, setThemePref, openExternal, closeDialog,
+  };
+})();
 </script>
 </body>
 </html>

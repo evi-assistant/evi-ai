@@ -21,7 +21,7 @@ import logging
 import secrets
 import threading
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -158,6 +158,114 @@ class EditRequest(BaseModel):
 
 class BranchRequest(BaseModel):
     at_index: int
+
+
+# --- full-config read/write (settings screen) ----------------------------
+#
+# Secret fields are never sent to the browser in the clear. GET returns the
+# sentinel for any non-empty secret; POST treats an incoming sentinel as
+# "leave unchanged" (so re-saving the form doesn't wipe a token the user
+# never saw). An empty string still clears the value.
+_SECRET_FIELDS: dict[str, frozenset[str]] = {
+    "llm": frozenset({"api_key"}),
+    "web": frozenset({"auth_token"}),
+    "telemetry": frozenset({"dsn"}),
+}
+_SECRET_SENTINEL = "********"
+# Sections that can be hot-applied to a live chat. Everything persists to
+# disk regardless; these also push onto in-memory sessions so the change
+# takes effect without starting a new chat.
+_HOT_SECTIONS = (
+    "llm", "auto", "tools", "telemetry", "comfy",
+    "web", "google", "microsoft", "obsidian",
+)
+
+
+def _config_snapshot(cfg: Config) -> dict[str, Any]:
+    """asdict(cfg) with secrets masked for transport to the browser."""
+    data = asdict(cfg)
+    for section, secrets_ in _SECRET_FIELDS.items():
+        body = data.get(section, {})
+        for key in secrets_:
+            if body.get(key):
+                body[key] = _SECRET_SENTINEL
+    return data
+
+
+def _coerce_to(current: Any, value: Any) -> Any:
+    """Coerce an incoming JSON value to the type of the existing field.
+
+    bool must be checked before int (bool is a subclass of int). Lists are
+    shallow-copied; everything else falls back to the value as-is (str).
+    """
+    if isinstance(current, bool):
+        return bool(value)
+    if isinstance(current, int):
+        return int(value)
+    if isinstance(current, float):
+        return float(value)
+    if isinstance(current, list):
+        return list(value)
+    return value
+
+
+def _docs_dir() -> Path | None:
+    """Locate the bundled ``docs/`` folder across install layouts.
+
+    Source/editable installs find it at the repo root; the frozen desktop
+    sidecar finds the copy PyInstaller stages (``--add-data docs``) under
+    ``sys._MEIPASS``. Returns None when no docs ship (plain ``pip install`` —
+    the UI then falls back to the public wiki link)."""
+    import sys
+
+    meipass = getattr(sys, "_MEIPASS", "")
+    candidates = [
+        Path(meipass) / "docs" if meipass else None,
+        Path(__file__).resolve().parents[3] / "docs",  # repo root (web→apps→evi→root)
+        Path(__file__).resolve().parent / "docs",
+    ]
+    for c in candidates:
+        if c is not None and c.is_dir():
+            return c
+    return None
+
+
+def _doc_title(path: Path) -> str:
+    """First ``# `` heading, else a title-cased slug."""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+    except OSError:
+        pass
+    return path.stem.replace("-", " ").replace("_", " ").title()
+
+
+def _apply_config_patch(cfg: Config, patch: dict[str, Any]) -> list[str]:
+    """Mutate `cfg` in place from a nested {section: {key: val}} patch.
+
+    Returns the list of section names actually touched. Unknown sections and
+    unknown keys are skipped (forward-compatible with older configs). Secret
+    fields left at the sentinel are not overwritten.
+    """
+    touched: list[str] = []
+    for section, values in patch.items():
+        target = getattr(cfg, section, None)
+        if target is None or not is_dataclass(target) or not isinstance(values, dict):
+            continue
+        valid = {f.name for f in fields(target)}
+        secrets_ = _SECRET_FIELDS.get(section, frozenset())
+        changed = False
+        for key, raw in values.items():
+            if key not in valid:
+                continue
+            if key in secrets_ and raw == _SECRET_SENTINEL:
+                continue  # unchanged — user never saw the real value
+            setattr(target, key, _coerce_to(getattr(target, key), raw))
+            changed = True
+        if changed:
+            touched.append(section)
+    return touched
 
 
 @dataclass
@@ -502,9 +610,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
+        from evi import __version__
         cfg = Config.load()
         return {
             "ok": True,
+            "version": __version__,
             "model": cfg.llm.model,
             "sessions": len(sessions),
         }
@@ -807,6 +917,89 @@ def create_app() -> FastAPI:
             "fast_model": cfg.llm.fast_model,
             "effort": cfg.llm.reasoning_effort,
             "fast_mode": cfg.llm.fast_mode,
+        }
+
+    @app.get("/api/config")
+    def config_get() -> dict[str, Any]:
+        """Full config snapshot for the settings screen (secrets masked)."""
+        return _config_snapshot(Config.load())
+
+    @app.post("/api/config")
+    def config_set(patch: dict[str, Any]) -> dict[str, Any]:
+        """Apply a nested {section: {key: value}} patch and persist it.
+
+        Unknown sections/keys are ignored. Touched sections are also pushed
+        onto every live session so changes take effect without a new chat;
+        the LLM client is rebuilt when the llm section changes (covers
+        backend/base_url/api_key/model switches). Returns the fresh masked
+        snapshot so the UI can re-render."""
+        if not isinstance(patch, dict):
+            raise HTTPException(400, "expected an object body")
+        cfg = Config.load()
+        touched = _apply_config_patch(cfg, patch)
+        cfg.save()
+
+        for sess in sessions.values():
+            ac = sess.agent.config
+            for section in _HOT_SECTIONS:
+                if section not in touched:
+                    continue
+                src = getattr(cfg, section)
+                dst = getattr(ac, section)
+                for f in fields(src):
+                    setattr(dst, f.name, getattr(src, f.name))
+            if "llm" in touched:
+                try:
+                    sess.agent.client = make_client(cfg.llm)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # Some sections only fully bind at session creation (tool enablement,
+        # permission policy). Tell the UI which of those changed so it can hint
+        # "applies to new chats".
+        deferred = [s for s in ("tools", "auto") if s in touched]
+        return {"ok": True, "touched": touched, "deferred": deferred,
+                "config": _config_snapshot(cfg)}
+
+    @app.get("/api/docs")
+    def docs_list() -> dict[str, Any]:
+        """List bundled documentation pages for the in-app docs viewer."""
+        d = _docs_dir()
+        if d is None:
+            return {"pages": []}
+        pages = [{"slug": p.stem, "title": _doc_title(p)} for p in sorted(d.glob("*.md"))]
+        return {"pages": pages}
+
+    @app.get("/api/docs/{slug}")
+    def docs_page(slug: str) -> dict[str, Any]:
+        """Render one doc page to HTML (offline, no CDN). Slug is sanitised to
+        the bare filename to prevent path traversal."""
+        d = _docs_dir()
+        if d is None:
+            raise HTTPException(404, "docs not bundled")
+        safe = Path(slug).name  # strip any directory components
+        page = d / f"{safe}.md"
+        if not page.is_file():
+            raise HTTPException(404, f"no such doc {safe!r}")
+        from evi.apps.web.mdlite import render
+
+        return {"slug": safe, "title": _doc_title(page),
+                "html": render(page.read_text(encoding="utf-8"))}
+
+    @app.get("/api/doctor")
+    def doctor_api() -> dict[str, Any]:
+        """Run `evi doctor` checks and return them as JSON for the in-app
+        Diagnostics panel (Help → Run Diagnostics)."""
+        from evi.doctor import run_checks, summarize
+
+        checks = run_checks()
+        ok, warn, fail = summarize(checks)
+        return {
+            "checks": [
+                {"name": c.name, "ok": c.status == "ok", "level": c.status, "detail": c.detail}
+                for c in checks
+            ],
+            "summary": {"ok": ok, "warn": warn, "fail": fail},
         }
 
     @app.post("/api/reset")

@@ -117,12 +117,26 @@ backlog — fill the ⬜ rows as you touch each area.
 | MCP tools available (P7) | 🧪 |
 | Memory / index / calendar / git tools | 🧪 |
 
+### Settings & help (Phase 56, eVi 0.2.5)
+| Feature | Status |
+|---|---|
+| Settings screen opens (⚙ / Ctrl+, / File→Settings) | ✅ `test_settings_opens_and_renders` |
+| Setting change saves via `/api/config` (round-trip) | ✅ `test_settings_persists_change` · 🧪 unit |
+| Secret fields masked (api_key/auth_token/dsn) | 🧪 unit |
+| In-app docs render offline (`/api/docs`, mdlite) | ✅ `test_docs_dialog_renders` |
+| Diagnostics panel (`/api/doctor`) | ✅ `test_diagnostics_dialog_renders` |
+| Theme toggle (system/dark/light) | 👤 (verified via preview) |
+
 ### Native desktop (manual per release)
 | Feature | Status |
 |---|---|
 | Installer runs; app window opens | 👤 |
 | Sidecar spawns; chat works in the window | 👤 |
 | In-app auto-update (check → install → relaunch) | 👤 |
+| File/Edit/View/Help menus + accelerators | 👤 |
+| Help → Check for Updates (force-update) | 👤 |
+| Tray icon: show/hide, new chat, quit | 👤 |
+| Close → minimize to tray (app keeps running) | 👤 |
 | SmartScreen/Gatekeeper behaviour (unsigned) | 👤 |
 
 ## Desktop release checklist (manual)
