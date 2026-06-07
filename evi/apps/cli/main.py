@@ -3209,6 +3209,51 @@ def mcp_list_tools() -> None:
         manager.stop()
 
 
+@mcp_app.command("serve")
+def mcp_serve(
+    categories: str = typer.Option(
+        "memory,index,calendar,git",
+        "--categories",
+        "-c",
+        help="Comma-separated tool categories to expose to MCP clients.",
+    ),
+) -> None:
+    """Run Evi AS an MCP server (stdio), exposing Evi's tools to Claude Desktop /
+    Cursor / Cline / Continue. This speaks the MCP protocol on stdin/stdout —
+    it's spawned by an MCP client, not run interactively. See `mcp serve-config`
+    for a ready-to-paste client config."""
+    try:
+        from evi.mcp.publish import serve
+    except ImportError:
+        console.print("[red]`mcp` package not installed — run: pip install 'evi-ai[mcp]'[/red]")
+        raise typer.Exit(1)
+    cats = tuple(c.strip() for c in categories.split(",") if c.strip())
+    serve(cats)
+
+
+@mcp_app.command("serve-config")
+def mcp_serve_config(
+    categories: str = typer.Option(
+        "memory,index,calendar,git", "--categories", "-c",
+        help="Tool categories the snippet will expose.",
+    ),
+) -> None:
+    """Print an MCP client config snippet (Claude Desktop / Cursor) that runs
+    `evi mcp serve`. Paste it into the client's mcpServers config."""
+    import json
+    import sys
+
+    snippet = {
+        "mcpServers": {
+            "evi": {
+                "command": sys.executable,
+                "args": ["-m", "evi", "mcp", "serve", "--categories", categories],
+            }
+        }
+    }
+    console.print(json.dumps(snippet, indent=2))
+
+
 schedule_app = typer.Typer(help="Manage scheduled prompts.")
 app.add_typer(schedule_app, name="schedule")
 
