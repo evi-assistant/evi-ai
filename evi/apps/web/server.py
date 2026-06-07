@@ -543,6 +543,19 @@ def create_app() -> FastAPI:
             "ollama_installed": shutil.which("ollama") is not None,
             "any_reachable": any_reachable,
         }
+        # First-run wizard hints (the recommended model + whether we can install
+        # Ollama unattended here). Hardware doesn't change within a run, so
+        # compute these once and reuse — keeps the frequently-polled status fast.
+        if "recommended_model" not in _status_cache:
+            try:
+                from evi import firstrun
+                _status_cache["recommended_model"] = firstrun.recommended_model()
+                _status_cache["can_auto_install"] = firstrun.ollama_install_plan().available
+            except Exception:  # noqa: BLE001
+                _status_cache["recommended_model"] = "qwen2.5:3b-instruct-q4_K_M"
+                _status_cache["can_auto_install"] = False
+        data["recommended_model"] = _status_cache["recommended_model"]
+        data["can_auto_install_ollama"] = _status_cache["can_auto_install"]
         with _status_lock:
             _status_cache["at"] = time.monotonic()
             _status_cache["data"] = data
@@ -599,6 +612,62 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001
             opened = False
         return {"opened": bool(opened), "url": url}
+
+    @app.post("/api/backend/install")
+    def backend_install(req: BackendActionRequest) -> dict[str, object]:
+        """Unattended install of a local backend (Ollama only) via the OS
+        package manager (winget/brew) or the official install script. Blocking
+        — installs can take a minute or two; the UI shows a spinner. Falls back
+        to a manual-download URL when no unattended path exists on this OS."""
+        from evi import firstrun
+
+        kind = req.kind.strip().lower()
+        if kind != "ollama":
+            return {"ok": False,
+                    "message": f"Automatic install isn't supported for {kind}. "
+                               "Install it yourself, then click Recheck."}
+        return firstrun.install_ollama()
+
+    @app.get("/api/backend/pull")
+    async def backend_pull(model: str | None = None) -> EventSourceResponse:
+        """Stream Ollama model-pull progress over SSE — the first-run wizard's
+        'downloading model' step. Defaults to the hardware-recommended model.
+        Idempotent: pulling an already-present model just re-verifies quickly."""
+        from evi import firstrun
+        from evi.backends.ollama import OllamaBackend
+
+        model_id = (model or "").strip() or firstrun.recommended_model()
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        def enqueue(payload: dict | None) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, payload)
+
+        def worker() -> None:
+            try:
+                for p in OllamaBackend().pull_model(model_id):
+                    pct = None
+                    if p.total:
+                        pct = round((p.downloaded or 0) * 100.0 / p.total, 1)
+                    enqueue({"kind": "progress", "model": model_id,
+                             "status": p.status, "downloaded": p.downloaded,
+                             "total": p.total, "pct": pct})
+                enqueue({"kind": "done", "model": model_id})
+            except Exception as exc:  # noqa: BLE001
+                enqueue({"kind": "error", "message": f"{type(exc).__name__}: {exc}"})
+            finally:
+                enqueue(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        async def stream() -> AsyncIterator[dict[str, str]]:
+            while True:
+                payload = await queue.get()
+                if payload is None:
+                    return
+                yield {"event": "message", "data": json.dumps(payload)}
+
+        return EventSourceResponse(stream())
 
     @app.get("/api/session/{session_id}/usage")
     def session_usage(session_id: str) -> dict[str, int]:
