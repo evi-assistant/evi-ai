@@ -1,97 +1,143 @@
 # Roadmap
 
-A scratch list of Evi-native ideas not yet built. Phases we've shipped
-are tracked in `CHANGELOG.md` and the project memory; this is the
-forward backlog.
+Forward plan for Evi. **Shipped** work lives in `CHANGELOG.md` + project
+memory; this file is what's *next* and why. Items carry a rough size
+(S = an afternoon, M = a day, L = a phase) and a one-line rationale.
 
-Items get a rough size (S/M/L) and a one-line "why".
+- Vendor-SDK feature parity ideas → [sdk-coverage.md](sdk-coverage.md)
+- Third-party app/service integrations → [future-integrations.md](future-integrations.md)
+- Release mechanics → [releasing.md](releasing.md)
 
-For features borrowed from other vendors' SDKs, see
-[sdk-coverage.md](sdk-coverage.md).
+_Last rewritten 2026-06-06 (post-Phase-48). Supersedes the old v0.11.0-era
+backlog — most of those "next phase candidates" have since shipped._
 
-For external app/service integrations (Notion, Spotify, Slack, etc),
-see [future-integrations.md](future-integrations.md).
+## Reality check — shipped through Phase 48 (v0.22.0)
 
-## Next phase candidates
+The old roadmap's headline candidates are **done**: self-update (`evi update`,
+P29), citations + local rerank (P30), `evi review` (P31), conversation grep
+(P32), plus memory/MCP/skills/scheduler/multi-backend/hooks/worktrees/dream/
+voice(STT+TTS)/vision/OCR/PDF/SQLite/calendar/routing/auth, the FastAPI+SSE web
+UI, and the standalone Tauri desktop bundle (onedir sidecar + "no LLM backend"
+UX, P48). CI is green; the desktop-release pipeline exists.
 
-### Self-update + rollback (Phase 29 proposal)
+So the backlog below is genuinely forward-looking.
 
-Documented in [self-update.md](self-update.md). Headline: `evi update`
-checks PyPI, snapshots prior state, upgrades, verifies, rolls back if
-broken. **L** (~400 + 200 LOC + tests).
+## Planned phases (proposed sequence)
 
-### Citations + reranker (Phase 30 proposal)
+This is a *proposed* order, weighted toward finishing the distribution story
+(so new users have a smooth install → first-chat → stay-updated path) before
+expanding surface area.
 
-Two features that pair: (a) when the agent uses `read_file`,
-`find_in_project`, or `web_fetch`, surface excerpts as inline
-citations; (b) re-rank `find_in_project` candidates with a small
-cross-encoder before returning. **M** each.
+### Phase 49 — Supply-chain hygiene / vuln checking — **S, in progress**
 
-### `evi review` — git-aware code review (Phase 31 proposal)
+Make dependency vulnerabilities visible and gated in CI.
 
-`evi review HEAD~5..` / `evi review --staged` / `evi review --pr <url>`.
-Combines `git_diff` + an LLM critique pass. Could leverage the
-`coder` route from multi-model routing. **M**.
+- `pip-audit` (OSV-backed) CI job for the Python deps.
+- `cargo-deny check advisories` (RustSec) for the desktop crate.
+- `.github/dependabot.yml` for pip + cargo + github-actions (weekly, grouped,
+  Conventional-Commit prefixes).
+- Enable GitHub-native **Dependabot alerts + security updates** (free on
+  private repos). NOTE: CodeQL code-scanning and secret-scanning are **not**
+  free on private repos (need paid GitHub Advanced Security) — deferred; a
+  self-hosted `gitleaks`/CodeQL-CLI step is a possible later add.
 
-### Conversation grep (Phase 32 proposal)
+### Phase 50 — Frictionless first run (time-to-first-chat) — **M**
 
-`evi search "<query>"` across all transcripts. We already write
-JSONL; this is fundamentally `ripgrep | format`. **S**.
+A fresh user has no LLM backend → today they hit the "no backend" banner.
+**Decision (from research): do NOT bundle a runtime** — the multi-GB *model*
+download is the real blocker, bundling balloons the installer 5–10×, and Evi
+is already built around Ollama. Instead:
 
-### MCP-server-publish (Phase 33 proposal)
+- True **one-click Ollama install** in `/api/backend/start` (winget /
+  silent installer on Windows, cask/dmg on macOS, official `install.sh` on
+  Linux) → existing auto-`serve` → existing `pull_model` SSE progress.
+- **First-run wizard**: detect hardware via `recommend(hw)`, auto-pull a small
+  sensible default (`qwen2.5:3b-instruct-q4_K_M`, ~1.9 GB — best local
+  tool-calling at that size), "running on CPU (slow)" hint, "upgrade to 7B
+  later" as a secondary action. Chat unblocks the moment the pull finishes.
+- **vLLM: excluded** for first-run (GPU/CUDA/Linux server-grade; not a desktop
+  fit). It already works as a *remote* OpenAI endpoint via the generic
+  `openai_compat` backend — no work needed.
+- (If we ever do bundle: ship llama.cpp's `llama-server` **Vulkan** build —
+  small, clean MIT, one binary for cross-vendor GPU + CPU; avoid the 373 MB
+  CUDA pack and Ollama's redistribution notice debt.)
 
-Expose Evi's tools (memory, index, calendar, git) as an MCP server
-that Claude Desktop / Cline / Continue / Cursor can consume. Inverts
-the integration story: instead of building one tool per app, the
-editor's existing MCP client connects to Evi. **L**.
+### Phase 51 — Desktop auto-update against GitHub releases — **M**
 
-## Smaller items (S — could fit a single afternoon)
+The CLI/pip path already self-updates (`evi update` → PyPI). The **desktop**
+app (not pip-installed) needs its own updater pointed at the
+`desktop-release.yml` GitHub releases we now build.
 
-- ✅ **Output caching** — shipped Phase 36 (0.18.0): `read_file` caches by (path, mtime, size).
-- ✅ **Permission batching** — shipped Phase 36 (0.18.0): one prompt per multi-tool turn.
-- ✅ **Auto-titling** — shipped Phase 36 (0.18.0): `Agent.suggest_title()` + web tab rename + `evi sessions title`.
-- ✅ **Hot reload of skills** — confirmed Phase 36 (0.18.0): stores rescan disk on every prompt compose; `/reload` reflects new skills + memory.
-- ✅ **`evi doctor`** — shipped Phase 36 (0.18.0): paths / config / backend / deps / binaries / hardware diagnostic.
-- **Long-context model awareness** — tag models in the registry with `context_size`; auto-pick a long-context one when usage gets high.
-- **Recent-prompts history in REPL** — currently we have command history via prompt_toolkit; could add a per-project recent-prompts list surfaced via `/recent`.
+- Adopt Tauri 2's **`@tauri-apps/plugin-updater`** + `tauri-plugin-process`:
+  checks a release endpoint, downloads, verifies, relaunches.
+- Requires an **updater signing keypair** (Tauri minisign — free, separate
+  from OS code-signing). `desktop-release.yml` gains the signing step + a
+  `latest.json` manifest attached to releases.
+- Pairs with — but does not require — **OS code-signing** (Authenticode /
+  Apple Developer ID) to silence SmartScreen/Gatekeeper. Code-signing needs
+  paid certs → track separately; the updater works unsigned-by-OS today.
 
-## Medium items (M — a chunky afternoon to a day)
+### Phase 52 — Crash / error reporting — **M**
 
-- **Background tool execution** — long-running tools (index large repo, scheduled task) post progress events. Currently they block the turn.
-- **Memory tags** — `remember("Q3 plans", tags=["work","planning"])`; `recall_by_tag("work")`. Replaces flat filename namespace.
-- **`evi recipe`** — multi-turn workflows. "Morning standup" = calendar + yesterday's commits + email. Recipes are stored under `~/.evi/recipes/` like skills.
-- **Cross-machine sync** — sync `~/.evi/` via git or rclone. Memory, skills, profiles, routes, calendars all move with you. Conflicts via last-write-wins or `~/.evi/.attic/`.
-- **Conversation autotitle via LLM** — see "auto-titling" above; LLM-powered version.
-- **Web UI permission audit log** — list previously-approved tool calls so users can revoke. Reverse permission flow.
-- **Plugin loader** — `~/.evi/plugins/<name>/` lazy-loaded Python modules that register tools. Already partly possible via skills + MCP, but a first-class `tools.py` plugin would be cleaner.
+Opt-in, privacy-first telemetry so we learn about crashes.
 
-## Large items (L — a phase of work)
+- `sentry-sdk` behind a thin **`Reporter`** abstraction (swappable backend via
+  one DSN/config value), pointed at **self-hosted GlitchTip** (OSS,
+  Sentry-API-compatible) — or hosted Sentry free tier for zero-infra start.
+- Hooks: CLI `sys.excepthook`, FastAPI exception handler, Tauri Rust panic
+  handler (+ community `tauri-plugin-sentry`); the frozen sidecar reuses the
+  CLI path.
+- **Opt-in (default OFF)** config flag + env override; a **shared scrubber**
+  (`before_send`) that strips home/user paths, env (allowlist only),
+  API keys, hostnames, and — critically for an AI app — **prompt/exception
+  content + frame locals**.
+- "Open a GitHub issue on crash" stays a documented **Plan B** behind the same
+  interface — only viable via a token-holding serverless relay (no shippable
+  token), and re-implements dedup/rate-limit/scrub that Sentry gives free.
 
-- **`evi update` self-update** — see above.
-- **MCP-server-publish** — see above.
-- **Responses API migration** — adopt OpenAI's new shape. Big migration but future-proofs the core.
-- **Citations** — see above.
-- **Local rerank tool** — see above.
-- **Multi-user web mode** — auth per user (we have a single token); per-user `~/.evi/` paths; per-user permission policies. Useful for small-team installs.
-- **Federation / inter-agent protocol** — Evi-to-Evi: one machine's agent can delegate to another's. Pairs with profiles + remote backend.
+## Larger backlog (unsequenced — L unless noted)
 
-## Already considered, deferred
+- **MCP-server-publish** — expose Evi's tools (memory, index, calendar, git)
+  as an MCP server so Claude Desktop / Cursor / Cline / Continue consume Evi.
+  Flips the integration story. (Highest-leverage L after distribution.)
+- **Responses API migration** — adopt OpenAI's newer shape; future-proofs core.
+- **Cross-machine sync** of `~/.evi/` (git/rclone) — **M**; fits the documented
+  3-machine setup (memory/skills/profiles/routes move with you).
+- **`evi recipe`** — saved multi-turn workflows ("morning standup" = calendar +
+  commits + email) under `~/.evi/recipes/`. **M**.
+- **Memory tags** (`recall_by_tag`), **plugin loader** (`~/.evi/plugins/`),
+  **background tool execution** (progress events for long tools). **M** each.
+- **Multi-user web mode** — per-user auth/paths/permissions for small teams.
+- **Federation / inter-agent protocol** — Evi-to-Evi delegation across machines
+  (pairs with profiles + remote backend).
+- Smaller: long-context model awareness in the registry; `/recent` prompt
+  history in the REPL.
 
-- **Computer use upgrade — agentic browser via Playwright** — agentic browsing rather than just pyautogui. Big surface area. Considered for Phase 12.5+ but deprioritised in favor of MCP integration with existing browser-MCP servers.
-- **Fine-tune Evi from your own transcripts** — dream engine already does memory curation; the next step is "use the transcripts as a fine-tuning dataset for a local 3B model". Pairs with distillation. Niche.
-- **Voice cloning for AutoSpeaker** — replace platform TTS with a local cloned voice (e.g. Bark, Tortoise, F5-TTS). Heavy deps + huge model downloads; defer.
+## Integrations backlog
 
-## Notes on prioritisation
+A large, separately-tracked list (Home Assistant, Notion, Spotify, Slack,
+native GitHub tool, generic IMAP/SMTP email, RSS, weather, Wikipedia,
+YouTube transcripts, Todoist, …) lives in
+[future-integrations.md](future-integrations.md). Many become trivial once
+**MCP-server-publish** lands (consume existing MCP servers instead of building
+each tool by hand).
 
-We've shipped 28 phases bringing Evi from scaffold to v0.11.0 in three
-days. The remaining "must-have" list is getting short:
+## Explicitly deferred
 
-- **Distribution polish** — self-update is the last big gap.
-- **Quality of life** — output caching, permission batching, auto-titling, hot reload, doctor.
-- **Search + retrieval** — citations + rerank are the highest-leverage QoL upgrade for any non-trivial repo.
-- **Federation / publish** — MCP server publish is the integration-story flip.
+- **Agentic browser via Playwright** — deprioritised in favour of MCP browser
+  servers (big surface area).
+- **Fine-tune Evi from transcripts** — niche; dream engine already curates.
+- **Voice cloning for AutoSpeaker** (Bark/Tortoise/F5-TTS) — heavy deps + huge
+  models.
+- **CodeQL / secret-scanning on the private repo** — not free; revisit if the
+  repo goes public or GHAS is purchased (or self-host gitleaks).
+- **Docker image push** in `release.yml`; **sigstore** wheel signing (post-1.0).
 
-After those, we're in territory where individual features compete with
-"is the user actually using the existing surface enough that this
-matters?". Worth pausing to gather usage data via the `evi tail` /
-transcripts + `evi dream` engine before adding more.
+## Prioritisation note
+
+Distribution polish (49→51) is the current focus: a new user should install,
+get to first chat without a manual backend setup, and stay updated — all
+without us hand-holding. After that, **MCP-server-publish** is the single
+highest-leverage feature (it subsumes much of the integrations backlog).
+Beyond that, gather real usage via transcripts + `evi dream` before piling on
+more surface area.
