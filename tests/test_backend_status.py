@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,8 +20,13 @@ import evi.apps.web.server as server_mod  # noqa: E402
 
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
-    # Isolate config/home so the auth middleware sees no token.
+    # Isolate config so the auth middleware sees no token AND so tests that
+    # WRITE config (/api/backend/use) can't clobber the real ~/.evi/config.toml.
+    # CONFIG_PATH is bound at import time, so setenv("EVI_HOME") alone is too
+    # late — redirect the module global directly.
+    import evi.config as _cfg
     monkeypatch.setenv("EVI_HOME", str(tmp_path))
+    monkeypatch.setattr(_cfg, "CONFIG_PATH", tmp_path / "config.toml")
     app = server_mod.create_app()
     return TestClient(app)
 
@@ -180,6 +186,51 @@ def test_install_endpoint_delegates_to_firstrun(client, monkeypatch):
 def test_install_endpoint_rejects_non_ollama(client):
     body = client.post("/api/backend/install", json={"kind": "lmstudio"}).json()
     assert body["ok"] is False
+
+
+def test_backend_use_explicit_model_persists(client):
+    body = client.post(
+        "/api/backend/use",
+        json={"kind": "ollama", "model": "qwen2.5:3b-instruct-q4_K_M"},
+    ).json()
+    assert body["ok"] is True
+    assert body["backend"] == "ollama"
+    assert "11434" in body["base_url"]
+    assert body["model"] == "qwen2.5:3b-instruct-q4_K_M"
+    # persisted: a fresh status reflects the new configured backend
+    status = client.get("/api/backend/status").json()
+    assert status["configured"]["backend"] == "ollama"
+
+
+def test_backend_use_autopicks_recommended_when_installed(client, monkeypatch):
+    import evi.backends.factory as fac
+    import evi.firstrun as fr
+
+    class FakeBackend:
+        def list_models(self):
+            return [SimpleNamespace(id="qwen2.5:3b-instruct-q4_K_M"), SimpleNamespace(id="other:7b")]
+
+    monkeypatch.setattr(fac, "get_backend", lambda settings: FakeBackend())
+    monkeypatch.setattr(fr, "recommended_model", lambda: "qwen2.5:3b-instruct-q4_K_M")
+    body = client.post("/api/backend/use", json={"kind": "ollama"}).json()
+    assert body["model"] == "qwen2.5:3b-instruct-q4_K_M"  # recommended + installed → chosen
+
+
+def test_backend_use_autopick_falls_back_to_first_installed(client, monkeypatch):
+    import evi.backends.factory as fac
+    import evi.firstrun as fr
+
+    monkeypatch.setattr(
+        fac, "get_backend",
+        lambda settings: SimpleNamespace(list_models=lambda: [SimpleNamespace(id="only:7b")]),
+    )
+    monkeypatch.setattr(fr, "recommended_model", lambda: "qwen2.5:3b-instruct-q4_K_M")  # not installed
+    body = client.post("/api/backend/use", json={"kind": "ollama"}).json()
+    assert body["model"] == "only:7b"  # recommended absent → first installed
+
+
+def test_backend_use_rejects_unknown_kind(client):
+    assert client.post("/api/backend/use", json={"kind": "bogus"}).status_code == 400
 
 
 def test_pull_endpoint_streams_progress(client, monkeypatch):

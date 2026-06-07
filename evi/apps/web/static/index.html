@@ -982,42 +982,65 @@ function bkBtn(label, act, kind) {
 }
 function renderBackendBanner(st) {
   const el = document.getElementById('backend-banner');
-  if (!st || st.any_reachable) { el.style.display = 'none'; return; }
+  if (!st) { el.style.display = 'none'; return; }
   const cfg = st.configured || {};
-  const model = st.recommended_model || 'a small model';
-  var html = '<b>⚠ No local LLM backend is running.</b> Evi needs a model server to reply. ' +
-    '<span style="opacity:.7">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>' +
-    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
-  // Primary one-click path: install (if needed) + start + pull a small model.
-  if (st.ollama_installed) {
-    html += bkBtn('⚡ Set up Evi (start + download ' + model + ')', 'auto', 'ollama');
-    html += bkBtn('Start only', 'start', 'ollama');
-  } else if (st.can_auto_install_ollama) {
-    html += bkBtn('⚡ Set up Evi automatically (install Ollama + ' + model + ')', 'auto', 'ollama');
-    html += bkBtn('Download manually', 'download', 'ollama');
+  // READY = the backend chat ACTUALLY uses is reachable. (any_reachable is not
+  // enough — a *different* candidate being up doesn't mean chat will work; that
+  // was the bug where the banner cleared but chats hit a dead backend.)
+  if (cfg.reachable) { el.style.display = 'none'; return; }
+
+  const live = (st.candidates || []).filter(function (c) { return c.reachable; });
+  var html, actions = '', hint = '';
+  if (live.length) {
+    // State B — a non-configured backend is running; offer to switch to it.
+    html = '<b>⚠ Evi is set to ' + (cfg.backend || '?') + ' (' + (cfg.base_url || '?') +
+      '), which isn\'t running</b> — but ' + live.map(function (c) { return c.kind; }).join(', ') +
+      ' is. Point Evi at it:';
+    actions = live.map(function (c) { return bkBtn('Use ' + c.kind, 'use', c.kind); }).join('');
   } else {
-    html += bkBtn('Download Ollama', 'download', 'ollama');
+    // State C — nothing reachable; first-run setup wizard.
+    const model = st.recommended_model || 'a small model';
+    html = '<b>⚠ No local LLM backend is running.</b> Evi needs a model server to reply. ' +
+      '<span style="opacity:.7">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>';
+    if (st.ollama_installed) {
+      actions = bkBtn('⚡ Set up Evi (start + download ' + model + ')', 'auto', 'ollama') +
+                bkBtn('Start only', 'start', 'ollama');
+    } else if (st.can_auto_install_ollama) {
+      actions = bkBtn('⚡ Set up Evi automatically (install Ollama + ' + model + ')', 'auto', 'ollama') +
+                bkBtn('Download manually', 'download', 'ollama');
+    } else {
+      actions = bkBtn('Download Ollama', 'download', 'ollama');
+    }
+    hint = '<div style="margin-top:6px;opacity:.7">Using LM Studio? Open it, load a model, ' +
+      'then Developer → Start Server (port 1234), and click Recheck.</div>';
   }
-  html += bkBtn('Recheck', 'recheck');
-  html += '</div>';
-  html += '<div id="bk-progress" style="margin-top:8px;display:none"></div>';
-  html += '<div style="margin-top:6px;opacity:.7">Using LM Studio? Open it, load a model, ' +
-    'then Developer → Start Server (port 1234), and click Recheck.</div>';
+  html += '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+    actions + bkBtn('Recheck', 'recheck') + '</div>';
+  html += '<div id="bk-progress" style="margin-top:8px;display:none"></div>' + hint;
   el.innerHTML = html;
   el.style.display = 'block';
   el.querySelectorAll('.bk-btn').forEach(function (b) { b.onclick = onBackendAction; });
 }
-function bkProgress(text, pct) {
+function bkProgress(text, pct, busy) {
   const p = document.getElementById('bk-progress');
   if (!p) return;
+  if (!document.getElementById('bk-spin-style')) {
+    var s = document.createElement('style'); s.id = 'bk-spin-style';
+    s.textContent = '@keyframes bk-spin{to{transform:rotate(360deg)}}';
+    document.head.appendChild(s);
+  }
   p.style.display = 'block';
-  var bar = '';
+  var extra = '';
   if (typeof pct === 'number') {
     var w = Math.max(0, Math.min(100, pct));
-    bar = '<div style="height:8px;background:#1f2937;border-radius:4px;overflow:hidden;margin-top:5px">' +
+    extra = '<div style="height:8px;background:#1f2937;border-radius:4px;overflow:hidden;margin-top:5px">' +
       '<div style="height:100%;width:' + w + '%;background:#22d3ee;transition:width .2s"></div></div>';
+  } else if (busy) {
+    // Indeterminate spinner for blocking steps (e.g. the silent Ollama install).
+    extra = '<span style="display:inline-block;margin-top:6px;width:15px;height:15px;vertical-align:-2px;' +
+      'border:2px solid #334155;border-top-color:#22d3ee;border-radius:50%;animation:bk-spin .8s linear infinite"></span>';
   }
-  p.innerHTML = '<div>' + text + '</div>' + bar;
+  p.innerHTML = '<div>' + text + '</div>' + extra;
 }
 async function pollReachable(tries, delayMs) {
   for (var i = 0; i < tries; i++) {
@@ -1048,7 +1071,7 @@ async function autoSetup(st) {
   st = st || {};
   // 1. Install Ollama if it isn't here yet.
   if (!st.ollama_installed) {
-    bkProgress('Installing Ollama… this can take a minute.');
+    bkProgress('Installing Ollama… this can take a minute.', undefined, true);
     var res = await fetch('/api/backend/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama' }) })
       .then(function (r) { return r.json(); }).catch(function () { return { ok: false }; });
     if (!res.ok) {
@@ -1062,15 +1085,20 @@ async function autoSetup(st) {
     }
   }
   // 2. Start the server and wait for it.
-  bkProgress('Starting Ollama…');
+  bkProgress('Starting Ollama…', undefined, true);
   await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama' }) }).catch(function () {});
   var up = await pollReachable(15, 1200);
   if (!up) { bkProgress("Ollama didn't come up in time. Give it a moment and click Recheck."); return; }
   // 3. Pull the recommended default model (idempotent if already present).
   bkProgress('Downloading model' + (st.recommended_model ? (' ' + st.recommended_model) : '') + '…', 0);
   var ok = await pullModelSSE(st.recommended_model || '');
-  bkProgress(ok ? 'All set — Evi is ready to chat!' : "Model download didn't finish. Retry from the model menu, then chat.");
-  // 4. Re-check: hides the banner once a backend + model are live.
+  if (!ok) { bkProgress("Model download didn't finish. Give it a moment and click Recheck."); return; }
+  // 4. Activate it: point Evi's config at Ollama + this model (the step the
+  //    old wizard skipped — without it chat kept hitting the default backend).
+  bkProgress('Configuring Evi to use Ollama…', undefined, true);
+  await fetch('/api/backend/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'ollama', model: st.recommended_model || undefined }) }).catch(function () {});
+  bkProgress('All set — Evi is ready to chat!');
+  // 5. Re-check: now the *configured* backend is reachable, so the banner hides.
   await checkBackend();
 }
 async function onBackendAction(e) {
@@ -1087,6 +1115,10 @@ async function onBackendAction(e) {
       btn.textContent = 'Starting…';
       await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
       await pollReachable(10, 1200);
+    } else if (act === 'use') {
+      // Switch Evi to a running backend (auto-picks an installed model).
+      btn.textContent = 'Switching…';
+      await fetch('/api/backend/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
     } else if (act === 'download') {
       await fetch('/api/backend/open-download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });
     }
@@ -1099,7 +1131,10 @@ async function sendMessage(text, images) {
   // …) are handled without a model, so only gate normal messages.
   if (!text.startsWith('/')) {
     const st = await checkBackend();
-    if (st && !st.any_reachable) {
+    // Gate on the CONFIGURED backend being reachable (what chat actually uses),
+    // not any_reachable — otherwise we'd fire into a dead backend while a
+    // different one happens to be up.
+    if (st && !(st.configured && st.configured.reachable)) {
       input.value = text;  // keep what they typed
       return;              // the banner (shown by checkBackend) explains how to fix it
     }

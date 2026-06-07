@@ -1,6 +1,6 @@
 # Evi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-07 · version 0.24.0 (desktop app 0.2.0)_
+_Last updated: 2026-06-07 · version 0.24.1 (desktop app 0.2.2)_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -97,6 +97,12 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **0.24.1 fix — first-run wizard activates the backend it sets up.** New
+  `POST /api/backend/use` writes `{backend,base_url,model}` + rebuilds live
+  clients; wizard now does install→start→pull→**use**; banner keys off the
+  *configured* backend's reachability (not any_reachable) and offers
+  "Use <backend>" when a different one is live; install shows a spinner.
+  Fixes the "banner cleared but chat hangs" bug. Desktop → 0.2.2.
 - ✅ **Phase 55 — opt-in Responses API (0.24.0).** `[llm] api = "responses"`
   (default `"chat"`; env `EVI_LLM_API`) routes the agent loop through OpenAI's
   Responses API via `evi/llm/responses.py` (chat↔responses conversion + a
