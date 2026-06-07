@@ -47,10 +47,16 @@ scripts/build-sidecar.sh          # or scripts\build-sidecar.ps1 on Windows
 ```
 
 This runs PyInstaller over `scripts/sidecar_entry.py` (which imports the
-FastAPI `app` object directly and runs uvicorn), producing
-`dist/evi-server[.exe]`, then stages it at
-`desktop/src-tauri/binaries/evi-server-<target-triple>` — the name Tauri's
-`externalBin` mechanism expects.
+FastAPI `app` object directly and runs uvicorn) in **`--onedir`** mode,
+producing a `dist/evi-server/` **folder** (`evi-server[.exe]` +
+`_internal/`), then stages the whole folder at
+`desktop/src-tauri/binaries/evi-server/` for Tauri's `bundle.resources`.
+
+> **Why onedir, not onefile.** A `--onefile` exe self-extracts ~70 MB to a
+> temp dir on *every* launch, which cost ~13–16 s of cold start. `--onedir`
+> runs in place, so the app window appears in ~2–3 s. The trade-off is
+> shipping a folder instead of one file — handled transparently by
+> `bundle.resources` (below).
 
 > **Scope — the "practical" tier.** The sidecar bundles **web + pdf +
 > index** Python deps, so chat, tools, image-gen, the web UI, PDF reading,
@@ -90,12 +96,13 @@ npm run tauri build -- --config src-tauri/tauri.standalone.conf.json
 ```
 
 `tauri.standalone.conf.json` is a small overlay that adds
-`bundle.externalBin: ["binaries/evi-server"]`. It's kept **separate** from
-the default `tauri.conf.json` on purpose: declaring `externalBin` there
-would make the plain `npm run build` fail whenever a sidecar hasn't been
-frozen. Tauri places the sidecar next to the app binary at install time
-(triple suffix stripped), which is exactly where `sidecar_path()` in
-`main.rs` looks for it.
+`bundle.resources` shipping the staged `binaries/evi-server/` folder. It's
+kept **separate** from the default `tauri.conf.json` on purpose: declaring
+the resource bundle there would make the plain `npm run build` fail
+whenever a sidecar hasn't been frozen. Tauri unpacks the folder under the
+app's resource dir at install time; `main.rs` resolves the binary from
+`resource_dir()` (`<resources>/evi-server/evi-server[.exe]`), with
+adjacent-exe fallbacks for the dev/staged layouts.
 
 ## Toolchain setup (Windows, no-admin friendly)
 
@@ -127,6 +134,12 @@ before building.
 
 ## Verification status
 
+- **0.22.0 — switched to `--onedir` + `bundle.resources`.** The onedir
+  sidecar launches the app window in ~2–3 s (was ~13–16 s with onefile).
+  ⚠ The standalone installers below were built from the **0.21.x**
+  onefile/old-probe sidecar; regenerate them with the 0.22.0 server code
+  (`build-sidecar.ps1` → stage `binaries/evi-server/` → `npm run tauri
+  build -- --config src-tauri/tauri.standalone.conf.json`) before shipping.
 - **Sidecar build: verified on Windows (2026-05-29).**
   `scripts/build-sidecar.ps1` froze a working 72.7 MB `evi-server.exe`
   (practical tier: web+pdf+index). `evi-server.exe --check` loads all
@@ -151,8 +164,36 @@ before building.
 ## Size + signing notes
 
 - Expect ~80–150 MB per sidecar (Python runtime + fastapi/uvicorn/pydantic
-  + evi). One-file PyInstaller binaries self-extract to a temp dir on first
-  launch, adding a small startup delay; use `--onedir` if that matters.
+  + evi). We ship **`--onedir`** (a folder, not one file): onefile binaries
+  self-extract to a temp dir on *every* launch, which cost ~13–16 s here —
+  onedir runs in place in ~2–3 s. The build scripts already use onedir.
 - Code signing / notarization (macOS) and Authenticode (Windows) are out
   of scope here but required for friction-free distribution — wire them
   into the Tauri bundler config when you have certificates.
+
+## All-Python fallback: pywebview
+
+The Tauri shell is the shipped desktop app, but building it needs the full
+Rust + Node + MSVC toolchain. If you only want a desktop **window** around
+the web UI without that toolchain, **[pywebview](https://pywebview.flowrl.com/)**
+is an all-Python alternative: start `evi web` on a local port and point a
+`webview.create_window(...)` at `http://127.0.0.1:<port>`. It uses the OS
+WebView (WebView2/WebKit), so the result is lightweight, but it is *not* a
+distributable installer — it still needs Python + `evi-ai[web]` on the
+machine. Treat it as a dev/personal-use convenience, not a replacement for
+the standalone Tauri build.
+
+## Backend discovery in the standalone app
+
+The bundled server does **not** bundle an LLM — it talks to whatever local
+backend is running. Two pieces make that robust on a fresh machine:
+
+- **llama.cpp port fallback.** llama.cpp defaults to `:8080`; when that's
+  taken people bump to the next free port. `evi/portprobe.py`'s
+  `discover_llamacpp_url` scans `8080..8090` and the llama.cpp backend
+  (`discover_ports=True`) auto-picks the one actually serving an
+  OpenAI-shaped `/v1/models`, so a busy default port doesn't hide it.
+- **No-backend UX.** If nothing answers, the web UI shows a "⚠ No local LLM
+  backend" banner with Start / Install / Recheck actions (see
+  `GET /api/backend/status`) rather than failing silently — important in
+  the standalone app, where the user may not have a backend installed yet.
