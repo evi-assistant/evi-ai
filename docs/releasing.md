@@ -5,8 +5,8 @@ How to cut a new version of Evi.
 ## One-time setup
 
 1. **PyPI Trusted Publishing.** On https://pypi.org → Manage → Publishing,
-   add a pending publisher for the **`evi-ai`** distribution (the import
-   package and CLI stay `evi`; only the PyPI name is `evi-ai`) pointing at
+   add a pending publisher for the **`evi-assistant`** distribution (the import
+   package and CLI stay `evi`; only the PyPI name is `evi-assistant`) pointing at
    this repo's `release.yml` workflow. No API tokens required.
 2. **Docker Hub / GHCR (optional).** If you want to push the image too,
    add `DOCKER_USERNAME` / `DOCKER_TOKEN` secrets and a job to
@@ -58,7 +58,7 @@ get confused and PyPI rejects duplicates.
 
 # Smoke-test the wheel in a fresh venv:
 python -m venv /tmp/wheel-check
-/tmp/wheel-check/bin/python -m pip install ./dist/evi_ai-X.Y.Z-py3-none-any.whl
+/tmp/wheel-check/bin/python -m pip install ./dist/evi_assistant-X.Y.Z-py3-none-any.whl
 /tmp/wheel-check/bin/evi --version
 ```
 

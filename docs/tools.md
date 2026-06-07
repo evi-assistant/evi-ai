@@ -80,7 +80,7 @@ the main conversation focused.
 | `web_search` | DuckDuckGo search via `duckduckgo_search`. Returns JSON `[{title, url, snippet}, …]`. |
 | `web_fetch`  | Download a URL (http/https only) and return extracted text. 1 MB raw cap, 16 KB output cap. |
 
-Requires `pip install 'evi-ai[web-tools]'` (gets `duckduckgo_search` and
+Requires `pip install 'evi-assistant[web-tools]'` (gets `duckduckgo_search` and
 `beautifulsoup4`).
 
 ## `voice` — TTS + STT (default OFF)
@@ -91,7 +91,7 @@ Requires `pip install 'evi-ai[web-tools]'` (gets `duckduckgo_search` and
 | `transcribe_microphone`  | Record `duration` seconds and transcribe via faster-whisper. |
 
 `speak` needs no Python deps — uses platform CLIs.
-`transcribe_microphone` needs `pip install 'evi-ai[stt]'` (faster-whisper +
+`transcribe_microphone` needs `pip install 'evi-assistant[stt]'` (faster-whisper +
 sounddevice + numpy).
 
 ## `computer` — mouse / keyboard / screen (default OFF, NEVER auto-approved)
@@ -110,7 +110,7 @@ sounddevice + numpy).
 - Category never lives in `auto.auto_approve` — every action prompts the
   human.
 - `pyautogui.FAILSAFE = True` — slam the mouse into a corner to abort.
-- Requires `pip install 'evi-ai[computer]'` (pyautogui + pillow).
+- Requires `pip install 'evi-assistant[computer]'` (pyautogui + pillow).
 
 ## `sqlite` — SQLite queries (default OFF)
 
@@ -125,7 +125,7 @@ sounddevice + numpy).
 |------------|---------------------------------------------------------------|
 | `read_pdf` | Extract text from a PDF. Page-range optional. Caps total output. |
 
-Requires `pip install 'evi-ai[pdf]'` (PyMuPDF).
+Requires `pip install 'evi-assistant[pdf]'` (PyMuPDF).
 
 ## `mcp` — Model Context Protocol (default OFF)
 

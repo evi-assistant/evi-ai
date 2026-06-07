@@ -72,7 +72,7 @@ def test_listen_propagates_missing_deps(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setitem(sys.modules, "sounddevice", None)
     monkeypatch.setitem(sys.modules, "numpy", None)
-    with pytest.raises(VoiceError, match="evi-ai\\[stt\\]"):
+    with pytest.raises(VoiceError, match="evi-assistant\\[stt\\]"):
         voice_mod.listen(duration=0.1)
 
 

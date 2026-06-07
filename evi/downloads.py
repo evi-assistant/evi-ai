@@ -57,7 +57,7 @@ def download_gguf(
         from huggingface_hub import HfApi, hf_hub_download
     except ImportError as exc:  # pragma: no cover — exercised in CLI only
         raise RuntimeError(
-            "huggingface_hub not installed — run: pip install 'evi-ai[downloads]'"
+            "huggingface_hub not installed — run: pip install 'evi-assistant[downloads]'"
         ) from exc
 
     ensure_dirs()

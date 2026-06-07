@@ -108,7 +108,7 @@ def _load_whisper(model_name: str, device: str, compute_type: str):
     except ImportError as exc:
         raise VoiceError(
             "STT requires faster-whisper + sounddevice — "
-            "install with: pip install 'evi-ai[stt]'"
+            "install with: pip install 'evi-assistant[stt]'"
         ) from exc
     _WHISPER_MODEL = WhisperModel(model_name, device=device, compute_type=compute_type)
     _WHISPER_MODEL_KEY = key
@@ -144,7 +144,7 @@ def listen(
     except ImportError as exc:
         raise VoiceError(
             "STT requires sounddevice + numpy — "
-            "install with: pip install 'evi-ai[stt]'"
+            "install with: pip install 'evi-assistant[stt]'"
         ) from exc
 
     audio = sd.rec(
@@ -380,7 +380,7 @@ class AutoListener:
         except ImportError as exc:
             raise VoiceError(
                 "voice loop requires sounddevice + numpy — "
-                "install with: pip install 'evi-ai[stt]'"
+                "install with: pip install 'evi-assistant[stt]'"
             ) from exc
 
         self._stop_evt.clear()

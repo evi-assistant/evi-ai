@@ -15,7 +15,7 @@ The Rust shell (`desktop/src-tauri/src/main.rs`) decides at launch:
    - a **bundled sidecar** binary named `evi-server[.exe]` sitting next to
      the app executable (the standalone path — no Python needed), else
    - **system Python**: `python -m uvicorn evi.apps.web.server:app` from the
-     repo root (the developer / source-checkout path; needs `evi-ai[web]`
+     repo root (the developer / source-checkout path; needs `evi-assistant[web]`
      installed).
 
 So the *same* app binary works as a thin shell over system Python **and**
@@ -29,7 +29,7 @@ npm install
 npm run build       # → installer under src-tauri/target/release/bundle/
 ```
 
-This installer still needs Python 3.11+ and `pip install evi-ai[web]` on
+This installer still needs Python 3.11+ and `pip install evi-assistant[web]` on
 the target machine (local mode falls back to system Python). Good for your
 own machines.
 
@@ -194,7 +194,7 @@ the web UI without that toolchain, **[pywebview](https://pywebview.flowrl.com/)*
 is an all-Python alternative: start `evi web` on a local port and point a
 `webview.create_window(...)` at `http://127.0.0.1:<port>`. It uses the OS
 WebView (WebView2/WebKit), so the result is lightweight, but it is *not* a
-distributable installer — it still needs Python + `evi-ai[web]` on the
+distributable installer — it still needs Python + `evi-assistant[web]` on the
 machine. Treat it as a dev/personal-use convenience, not a replacement for
 the standalone Tauri build.
 

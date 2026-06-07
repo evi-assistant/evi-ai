@@ -67,7 +67,7 @@ runs at the end of each successful upgrade to drop older ones.
                                         │
                                         ▼
                               ┌──────────────────┐
-                              │  Probe PyPI      │   /pypi/evi-ai/json
+                              │  Probe PyPI      │   /pypi/evi-assistant/json
                               └─────────┬────────┘
                                         │
                           current ≥ latest? ──── yes ──► "up to date"
@@ -127,11 +127,11 @@ runs at the end of each successful upgrade to drop older ones.
 
 We check, in order:
 
-1. **Editable** — parse the output of `pip show evi-ai`. If it has an
+1. **Editable** — parse the output of `pip show evi-assistant`. If it has an
    `Editable project location:` line, refuse with the editable
    location printed and a hint to `git pull` instead.
 2. **pipx** — if `PIPX_HOME` is in env OR `which evi` resolves under
-   `~/.local/pipx/venvs/evi-ai/`, suggest `pipx upgrade evi-ai` rather than
+   `~/.local/pipx/venvs/evi-assistant/`, suggest `pipx upgrade evi-assistant` rather than
    running pip ourselves.
 3. **Locked env** — if cwd (or any parent up to `$HOME`) has a
    `poetry.lock` / `uv.lock` / `Pipfile.lock`, suggest the right tool's
@@ -147,7 +147,7 @@ subprocess.run(
 )
 ```
 
-`spec` is either `evi-ai` (latest) or `evi-ai==<version>`. `sys.executable`
+`spec` is either `evi-assistant` (latest) or `evi-assistant==<version>`. `sys.executable`
 guarantees we install into the SAME interpreter that's running `evi`,
 which is critical — using bare `pip` could pick up a different venv.
 
@@ -220,7 +220,7 @@ evi/apps/cli/main.py
 
 ## Tests
 
-- Mock `httpx.get("https://pypi.org/pypi/evi-ai/json")` to return canned
+- Mock `httpx.get("https://pypi.org/pypi/evi-assistant/json")` to return canned
   payloads (newer / same / older / 404).
 - Mock `subprocess.run` for pip calls — verify command shape, capture
   exit codes, simulate success + failure.

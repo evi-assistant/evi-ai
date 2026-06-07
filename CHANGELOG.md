@@ -26,6 +26,14 @@ each app, the app's existing MCP client connects to Evi.
   Verified end-to-end: a real MCP client initializes the server, lists tools,
   and calls one (input-schema validation enforced).
 
+### Changed — PyPI distribution renamed to `evi-assistant`
+
+The intended `evi-ai` name is taken on PyPI by an unrelated project, so the
+distribution is now **`evi-assistant`** (`pip install evi-assistant`). The
+import package and CLI are unchanged (`import evi`, run `evi`) — only the
+install name, the in-app install hints, and the self-updater's target moved.
+Publishing still requires PyPI Trusted Publishing configured for the new name.
+
 ## [0.23.0] — 2026-06-07
 
 Phases 49–52 — supply-chain hygiene, a frictionless first run, desktop
@@ -47,7 +55,7 @@ Privacy-first error reporting, **OFF by default and inert until configured**.
 - **Hooks:** a chained `sys.excepthook` (CLI) and `init_reporting()` at web
   `create_app()` (so sentry-sdk's FastAPI integration captures server errors —
   and the frozen desktop sidecar, which runs the same app). New optional extra
-  `evi-ai[telemetry]` (`sentry-sdk`).
+  `evi-assistant[telemetry]` (`sentry-sdk`).
 - A "log a GitHub issue" backend was evaluated and deferred — it needs a
   token-holding relay and re-implements dedup/scrub/rate-limit that the SDK
   gives free; the `Reporter` seam leaves room for it later.
@@ -182,7 +190,7 @@ tells you (and helps you fix it) when no local LLM backend is running.
   and `/api/upload` endpoints use `Form`/`UploadFile`, which FastAPI requires
   `python-multipart` for *at route-registration time*, so `create_app()`
   raised and the server wouldn't start. It was only ever present transitively
-  via the `mcp` extra, so `pip install evi-ai[web]` (and the standalone
+  via the `mcp` extra, so `pip install evi-assistant[web]` (and the standalone
   sidecar) shipped a server that crashed on boot. Now a declared `web` dep.
 
 ### Build — standalone sidecar
@@ -264,7 +272,7 @@ build scripts are no longer "verified-by-construction" only.
   bundled deps (app + `fitz`/`numpy` + uvicorn protocols) and reports —
   lets a frozen build self-verify without a chat flow.
 
-The `evi-ai` wheel is functionally unchanged (these live in `desktop/` +
+The `evi-assistant` wheel is functionally unchanged (these live in `desktop/` +
 `scripts/`, neither of which ships in the wheel). See
 `docs/desktop-bundling.md` for the full, now-verified flow.
 
@@ -284,7 +292,7 @@ The `evi-ai` wheel is functionally unchanged (these live in `desktop/` +
   (what `evi-tools install` drops) → PATH. The desktop shell sets
   `EVI_TESSERACT_CMD` (+ `TESSDATA_PREFIX`) when a `tesseract` binary is
   bundled next to the sidecar, so OCR works offline in the standalone app.
-- New **`evi-ai[build-desktop]`** extra (`pyinstaller`) — a build-time-only
+- New **`evi-assistant[build-desktop]`** extra (`pyinstaller`) — a build-time-only
   dependency for freezing the sidecar.
 - `docs/desktop-bundling.md` updated for the practical tier + the optional
   Tesseract-bundling step. (The Tauri/PyInstaller build itself is still
@@ -295,7 +303,7 @@ The `evi-ai` wheel is functionally unchanged (these live in `desktop/` +
 The desktop app is **not** a pip extra — pip extras only install Python
 deps, they can't build a native installer. It's a separate downloadable
 artifact (native installers via GitHub Releases), built from `desktop/` in
-this monorepo, embedding a frozen server. `pip install evi-ai` remains the
+this monorepo, embedding a frozen server. `pip install evi-assistant` remains the
 path for CLI / web / server / library use.
 
 ### Bumped to 0.21.0.
@@ -342,17 +350,17 @@ path for CLI / web / server / library use.
   shell launch `uvicorn evi.apps.web.server:app`. The `evi` command and
   `import evi` are unchanged for users.
 
-### Changed — packaging: distribution renamed to `evi-ai`
+### Changed — packaging: distribution renamed to `evi-assistant`
 
-- The PyPI distribution is now **`evi-ai`** (the bare `evi` name is taken).
+- The PyPI distribution is now **`evi-assistant`** (the bare `evi` name is taken).
   The **import package stays `evi`** (`import evi`) and the **CLI command
-  stays `evi`** — only the install name changes: `pip install evi-ai`.
-- All in-app install hints now read `pip install 'evi-ai[<extra>]'`.
-- The self-updater (`evi update`) targets `evi-ai` on PyPI: the version
-  probe hits `/pypi/evi-ai/json`, `pip show evi-ai` detects editable
-  installs, and pipx/poetry/uv/pipenv hints all reference `evi-ai`.
+  stays `evi`** — only the install name changes: `pip install evi-assistant`.
+- All in-app install hints now read `pip install 'evi-assistant[<extra>]'`.
+- The self-updater (`evi update`) targets `evi-assistant` on PyPI: the version
+  probe hits `/pypi/evi-assistant/json`, `pip show evi-assistant` detects editable
+  installs, and pipx/poetry/uv/pipenv hints all reference `evi-assistant`.
   A new `evi.update.DIST_NAME` constant centralises the name.
-- Verified `python -m build` produces `evi_ai-0.19.0-py3-none-any.whl`
+- Verified `python -m build` produces `evi_assistant-0.19.0-py3-none-any.whl`
   carrying the `evi`/`apps` packages, the `evi` console-script entry
   point, `py.typed`, and the web static assets.
 

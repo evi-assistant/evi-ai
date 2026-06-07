@@ -339,7 +339,7 @@ def create_app() -> FastAPI:
                 except ImportError:
                     logger.warning(
                         "MCP enabled but `mcp` package not installed; "
-                        "run `pip install 'evi-ai[mcp]'`"
+                        "run `pip install 'evi-assistant[mcp]'`"
                     )
                     mcp_manager = None
 

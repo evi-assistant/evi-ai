@@ -33,8 +33,8 @@ native desktop window.
 ## Quickstart
 
 > **Package name:** the project is **Evi**, but the PyPI distribution is
-> **`evi-ai`** (the bare `evi` name was taken). Once published you'll
-> `pip install evi-ai`; the import package and CLI command are both still
+> **`evi-assistant`** (the bare `evi` name was taken). Once published you'll
+> `pip install evi-assistant`; the import package and CLI command are both still
 > `evi` (`import evi`, run `evi`). The steps below use an editable install
 > from a clone, which doesn't depend on the published name.
 

@@ -92,7 +92,7 @@ Tail the Tauri stderr to see what `py -3.11 -m uvicorn …` actually did.
 
 ## Scheduler / cron tasks aren't firing
 
-- `apscheduler` not installed: `pip install 'evi-ai[scheduler]'`.
+- `apscheduler` not installed: `pip install 'evi-assistant[scheduler]'`.
 - The scheduler isn't running anywhere. Pick one:
   - foreground daemon: `evi scheduler`
   - alongside web: `evi web` (lifespan starts the scheduler)
