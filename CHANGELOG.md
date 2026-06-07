@@ -3,6 +3,29 @@
 All notable user-visible changes to Evi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.1] — 2026-06-07
+
+### Fixed — first-run wizard now actually activates the backend it sets up
+
+A fresh Ollama user could finish the setup wizard, watch the "no backend"
+banner clear, and still get **no reply** — because the wizard installed Ollama
+and pulled a model but never pointed Evi's config at it, so chats kept hitting
+the shipped default (LM Studio / a 7B that wasn't installed).
+
+- **New `POST /api/backend/use`** persists `{backend, base_url, model}` to
+  config and rebuilds live sessions' clients (works without a restart). When no
+  model is given it picks one **actually installed** on the backend (preferring
+  the hardware-recommended one), so the config never points at a missing model.
+- **The wizard now activates the backend** after the pull: install → start →
+  pull → **use** → ready.
+- **Banner logic corrected:** it now keys off whether the **configured** backend
+  (the one chat uses) is reachable — not "any backend is reachable," which was
+  the bug that cleared the warning while chats hit a dead backend. When a
+  *different* backend is running than the one configured, the banner offers a
+  **"Use <backend>"** button. Message-send is gated on the configured backend.
+- **Install feedback:** the silent Ollama install now shows a spinner.
+- Desktop app → **0.2.2**.
+
 ## [0.24.0] — 2026-06-07
 
 ### Added — Phase 53: Evi as an MCP server (`mcp-server-publish`)

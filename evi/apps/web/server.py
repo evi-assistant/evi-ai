@@ -100,6 +100,14 @@ class BackendActionRequest(BaseModel):
     kind: str  # "ollama" | "lmstudio" | "llamacpp"
 
 
+class BackendUseRequest(BaseModel):
+    """POST body for /api/backend/use — switch the active backend (+ model)."""
+
+    kind: str                      # ollama | lmstudio | llamacpp | openai_compat
+    model: str | None = None       # explicit; else auto-pick an installed one
+    base_url: str | None = None    # override; else the backend's default URL
+
+
 # --- LLM backend probing -------------------------------------------------
 #
 # Known local backends we probe regardless of which one is configured, so the
@@ -675,6 +683,63 @@ def create_app() -> FastAPI:
                 yield {"event": "message", "data": json.dumps(payload)}
 
         return EventSourceResponse(stream())
+
+    @app.post("/api/backend/use")
+    def backend_use(req: BackendUseRequest) -> dict[str, object]:
+        """Switch the active LLM backend (+ model) and persist it.
+
+        This is what makes the first-run wizard actually *work*: after
+        install→serve→pull we call this so Evi talks to the backend it just set
+        up, instead of the shipped default. Also backs the banner's
+        'Use <backend>' action. When no model is given we pick one that's
+        actually installed on the backend (preferring the recommended one), so
+        we never point the config at a model that isn't there. Rebuilds live
+        sessions' clients so the current chat works without a restart."""
+        from evi import firstrun
+        from evi.backends.factory import default_base_url, get_backend
+
+        kind = req.kind.strip().lower()
+        if kind not in {"lmstudio", "ollama", "llamacpp", "openai_compat"}:
+            raise HTTPException(400, f"unknown backend {kind!r}")
+        base_url = (req.base_url or default_base_url(kind)).strip()
+
+        cfg = Config.load()
+        cfg.llm.backend = kind
+        cfg.llm.base_url = base_url
+        cfg.llm.api_key = {"ollama": "ollama", "lmstudio": "lm-studio"}.get(
+            kind, cfg.llm.api_key or "sk-noauth"
+        )
+
+        model = (req.model or "").strip()
+        if not model:
+            # Pick a model that exists on the backend, preferring the
+            # hardware-recommended one; never leave config pointing at a
+            # model the backend doesn't have.
+            try:
+                installed = [m.id for m in get_backend(cfg.llm).list_models()]
+            except Exception:  # noqa: BLE001
+                installed = []
+            try:
+                rec = firstrun.recommended_model()
+            except Exception:  # noqa: BLE001
+                rec = ""
+            model = rec if rec in installed else (installed[0] if installed else rec)
+        if model:
+            cfg.llm.model = model
+        cfg.save()
+
+        # Apply to every live session (rebuild the client for the new backend).
+        for sess in sessions.values():
+            sess.agent.config.llm.backend = cfg.llm.backend
+            sess.agent.config.llm.base_url = cfg.llm.base_url
+            sess.agent.config.llm.api_key = cfg.llm.api_key
+            sess.agent.config.llm.model = cfg.llm.model
+            try:
+                sess.agent.client = make_client(cfg.llm)
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "backend": cfg.llm.backend,
+                "base_url": cfg.llm.base_url, "model": cfg.llm.model}
 
     @app.get("/api/session/{session_id}/usage")
     def session_usage(session_id: str) -> dict[str, int]:

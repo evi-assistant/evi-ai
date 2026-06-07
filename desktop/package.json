@@ -1,7 +1,7 @@
 {
   "name": "evi-desktop",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Tauri shell that launches the Evi local web UI as a desktop app.",
   "scripts": {
     "tauri": "tauri",
