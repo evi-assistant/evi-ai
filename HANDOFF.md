@@ -1,6 +1,6 @@
 # Evi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-05 · version 0.21.2 (next bump → 0.22.0)_
+_Last updated: 2026-06-06 · version 0.22.0_
 
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
@@ -26,14 +26,20 @@ Local-first personal AI assistant living at `C:\evi`.
 
 ## 2. Current status
 
-- **Tests:** `570 passed, 1 skipped` (full suite ~90s under `.venv`). Clean ruff.
+- **Tests:** `570 passed, 1 skipped` (re-verified on this machine 2026-06-06,
+  ~33s under the fresh `.venv`). Clean ruff.
 - **Desktop:** standalone Tauri build works end-to-end on Windows — produces MSI
   + NSIS installers (~78–79 MB) embedding a ~72 MB PyInstaller sidecar.
-- **NOT under version control.** There is a `.gitignore` but no `.git`. Strongly
-  recommend `git init` (see Open items).
+- **Under version control now.** `git init` done — initial commit `208ea02`
+  ("Evi v0.21.2", 235 files) on `main` (origin/main set). Working tree clean.
+- **Migrated to this machine (`dusti`).** The old `.venv` (base interpreter
+  under `C:\Users\Dustin Kost\…`) was dead on arrival; recreated with
+  `py -3.11` (3.11.9) + all extras. cargo/node/npm are present here.
 - We are mid **Phase 48** (desktop bundling polish + "no LLM backend" UX).
+  Version **bumped to 0.22.0**; CHANGELOG + `docs/desktop-bundling.md` updated.
+  Remaining Phase-48 work is the desktop sidecar rebuild → verify → installers.
 
-### Work done in the current session (on disk, **uncommitted / no VCS**)
+### Work done in Phase 48 (now committed; the 0.22.0 changes are documented)
 
 | Area | Change |
 |---|---|
@@ -53,22 +59,33 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
+**Still open — the desktop rebuild track (needs cargo + node + MSVC + the venv):**
+
 1. **Rebuild the sidecar** with the new `portprobe.py` / `server.py` code. The
    currently-staged frozen exe (`desktop/src-tauri/binaries/evi-server/`) was
-   built from the **old** probe code. Run `scripts/build-sidecar.ps1`.
+   built from the **old** probe code (May 29, pre-portprobe). Run
+   `scripts/build-sidecar.ps1`.
 2. **Re-verify the desktop app** end-to-end: stage `binaries/evi-server/` →
    `desktop/src-tauri/target/release/evi-server/`, launch
    `target\release\evi-desktop.exe`, confirm ~2–3 s launch + the no-backend
    banner appears.
 3. **Regenerate installers:** `cd desktop && npm run tauri build -- --config src-tauri/tauri.standalone.conf.json`. Confirm Tauri places the resource
-   folder where `sidecar_path()` in `main.rs` looks (`<resources>/evi-server/`).
-4. **Docs/CHANGELOG/memory + version bump → 0.22.0** for Phase 48. Note in
-   `docs/desktop-bundling.md`: pywebview as the documented all-Python fallback
-   to Tauri, and the llama.cpp 8080–8090 port fallback.
-5. **`git init`** — the project has no VCS. Do this before/after migrating.
-6. Deferred (user said "not yet"): GitHub Actions desktop-release workflow.
-7. Verify the old `apps/` top-level PyPI namespace collision is fully resolved
-   (apps were moved under `evi/apps/`; double-check no stray top-level `apps`).
+   folder where `main.rs` looks (`<resources>/evi-server/`).
+
+**Deferred:**
+
+4. GitHub Actions desktop-release workflow (user said "not yet").
+
+**Done (2026-06-06):**
+
+- ✅ **Version bump → 0.22.0** (`evi/__init__.py`, `pyproject.toml`) + a
+  Phase-48 **CHANGELOG** entry + **`docs/desktop-bundling.md`** updated
+  (onedir/`bundle.resources`, pywebview all-Python fallback, llama.cpp
+  8080–8090 port fallback). Memory refreshed.
+- ✅ **`git init`** — initial commit on `main` (was the old item #5).
+- ✅ **`apps/` namespace** — verified resolved; no stray top-level `apps/`
+  (frontends live under `evi/apps/`).
+- ✅ **`.venv` recreated** on this machine (`py -3.11`, all extras).
 
 ## 4. Known issues & gotchas
 

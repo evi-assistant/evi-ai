@@ -26,6 +26,9 @@ Thumbs.db
 *.swp
 *~
 
+# Tooling state (Rootstock pipeline / agent harness scratch)
+.rstk/
+
 # Tauri / Node
 desktop/node_modules/
 desktop/src-tauri/target/

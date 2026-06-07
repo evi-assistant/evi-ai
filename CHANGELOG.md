@@ -3,6 +3,68 @@
 All notable user-visible changes to Evi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.0] — 2026-06-06
+
+Phase 48 — desktop standalone launch is now fast, and the web/desktop UI
+tells you (and helps you fix it) when no local LLM backend is running.
+
+### Desktop — standalone launch ~2.7 s (was ~16 s)
+
+- **`--onedir` sidecar, not `--onefile`.** `scripts/build-sidecar.{ps1,sh}`
+  now freeze the server as a folder (`evi-server[.exe]` + `_internal/`)
+  instead of a single self-extracting exe. Onefile unpacked ~70 MB to a
+  temp dir on every launch (~13–16 s cold start); onedir runs in place, so
+  the app window appears in ~2–3 s.
+- **`tauri.standalone.conf.json` ships the folder via `bundle.resources`**
+  (was `externalBin`, which expects a single binary). `main.rs` resolves
+  the sidecar from Tauri's `resource_dir()` (`<resources>/evi-server/`),
+  with adjacent-exe fallbacks for dev/staged layouts.
+- The non-blocking loading shim (`desktop/dist-shim/index.html`, "Starting
+  Evi…" spinner polling `/api/health`) added in 0.21.2 still covers any
+  residual startup time and now almost always flashes by.
+
+### Added — "No local LLM backend" UX (web + desktop)
+
+- **Banner in the web UI** (`evi/apps/web/static/index.html`): when no
+  reachable OpenAI-compatible backend is found, a "⚠ No local LLM backend"
+  banner offers **Start** (auto-start Ollama), **Install** (open the
+  backend's download page), and **Recheck**, and gates message-send until a
+  backend answers.
+- **`GET /api/backend/status`** probes the configured backend plus known
+  local candidates **concurrently**, caches the result for 3 s, validates
+  the OpenAI `/v1/models` shape (so a random service on a port isn't
+  mistaken for an LLM), and reports llama.cpp's resolved port. New
+  **`POST /api/backend/start`** (Ollama auto-start) and
+  **`POST /api/backend/open-download`** back the banner's actions.
+
+### Added — `evi/portprobe.py` + llama.cpp port discovery
+
+- New dependency-light **`evi.portprobe`** module: a raw-socket
+  `port_open` check, `is_openai_server` (200 + JSON `data` list), and
+  `discover_llamacpp_url` that scans `8080..8090` for a real server. Host
+  is normalised `localhost`/`::1` → `127.0.0.1`.
+- **`evi/backends/llamacpp.py`** auto-discovers a live llama.cpp across
+  8080–8090 when the configured port isn't the one serving (cached;
+  `discover_ports=True`).
+
+### Fixed
+
+- **`:8080` false positives** — backend detection counted *any* service
+  answering on a known port as an LLM. It now requires an OpenAI-shaped
+  `/v1/models` response.
+- **Slow backend status (~13.8 s → ~1.5 s)** — concurrent probing + a 3 s
+  cache replace the old serial, uncached checks.
+- **Windows `localhost` IPv6 stall** — a connect to a closed `::1`
+  loopback port is *dropped* (SYN filtered), not refused, so it blocked for
+  the full timeout. Probes and connections now pin to `127.0.0.1`.
+- **Time-bomb transcript test** — `tests/test_transcripts.py` used a fixed
+  date that would eventually fail; made it relative.
+
+### Tests
+
+- New `tests/test_portprobe.py`; rewrote `tests/test_backend_status.py`;
+  +5 cases in `tests/test_backends.py` for the llama.cpp port fallback.
+
 ## [0.21.2] — 2026-05-29
 
 ### Desktop — fixed: app launched the sidecar but no window appeared
