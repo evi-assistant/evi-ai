@@ -746,10 +746,12 @@ async function streamReroll() {
       const { done: streamDone, value } = await reader.read();
       if (streamDone) break;
       buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        for (const line of chunk.split('\n')) {
+      // SSE frames end in a blank line — tolerate BOTH \n\n and \r\n\r\n
+      // (sse-starlette emits CRLF; splitting on \n\n only would never match).
+      let sep;
+      while ((sep = buf.match(/\r?\n\r?\n/)) !== null) {
+        const chunk = buf.slice(0, sep.index); buf = buf.slice(sep.index + sep[0].length);
+        for (const line of chunk.split(/\r?\n/)) {
           if (!line.startsWith('data:')) continue;
           const payload = line.slice(5).trim();
           if (!payload) continue;
@@ -1175,11 +1177,14 @@ async function sendMessage(text, images) {
       const { done: streamDone, value } = await reader.read();
       if (streamDone) break;
       buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        for (const line of chunk.split('\n')) {
+      // SSE frames end in a blank line — tolerate BOTH \n\n and \r\n\r\n
+      // (sse-starlette emits CRLF; splitting on \n\n only would never match,
+      // so no events would ever render — the "no chat response" bug).
+      let sep;
+      while ((sep = buf.match(/\r?\n\r?\n/)) !== null) {
+        const chunk = buf.slice(0, sep.index);
+        buf = buf.slice(sep.index + sep[0].length);
+        for (const line of chunk.split(/\r?\n/)) {
           if (!line.startsWith('data:')) continue;
           const payload = line.slice(5).trim();
           if (!payload) continue;
