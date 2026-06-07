@@ -65,7 +65,7 @@ web = [
     # FastAPI raises at route-registration time without it, so the server
     # won't even start — not optional. Previously only present transitively
     # via the `mcp` extra, which broke `pip install evi-ai[web]` on its own.
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.32",
 ]
 mcp = [
     "mcp>=1.0",
