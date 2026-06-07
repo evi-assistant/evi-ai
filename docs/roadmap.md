@@ -104,7 +104,12 @@ Opt-in, privacy-first telemetry so we learn about crashes.
   `--token`); per-tool allow-list (`--tools`). Remaining nice-to-haves: an
   OAuth flow for HTTP (vs static token), and exposing index/calendar data as
   resources too.
-- **Responses API migration** — adopt OpenAI's newer shape; future-proofs core.
+- ✅ **Responses API** — **shipped as opt-in (0.24.0, Phase 55)**, NOT a
+  migration: `[llm] api = "responses"` (default `"chat"`) routes the agent loop
+  through OpenAI's Responses API for endpoints that support it, via a stream
+  adapter that keeps the loop unchanged. Local backends stay on Chat
+  Completions. Remaining: verify against a live Responses endpoint; extend the
+  compaction/variant helpers (still chat-only — fine for OpenAI cloud).
 - **Cross-machine sync** of `~/.evi/` (git/rclone) — **M**; fits the documented
   3-machine setup (memory/skills/profiles/routes move with you).
 - **`evi recipe`** — saved multi-turn workflows ("morning standup" = calendar +

@@ -43,6 +43,25 @@ Builds on Phase 53's `evi mcp serve`:
 - Verified end-to-end: stdio lists tools/resources/prompts; HTTP rejects
   missing/bad tokens (401) and admits the right one.
 
+### Added — Phase 55: opt-in OpenAI Responses API path
+
+The agent loop can now talk the newer **Responses API** as an opt-in, without
+disturbing local-first defaults.
+
+- New **`[llm] api`** setting (`"chat"` default | `"responses"`), env override
+  `EVI_LLM_API`. `"chat"` (Chat Completions) stays the default and the only
+  shape Evi's local backends (LM Studio/Ollama/llama.cpp) support; `"responses"`
+  is for endpoints that implement it (e.g. OpenAI cloud).
+- New `evi/llm/responses.py`: chat↔responses request conversion (messages →
+  `input` incl. tool-call/tool-result round-trips; tools flattened) and a stream
+  **adapter** that re-emits Responses events as Chat-Completion-shaped chunks —
+  so the large streaming/tool loop in `agent.py` is reused unchanged (one
+  branch at the API call).
+- **Not a migration:** with the default `"chat"`, nothing changes for existing
+  users. The converters + adapter are unit-tested against the SDK's event
+  shapes but NOT verified against a live Responses endpoint (no cloud in CI) —
+  treat first real use as the integration test.
+
 ### Changed — PyPI distribution renamed to `evi-assistant`
 
 The intended `evi-ai` name is taken on PyPI by an unrelated project, so the

@@ -59,10 +59,10 @@ IPv6 (`::1`) connect stall; the stale-date transcript test.
 
 ## 3. Open items / TODO (in priority order)
 
-**Phases 48–53 complete.** Distribution-polish arc (48–52) + **MCP-server-publish
-(53)**. See `docs/roadmap.md` for what's next: Responses API migration,
-cross-machine sync, `evi recipe`, plus MCP follow-ups (resources/prompts, an
-HTTP transport, per-tool auth).
+**Phases 48–55 complete.** Distribution-polish arc (48–52), MCP-server-publish
++ follow-ups (53–54), and an opt-in Responses API path (55). See
+`docs/roadmap.md` for what's next: cross-machine `~/.evi` sync, `evi recipe`,
+memory tags, plugin loader, multi-user web mode.
 
 ### Releases (2026-06-07)
 
@@ -96,6 +96,12 @@ Near-term loose ends:
 
 **Done (2026-06-07):**
 
+- ✅ **Phase 55 — opt-in Responses API (0.24.0).** `[llm] api = "responses"`
+  (default `"chat"`; env `EVI_LLM_API`) routes the agent loop through OpenAI's
+  Responses API via `evi/llm/responses.py` (chat↔responses conversion + a
+  stream adapter that keeps `agent.py`'s loop unchanged). NOT a migration —
+  local backends stay on Chat Completions. Unit-tested; not verified against a
+  live Responses endpoint (no cloud in CI). 627 tests green.
 - ✅ **Phase 53–54 — MCP-server-publish (0.24.0).** `evi mcp serve` runs Evi as
   an MCP server exposing curated **tools** (memory/index/calendar/git) +
   **memory resources** (`evi://memory/<name>`) + **command prompts** to Claude
