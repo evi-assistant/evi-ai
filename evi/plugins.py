@@ -52,6 +52,7 @@ class Plugin:
     version: str
     path: Path
     commands: int
+    skills: int = 0
 
 
 def _plugins_dir(root: Path | None = None) -> Path:
@@ -124,6 +125,8 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
                 continue
             cdir = pd / "commands"
             ncmd = len(list(cdir.rglob("*.md"))) if cdir.is_dir() else 0
+            sdir = pd / "skills"
+            nskill = len([p for p in sdir.iterdir() if (p / "SKILL.md").is_file()]) if sdir.is_dir() else 0
             out.append(
                 Plugin(
                     name=pd.name,
@@ -131,6 +134,7 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
                     version=str(m.get("version", "")),
                     path=pd,
                     commands=ncmd,
+                    skills=nskill,
                 )
             )
     return out

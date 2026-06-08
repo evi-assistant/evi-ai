@@ -53,23 +53,39 @@ class SkillStore:
 
     # --- public API ------------------------------------------------------
 
+    def _scan_roots(self) -> list[tuple[str, Path]]:
+        """[(name-prefix, dir)] — the user's skills dir plus each installed
+        plugin's skills/ (~/.evi/plugins/<name>/skills/, exposed as
+        `<plugin>:<skill>`)."""
+        roots: list[tuple[str, Path]] = []
+        if self.root.is_dir():
+            roots.append(("", self.root))
+        plugins = self.root.parent / "plugins"
+        if plugins.is_dir():
+            for pd in sorted(plugins.iterdir()):
+                sdir = pd / "skills"
+                if sdir.is_dir() and _NAME_RE.match(pd.name):
+                    roots.append((pd.name + ":", sdir))
+        return roots
+
     def list(self) -> list[SkillEntry]:
-        if not self.root.is_dir():
-            return []
         entries: list[SkillEntry] = []
-        for sub in sorted(p for p in self.root.iterdir() if p.is_dir()):
-            skill_file = sub / "SKILL.md"
-            if not skill_file.is_file():
-                continue
-            try:
-                meta, _ = _split_frontmatter(skill_file.read_text(encoding="utf-8"))
-            except OSError:
-                continue
-            name = (meta.get("name") or sub.name).strip()
-            if not _NAME_RE.match(name):
-                continue
-            desc = (meta.get("description") or "").strip() or "(no description)"
-            entries.append(SkillEntry(name=name, description=desc, path=skill_file))
+        for prefix, root in self._scan_roots():
+            for sub in sorted(p for p in root.iterdir() if p.is_dir()):
+                skill_file = sub / "SKILL.md"
+                if not skill_file.is_file():
+                    continue
+                try:
+                    meta, _ = _split_frontmatter(skill_file.read_text(encoding="utf-8"))
+                except OSError:
+                    continue
+                local = (meta.get("name") or sub.name).strip()
+                if not _NAME_RE.match(local):
+                    continue
+                desc = (meta.get("description") or "").strip() or "(no description)"
+                entries.append(
+                    SkillEntry(name=prefix + local, description=desc, path=skill_file)
+                )
         return entries
 
     def read(self, name: str) -> str:

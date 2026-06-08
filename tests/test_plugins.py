@@ -70,6 +70,31 @@ def test_install_unknown_source(tmp_path):
         plugins.install(str(tmp_path / "does-not-exist"), root=tmp_path / "home")
 
 
+def test_plugin_skills_exposed(tmp_path):
+    from evi.skills import SkillStore
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "plugin.toml").write_text('name = "kit"\nversion = "1.0"\n', encoding="utf-8")
+    skill = src / "skills" / "review"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\ndescription: do a review\n---\nReview steps here\n", encoding="utf-8"
+    )
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+
+    # counted in the plugin listing
+    p = plugins.list_plugins(root=root)[0]
+    assert p.skills == 1
+
+    # exposed via SkillStore as kit:review (no copying)
+    ss = SkillStore(root=root / "skills")
+    names = {e.name for e in ss.list()}
+    assert "kit:review" in names
+    assert "Review steps here" in ss.read("kit:review")
+
+
 def test_user_commands_and_plugin_coexist(tmp_path):
     root = tmp_path / "home"
     # a user command
