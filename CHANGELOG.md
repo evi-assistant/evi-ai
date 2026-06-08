@@ -3,6 +3,18 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [desktop 0.2.10] — 2026-06-08
+
+### Fixed — "Command … not allowed by ACL" on desktop IPC
+
+The desktop window loads the local server over `http://127.0.0.1:<port>`, which
+Tauri treats as a *remote* URL — and a capability doesn't apply to remote pages
+unless they're explicitly allowed. So every frontend `invoke()` (Check for
+Updates, Open Logs, Get Support's external open) failed with
+`Command <name> not allowed by ACL`. The default capability now allows
+`http://localhost:*/*` + `http://127.0.0.1:*/*`. (Menus were unaffected — they
+dispatch via Rust `eval`, not `invoke`.) Desktop → 0.2.10; no Python change.
+
 ## [0.29.0] — 2026-06-08
 
 ### Added — Claude Code parity (phases 64–71)
