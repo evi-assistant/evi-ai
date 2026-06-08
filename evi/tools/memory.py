@@ -21,13 +21,18 @@ _store = MemoryStore()
         "Save a piece of information to long-term memory so it persists across "
         "sessions. `name` is a short identifier (letters, digits, dash, "
         "underscore). `content` is markdown — overwrites any existing entry "
-        "with the same name."
+        "with the same name. `tags` is an optional comma-separated list "
+        "(e.g. \"work, project-x\") for grouping + retrieval via recall_by_tag; "
+        "leave it empty to keep any existing tags."
     ),
     category="memory",
 )
-def remember(name: str, content: str) -> str:
-    path = _store.write(name, content)
-    return f"saved memory '{name}' to {path}"
+def remember(name: str, content: str, tags: str = "") -> str:
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags.strip() else None
+    path = _store.write(name, content, tags=tag_list)
+    saved = _store.tags_of(name)
+    note = f" [tags: {', '.join(saved)}]" if saved else ""
+    return f"saved memory '{name}' to {path}{note}"
 
 
 @tool(
@@ -52,11 +57,27 @@ def forget(name: str) -> str:
 
 @tool(
     description=(
-        "List all stored memories as JSON: [{name, summary}, …]. The summary "
-        "is the first non-empty line of each memory file."
+        "List all stored memories as JSON: [{name, summary, tags}, …]. The "
+        "summary is the first non-empty line of each memory file."
     ),
     category="memory",
 )
 def list_memories() -> str:
     entries = _store.list()
-    return json.dumps([{"name": e.name, "summary": e.summary} for e in entries])
+    return json.dumps(
+        [{"name": e.name, "summary": e.summary, "tags": list(e.tags)} for e in entries]
+    )
+
+
+@tool(
+    description=(
+        "Find stored memories carrying a given tag (case-insensitive). Returns "
+        "JSON: [{name, summary, tags}, …]. Pair with the `tags` arg of remember."
+    ),
+    category="memory",
+)
+def recall_by_tag(tag: str) -> str:
+    entries = _store.by_tag(tag)
+    return json.dumps(
+        [{"name": e.name, "summary": e.summary, "tags": list(e.tags)} for e in entries]
+    )

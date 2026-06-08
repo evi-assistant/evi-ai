@@ -123,3 +123,67 @@ def test_tool_wrappers(store: MemoryStore) -> None:
     assert REGISTRY["recall"].call(json.dumps({"name": "facts"})).startswith(
         "ERROR:"
     )
+
+
+# --- tags (Phase 59) ----------------------------------------------------
+
+
+def test_tags_write_and_query(store: MemoryStore) -> None:
+    store.write("a", "alpha", tags=["work", "Project-X"])
+    store.write("b", "beta", tags=["home"])
+    store.write("c", "gamma", tags=["work"])
+    assert store.tags_of("a") == ("work", "project-x")  # normalised
+    assert {e.name for e in store.by_tag("work")} == {"a", "c"}
+    assert {e.name for e in store.by_tag("WORK")} == {"a", "c"}  # case-insensitive
+    assert store.all_tags() == ["home", "project-x", "work"]
+
+
+def test_read_strips_tags_marker(store: MemoryStore) -> None:
+    store.write("a", "the body text", tags=["x", "y"])
+    body = store.read("a")
+    assert "the body text" in body
+    assert "tags:" not in body  # marker hidden from the model
+    # but the entry still carries the tags
+    assert store.list()[0].tags == ("x", "y")
+
+
+def test_summary_ignores_tags_marker(store: MemoryStore) -> None:
+    store.write("a", "real first line\nmore", tags=["t1"])
+    assert store.list()[0].summary == "real first line"
+
+
+def test_content_edit_preserves_tags(store: MemoryStore) -> None:
+    store.write("a", "v1", tags=["keep"])
+    store.write("a", "v2")  # no tags arg → preserve
+    assert store.tags_of("a") == ("keep",)
+    assert "v2" in store.read("a")
+
+
+def test_empty_tags_clears(store: MemoryStore) -> None:
+    store.write("a", "x", tags=["gone"])
+    store.write("a", "x", tags=[])  # explicit clear
+    assert store.tags_of("a") == ()
+
+
+def test_legacy_untagged_memory(store: MemoryStore, tmp_path: Path) -> None:
+    # A file written without the marker (pre-0.26 memory) parses as tag-less.
+    (tmp_path / "old.md").write_text("# Old\nlegacy body\n", encoding="utf-8")
+    entry = next(e for e in store.list() if e.name == "old")
+    assert entry.tags == ()
+
+
+def test_format_for_prompt_shows_tags(store: MemoryStore) -> None:
+    store.write("p", "notes", tags=["work"])
+    assert "[work]" in store.format_for_prompt()
+
+
+def test_tool_tags_roundtrip(store: MemoryStore) -> None:
+    out = REGISTRY["remember"].call(
+        json.dumps({"name": "t", "content": "tagged", "tags": "work, urgent"})
+    )
+    assert "tags: work, urgent" in out
+    tagged = json.loads(REGISTRY["recall_by_tag"].call(json.dumps({"tag": "urgent"})))
+    assert any(e["name"] == "t" for e in tagged)
+    listed = json.loads(REGISTRY["list_memories"].call("{}"))
+    entry = next(e for e in listed if e["name"] == "t")
+    assert entry["tags"] == ["work", "urgent"]

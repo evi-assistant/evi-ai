@@ -28,11 +28,40 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _MAX_NAME_LEN = 64
 _MAX_CONTENT_BYTES = 64 * 1024
 
+# Tags are stored as an invisible trailing HTML comment so they don't show in
+# rendered markdown, don't disturb the first-line summary, and leave untagged
+# legacy memories parsing cleanly as tag-less.
+_TAGS_RE = re.compile(r"(?im)^<!--\s*tags:\s*(.*?)\s*-->\s*$")
+
+
+def _normalize_tags(tags) -> tuple[str, ...]:
+    """Lower-case, strip, dedupe (order-preserving), drop empties."""
+    seen: dict[str, None] = {}
+    for t in tags or ():
+        t = str(t).strip().lower()
+        if t:
+            seen.setdefault(t, None)
+    return tuple(seen)
+
+
+def _parse_tags(text: str) -> tuple[str, ...]:
+    m = _TAGS_RE.search(text)
+    return _normalize_tags(m.group(1).split(",")) if m else ()
+
+
+def _strip_tags_marker(text: str) -> str:
+    return _TAGS_RE.sub("", text).rstrip()
+
+
+def _tags_marker(tags: tuple[str, ...]) -> str:
+    return f"<!-- tags: {', '.join(tags)} -->"
+
 
 @dataclass(frozen=True)
 class MemoryEntry:
     name: str
     summary: str  # first non-empty line, used in the index
+    tags: tuple[str, ...] = ()
 
 
 class MemoryStore:
@@ -58,16 +87,40 @@ class MemoryStore:
         for p in sorted(self.root.glob("*.md")):
             if p.name == INDEX_FILE.name:
                 continue
-            entries.append(MemoryEntry(name=p.stem, summary=_first_line(p)))
+            try:
+                text = p.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                text = ""
+            entries.append(
+                MemoryEntry(name=p.stem, summary=_summary(text), tags=_parse_tags(text))
+            )
         return entries
 
     def read(self, name: str) -> str:
+        """Return the memory body (the tags marker is metadata, stripped out)."""
         path = self._path_for(name)
         if not path.is_file():
             raise KeyError(name)
-        return path.read_text(encoding="utf-8")
+        return _strip_tags_marker(path.read_text(encoding="utf-8")) + "\n"
 
-    def write(self, name: str, content: str) -> Path:
+    def tags_of(self, name: str) -> tuple[str, ...]:
+        path = self._path_for(name)
+        if not path.is_file():
+            return ()
+        return _parse_tags(path.read_text(encoding="utf-8"))
+
+    def by_tag(self, tag: str) -> list[MemoryEntry]:
+        """All entries carrying `tag` (case-insensitive)."""
+        want = tag.strip().lower()
+        return [e for e in self.list() if want in e.tags]
+
+    def all_tags(self) -> list[str]:
+        tags: set[str] = set()
+        for e in self.list():
+            tags.update(e.tags)
+        return sorted(tags)
+
+    def write(self, name: str, content: str, tags=None) -> Path:
         self._validate_name(name)
         if len(content.encode("utf-8")) > _MAX_CONTENT_BYTES:
             raise ValueError(
@@ -76,7 +129,17 @@ class MemoryStore:
         ensure_dirs()
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._path_for(name)
-        path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        body = _strip_tags_marker(content)
+        # tags=None preserves whatever's already on disk (a content edit
+        # shouldn't silently drop tags); tags=[] clears them.
+        if tags is None:
+            new_tags = self.tags_of(name) if path.is_file() else ()
+        else:
+            new_tags = _normalize_tags(tags)
+        out = body
+        if new_tags:
+            out += "\n\n" + _tags_marker(new_tags)
+        path.write_text(out.rstrip() + "\n", encoding="utf-8")
         self._rebuild_index()
         return path
 
@@ -135,7 +198,8 @@ class MemoryStore:
             return ""
         lines = ["## Memory index", ""]
         for e in entries:
-            lines.append(f"- **{e.name}** — {e.summary}")
+            suffix = f"  _[{', '.join(e.tags)}]_" if e.tags else ""
+            lines.append(f"- **{e.name}** — {e.summary}{suffix}")
         lines.append("")
         lines.append("Use `recall(name)` to fetch full contents.")
         return "\n".join(lines)
@@ -163,16 +227,25 @@ class MemoryStore:
             return
         lines = ["# eVi memory index", ""]
         for e in entries:
-            lines.append(f"- `{e.name}` — {e.summary}")
+            suffix = f"  [{', '.join(e.tags)}]" if e.tags else ""
+            lines.append(f"- `{e.name}` — {e.summary}{suffix}")
         index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _summary(text: str) -> str:
+    """First meaningful line of a memory body, for the index/summary."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("<!--"):
+            continue  # skip blanks + the tags marker / other comments
+        line = line.lstrip("#").strip()
+        if line:
+            return line[:160]
+    return "(empty)"
 
 
 def _first_line(path: Path) -> str:
     try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip().lstrip("#").strip()
-            if line:
-                return line[:160]
+        return _summary(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
-        pass
-    return "(empty)"
+        return "(empty)"
