@@ -597,6 +597,7 @@ def create_app() -> FastAPI:
             memory = MemoryStore() if toggles.get("memory") else None
             skills = SkillStore() if toggles.get("skills") else None
             from evi.guardrails import Guardrails
+            from evi.transcripts import TranscriptStore
 
             guardrails = Guardrails.load()
             agent = Agent(
@@ -606,9 +607,25 @@ def create_app() -> FastAPI:
                 memory=memory,
                 skills=skills,
                 guardrails=guardrails if guardrails.enabled else None,
-                # permission_callback gets attached per-request so it sees
-                # the right SSE enqueue function.
+                # Persist per-turn so a chat survives a server/app restart, and
+                # write under the CLIENT's session id so the transcript file
+                # matches the tab. permission_callback is attached per-request.
+                transcripts=TranscriptStore() if toggles.get("transcripts") else None,
+                session_id=session_id,
             )
+            # Revive history from disk if this session was seen before (e.g. the
+            # desktop app was closed + reopened). The composed system prompt at
+            # index 0 stays; everything after is rebuilt from the transcript.
+            try:
+                from evi.sessions import find_session, history_from_transcript
+
+                path = find_session(session_id)
+                if path is not None:
+                    restored = history_from_transcript(path)
+                    if restored:
+                        agent.history = [agent.history[0], *restored]
+            except Exception:  # noqa: BLE001
+                pass
             sess = WebSession(agent=agent)
             sessions[session_id] = sess
         return sess
@@ -1172,13 +1189,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/session/{session_id}/history")
     def session_history(session_id: str) -> dict[str, object]:
-        """Return the session's full history so the browser can rebuild
-        state after a reload."""
-        sess = sessions.get(session_id)
-        if sess is None:
-            raise HTTPException(404, "no such session")
+        """Return the session's history so the browser can rebuild state after a
+        reload. Uses get_session so a session that's only on disk (e.g. the
+        desktop app was reopened) is revived from its transcript rather than
+        404'ing into a blank chat."""
+        sess = get_session(session_id)
         # Strip the bulky image_url data URLs from any multipart user content
         # so the response stays small. The agent still has them in memory.
+        # NB: the system message at index 0 is kept so `index` stays aligned
+        # with the agent's history (edit/branch use it); the client skips it.
         cleaned: list[dict] = []
         for i, msg in enumerate(sess.agent.history):
             content = msg.get("content")
