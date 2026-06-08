@@ -260,6 +260,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/plan", "next turn runs in plan-only mode (no tools)"),
         ("/auto [on|off]", "auto-approve every tool call for this session"),
         ("/compact", "summarise older history into one note to free context"),
+        ("/context, /ctx", "show where the context window is being spent"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
         ("/effort [low|medium|high|max]", "set reasoning effort"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
@@ -643,8 +644,39 @@ def _handle_auto(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
     return "continue"
 
 
+def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """Show where the context window is being spent (Phase 88)."""
+    from evi.context_report import BUCKETS, context_breakdown
+
+    rep = context_breakdown(agent.history, agent.config.llm.context_size or 0)
+    used, ceiling, pct = rep["used"], rep["ceiling"], rep["pct"]
+    color = "red" if pct >= 85 else "yellow" if pct >= 70 else "green"
+    head = f"[bold]Context[/bold] — {rep['messages']} messages, ~{used:,} tokens"
+    if ceiling:
+        head += f" of {ceiling:,} ([{color}]{pct}%[/{color}])"
+    else:
+        head += " [dim](no llm.context_size set)[/dim]"
+    console.print(head)
+
+    labels = {"system": "system prompt", "user": "you",
+              "assistant": "assistant", "tools": "tools"}
+    width = 24
+    for b in BUCKETS:
+        toks = rep["buckets"][b]
+        share = rep["pct_of_used"][b]
+        fill = (share * width) // 100
+        bar = "█" * fill + "·" * (width - fill)
+        console.print(
+            f"  [cyan]{labels[b]:<14}[/cyan] [dim]{bar}[/dim] "
+            f"{toks:,} [dim]({share}%)[/dim]"
+        )
+    return "continue"
+
+
 _BUILTINS: dict[str, callable] = {
     "help": _handle_help,
+    "context": _handle_context,
+    "ctx": _handle_context,
     "?": _handle_help,
     "reset": _handle_reset,
     "exit": _handle_exit,

@@ -247,7 +247,9 @@ locally and ship once that clears.
   orchestration format (beyond recipes + parallel research). **L.**
 - **Phase 87 — cross-device session handoff** — continue a live session from
   another device. **M.**
-- **Phase 88 — context-window visualization** — a richer view than the chip. **S.**
+- **Phase 88 — context-window visualization** — **✅ shipped (local)**: `/context`
+  (`/ctx`) in the REPL and a click-the-chip popover in the web UI break tokens
+  down by system / you / assistant / tools (`/api/session/{id}/context`).
 - **Phase 89 — OpenTelemetry / metrics** — opt-in traces/metrics export. **M.**
 - Smaller: long-context awareness in the model registry · `/recent` REPL history
   · deep links (`evi://`).
