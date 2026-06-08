@@ -2245,6 +2245,53 @@ def recipe_run(
 
 
 @app.command()
+def run(
+    prompt: str = typer.Argument(None, help="The prompt. If omitted, read from stdin."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+    mode: str = typer.Option("", "--mode", "-m", help="Tool preset: chat | cowork | code."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Auto-approve all tool calls (unattended)."
+    ),
+) -> None:
+    """Headless: run a single prompt non-interactively and print the result.
+
+    text → the final answer on stdout. json → {text, tools, usage, error}.
+    Without --yes, tools that aren't in your auto-approve list are denied (so a
+    scripted run never blocks on a prompt). Reads the prompt from stdin if
+    omitted: `echo "summarise README.md" | evi run -m code -y`."""
+    import sys as _sys
+
+    from evi import headless as _hl
+
+    text = (prompt if prompt is not None else _sys.stdin.read()).strip()
+    if not text:
+        console.print("[red]no prompt given[/red]")
+        raise typer.Exit(2)
+
+    agent = _build_agent()
+    if mode:
+        from evi.modes import mode_tools
+
+        agent.tools = {t.name: t for t in mode_tools(mode)}
+    if yes:
+        agent.enable_auto_all()
+    else:
+        # Non-interactive: deny tools not already auto-approved rather than
+        # block on a permission prompt that no one can answer.
+        agent.permission_callback = lambda *a, **k: False
+        agent.permission_batch_callback = None
+
+    res = _hl.run_headless(agent, text)
+    if format == "json":
+        print(_hl.to_json(res))
+        return
+    if res.error:
+        print(f"error: {res.error}", file=_sys.stderr)
+        raise typer.Exit(1)
+    print(res.text)
+
+
+@app.command()
 def rewind(
     seq: int = typer.Argument(
         0, help="Undo file writes from this checkpoint seq onward (0 = just the latest)."
