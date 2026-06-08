@@ -74,6 +74,48 @@ def run_subagent(
     return result
 
 
+def run_subagents_parallel(
+    tasks: list[str],
+    *,
+    system_prompt: str,
+    tool_categories: Iterable[str] = (),
+    max_turns: int = 6,
+    max_workers: int = 4,
+) -> list[tuple[str, str]]:
+    """Run several subagents concurrently and return [(task, result), …] in the
+    original order.
+
+    Each task gets its own scoped Agent via `run_subagent`. Wall-clock wins come
+    from overlapping the orchestration + tool calls; note that a single local
+    backend serialises the actual model inference (one model, one GPU), so the
+    big speedups are on tool-heavy work or a remote / multi-GPU backend.
+    """
+    import concurrent.futures as _futures
+
+    if not tasks:
+        return []
+    results: list[tuple[str, str]] = [(t, "") for t in tasks]
+    workers = min(max_workers, len(tasks)) or 1
+    with _futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        fut_to_i = {
+            ex.submit(
+                run_subagent,
+                system_prompt=system_prompt,
+                task=task,
+                tool_categories=tool_categories,
+                max_turns=max_turns,
+            ): i
+            for i, task in enumerate(tasks)
+        }
+        for fut in _futures.as_completed(fut_to_i):
+            i = fut_to_i[fut]
+            try:
+                results[i] = (tasks[i], fut.result())
+            except Exception as exc:  # noqa: BLE001
+                results[i] = (tasks[i], f"ERROR: {type(exc).__name__}: {exc}")
+    return results
+
+
 # Pre-baked subagent personalities. New ones can be added without changing
 # the tool-layer dispatch — see evi/tools/subagent.py.
 SUBAGENT_PROFILES: dict[str, dict[str, object]] = {
