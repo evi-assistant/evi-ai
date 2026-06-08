@@ -3,6 +3,26 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.28.0] — 2026-06-08
+
+### Added
+
+- **Session modes — Chat / Cowork / Code** — a segmented control in the header
+  (like Claude Desktop) that gates which tools a session can use: Chat (memory +
+  skills), Cowork (+ files, web, calendar, images, PDF), Code (+ code, shell,
+  git, subagents). Switching hot-swaps the live agent's tools; the choice
+  persists and follows tab switches. New `/api/modes` + `/api/session/{id}/mode`.
+
+### CI
+
+- **desktop-release** now warms the Tauri Windows bundler cache with retries
+  before the release build, so transient `http status: 504` failures on the
+  bundler's toolchain download self-heal (the Rust compile is cached, so the
+  retries are cheap). Desktop 0.2.6/0.2.7 builds were lost to that outage; this
+  release supersedes them.
+
+Desktop → 0.2.8.
+
 ## [0.27.0] — 2026-06-08
 
 ### Added
