@@ -2291,6 +2291,58 @@ def run(
     print(res.text)
 
 
+plugin_app = typer.Typer(help="Plugins — installable bundles of slash commands.")
+app.add_typer(plugin_app, name="plugin")
+
+
+@plugin_app.command("add")
+def plugin_add(
+    source: str = typer.Argument(..., help="Local directory or git URL."),
+    name: str = typer.Option("", "--name", help="Override the plugin name."),
+) -> None:
+    """Install a plugin from a local directory or a git URL."""
+    from evi import plugins
+
+    try:
+        pname = plugins.install(source, name=name or None)
+    except plugins.PluginError as exc:
+        console.print(f"[red]install failed:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]installed[/green] {pname}\n"
+        f"[dim]its commands are now[/dim] [cyan]/{pname}:<command>[/cyan] "
+        f"[dim](see `evi plugin list`)[/dim]"
+    )
+
+
+@plugin_app.command("list")
+def plugin_list() -> None:
+    """List installed plugins."""
+    from evi import plugins
+
+    items = plugins.list_plugins()
+    if not items:
+        console.print(
+            "[dim]no plugins. Add one with:[/dim] [cyan]evi plugin add <dir|git-url>[/cyan]"
+        )
+        return
+    for p in items:
+        ver = f" [dim]v{p.version}[/dim]" if p.version else ""
+        desc = f" — {p.description}" if p.description else ""
+        console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({p.commands} cmds)[/dim]{desc}")
+
+
+@plugin_app.command("remove")
+def plugin_remove(name: str) -> None:
+    """Remove an installed plugin."""
+    from evi import plugins
+
+    if not plugins.remove(name):
+        console.print(f"[red]no such plugin:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
 @app.command()
 def rewind(
     seq: int = typer.Argument(
