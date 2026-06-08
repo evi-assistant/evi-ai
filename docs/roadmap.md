@@ -167,14 +167,14 @@ choice persists and follows tab switches. `evi/modes.py` + `/api/modes` +
 - Smaller: long-context model awareness in the registry; `/recent` prompt
   history in the REPL.
 
-## Candidate phases — Claude Code parity review (2026-06-08)
+## Claude Code parity phases — ✅ all shipped (0.29.0 / desktop 0.2.9)
 
 A pass over the [Claude Code docs](https://code.claude.com/docs/en/overview)
-surfaced these gaps. Each is a genuine *net-new* capability (eVi already has the
-agentic loop, subagents + parallel research, MCP client/publish, hooks,
-scheduler, skills, memory + tags, worktrees, routing, guardrails, vuln scanning,
-voice, computer-use, custom commands, recipes, and session modes). Ordered by
-value × fit with eVi's local-first, single-user, privacy-first stance.
+surfaced these gaps; **all eight shipped in 0.29.0** (see CHANGELOG for details).
+Each was a genuine *net-new* capability (eVi already had the agentic loop,
+subagents + parallel research, MCP client/publish, hooks, scheduler, skills,
+memory + tags, worktrees, routing, guardrails, vuln scanning, voice,
+computer-use, custom commands, recipes, and session modes).
 
 - **Phase 64 — File checkpointing + rewind** — **M**. Snapshot files before each
   tool edit; `/rewind` (CLI + web) restores files and/or the conversation to a
