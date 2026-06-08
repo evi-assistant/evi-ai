@@ -10,6 +10,7 @@ from evi.sessions import (
     find_session,
     history_from_transcript,
     list_sessions,
+    most_recent_session_id,
 )
 
 
@@ -93,3 +94,20 @@ def test_history_preserves_tool_calls(tmp_path: Path) -> None:
     ])
     history = history_from_transcript(f)
     assert history[0]["tool_calls"] == tcs
+
+
+def test_most_recent_session_by_timestamp(tmp_path: Path) -> None:
+    now = time.time()
+    # "aaa" is lexically first but older; "bbb" is newer — most_recent must
+    # pick by timestamp, not filename order.
+    _write_session(tmp_path, "2026-05-20", "bbb", [
+        {"role": "user", "content": "new", "ts": now},
+    ])
+    _write_session(tmp_path, "2026-05-19", "aaa", [
+        {"role": "user", "content": "old", "ts": now - 9999},
+    ])
+    assert most_recent_session_id(root=tmp_path) == "bbb"
+
+
+def test_most_recent_session_empty(tmp_path: Path) -> None:
+    assert most_recent_session_id(root=tmp_path) is None
