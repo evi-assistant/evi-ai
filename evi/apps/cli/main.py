@@ -711,6 +711,12 @@ def _run_repl(agent: Agent) -> None:
     )
 
     while True:
+        # Optional customizable status line (off by default).
+        from evi.statusline import status_line
+
+        line = status_line(agent, agent.config)
+        if line:
+            console.print(line, style="dim", markup=False, highlight=False)
         bits: list[str] = ["[bold green]you"]
         # Context usage chip — only when we have a known ceiling.
         used, ceiling = agent.token_usage()

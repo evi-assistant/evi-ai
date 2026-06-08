@@ -189,6 +189,20 @@ class TelemetrySettings:
 
 
 @dataclass
+class StatusLineSettings:
+    """Customizable chat-REPL status line (off by default). See evi/statusline.py.
+
+    `format` tokens: {model} {used} {ceiling} {pct} {branch} {goal} {effort}
+    {fast}. `command` (optional) runs a shell command with the state as JSON on
+    stdin and uses its stdout, overriding `format`.
+    """
+
+    enabled: bool = False
+    format: str = "{model} · {pct}% ctx · {branch}{goal}{fast}"
+    command: str = ""
+
+
+@dataclass
 class ToolToggles:
     fs: bool = True
     code: bool = True
@@ -247,6 +261,7 @@ class Config:
     auto: AutoSettings = field(default_factory=AutoSettings)
     web: WebSettings = field(default_factory=WebSettings)
     telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
+    statusline: StatusLineSettings = field(default_factory=StatusLineSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -273,6 +288,7 @@ class Config:
             auto=AutoSettings(**data.get("auto", {})),
             web=WebSettings(**data.get("web", {})),
             telemetry=TelemetrySettings(**data.get("telemetry", {})),
+            statusline=StatusLineSettings(**data.get("statusline", {})),
         )
 
     def save(self) -> None:
