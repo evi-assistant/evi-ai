@@ -20,10 +20,52 @@ from __future__ import annotations
 
 import fnmatch
 import json
+from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 _EDIT_CATEGORIES = ("fs", "code")
 VALID_MODES = ("ask", "accept_edits", "plan", "yolo")
+
+
+def _under_trusted_dir(values: list[str], trusted_dirs: Iterable[str]) -> bool:
+    """True if any string arg resolves to a path inside a trusted directory."""
+    roots: list[Path] = []
+    for d in trusted_dirs or ():
+        try:
+            roots.append(Path(d).expanduser().resolve())
+        except (OSError, ValueError):
+            continue
+    if not roots:
+        return False
+    for v in values:
+        try:
+            p = Path(v).expanduser().resolve()
+        except (OSError, ValueError):
+            continue
+        for r in roots:
+            try:
+                if p == r or p.is_relative_to(r):
+                    return True
+            except (OSError, ValueError):
+                continue
+    return False
+
+
+def _host_trusted(values: list[str], trusted_domains: Iterable[str]) -> bool:
+    """True if any string arg is a URL whose host matches a trusted domain
+    (exact or a subdomain of it)."""
+    domains = [d.lower().lstrip(".") for d in (trusted_domains or ()) if d.strip()]
+    if not domains:
+        return False
+    for v in values:
+        host = (urlparse(v).hostname or "").lower()
+        if not host:
+            continue
+        for d in domains:
+            if host == d or host.endswith("." + d):
+                return True
+    return False
 
 
 def _arg_values(tool_args: str | dict) -> list[str]:
@@ -62,6 +104,8 @@ def decide(
     tool_name: str,
     tool_category: str,
     tool_args: str | dict,
+    trusted_dirs: Iterable[str] = (),
+    trusted_domains: Iterable[str] = (),
 ) -> str:
     """Return 'allow', 'deny', or 'ask' for one tool call."""
     if mode == "yolo":
@@ -72,11 +116,16 @@ def decide(
     values = _arg_values(tool_args)
     for rule in rules or ():
         action = _rule_action(rule, tool_name, values)
-        if action:  # first match wins (deny or allow)
+        if action:  # first match wins (deny or allow); explicit deny beats trust
             return action
 
     if mode == "accept_edits" and tool_category in _EDIT_CATEGORIES:
         return "allow"
     if tool_category in set(auto_approve or ()):
+        return "allow"
+    # Trusted scopes: files under a trusted dir, or web fetches to a trusted host.
+    if tool_category in _EDIT_CATEGORIES and _under_trusted_dir(values, trusted_dirs):
+        return "allow"
+    if tool_category == "web" and _host_trusted(values, trusted_domains):
         return "allow"
     return "ask"

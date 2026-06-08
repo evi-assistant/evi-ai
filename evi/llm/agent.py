@@ -509,6 +509,8 @@ class Agent:
             tool.name,
             tool.category,
             args_json,
+            getattr(auto, "trusted_dirs", []) or [],
+            getattr(auto, "trusted_domains", []) or [],
         )
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:

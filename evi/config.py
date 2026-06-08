@@ -248,6 +248,10 @@ class AutoSettings:
     )
     mode: str = "ask"  # ask | accept_edits | plan | yolo
     rules: list[str] = field(default_factory=list)
+    # Auto-approve fs/code tools whose path is under one of these dirs, and
+    # web fetches to one of these hosts — without listing the whole category.
+    trusted_dirs: list[str] = field(default_factory=list)
+    trusted_domains: list[str] = field(default_factory=list)
 
 
 @dataclass

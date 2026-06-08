@@ -2066,6 +2066,10 @@ initModes();
         { type:'auto-approve', section:'auto', key:'auto_approve' },
         { type:'lines', section:'auto', key:'rules', label:'Rules (one per line)',
           help:'allow|deny <tool-glob> [arg-glob] — e.g. "deny shell rm*", "allow web", "deny fs *.env"' },
+        { type:'lines', section:'auto', key:'trusted_dirs', label:'Trusted directories',
+          help:'Auto-approve file tools whose path is under one of these dirs (one per line).' },
+        { type:'lines', section:'auto', key:'trusted_domains', label:'Trusted domains',
+          help:'Auto-approve web fetches to these hosts (one per line, e.g. docs.python.org).' },
       ] },
     { id:'context', title:'Context', blurb:'When eVi compacts long conversations.', fields:[
       { type:'int', section:'llm', key:'compact_after_messages', label:'Compact after N messages', help:'0 disables.' },

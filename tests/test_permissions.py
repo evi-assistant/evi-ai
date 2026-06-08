@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from evi.config import AutoSettings, Config
 from evi.llm.agent import Agent
 from evi.permissions import decide
@@ -72,3 +74,42 @@ def test_agent_auto_all_overrides_plan():
     a = _agent(AutoSettings(mode="plan"))
     a.enable_auto_all()
     assert a._permission_decision(_tool(), "{}") == "allow"
+
+
+# --- trusted dirs + domains (Phase 77) ----------------------------------
+
+
+def test_trusted_dir(tmp_path):
+    inside = tmp_path / "proj" / "src"
+    inside.mkdir(parents=True)
+    trusted = [str(tmp_path / "proj")]
+    args_in = json.dumps({"path": str(inside / "f.py"), "content": "x"})
+    args_out = json.dumps({"path": str(tmp_path / "other" / "f.py")})
+    assert decide("ask", [], [], "write_file", "fs", args_in, trusted_dirs=trusted) == "allow"
+    assert decide("ask", [], [], "write_file", "fs", args_out, trusted_dirs=trusted) == "ask"
+
+
+def test_trusted_domain():
+    trusted = ["docs.python.org"]
+    fetch = json.dumps({"url": "https://docs.python.org/3/library/os.html"})
+    other = json.dumps({"url": "https://evil.example.com/x"})
+    assert decide("ask", [], [], "web_fetch", "web", fetch, trusted_domains=trusted) == "allow"
+    assert decide("ask", [], [], "web_fetch", "web", other, trusted_domains=trusted) == "ask"
+    # subdomain matches
+    sub = json.dumps({"url": "https://api.docs.python.org/x"})
+    assert decide("ask", [], [], "web_fetch", "web", sub, trusted_domains=trusted) == "allow"
+
+
+def test_deny_rule_beats_trusted_dir(tmp_path):
+    trusted = [str(tmp_path)]
+    args = json.dumps({"path": str(tmp_path / "secret.env")})
+    # explicit deny rule wins over the trusted dir
+    assert decide("ask", [], ["deny write_file *.env"], "write_file", "fs", args,
+                  trusted_dirs=trusted) == "deny"
+
+
+def test_agent_uses_trusted_dirs(tmp_path):
+    a = _agent(AutoSettings(mode="ask", trusted_dirs=[str(tmp_path)]))
+    args = json.dumps({"path": str(tmp_path / "x.py"), "content": "y"})
+    tool = _tool(name="write_file", category="fs")
+    assert a._permission_decision(tool, args) == "allow"
