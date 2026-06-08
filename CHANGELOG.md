@@ -3,6 +3,31 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.29.0] — 2026-06-08
+
+### Added — Claude Code parity (phases 64–71)
+
+- **File checkpointing + rewind** — every `write_file` is journalled with the
+  file's prior state; `evi rewind` / `/rewind` / File→Undo File Change restore
+  modified files and delete newly-created ones.
+- **Headless mode** — `evi run "<prompt>" [--format json] [--mode …] [--yes]`
+  for scripts/CI/cron; prints text or a JSON envelope.
+- **Permission modes + rules** — `auto.mode` (ask/accept_edits/plan/yolo) and a
+  first-match allow/deny rule list (`deny shell rm*`, `deny write_file *.env`…),
+  surfaced in Settings → Permissions.
+- **Sandboxed code execution** — `run_python` can run under bwrap/sandbox-exec
+  (read-only FS, no network) when `[tools] sandbox` is on.
+- **Plugins** — `evi plugin add/list/remove` install command bundles from a
+  local dir or git; the command loader scans them as `/<plugin>:<command>`.
+- **Output styles** — switchable response personas (concise/explanatory/teacher
+  or `~/.evi/styles/*.md`) via `[llm] output_style`, `evi style`, and Settings.
+- **Multi-agent code review** — `evi review --multi` fans out parallel reviewers
+  (correctness/security/performance/tests) and combines them.
+- **Session continue/fork** — `evi sessions continue` (resume latest) and
+  `evi sessions fork <id>` (diverge into a new session).
+
+Desktop → 0.2.9.
+
 ## [0.28.0] — 2026-06-08
 
 ### Added
