@@ -134,7 +134,25 @@ A Claude-Desktop-style control surface (the "UI enhancements" detour).
 - ✅ **Background tool execution** — **shipped (0.26.0, Phase 60)**: ToolProgress
   heartbeats for slow tools (CLI + web) instead of an apparent hang; `long=True`
   tools announce immediately.
+- ✅ **Parallel multi-agent research** — **shipped (0.27.0, Phase 61)**:
+  `parallel_research(tasks)` fans out up to 6 read-only Explore subagents
+  concurrently and combines their findings (`run_subagents_parallel`).
+- ✅ **Claude-Code-style slash commands** — **shipped (0.27.0, Phase 62)**:
+  `~/.evi/commands/*.md` now support frontmatter (description/argument-hint/
+  model), `$ARGUMENTS` + positional `$1..$9`, `@file` refs, and subdir
+  namespacing (`/git:commit`). See [commands.md](commands.md).
 - **Plugin loader** (`~/.evi/plugins/`) — **M**; drop-in user tools.
+
+### Phase 56b — desktop/settings polish — **✅ shipped (0.27.0 / desktop 0.2.7)**
+
+- Fixed File→Settings (and all native-menu→webview actions): the Rust bridge now
+  `eval`s `window.eviUI.handleMenu(id)` directly instead of emitting an event
+  the remote page wasn't listening for.
+- Settings → Model & Backend: a **System** panel (OS, GPU, VRAM, RAM,
+  driver/CUDA cc, inference mode) via `/api/system`, plus the
+  hardware-recommended model with an Ollama **Pull** button + progress bar.
+- Help → Check for Updates shows clear states (checking / up to date /
+  downloading).
 - **Multi-user web mode** — per-user auth/paths/permissions for small teams.
 - **Federation / inter-agent protocol** — eVi-to-eVi delegation across machines
   (pairs with profiles + remote backend).

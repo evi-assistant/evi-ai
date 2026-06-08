@@ -3,6 +3,34 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.27.0] — 2026-06-08
+
+### Added
+
+- **Parallel multi-agent research** — `parallel_research(tasks)` runs up to 6
+  read-only Explore subagents at once (one per sub-question) and combines their
+  findings for the main model to synthesize.
+- **Claude-Code-style custom slash commands** — `~/.evi/commands/*.md` gain
+  frontmatter (`description`/`argument-hint`/`model`), `$ARGUMENTS` + positional
+  `$1..$9`, `@file` inlining, and subdirectory namespacing (`/git:commit`). The
+  legacy `{args}` still works. See [docs/commands.md](docs/commands.md).
+- **System stats in Settings → Model & Backend** — OS, GPU, VRAM (total/free),
+  RAM, driver + CUDA compute capability, and inference mode (new `/api/system`),
+  plus the hardware-recommended model with a one-click Ollama **Pull** (progress
+  bar) or **Use**.
+
+### Fixed
+
+- **File → Settings (and other native menu items) did nothing** in the desktop
+  app — only the gear worked. The menu used `emit`, but withGlobalTauri's event
+  module isn't reliably injected on the remote (localhost) page, so no listener
+  was attached. The Rust bridge now `eval`s the JS handler directly.
+- **Help → Check for Updates** now shows clear states: checking / up to date /
+  downloading.
+
+Desktop → 0.2.7 (0.2.6 was skipped — its build hit a sustained transient CDN
+`504` on the Windows Tauri bundler; this release supersedes it).
+
 ## [0.26.0] — 2026-06-07
 
 ### Added — sync, recipes, memory tags, tool progress
