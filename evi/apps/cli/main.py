@@ -2057,6 +2057,66 @@ def route_preset(
         )
 
 
+sync_app = typer.Typer(help="Cross-machine sync of portable ~/.evi state (git).")
+app.add_typer(sync_app, name="sync")
+
+
+@sync_app.command("init")
+def sync_init(
+    remote: str = typer.Argument(
+        "", help="Git remote URL (e.g. git@github.com:you/evi-home.git). Optional."
+    ),
+) -> None:
+    """Set up sync in ~/.evi: init the repo + managed .gitignore (and the
+    remote, if given). Syncs memory/skills/profiles/commands/routes/mcp/hooks;
+    keeps config, secrets, models, and indices local."""
+    from evi import sync as sync_mod
+
+    try:
+        console.print(sync_mod.init(remote=remote or None))
+    except sync_mod.SyncError as exc:
+        console.print(f"[red]sync init failed:[/red] {exc}")
+        raise typer.Exit(1)
+
+
+@sync_app.command("push")
+def sync_push(
+    message: str = typer.Option("", "--message", "-m", help="Commit message."),
+) -> None:
+    """Commit local changes to the portable state and push to the remote."""
+    from evi import sync as sync_mod
+
+    try:
+        console.print(sync_mod.push(message=message or None))
+    except sync_mod.SyncError as exc:
+        console.print(f"[red]sync push failed:[/red] {exc}")
+        raise typer.Exit(1)
+
+
+@sync_app.command("pull")
+def sync_pull() -> None:
+    """Pull the latest portable state from the remote into ~/.evi."""
+    from evi import sync as sync_mod
+
+    try:
+        console.print(sync_mod.pull())
+    except sync_mod.SyncError as exc:
+        console.print(f"[red]sync pull failed:[/red] {exc}")
+        raise typer.Exit(1)
+
+
+@sync_app.command("status")
+def sync_status() -> None:
+    """Show the sync remote + working-tree status."""
+    from evi import sync as sync_mod
+
+    try:
+        console.print(sync_mod.status())
+    except sync_mod.SyncError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def setup() -> None:
     """Interactive first-run wizard. Detects backends, recommends a model,
