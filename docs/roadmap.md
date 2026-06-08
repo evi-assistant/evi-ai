@@ -153,6 +153,14 @@ A Claude-Desktop-style control surface (the "UI enhancements" detour).
   hardware-recommended model with an Ollama **Pull** button + progress bar.
 - Help → Check for Updates shows clear states (checking / up to date /
   downloading).
+
+### Phase 63 — session modes (Chat / Cowork / Code) — **✅ shipped (0.28.0 / desktop 0.2.8)**
+
+A header segmented control (à la Claude Desktop) that gates a session's tool
+set: **Chat** (memory + skills), **Cowork** (+ files/web/calendar/images/pdf),
+**Code** (+ code/shell/git/subagents). Hot-swaps the live agent's tools; the
+choice persists and follows tab switches. `evi/modes.py` + `/api/modes` +
+`/api/session/{id}/mode`.
 - **Multi-user web mode** — per-user auth/paths/permissions for small teams.
 - **Federation / inter-agent protocol** — eVi-to-eVi delegation across machines
   (pairs with profiles + remote backend).
