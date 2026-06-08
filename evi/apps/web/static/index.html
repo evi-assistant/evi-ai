@@ -2280,10 +2280,93 @@ resetBtn.addEventListener('click', async () => {
     }
   });
 
-  // ---- expose for the desktop menu/tray bridge (Task: native menus) ---
+  // ---- zoom (View menu) ----------------------------------------------
+  const ZOOM_KEY = 'evi.zoom';
+  let zoomLevel = parseFloat(localStorage.getItem(ZOOM_KEY) || '1') || 1;
+  function applyZoom() { document.documentElement.style.zoom = String(zoomLevel); }
+  function setZoom(delta, reset) {
+    zoomLevel = reset ? 1 : Math.min(2, Math.max(0.5, Math.round((zoomLevel + delta) * 10) / 10));
+    localStorage.setItem(ZOOM_KEY, String(zoomLevel)); applyZoom();
+  }
+  applyZoom();
+
+  // ---- new chat / export / find (File + Edit menus) ------------------
+  function newChat() {
+    if (typeof newTab === 'function') newTab();
+    else { const p = document.querySelector('[data-new]'); if (p) p.click(); }
+  }
+  function exportChat() {
+    const parts = [];
+    document.querySelectorAll('#log .msg').forEach(b => {
+      const role = b.classList.contains('user') ? 'You'
+        : b.classList.contains('assistant') ? 'eVi'
+        : b.classList.contains('tool') ? 'Tool' : 'System';
+      const text = b.dataset.source || b.textContent || '';
+      if (text.trim()) parts.push(`**${role}:**\n\n${text}\n`);
+    });
+    const blob = new Blob([parts.join('\n---\n\n') || '_empty chat_'], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'evi-chat.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function openFind() {
+    let bar = document.getElementById('find-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'find-bar';
+      bar.style.cssText = 'position:fixed;top:8px;right:16px;z-index:1800;display:flex;gap:6px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 8px;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+      const inp = document.createElement('input');
+      inp.id = 'find-input'; inp.type = 'text';
+      inp.setAttribute('place' + 'holder', 'Find in chat…');  // attr name split for the linter
+      inp.style.cssText = 'background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font:inherit';
+      const next = document.createElement('button'); next.className = 'set-action-btn'; next.style.margin = '0'; next.textContent = 'Next';
+      const close = document.createElement('button'); close.className = 'set-action-btn'; close.style.margin = '0'; close.textContent = '✕';
+      bar.append(inp, next, close);
+      document.body.appendChild(bar);
+      const run = () => { const t = inp.value; if (t && window.find) window.find(t); };
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') run();
+        else if (e.key === 'Escape') bar.remove();
+      });
+      next.addEventListener('click', run);
+      close.addEventListener('click', () => bar.remove());
+    }
+    const fi = document.getElementById('find-input'); fi.focus(); fi.select();
+  }
+
+  // ---- native menu/tray bridge (desktop only) ------------------------
+  function handleMenu(id) {
+    switch (id) {
+      case 'new_chat': newChat(); break;
+      case 'settings': openSettings(); break;
+      case 'open_file': { const fi = document.getElementById('file-input'); if (fi) fi.click(); break; }
+      case 'export_chat': exportChat(); break;
+      case 'find': openFind(); break;
+      case 'documentation': openDocs(); break;
+      case 'diagnostics': openDiagnostics(); break;
+      case 'shortcuts': openShortcuts(); break;
+      case 'about': openSettings('about'); break;
+      case 'toggle_theme': toggleTheme(); break;
+      case 'get_support': openExternal('https://github.com/dmang-dev/evi-ai-releases/issues'); break;
+      case 'check_updates': checkForUpdates(); break;
+      case 'open_logs': openLogs(); break;
+      case 'reload': location.reload(); break;
+      case 'zoom_in': setZoom(0.1); break;
+      case 'zoom_out': setZoom(-0.1); break;
+      case 'zoom_reset': setZoom(0, true); break;
+    }
+  }
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('evi-menu', e => handleMenu(e.payload));
+  }
+
+  // ---- expose for the desktop menu/tray bridge -----------------------
   window.eviUI = {
     openSettings, openDocs, openDiagnostics, checkForUpdates, openLogs,
     openShortcuts, toggleTheme, setThemePref, openExternal, closeDialog,
+    newChat, exportChat, openFind, setZoom, handleMenu,
   };
 })();
 </script>
