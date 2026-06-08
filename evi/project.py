@@ -15,11 +15,20 @@ goal is "always-on context", not "stuff every README into every turn".
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover
+    import tomli as tomllib
 
-PROJECT_FILENAMES = ("EVI.md", "evi.md")  # case-insensitive on win, but be explicit
+
+# EVI.md is eVi's own; AGENTS.md is the emerging cross-tool standard. EVI.md
+# wins when both exist in the same directory.
+PROJECT_FILENAMES = ("EVI.md", "evi.md", "AGENTS.md", "agents.md")
+PROJECT_CONFIG_FILENAME = ".evi.toml"  # per-project config overlay
 _MAX_BYTES = 64 * 1024
 
 
@@ -68,3 +77,36 @@ def load_project_context(start: Path | None = None) -> ProjectContext | None:
     except UnicodeDecodeError:
         return None
     return ProjectContext(path=path, content=text)
+
+
+# --- per-project config overlay (Phase 74) ------------------------------
+
+
+def find_project_config(start: Path | None = None) -> Path | None:
+    """Walk up from `start` (default cwd) for a `.evi.toml` project config."""
+    cur: Path | None = (start or Path.cwd()).resolve()
+    while cur is not None:
+        candidate = cur / PROJECT_CONFIG_FILENAME
+        if candidate.is_file():
+            return candidate
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def load_project_config_overlay(start: Path | None = None) -> dict:
+    """Return the project `.evi.toml` parsed to a dict (empty if none).
+
+    Merged on top of the user config (and any active profile) by Config.load,
+    so a repo can pin its own model, tool toggles, permission rules, etc."""
+    path = find_project_config(start)
+    if path is None:
+        return {}
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}

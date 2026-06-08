@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evi.project import find_project_file, load_project_context
+from evi.project import (
+    find_project_config,
+    find_project_file,
+    load_project_config_overlay,
+    load_project_context,
+)
 
 
 def test_find_walks_up_to_ancestor(tmp_path: Path) -> None:
@@ -50,3 +55,49 @@ def test_load_truncates_oversize(tmp_path: Path) -> None:
 def test_load_skips_binary(tmp_path: Path) -> None:
     (tmp_path / "EVI.md").write_bytes(b"\xff\xfe\xfd not utf-8")
     assert load_project_context(start=tmp_path) is None
+
+
+# --- project config overlay + AGENTS.md (Phase 74) ----------------------
+
+
+def test_recognizes_agents_md(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("agent rules", encoding="utf-8")
+    ctx = load_project_context(start=tmp_path)
+    assert ctx is not None and "agent rules" in ctx.content
+
+
+def test_evi_md_wins_over_agents_md(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("generic", encoding="utf-8")
+    (tmp_path / "EVI.md").write_text("evi-specific", encoding="utf-8")
+    assert find_project_file(start=tmp_path).name == "EVI.md"
+
+
+def test_find_project_config_walks_up(tmp_path: Path) -> None:
+    (tmp_path / ".evi.toml").write_text("[llm]\ntemperature = 0.123\n", encoding="utf-8")
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    assert find_project_config(start=nested) == tmp_path / ".evi.toml"
+    # no .evi.toml anywhere up-tree → None
+    assert find_project_config(start=tmp_path.parent / "elsewhere-xyz") is None
+
+
+def test_load_project_config_overlay(tmp_path: Path) -> None:
+    (tmp_path / ".evi.toml").write_text(
+        "[llm]\ntemperature = 0.123\nmodel = 'proj-model'\n", encoding="utf-8"
+    )
+    overlay = load_project_config_overlay(start=tmp_path)
+    assert overlay["llm"]["temperature"] == 0.123
+    assert overlay["llm"]["model"] == "proj-model"
+    # walked up from a nested dir → still finds the ancestor's .evi.toml
+    nested = tmp_path / "deep" / "x"
+    nested.mkdir(parents=True)
+    assert load_project_config_overlay(start=nested)["llm"]["temperature"] == 0.123
+
+
+def test_config_load_applies_project_overlay(tmp_path: Path, monkeypatch) -> None:
+    from evi.config import Config
+
+    (tmp_path / ".evi.toml").write_text("[llm]\ntemperature = 0.123\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cfg = Config.load()
+    assert cfg.llm.temperature == 0.123  # project overlay wins
