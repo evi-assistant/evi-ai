@@ -2056,8 +2056,12 @@ initModes();
     ]},
     { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
       fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) }))
-        .concat([{ type:'bool', section:'tools', key:'sandbox', label:'Sandbox code execution',
-          help:'Run run_python under an OS sandbox (read-only FS, no network) where available (bwrap / sandbox-exec).' }]) },
+        .concat([
+          { type:'bool', section:'tools', key:'sandbox', label:'Sandbox code execution',
+            help:'Run run_python under an OS sandbox (read-only FS, no network) where available (bwrap / sandbox-exec).' },
+          { type:'lines', section:'tools', key:'mcp_allow', label:'MCP server allowlist',
+            help:'If non-empty, only these mcp.json server names load (one per line). Empty = all enabled servers.' },
+        ]) },
     { id:'permissions', title:'Permissions', blurb:'How tool calls are approved.',
       applies:'new-chat', fields:[
         { type:'select', section:'auto', key:'mode', label:'Permission mode',

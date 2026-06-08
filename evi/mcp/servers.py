@@ -36,6 +36,17 @@ class MCPServer:
     enabled: bool = True
 
 
+def filter_allowed(servers: list[MCPServer], allow) -> list[MCPServer]:
+    """Apply a consume-side allowlist. Empty/None `allow` → unchanged (the
+    manager still honours each server's `enabled`). Non-empty → keep only
+    servers whose name is in the allowlist, so a shared/synced mcp.json can be
+    gated per machine via `[tools] mcp_allow`."""
+    names = {n for n in (allow or ()) if n}
+    if not names:
+        return servers
+    return [s for s in servers if s.name in names]
+
+
 def load_servers(path: Path | None = None) -> list[MCPServer]:
     """Read `~/.evi/mcp.json`. Returns [] if the file is missing or empty.
 
