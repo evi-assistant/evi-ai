@@ -160,6 +160,10 @@ class BranchRequest(BaseModel):
     at_index: int
 
 
+class ModeRequest(BaseModel):
+    mode: str  # chat | cowork | code
+
+
 # --- full-config read/write (settings screen) ----------------------------
 #
 # Secret fields are never sent to the browser in the clear. GET returns the
@@ -282,6 +286,7 @@ class WebSession:
 
     agent: Agent
     pending: dict[str, PendingDecision] = field(default_factory=dict)
+    mode: str = "chat"  # Chat / Cowork / Code — gates the agent's tool set
 
 
 # ---- event serialization -------------------------------------------------
@@ -1055,6 +1060,31 @@ def create_app() -> FastAPI:
             "backend": cfg.llm.backend,
             "current_model": cfg.llm.model,
         }
+
+    @app.get("/api/modes")
+    def modes_list() -> dict[str, Any]:
+        """The session modes for the Chat/Cowork/Code switcher."""
+        from evi.modes import DEFAULT_MODE, MODES
+
+        return {
+            "modes": [
+                {"name": m.name, "label": m.label, "blurb": m.blurb} for m in MODES.values()
+            ],
+            "default": DEFAULT_MODE,
+        }
+
+    @app.post("/api/session/{session_id}/mode")
+    def session_set_mode(session_id: str, req: ModeRequest) -> dict[str, Any]:
+        """Set a session's mode, hot-swapping the agent's tool set so it takes
+        effect on the next turn (no new chat needed)."""
+        from evi.modes import mode_tools, resolve
+
+        sess = get_session(session_id)
+        mode = resolve(req.mode).name
+        sess.mode = mode
+        sess.agent.tools = {t.name: t for t in mode_tools(mode)}
+        return {"ok": True, "mode": mode,
+                "tools": sorted(t.name for t in sess.agent.tools.values())}
 
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
