@@ -119,3 +119,66 @@ def review_prompt(diff: str, *, label: str = "diff") -> str:
         f"\n(NOTE: diff was truncated at {_MAX_DIFF_BYTES // 1024} KB)"
     )
     return f"Please review the following {label}:{note}\n\n```diff\n{body}\n```"
+
+
+# --- multi-agent review (Phase 70) --------------------------------------
+#
+# Fan out one focused reviewer per lens (in parallel), then combine. Each lens
+# is baked into the task message (run_subagents_parallel shares one system
+# prompt across tasks), so a single generic reviewer prompt drives them all.
+
+MULTI_REVIEW_SYSTEM_PROMPT = (
+    "You are a senior engineer reviewing a code diff through ONE specific lens "
+    "(given in the task). Stay strictly within that lens. For each issue: the "
+    "file + line range (e.g. `foo.py:42-50`), a one-line problem, and a brief "
+    "fix. Skip stylistic nits. If nothing in your lens applies, say so plainly "
+    "— don't invent issues. You have read-only access to the working tree to "
+    "pull surrounding context."
+)
+
+REVIEW_LENSES: dict[str, str] = {
+    "correctness": (
+        "Lens: CORRECTNESS. Find logic bugs only — off-by-one, null/undefined, "
+        "race conditions, unhandled exceptions, wrong edge cases, broken control flow."
+    ),
+    "security": (
+        "Lens: SECURITY. Find vulnerabilities only — injection, auth bypass, secrets "
+        "in code/logs, TOCTOU, path traversal, unsafe deserialization, SSRF."
+    ),
+    "performance": (
+        "Lens: PERFORMANCE. Find efficiency problems only — N+1 patterns, unbounded "
+        "loops, I/O in hot paths, needless allocations, quadratic blow-ups."
+    ),
+    "tests": (
+        "Lens: TESTS. Assess test coverage only — is the new/changed behaviour tested? "
+        "Which edge cases or failure paths are missing? Suggest concrete test cases."
+    ),
+}
+
+
+def multi_review(
+    diff: str,
+    lenses: list[str] | None = None,
+    tool_categories: tuple[str, ...] = ("fs", "git", "index"),
+) -> str:
+    """Run one reviewer per lens in parallel and combine into one report."""
+    from evi.llm.subagent import run_subagents_parallel
+
+    chosen = lenses or list(REVIEW_LENSES)
+    body, truncated = truncate_diff(diff)
+    note = "" if not truncated else f"\n(NOTE: diff truncated at {_MAX_DIFF_BYTES // 1024} KB)"
+    tasks = [
+        f"{REVIEW_LENSES[lens]}{note}\n\nReview this diff:\n```diff\n{body}\n```"
+        for lens in chosen
+        if lens in REVIEW_LENSES
+    ]
+    results = run_subagents_parallel(
+        tasks,
+        system_prompt=MULTI_REVIEW_SYSTEM_PROMPT,
+        tool_categories=tool_categories,
+    )
+    blocks = [
+        f"## {lens.title()}\n\n{findings}"
+        for lens, (_, findings) in zip(chosen, results)
+    ]
+    return "# Multi-agent review\n\n" + "\n\n".join(blocks)

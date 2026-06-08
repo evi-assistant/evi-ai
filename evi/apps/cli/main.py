@@ -1133,6 +1133,11 @@ def review(
         False, "--no-tools",
         help="Run with tools disabled. Default: fs + git + index read-only tools enabled.",
     ),
+    multi: bool = typer.Option(
+        False, "--multi",
+        help="Fan out parallel reviewers (correctness · security · performance · tests) "
+             "and combine, instead of one pass.",
+    ),
 ) -> None:
     """Git-aware code review. Streams a focused critique to your terminal.
 
@@ -1158,6 +1163,17 @@ def review(
         raise typer.Exit(1)
     if not diff.strip():
         console.print("[dim](no changes to review)[/dim]")
+        return
+
+    if multi:
+        from evi.review import multi_review
+
+        cats = () if no_tools else ("fs", "git", "index")
+        console.print(
+            "[dim]running parallel reviewers "
+            "(correctness · security · performance · tests)…[/dim]"
+        )
+        console.print(Markdown(multi_review(diff, tool_categories=cats)))
         return
 
     # Build a scoped agent: same model + memory + skills, but with a
