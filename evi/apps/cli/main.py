@@ -2117,6 +2117,124 @@ def sync_status() -> None:
         raise typer.Exit(1)
 
 
+recipe_app = typer.Typer(help="Saved multi-turn workflows (recipes).")
+app.add_typer(recipe_app, name="recipe")
+
+
+def _print_turn(agent: Agent, prompt: str) -> None:
+    """Stream one agent turn to the console (text + tool activity)."""
+    in_thinking = False
+    for event in agent.chat(prompt):
+        if isinstance(event, ThinkingDelta):
+            if not in_thinking:
+                console.print("[dim italic]", end="")
+                in_thinking = True
+            console.print(event.text, end="", soft_wrap=True, highlight=False, style="dim italic")
+            continue
+        if in_thinking:
+            console.print("[/dim italic]", end="")
+            in_thinking = False
+        if isinstance(event, TextDelta):
+            console.print(event.text, end="", soft_wrap=True, highlight=False)
+        elif isinstance(event, ToolCall):
+            console.print(f"\n[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}")
+        elif isinstance(event, ToolResult):
+            preview = event.output if len(event.output) < 400 else event.output[:400] + "…"
+            console.print(f"[yellow]← result[/yellow] {preview}")
+        elif isinstance(event, Error):
+            console.print(f"\n[red]error:[/red] {event.message}")
+        elif isinstance(event, Done):
+            console.print()
+            break
+
+
+@recipe_app.command("list")
+def recipe_list() -> None:
+    """List saved recipes."""
+    from evi import recipes
+
+    recs = recipes.list_recipes()
+    if not recs:
+        console.print(
+            "[dim]no recipes. Create one with:[/dim] [cyan]evi recipe new <name>[/cyan]"
+        )
+        return
+    for r in recs:
+        desc = f" — {r.description}" if r.description else ""
+        console.print(f"  [bold]{r.name}[/bold] [dim]({len(r.steps)} steps)[/dim]{desc}")
+
+
+@recipe_app.command("show")
+def recipe_show(name: str) -> None:
+    """Print a recipe's steps."""
+    from evi import recipes
+
+    try:
+        rec = recipes.load_recipe(name)
+    except recipes.RecipeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    head = f"[bold]{rec.name}[/bold]" + (f" — {rec.description}" if rec.description else "")
+    console.print(head)
+    for i, step in enumerate(rec.steps, 1):
+        label = f" [dim]({step.label})[/dim]" if step.label else ""
+        console.print(f"  [cyan]{i}.[/cyan]{label} {step.prompt}")
+
+
+@recipe_app.command("new")
+def recipe_new(
+    name: str,
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing recipe."),
+) -> None:
+    """Write a starter recipe template to ~/.evi/recipes/<name>.toml."""
+    from evi import recipes
+
+    try:
+        path = recipes.create_recipe(name, overwrite=overwrite)
+    except recipes.RecipeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]created[/green] {path}\n"
+        f"[dim]edit it, then run:[/dim] [cyan]evi recipe run {recipes._slug(name)}[/cyan]"
+    )
+
+
+@recipe_app.command("run")
+def recipe_run(
+    name: str,
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Auto-approve every tool call (unattended run)."
+    ),
+) -> None:
+    """Run a recipe — its steps stream through one shared conversation."""
+    from evi import recipes
+
+    try:
+        rec = recipes.load_recipe(name)
+    except recipes.RecipeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    agent = _build_agent()
+    if yes:
+        agent.enable_auto_all()
+    console.print(
+        Panel.fit(
+            Text.assemble(
+                (f"recipe {rec.name} ", "bold cyan"), (f"· {len(rec.steps)} steps", "dim")
+            ),
+            border_style="cyan",
+        )
+    )
+    for i, step in enumerate(rec.steps, 1):
+        header = f"[bold cyan]Step {i}/{len(rec.steps)}[/bold cyan]"
+        if step.label:
+            header += f" [dim]· {step.label}[/dim]"
+        console.print(f"\n{header}\n[dim]> {step.prompt}[/dim]")
+        _print_turn(agent, step.prompt)
+    console.print("\n[green]recipe complete[/green]")
+
+
 @app.command()
 def setup() -> None:
     """Interactive first-run wizard. Detects backends, recommends a model,
