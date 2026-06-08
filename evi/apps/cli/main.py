@@ -3374,6 +3374,55 @@ def backup_restore(
     )
 
 
+finetune_app = typer.Typer(
+    help="Fine-tune dataset tools — curate transcripts into training data."
+)
+app.add_typer(finetune_app, name="finetune")
+
+
+@finetune_app.command("export")
+def finetune_export(
+    out: str = typer.Option(
+        "evi-finetune.jsonl", "--out", "-o", help="Output JSONL path."
+    ),
+    days: int = typer.Option(0, "--days", help="Only the last N days (0 = all)."),
+    limit: int = typer.Option(10000, "--limit", help="Max sessions to scan."),
+    min_turns: int = typer.Option(
+        1, "--min-turns", help="Skip sessions with fewer user turns."
+    ),
+    session: list[str] = typer.Option(
+        None, "--session", help="Only these session ids (repeatable)."
+    ),
+    system: str = typer.Option(
+        "", "--system", help="Prepend this system message to every example."
+    ),
+    include_tools: bool = typer.Option(
+        False, "--include-tools", help="Keep tool calls + results (default: drop)."
+    ),
+) -> None:
+    """Export stored sessions to a JSONL fine-tune dataset (one chat per line)."""
+    from evi import finetune
+
+    written, seen = finetune.export_dataset(
+        out,
+        sessions=session or None,
+        days=(days or None),
+        limit=limit,
+        min_user_turns=min_turns,
+        system=(system or None),
+        include_tools=include_tools,
+    )
+    console.print(
+        f"[green]wrote[/green] {written} examples from {seen} sessions "
+        f"→ [cyan]{out}[/cyan]"
+    )
+    if written == 0:
+        console.print(
+            "[dim]no examples — check tools.transcripts is on, or widen --days / "
+            "try --include-tools[/dim]"
+        )
+
+
 sessions_app = typer.Typer(help="Browse and resume past chat sessions.")
 app.add_typer(sessions_app, name="sessions")
 

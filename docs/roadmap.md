@@ -257,9 +257,10 @@ locally and ship once that clears.
 
 ### Previously-deferred, now planned
 
-- **Phase 90 — fine-tune from transcripts** — curate eVi transcripts into a
-  fine-tune dataset (export format + a guided pipeline; training stays
-  off-device/optional). **L.**
+- **Phase 90 — fine-tune from transcripts** — **✅ shipped (local)**: `evi
+  finetune export` turns stored sessions into a JSONL chat dataset (one
+  conversation per line; `--days/--session/--min-turns/--system/--include-tools`).
+  Training stays off-device — feed the JSONL to your trainer of choice.
 - **Phase 91 — voice cloning for AutoSpeaker** — optional local TTS voice
   cloning (e.g. F5-TTS / XTTS) behind the existing voice seam. **L.**
 - **Phase 92 — CodeQL / secret-scanning** — **✅ shipped (local, untested until
