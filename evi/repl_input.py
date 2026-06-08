@@ -211,6 +211,47 @@ def _completer_class():
     return _EviCompleter
 
 
+# --- keybindings ---------------------------------------------------------
+
+
+def _build_key_bindings(bindings: dict[str, str] | None = None):
+    """Build a prompt_toolkit `KeyBindings` from ~/.evi/keybindings.toml.
+
+    Each bound key replaces the current line with its command and submits it.
+    A binding that prompt_toolkit rejects (bad key name) is skipped so one
+    typo can't take down the editor. Returns None when there are no bindings.
+    """
+    if bindings is None:
+        from evi.keybindings import load_keybindings
+
+        bindings = load_keybindings()
+    if not bindings:
+        return None
+
+    from prompt_toolkit.key_binding import KeyBindings
+
+    kb = KeyBindings()
+
+    def _make(command: str):
+        def handler(event) -> None:
+            buf = event.app.current_buffer
+            buf.text = command
+            buf.cursor_position = len(command)
+            buf.validate_and_handle()  # submit, as if the user pressed Enter
+
+        return handler
+
+    import logging
+
+    log = logging.getLogger(__name__)
+    for key, command in bindings.items():
+        try:
+            kb.add(*key.split())(_make(command))
+        except Exception as exc:  # invalid key name → skip, keep the rest
+            log.warning("skipping keybinding %r (%s)", key, exc)
+    return kb
+
+
 # --- ReplInput facade ----------------------------------------------------
 
 
@@ -245,6 +286,7 @@ class ReplInput:
             auto_suggest=AutoSuggestFromHistory(),
             completer=completer_cls(agent),
             complete_while_typing=False,  # only on Tab — don't pop a menu mid-chat
+            key_bindings=_build_key_bindings(),
         )
 
     def read(self, prompt: str) -> str:

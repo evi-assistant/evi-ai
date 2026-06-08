@@ -14,7 +14,7 @@ planned (philosophy mismatch / separate big track).
 |---|---|---|
 | Agentic loop + built-in tools | `evi/llm/agent.py`; 20+ tools | ✅ |
 | Common workflows (explore/fix/refactor/test) | chat, `evi review`, recipes | ✅ |
-| Interactive mode + keyboard shortcuts | `prompt_toolkit` REPL (tab-complete, history) | ⚠️ no custom keybindings |
+| Interactive mode + keyboard shortcuts | `prompt_toolkit` REPL (tab-complete, history, `keybindings.toml`) | ✅ |
 | Goals | `/goal`, `agent.goal` | ✅ |
 | Scheduled tasks | scheduler (APScheduler), `evi scheduled` | ✅ |
 | Voice dictation | STT + voice loop | ✅ |
@@ -48,7 +48,7 @@ planned (philosophy mismatch / separate big track).
 | Skills | `SkillStore` | ✅ |
 | Subagents | `delegate_*` + `parallel_research` (Ph 61) | ✅ |
 | Output styles | `[llm] output_style` (Ph 69) | ✅ |
-| Hooks (incl. HTTP hooks) | `hooks.toml` | ⚠️ shell hooks; no HTTP-hook type |
+| Hooks (incl. HTTP hooks) | `hooks.toml` (command **or** `url`) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
 | Keybindings | — | ❌ buildable |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
@@ -57,7 +57,7 @@ planned (philosophy mismatch / separate big track).
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
-| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/list/remove` (Ph 68, 75) | ⚠️ commands + skills (hooks/MCP/subagents pending) |
+| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/list/remove` (Ph 68, 75, 80) | ⚠️ commands + skills + hooks + MCP (subagent profiles pending) |
 | Plugin marketplaces / discovery | install from dir or git URL | ❌ no curated index |
 | MCP client (connect to servers) | `MCPManager`, `mcp.json` | ✅ |
 | MCP server (publish eVi's tools) | `evi mcp serve` (stdio + HTTP) | ✅ |
@@ -138,8 +138,14 @@ planned (philosophy mismatch / separate big track).
 - **Phase 77** — auto-mode trusted directories + domains.
 - **Phase 78** — consume-side MCP server allowlist (`tools.mcp_allow`).
 
-Still open (lighter / later): the rest of plugin component types (hooks/MCP/
-subagent profiles), keybindings, deep links, a plugin marketplace index, HTTP
-hook type, "channels" push-into-session, a packaged CI action, an agent dispatch
-view. Explicitly **not** planned: cloud/enterprise backends, IDE extensions,
-mobile, agentic browser, cost/analytics dashboards, public Agent SDK.
+✅ **Also shipped (local, since 0.31.0 — pending the Actions billing block):**
+Phase 79 in-app update progress, **Phase 80** plugin hooks + MCP servers,
+**Phase 81** HTTP hook type, **Phase 82** configurable keybindings
+(`keybindings.toml`).
+
+Still open (lighter / later): subagent profiles in plugins, deep links, a plugin
+marketplace index, "channels" push-into-session, a packaged CI action, an agent
+dispatch view, context-window viz, OpenTelemetry. See [roadmap.md](roadmap.md)
+for the full Phase 83–94 plan. Explicitly **not** planned: cloud/enterprise
+backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
+public Agent SDK.
