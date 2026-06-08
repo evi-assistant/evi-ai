@@ -13,14 +13,21 @@ default; larger models give better accuracy at the cost of latency).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
 class VoiceError(RuntimeError):
     """Raised when a voice backend is missing or a spawn / capture fails."""
+
+
+# TTS engines selectable via [voice] engine. "system" is the zero-dep platform
+# voice; the rest are optional neural engines (lazy-imported, with cloning).
+ENGINES = ("system", "coqui", "f5", "piper")
 
 
 def detect_backend() -> str:
@@ -36,16 +43,40 @@ def detect_backend() -> str:
     return "none"
 
 
-def speak(text: str, *, rate: int | None = None, blocking: bool = True) -> None:
-    """Speak `text` aloud via the platform TTS engine.
+def speak(
+    text: str,
+    *,
+    rate: int | None = None,
+    blocking: bool = True,
+    engine: str = "system",
+    model: str = "",
+    clone_sample: str = "",
+    language: str = "en",
+) -> None:
+    """Speak `text` aloud.
 
-    `rate` is backend-specific (words per minute on Windows, -r on espeak).
-    `blocking=False` returns immediately while the speech plays in the
-    background — useful for long messages.
+    `engine="system"` (default) uses the zero-dep platform voice. The neural
+    engines ("coqui", "f5", "piper") synthesise to a temp WAV and play it;
+    they lazy-import their deps and raise `VoiceError` with an install hint if
+    missing. `rate` only applies to the system engine.
     """
     text = text.strip()
     if not text:
         return
+
+    if engine and engine != "system":
+        wav = Path(tempfile.gettempdir()) / f"evi-tts-{abs(hash(text)) % 10_000_000}.wav"
+        synthesize(
+            text, wav, engine=engine, model=model,
+            clone_sample=clone_sample, language=language,
+        )
+        try:
+            _play_wav(wav, blocking=blocking)
+        finally:
+            if blocking:
+                wav.unlink(missing_ok=True)
+        return
+
     backend = detect_backend()
     if backend == "none":
         raise VoiceError(
@@ -86,6 +117,158 @@ def speak(text: str, *, rate: int | None = None, blocking: bool = True) -> None:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as exc:
             raise VoiceError(f"TTS spawn failed: {exc}") from exc
+
+
+# ---- neural TTS engines (Phase 91) --------------------------------------
+
+
+def engine_available(engine: str) -> bool:
+    """Whether `engine`'s deps/binaries are present (no heavy import)."""
+    if engine == "system":
+        return detect_backend() != "none"
+    if engine == "coqui":
+        return importlib.util.find_spec("TTS") is not None
+    if engine == "f5":
+        return (
+            importlib.util.find_spec("f5_tts") is not None
+            or shutil.which("f5-tts_infer-cli") is not None
+        )
+    if engine == "piper":
+        return (
+            shutil.which("piper") is not None
+            or importlib.util.find_spec("piper") is not None
+        )
+    return False
+
+
+def available_engines() -> dict[str, bool]:
+    """{engine: installed?} for every known engine — used by the UI/CLI."""
+    return {e: engine_available(e) for e in ENGINES}
+
+
+# Coqui model load is slow (seconds + a download on miss) — cache per model id.
+_COQUI_TTS: object | None = None
+_COQUI_KEY: str | None = None
+
+
+def _coqui_model(model_id: str):
+    global _COQUI_TTS, _COQUI_KEY
+    if _COQUI_TTS is not None and _COQUI_KEY == model_id:
+        return _COQUI_TTS
+    try:
+        from TTS.api import TTS  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise VoiceError(
+            "Coqui XTTS not installed — pip install 'evi-assistant[voice-clone]' "
+            "(or: pip install coqui-tts)"
+        ) from exc
+    _COQUI_TTS = TTS(model_id)
+    _COQUI_KEY = model_id
+    return _COQUI_TTS
+
+
+def _synth_coqui(text, out, *, model, clone_sample, language) -> Path:
+    tts = _coqui_model(model or "tts_models/multilingual/multi-dataset/xtts_v2")
+    kwargs = {"text": text, "file_path": str(out), "language": language or "en"}
+    if clone_sample:
+        kwargs["speaker_wav"] = clone_sample
+    try:
+        tts.tts_to_file(**kwargs)  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001 — surface any engine error as VoiceError
+        raise VoiceError(f"Coqui synthesis failed: {exc}") from exc
+    return out
+
+
+def _synth_f5(text, out, *, model, clone_sample, language) -> Path:
+    cli = shutil.which("f5-tts_infer-cli")
+    if cli is None:
+        raise VoiceError(
+            "F5-TTS not installed — pip install f5-tts (provides f5-tts_infer-cli)"
+        )
+    cmd = [cli, "--gen_text", text, "--output_file", str(out)]
+    if model:
+        cmd += ["--model", model]
+    if clone_sample:
+        cmd += ["--ref_audio", clone_sample]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise VoiceError(f"F5-TTS synthesis failed: {exc}") from exc
+    return out
+
+
+def _synth_piper(text, out, *, model, clone_sample, language) -> Path:
+    binary = shutil.which("piper")
+    if binary is None:
+        raise VoiceError(
+            "Piper not installed — install the piper binary (or pip install piper-tts) "
+            "and set [voice] model to a voice .onnx path"
+        )
+    if not model:
+        raise VoiceError("Piper needs [voice] model set to a voice .onnx path")
+    try:
+        subprocess.run(
+            [binary, "-m", model, "-f", str(out)],
+            input=text.encode("utf-8"),
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise VoiceError(f"Piper synthesis failed: {exc}") from exc
+    return out
+
+
+_SYNTHESIZERS = {"coqui": _synth_coqui, "f5": _synth_f5, "piper": _synth_piper}
+
+
+def synthesize(
+    text: str,
+    out_path: Path | str,
+    *,
+    engine: str,
+    model: str = "",
+    clone_sample: str = "",
+    language: str = "en",
+) -> Path:
+    """Synthesise `text` to a WAV at `out_path` using the named neural engine.
+
+    Raises VoiceError for an unknown engine or missing deps/model.
+    """
+    fn = _SYNTHESIZERS.get(engine)
+    if fn is None:
+        raise VoiceError(f"unknown TTS engine {engine!r} (choose: {', '.join(ENGINES)})")
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return fn(text, out, model=model, clone_sample=clone_sample, language=language)
+
+
+def _play_wav(path: Path | str, *, blocking: bool = True) -> None:
+    """Play a WAV file with whatever the platform provides (no Python deps)."""
+    path = str(path)
+    if os.name == "nt":
+        import winsound
+
+        flags = winsound.SND_FILENAME | (0 if blocking else winsound.SND_ASYNC)
+        winsound.PlaySound(path, flags)
+        return
+    if hasattr(os, "uname") and os.uname().sysname == "Darwin":
+        cmd = ["afplay", path]
+    else:
+        player = (
+            shutil.which("paplay")
+            or shutil.which("aplay")
+            or shutil.which("ffplay")
+        )
+        if player is None:
+            raise VoiceError("no WAV player found — install pulseaudio-utils or alsa-utils")
+        cmd = [player, path] if "ffplay" not in player else [player, "-nodisp", "-autoexit", path]
+    try:
+        if blocking:
+            subprocess.run(cmd, check=True, capture_output=True)
+        else:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise VoiceError(f"WAV playback failed: {exc}") from exc
 
 
 # ---- STT -----------------------------------------------------------------
@@ -239,8 +422,20 @@ class AutoSpeaker:
     particular can stutter on long passages).
     """
 
-    def __init__(self, *, rate: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        rate: int | None = None,
+        engine: str = "system",
+        model: str = "",
+        clone_sample: str = "",
+        language: str = "en",
+    ) -> None:
         self.rate = rate
+        self.engine = engine
+        self.model = model
+        self.clone_sample = clone_sample
+        self.language = language
         self._buf = ""
         self._q: _queue.Queue[str | None] = _queue.Queue()
         self._stopped = False
@@ -293,8 +488,17 @@ class AutoSpeaker:
             if item is None or self._stopped:
                 return
             try:
-                # Blocking speak so chunks don't overlap audibly.
-                speak(item, rate=self.rate, blocking=True)
+                # Blocking speak so chunks don't overlap audibly. Only thread the
+                # neural-engine kwargs when one is selected, so the default path
+                # stays the plain speak(text, rate=, blocking=) call.
+                if self.engine and self.engine != "system":
+                    speak(
+                        item, rate=self.rate, blocking=True,
+                        engine=self.engine, model=self.model,
+                        clone_sample=self.clone_sample, language=self.language,
+                    )
+                else:
+                    speak(item, rate=self.rate, blocking=True)
             except VoiceError:
                 # Backend missing or platform issue — stop trying.
                 self._stopped = True

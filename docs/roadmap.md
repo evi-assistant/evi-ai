@@ -261,8 +261,11 @@ locally and ship once that clears.
   finetune export` turns stored sessions into a JSONL chat dataset (one
   conversation per line; `--days/--session/--min-turns/--system/--include-tools`).
   Training stays off-device — feed the JSONL to your trainer of choice.
-- **Phase 91 — voice cloning for AutoSpeaker** — optional local TTS voice
-  cloning (e.g. F5-TTS / XTTS) behind the existing voice seam. **L.**
+- **Phase 91 — voice engines / cloning** — **✅ shipped (local, neural engines
+  unverified — heavyweight optional installs)**: `[voice] engine` selects
+  system / Coqui XTTS / F5-TTS / Piper (switchable in Settings → Voice + `evi
+  voice engines`). Cloning engines take a `clone_sample` WAV; all lazy-import
+  and error cleanly if deps are absent. AutoSpeaker threads the engine through.
 - **Phase 92 — CodeQL / secret-scanning** — **✅ shipped (local, untested until
   CI billing clears)**: `security.yml` gained a gitleaks job (pinned binary +
   `.gitleaks.toml` allowlist) and a CodeQL job (python + javascript,

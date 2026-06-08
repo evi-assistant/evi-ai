@@ -195,6 +195,26 @@ value is a multi-key sequence. Terminal essentials (`c-c`, `c-d`, `tab`,
 `enter`) are reserved and silently ignored, and an unknown key name is skipped
 without breaking the others.
 
+## Voice / TTS — `[voice]` in `config.toml`
+
+```toml
+[voice]
+engine       = "system"   # system | coqui | f5 | piper
+model        = ""         # engine-specific: Coqui XTTS id, or a Piper voice .onnx path
+clone_sample = ""         # reference WAV for the cloning engines (coqui / f5)
+language     = "en"
+```
+
+- **system** — zero-dep platform voice (Windows SAPI / macOS `say` / espeak).
+- **coqui** — Coqui XTTS v2; multilingual, clones a voice from `clone_sample`.
+- **f5** — F5-TTS; fast zero-shot cloning (uses its `f5-tts_infer-cli`).
+- **piper** — lightweight local neural voices (set `model` to a `.onnx`); no cloning.
+
+The neural engines are optional heavyweight installs; eVi lazy-imports them and
+falls back to a clear error if the deps/binaries aren't present. `evi voice
+engines` shows which are installed and which is active; switch the engine in the
+desktop **Settings → Voice** screen or by editing `[voice]`.
+
 ## MCP — `~/.evi/mcp.json`
 
 ```json
