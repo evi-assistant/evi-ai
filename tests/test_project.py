@@ -7,6 +7,7 @@ from pathlib import Path
 from evi.project import (
     find_project_config,
     find_project_file,
+    find_project_files,
     load_project_config_overlay,
     load_project_context,
 )
@@ -92,6 +93,28 @@ def test_load_project_config_overlay(tmp_path: Path) -> None:
     nested = tmp_path / "deep" / "x"
     nested.mkdir(parents=True)
     assert load_project_config_overlay(start=nested)["llm"]["temperature"] == 0.123
+
+
+def test_nested_context_merges_outermost_first(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    pkg = root / "packages" / "web"
+    pkg.mkdir(parents=True)
+    (root / "EVI.md").write_text("ROOT RULES", encoding="utf-8")
+    (pkg / "EVI.md").write_text("WEB RULES", encoding="utf-8")
+
+    files = find_project_files(start=pkg)
+    assert [p.parent.name for p in files] == ["repo", "web"]  # root first, nearest last
+
+    ctx = load_project_context(start=pkg)
+    assert "ROOT RULES" in ctx.content and "WEB RULES" in ctx.content
+    # root appears before the package-level context
+    assert ctx.content.index("ROOT RULES") < ctx.content.index("WEB RULES")
+
+
+def test_single_level_unchanged(tmp_path: Path) -> None:
+    (tmp_path / "EVI.md").write_text("just one", encoding="utf-8")
+    ctx = load_project_context(start=tmp_path)
+    assert ctx.content.strip() == "just one"  # no per-file header when single
 
 
 def test_config_load_applies_project_overlay(tmp_path: Path, monkeypatch) -> None:
