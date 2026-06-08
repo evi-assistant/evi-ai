@@ -108,3 +108,48 @@ def test_user_commands_and_plugin_coexist(tmp_path):
     cs = CommandStore(root=root / "commands")
     names = {e.name for e in cs.list()}
     assert "mine" in names and "gitx:status" in names
+
+
+def test_plugin_hooks_loaded(tmp_path, monkeypatch):
+    """A plugin's hooks.toml is merged into the hook registry (Phase 80)."""
+    import evi.config as config
+    from evi import hooks
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "plugin.toml").write_text('name = "audit"\nversion = "1.0"\n', encoding="utf-8")
+    (src / "hooks.toml").write_text(
+        '[[before_tool_call]]\nname = "log"\nmatch = "*"\ncommand = ["echo", "hi"]\n',
+        encoding="utf-8",
+    )
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+
+    # counted in the listing
+    assert plugins.list_plugins(root=root)[0].hooks == 1
+
+    # picked up by load_hooks even when the user's own hooks.toml is absent
+    monkeypatch.setattr(config, "HOME", root)
+    reg = hooks.load_hooks(path=tmp_path / "no-such-hooks.toml")
+    assert [h.name for h in reg.hooks] == ["log"]
+
+
+def test_plugin_mcp_loaded(tmp_path, monkeypatch):
+    """A plugin's mcp.json is merged, namespaced <plugin>:<name> (Phase 80)."""
+    import evi.config as config
+    from evi.mcp import servers
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "plugin.toml").write_text('name = "tools"\nversion = "1.0"\n', encoding="utf-8")
+    (src / "mcp.json").write_text(
+        '[{"name": "files", "command": "mcp-files"}]', encoding="utf-8"
+    )
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+
+    assert plugins.list_plugins(root=root)[0].mcp == 1
+
+    monkeypatch.setattr(config, "HOME", root)
+    srv = servers.load_servers(path=tmp_path / "no-such-mcp.json")
+    assert [s.name for s in srv] == ["tools:files"]

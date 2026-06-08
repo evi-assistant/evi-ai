@@ -47,13 +47,9 @@ def filter_allowed(servers: list[MCPServer], allow) -> list[MCPServer]:
     return [s for s in servers if s.name in names]
 
 
-def load_servers(path: Path | None = None) -> list[MCPServer]:
-    """Read `~/.evi/mcp.json`. Returns [] if the file is missing or empty.
-
-    Malformed entries are skipped with no fanfare — the manager will log
-    when it tries to connect and fails, which is the right place to surface it.
-    """
-    p = path or MCP_CONFIG_PATH
+def _parse_server_file(p: Path, name_prefix: str = "") -> list[MCPServer]:
+    """Read one mcp.json into a list of MCPServers. Missing/empty/malformed → [].
+    `name_prefix` namespaces plugin-supplied servers (e.g. ``git-helpers:``)."""
     if not p.is_file():
         return []
     try:
@@ -72,13 +68,32 @@ def load_servers(path: Path | None = None) -> list[MCPServer]:
             continue
         servers.append(
             MCPServer(
-                name=str(name),
+                name=f"{name_prefix}{name}",
                 command=str(command),
                 args=[str(a) for a in entry.get("args", []) or []],
                 env={str(k): str(v) for k, v in (entry.get("env") or {}).items()},
                 enabled=bool(entry.get("enabled", True)),
             )
         )
+    return servers
+
+
+def load_servers(path: Path | None = None) -> list[MCPServer]:
+    """Read `~/.evi/mcp.json` plus every installed plugin's `mcp.json`.
+
+    Returns [] if nothing is configured. Plugin servers are namespaced
+    ``<plugin>:<name>`` (so they can't collide with the user's own and read
+    cleanly in the allowlist). Malformed entries are skipped silently — the
+    manager logs when a connection actually fails, which is the right place.
+    """
+    servers = _parse_server_file(path or MCP_CONFIG_PATH)
+    try:
+        from evi.plugins import plugin_dirs
+
+        for pd in plugin_dirs():
+            servers.extend(_parse_server_file(pd / "mcp.json", name_prefix=f"{pd.name}:"))
+    except Exception:  # plugin scanning must never break core MCP
+        pass
     return servers
 
 

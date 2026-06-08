@@ -2440,7 +2440,7 @@ def routine_run(name: str) -> None:
             console.print(Markdown(res["text"] or "(no output)"))
 
 
-plugin_app = typer.Typer(help="Plugins — installable bundles of slash commands.")
+plugin_app = typer.Typer(help="Plugins — installable bundles of commands, skills, hooks, and MCP servers.")
 app.add_typer(plugin_app, name="plugin")
 
 
@@ -2478,7 +2478,14 @@ def plugin_list() -> None:
     for p in items:
         ver = f" [dim]v{p.version}[/dim]" if p.version else ""
         desc = f" — {p.description}" if p.description else ""
-        counts = f"{p.commands} cmds" + (f", {p.skills} skills" if p.skills else "")
+        parts = [f"{p.commands} cmds"]
+        if p.skills:
+            parts.append(f"{p.skills} skills")
+        if p.hooks:
+            parts.append(f"{p.hooks} hooks")
+        if p.mcp:
+            parts.append(f"{p.mcp} mcp")
+        counts = ", ".join(parts)
         console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({counts})[/dim]{desc}")
 
 
