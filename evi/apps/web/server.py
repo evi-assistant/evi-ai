@@ -36,7 +36,7 @@ from evi.commands import CommandStore
 from evi.config import IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
 from evi.llm.agent import Agent, Done, Error, Event
 from evi.llm.client import make_client
-from evi.mcp import MCPManager, load_servers
+from evi.mcp import MCPManager, filter_allowed, load_servers
 from evi.memory import MemoryStore
 from evi.skills import SkillStore
 from evi.tools.base import get_enabled_tools
@@ -452,7 +452,7 @@ def create_app() -> FastAPI:
         nonlocal mcp_manager, scheduler_obj
         cfg = Config.load()
         if cfg.tools.mcp:
-            servers = load_servers()
+            servers = filter_allowed(load_servers(), cfg.tools.mcp_allow)
             if servers:
                 try:
                     mcp_manager = MCPManager(servers)

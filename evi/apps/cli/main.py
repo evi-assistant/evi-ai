@@ -38,7 +38,7 @@ from evi.llm.agent import (
     UsageStats,
 )
 from evi.llm.client import make_client
-from evi.mcp import MCPManager, load_servers
+from evi.mcp import MCPManager, filter_allowed, load_servers
 from evi.profiles import (
     ENV_VAR as PROFILE_ENV_VAR,
     PROFILES_DIR,
@@ -83,7 +83,7 @@ def _ensure_mcp(config: Config) -> MCPManager | None:
         return None
     if _mcp_manager is not None:
         return _mcp_manager
-    servers = load_servers()
+    servers = filter_allowed(load_servers(), config.tools.mcp_allow)
     if not servers:
         return None
     try:

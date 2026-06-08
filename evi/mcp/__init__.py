@@ -16,6 +16,6 @@ Public surface:
 
 from evi.mcp.bridge import MCPBridge
 from evi.mcp.manager import MCPManager
-from evi.mcp.servers import MCPServer, load_servers
+from evi.mcp.servers import MCPServer, filter_allowed, load_servers
 
-__all__ = ["MCPBridge", "MCPManager", "MCPServer", "load_servers"]
+__all__ = ["MCPBridge", "MCPManager", "MCPServer", "filter_allowed", "load_servers"]

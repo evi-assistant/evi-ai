@@ -228,6 +228,9 @@ class ToolToggles:
     # temp workdir, no network) where one is available (bwrap / sandbox-exec).
     # Falls back to unsandboxed if no sandboxer is present. See evi/sandbox.py.
     sandbox: bool = False
+    # Consume-side MCP allowlist: when non-empty, only these server names (from
+    # mcp.json) load — lets a shared/synced mcp.json be gated per machine.
+    mcp_allow: list[str] = field(default_factory=list)
 
 
 @dataclass
