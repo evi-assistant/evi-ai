@@ -3,6 +3,24 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.0] — 2026-06-08
+
+### Added — Claude Code parity, round 2 (phases 75–78)
+
+From the [eVi vs Claude Code comparison](docs/claude-code-comparison.md):
+
+- **Skills in plugins** (Phase 75) — plugins now bundle skills as well as
+  commands (scanned as `<plugin>:<skill>`); `evi plugin list` shows both counts.
+- **Nested project context** (Phase 76) — `EVI.md`/`AGENTS.md` are merged from
+  every ancestor directory (root → cwd), so monorepos get layered context.
+- **Trusted directories + domains** (Phase 77) — `auto.trusted_dirs` /
+  `auto.trusted_domains` auto-approve file tools under a path or web fetches to a
+  host, without opening a whole tool category (explicit deny rules still win).
+- **MCP server allowlist** (Phase 78) — `[tools] mcp_allow` restricts which
+  mcp.json servers load, so a shared/synced config can be gated per machine.
+
+Desktop → 0.2.12.
+
 ## [0.30.0] — 2026-06-08
 
 ### Added

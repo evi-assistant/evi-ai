@@ -35,7 +35,7 @@ planned (philosophy mismatch / separate big track).
 |---|---|---|
 | Permission modes (ask/accept-edits/plan/yolo) | `auto.mode` (Ph 66) | ✅ |
 | Fine-grained allow/deny rules | `auto.rules` (Ph 66) | ✅ |
-| Auto-mode config (trusted dirs / domains) | auto-approve categories + rules | ❌ no trusted-dir/domain lists |
+| Auto-mode config (trusted dirs / domains) | `auto.trusted_dirs` + `trusted_domains` (Ph 77) | ✅ |
 | Sandboxed bash/code | `[tools] sandbox` (Ph 67) | ✅ |
 | Security / vuln review | guardrails, `security.yml` (pip/cargo audit), `review --multi` | ✅ |
 
@@ -44,7 +44,7 @@ planned (philosophy mismatch / separate big track).
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
 | CLAUDE.md / memory | `EVI.md`/`AGENTS.md` project context + memory (+ tags) | ✅ |
-| Nested CLAUDE.md (large codebases) | nearest project file only | ❌ no multi-level merge |
+| Nested CLAUDE.md (large codebases) | merges EVI.md/AGENTS.md up the tree (Ph 76) | ✅ |
 | Skills | `SkillStore` | ✅ |
 | Subagents | `delegate_*` + `parallel_research` (Ph 61) | ✅ |
 | Output styles | `[llm] output_style` (Ph 69) | ✅ |
@@ -57,11 +57,11 @@ planned (philosophy mismatch / separate big track).
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
-| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/list/remove` (Ph 68) | ⚠️ commands only |
+| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/list/remove` (Ph 68, 75) | ⚠️ commands + skills (hooks/MCP/subagents pending) |
 | Plugin marketplaces / discovery | install from dir or git URL | ❌ no curated index |
 | MCP client (connect to servers) | `MCPManager`, `mcp.json` | ✅ |
 | MCP server (publish eVi's tools) | `evi mcp serve` (stdio + HTTP) | ✅ |
-| Managed MCP (allowlists) | per-tool allow on publish | ⚠️ no consume-side allowlist |
+| Managed MCP (allowlists) | per-tool allow on publish + `tools.mcp_allow` (Ph 78) | ✅ |
 
 ## Platforms
 
@@ -130,16 +130,16 @@ planned (philosophy mismatch / separate big track).
 | Authentication (accounts/SSO) | web auth token; local backends need none | 🚫 local |
 | ZDR / legal / data-usage | private by design (everything local) | 🚫 N/A |
 
-## Summary — the buildable gaps
+## Summary — buildable gaps
 
-Everything ❌ above that fits eVi's local-first stance becomes a roadmap phase:
-
-- **Phase 75** — plugin component types beyond commands (skills first; then hooks/MCP/subagents).
+✅ **Shipped in 0.31.0:**
+- **Phase 75** — plugin **skills** (commands + skills now bundle; hooks/MCP/subagents still pending).
 - **Phase 76** — nested project context (merge `EVI.md`/`AGENTS.md` up the tree).
 - **Phase 77** — auto-mode trusted directories + domains.
-- **Phase 78** — consume-side MCP server allowlist.
+- **Phase 78** — consume-side MCP server allowlist (`tools.mcp_allow`).
 
-Lighter / later: keybindings, deep links, a plugin marketplace index, HTTP hook
-type, "channels" push-into-session, a packaged CI action, an agent dispatch
+Still open (lighter / later): the rest of plugin component types (hooks/MCP/
+subagent profiles), keybindings, deep links, a plugin marketplace index, HTTP
+hook type, "channels" push-into-session, a packaged CI action, an agent dispatch
 view. Explicitly **not** planned: cloud/enterprise backends, IDE extensions,
 mobile, agentic browser, cost/analytics dashboards, public Agent SDK.
