@@ -133,6 +133,17 @@ def list_sessions(
     return out
 
 
+def most_recent_session_id(*, root: Path | None = None) -> str | None:
+    """The id of the most recently active session (by last timestamp), or None.
+
+    list_sessions orders by day-dir + filename, so we sort by `ended_at` here to
+    get the true most-recent rather than the lexically-last filename."""
+    items = [s for s in list_sessions(root=root, limit=100_000) if s.ended_at is not None]
+    if not items:
+        return None
+    return max(items, key=lambda s: s.ended_at).session_id
+
+
 def find_session(session_id: str, *, root: Path | None = None) -> Path | None:
     """Locate the JSONL path for a session id by scanning day dirs."""
     base = root or TRANSCRIPTS_DIR

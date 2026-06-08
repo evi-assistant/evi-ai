@@ -3315,25 +3315,63 @@ def sessions_export(
     console.print(f"[green]wrote[/green] {out}")
 
 
+def _hydrate_agent(agent: Agent, path) -> int:
+    """Load a transcript into `agent.history`, keeping its composed system
+    prompt at index 0. Returns the number of restored messages."""
+    from evi.sessions import history_from_transcript
+
+    history = history_from_transcript(path)
+    agent.history = [agent.history[0], *history]
+    return len(history)
+
+
 @sessions_app.command("resume")
 def sessions_resume(session_id: str) -> None:
-    """Resume a past session — load its history into a fresh agent and chat."""
-    from evi.sessions import find_session, history_from_transcript
+    """Resume a past session — load its history and continue in the same file."""
+    from evi.sessions import find_session
 
     path = find_session(session_id)
     if path is None:
         console.print(f"[red]no session[/red] {session_id}")
         raise typer.Exit(1)
-
     agent = _build_agent()
-    agent.session_id = session_id  # so new messages append to the same file
-    history = history_from_transcript(path)
-    # Preserve the agent's composed system prompt at index 0; everything
-    # after is rebuilt from disk.
-    agent.history = [agent.history[0], *history]
+    agent.session_id = session_id  # new messages append to the same file
+    n = _hydrate_agent(agent, path)
+    console.print(f"[cyan]resumed {session_id}[/cyan] [dim]({n} messages restored)[/dim]")
+    _run_repl(agent)
+
+
+@sessions_app.command("continue")
+def sessions_continue() -> None:
+    """Resume the most recently active session."""
+    from evi.sessions import find_session, most_recent_session_id
+
+    sid = most_recent_session_id()
+    if sid is None:
+        console.print("[dim]no sessions to continue[/dim]")
+        raise typer.Exit(1)
+    path = find_session(sid)
+    agent = _build_agent()
+    agent.session_id = sid
+    n = _hydrate_agent(agent, path)
+    console.print(f"[cyan]continuing {sid}[/cyan] [dim]({n} messages restored)[/dim]")
+    _run_repl(agent)
+
+
+@sessions_app.command("fork")
+def sessions_fork(session_id: str) -> None:
+    """Fork a past session into a NEW session — the original is left intact."""
+    from evi.sessions import find_session
+
+    path = find_session(session_id)
+    if path is None:
+        console.print(f"[red]no session[/red] {session_id}")
+        raise typer.Exit(1)
+    agent = _build_agent()  # fresh agent → new auto-generated session_id
+    n = _hydrate_agent(agent, path)
     console.print(
-        f"[cyan]resumed {session_id}[/cyan] "
-        f"[dim]({len(history)} messages restored)[/dim]"
+        f"[cyan]forked {session_id}[/cyan] → new session "
+        f"[bold]{agent.session_id}[/bold] [dim]({n} messages copied)[/dim]"
     )
     _run_repl(agent)
 
