@@ -222,6 +222,47 @@ browser (already deferred in favour of MCP browser servers). A full public Agent
 SDK is deferred too — headless mode (Phase 65) covers the automation need without
 committing to a stable library surface.
 
+## Next planned phases (79+)
+
+Releases are paused on a GitHub Actions billing block; these are building
+locally and ship once that clears.
+
+- **Phase 79 — in-app update progress toast** — **✅ shipped (local)**: the
+  silent auto-updater now shows a progress toast (downloading % → installing).
+- **Phase 80 — full plugin components** — hooks, MCP servers, and subagent
+  profiles bundled in a plugin (commands + skills already land). **M/L.**
+- **Phase 81 — HTTP hooks** — a hook type that POSTs to a URL (today's hooks are
+  shell-only). **S.**
+- **Phase 82 — keybindings** — configurable REPL shortcuts. **S.**
+- **Phase 83 — channels** — push an external alert/notification into a running
+  session (routines cover inbound webhook→recipe; this is push-into-live). **M.**
+- **Phase 84 — packaged CI action** — a reusable GitHub Action / workflow that
+  wraps `evi run` headless. **S/M.**
+- **Phase 85 — agent dispatch view** — a dashboard to manage many concurrent
+  sessions / subagents. **L.**
+- **Phase 86 — dynamic workflows** — a small scriptable multi-agent
+  orchestration format (beyond recipes + parallel research). **L.**
+- **Phase 87 — cross-device session handoff** — continue a live session from
+  another device. **M.**
+- **Phase 88 — context-window visualization** — a richer view than the chip. **S.**
+- **Phase 89 — OpenTelemetry / metrics** — opt-in traces/metrics export. **M.**
+- Smaller: long-context awareness in the model registry · `/recent` REPL history
+  · deep links (`evi://`).
+
+### Previously-deferred, now planned
+
+- **Phase 90 — fine-tune from transcripts** — curate eVi transcripts into a
+  fine-tune dataset (export format + a guided pipeline; training stays
+  off-device/optional). **L.**
+- **Phase 91 — voice cloning for AutoSpeaker** — optional local TTS voice
+  cloning (e.g. F5-TTS / XTTS) behind the existing voice seam. **L.**
+- **Phase 92 — CodeQL / secret-scanning** — security scanning on the private
+  repo (self-hosted gitleaks + CodeQL CLI, since GHAS isn't free). **M.**
+- **Phase 93 — Docker image push** — publish a container image in `release.yml`
+  (CLI/web server in a box). **M.**
+- **Phase 94 — sigstore wheel signing** — keyless signing of the PyPI wheels for
+  supply-chain provenance. **S/M.**
+
 ## Integrations backlog
 
 A large, separately-tracked list (Home Assistant, Notion, Spotify, Slack,
