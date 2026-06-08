@@ -120,6 +120,28 @@ jobs:
             echo "name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # The Windows Tauri NSIS bundler downloads its toolchain from GitHub at
+      # bundle time and has been intermittently returning HTTP 504 (the
+      # "failed to bundle project `http status: 504`" failures). Run the build
+      # once with retries first: the Rust compile is cached so re-tries are
+      # cheap (only the bundle step re-runs), and a successful run warms
+      # Tauri's bundler cache so the real release step below won't hit the
+      # flaky download. `continue-on-error` so a sustained outage still falls
+      # through to the release step (no worse than before).
+      - name: Warm bundler cache (retry transient 504s, Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 20
+          max_attempts: 3
+          retry_wait_seconds: 45
+          shell: pwsh
+          command: npm --prefix desktop run tauri build -- --config src-tauri/tauri.standalone.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       - name: Build app + (maybe) publish release
         uses: tauri-apps/tauri-action@v0
         env:
