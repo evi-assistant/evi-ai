@@ -14,7 +14,9 @@ rust-version = "1.77"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = [] }
+# tray-icon: system tray; image-png: load the tray icon; devtools: keep
+# View → Toggle Developer Tools available in release builds too.
+tauri = { version = "2.0", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-updater = "2.0"
 serde = { version = "1", features = ["derive"] }
