@@ -120,3 +120,11 @@ def test_settings_model_shows_system_panel(page: Page, evi_base_url: str):
     page.evaluate("window.eviUI.openSettings('model')")
     expect(page.locator("#settings-overlay")).to_be_visible()
     expect(page.locator("#settings-content")).to_contain_text("System", timeout=10000)
+
+
+def test_mode_switcher_renders_and_switches(page: Page, evi_base_url: str):
+    """The Chat/Cowork/Code switcher renders and selecting one activates it."""
+    page.goto(evi_base_url)
+    expect(page.locator("#mode-switch button")).to_have_count(3)
+    page.locator("#mode-switch button", has_text="Code").click()
+    expect(page.locator("#mode-switch button.active")).to_have_text("Code")
