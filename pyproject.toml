@@ -108,6 +108,11 @@ telemetry = [
     # (self-hosted GlitchTip or hosted Sentry). See evi/reporting.py.
     "sentry-sdk>=2.0",
 ]
+otel = [
+    # Opt-in OpenTelemetry traces + metrics (off by default). See evi/otel.py.
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+]
 e2e = [
     # Browser-driven UI regression tests (tests/e2e/). See TESTING.md.
     # After install: `playwright install chromium`.

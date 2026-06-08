@@ -2082,6 +2082,12 @@ initModes();
         help:'Opt-in. Sends scrubbed reports only when a DSN is set. Off by default.' },
       { type:'secret', section:'telemetry', key:'dsn', label:'Telemetry DSN',
         help:'Sentry-compatible endpoint. Blank keeps reporting inert.' },
+      { type:'bool', section:'telemetry', key:'traces', label:'OpenTelemetry traces',
+        help:'Opt-in spans around tool calls. Needs the [otel] extra + an endpoint.' },
+      { type:'bool', section:'telemetry', key:'metrics', label:'OpenTelemetry metrics',
+        help:'Opt-in tool-call counters/durations. Needs the [otel] extra + an endpoint.' },
+      { type:'text', section:'telemetry', key:'otlp_endpoint', label:'OTLP endpoint',
+        help:'Base OTLP/HTTP URL, e.g. http://localhost:4318. Blank = nothing is exported.' },
     ]},
     { id:'model', title:'Model & Backend', blurb:'Where eVi sends your messages.', fields:[
       { type:'select', section:'llm', key:'backend', label:'Backend',
