@@ -61,22 +61,38 @@ class CommandStore:
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root) if root is not None else COMMANDS_DIR
 
+    def _scan_roots(self) -> list[tuple[str, Path]]:
+        """[(name-prefix, dir)] — the user's commands dir plus each installed
+        plugin's commands/ (~/.evi/plugins/<name>/commands/, exposed as
+        `<plugin>:<cmd>`)."""
+        roots: list[tuple[str, Path]] = []
+        if self.root.is_dir():
+            roots.append(("", self.root))
+        plugins = self.root.parent / "plugins"
+        if plugins.is_dir():
+            for pd in sorted(plugins.iterdir()):
+                cdir = pd / "commands"
+                if cdir.is_dir() and _NAME_RE.match(pd.name):
+                    roots.append((pd.name + ":", cdir))
+        return roots
+
     def list(self) -> list[SlashCommandEntry]:
-        if not self.root.is_dir():
-            return []
         out: list[SlashCommandEntry] = []
-        for p in sorted(self.root.rglob("*.md")):
-            rel = p.relative_to(self.root).with_suffix("")
-            if not all(_NAME_RE.match(part) for part in rel.parts):
-                continue
-            out.append(self._entry(":".join(rel.parts), p))
+        for prefix, root in self._scan_roots():
+            for p in sorted(root.rglob("*.md")):
+                rel = p.relative_to(root).with_suffix("")
+                if not all(_NAME_RE.match(part) for part in rel.parts):
+                    continue
+                out.append(self._entry(prefix + ":".join(rel.parts), p))
         return out
 
     def get(self, name: str) -> SlashCommandEntry | None:
-        path = self._path_for(name)
-        if path is None or not path.is_file():
-            return None
-        return self._entry(name, path)
+        # Linear scan over a small set; also keeps path traversal impossible
+        # (only files surfaced by list() — already name-validated — can match).
+        for entry in self.list():
+            if entry.name == name:
+                return entry
+        return None
 
     def expand(self, name: str, args: str = "") -> str | None:
         """Return the command body (frontmatter stripped) with arguments and
@@ -88,12 +104,6 @@ class CommandStore:
         return _substitute(body, args).strip()
 
     # --- internals -------------------------------------------------------
-
-    def _path_for(self, name: str) -> Path | None:
-        parts = name.split(":")
-        if not parts or not all(_NAME_RE.match(part) for part in parts):
-            return None
-        return self.root.joinpath(*parts).with_suffix(".md")
 
     def _entry(self, name: str, path: Path) -> SlashCommandEntry:
         meta, body = _split_frontmatter(path.read_text(encoding="utf-8"))
