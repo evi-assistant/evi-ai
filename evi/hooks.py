@@ -19,6 +19,17 @@ Config lives in `~/.evi/hooks.toml`:
     match = "generate_image"
     command = ["notify-send", "Image ready"]
 
+    [[after_tool_call]]
+    name = "webhook"
+    match = "*"
+    url = "https://example.com/evi-hook"   # POSTs {event, tool, args_json,
+                                           # result} as JSON instead of spawning
+
+A hook uses `command` (argv, spawned) OR `url` (HTTP POST). For a url hook a
+2xx response is success; any other status becomes the "exit code", so
+`veto_on_nonzero = true` on a before-hook url that returns 4xx/5xx blocks the
+call.
+
 When a hook fires we set these env vars in the child process:
 
   EVI_HOOK_EVENT    "before_tool_call" | "after_tool_call"
@@ -64,7 +75,8 @@ class Hook:
     name: str
     event: HookEvent
     match: str           # glob pattern, e.g. "*", "write_file", "fs.*"
-    command: list[str]   # argv-style; we don't shell-eval
+    command: list[str]   # argv-style; we don't shell-eval (empty for url hooks)
+    url: str = ""        # if set, POST the event JSON here instead of spawning
     timeout: float = 30.0
     veto_on_nonzero: bool = False  # only meaningful for before_*
 
@@ -131,16 +143,19 @@ def load_hooks(path: Path | None = None) -> "HookRegistry":
 def _parse_entry(event: str, entry: dict) -> Hook:
     name = str(entry.get("name") or f"{event}-{entry.get('match', '*')}")
     match = str(entry.get("match") or "*")
+    url = str(entry.get("url") or "")
     command_raw = entry.get("command")
     if isinstance(command_raw, str):
         # Allow a single-string form for ergonomics; not shell-expanded.
         command = [command_raw]
     elif isinstance(command_raw, list):
         command = [str(x) for x in command_raw]
+    elif command_raw is None:
+        command = []
     else:
         raise ValueError("hook.command must be a string or list of strings")
-    if not command:
-        raise ValueError("hook.command cannot be empty")
+    if not url and not command:
+        raise ValueError("hook needs a non-empty command or a url")
     timeout = float(entry.get("timeout", 30.0))
     veto = bool(entry.get("veto_on_nonzero", False))
     return Hook(
@@ -148,6 +163,7 @@ def _parse_entry(event: str, entry: dict) -> Hook:
         event=event,  # type: ignore[arg-type]
         match=match,
         command=command,
+        url=url,
         timeout=timeout,
         veto_on_nonzero=veto,
     )
@@ -191,13 +207,69 @@ class HookRegistry:
         return results
 
 
+def _run_http_hook(
+    hook: Hook,
+    tool_name: str,
+    args_json: str,
+    result_output: str | None,
+) -> HookResult:
+    """POST the event as JSON to `hook.url`. A 2xx response is success (exit 0);
+    any other status becomes the exit code, so `veto_on_nonzero` still works
+    (a before-hook URL that returns 4xx/5xx blocks the call)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    payload: dict[str, str] = {
+        "event": hook.event,
+        "tool": tool_name,
+        "args_json": args_json,
+    }
+    if result_output is not None:
+        payload["result"] = result_output[:_ENV_RESULT_LIMIT]
+    req = urllib.request.Request(
+        hook.url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "evi-hook"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=hook.timeout) as resp:
+            body = resp.read().decode(errors="replace")
+            status = resp.status
+        return HookResult(
+            hook_name=hook.name,
+            exit_code=0 if 200 <= status < 300 else status,
+            stdout=body[:_ENV_RESULT_LIMIT],
+            stderr="" if 200 <= status < 300 else f"HTTP {status}",
+        )
+    except urllib.error.HTTPError as exc:
+        return HookResult(
+            hook_name=hook.name, exit_code=exc.code, stdout="", stderr=f"HTTP {exc.code}"
+        )
+    except (TimeoutError, urllib.error.URLError, OSError) as exc:
+        timed = isinstance(exc, TimeoutError) or isinstance(
+            getattr(exc, "reason", None), TimeoutError
+        )
+        return HookResult(
+            hook_name=hook.name,
+            exit_code=124 if timed else 126,
+            stdout="",
+            stderr=f"hook {hook.name!r} HTTP failed: {exc}",
+            timed_out=timed,
+        )
+
+
 def _run_hook(
     hook: Hook,
     tool_name: str,
     args_json: str,
     result_output: str | None,
 ) -> HookResult:
-    """Spawn the hook command with EVI_HOOK_* env vars set."""
+    """Run a hook: POST to its URL, or spawn its command with EVI_HOOK_* env."""
+    if hook.url:
+        return _run_http_hook(hook, tool_name, args_json, result_output)
+
     import os
 
     env = dict(os.environ)
