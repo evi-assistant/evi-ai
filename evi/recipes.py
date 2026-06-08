@@ -123,6 +123,21 @@ prompt = "Now build on the previous answer."
 '''
 
 
+def run_recipe_headless(agent, recipe: "Recipe") -> list[dict]:
+    """Run a recipe's steps through `agent` non-interactively (shared
+    conversation), returning [{label, prompt, text, error}, …]. Used by the
+    routine webhook + `evi routine run`."""
+    from evi.headless import run_headless
+
+    results: list[dict] = []
+    for step in recipe.steps:
+        res = run_headless(agent, step.prompt)
+        results.append(
+            {"label": step.label, "prompt": step.prompt, "text": res.text, "error": res.error}
+        )
+    return results
+
+
 def create_recipe(name: str, root: Path | None = None, overwrite: bool = False) -> Path:
     """Write a starter recipe template and return its path."""
     d = recipes_dir(root)

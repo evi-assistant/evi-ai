@@ -519,6 +519,10 @@ def create_app() -> FastAPI:
             path in _PUBLIC_PATHS
             or path.startswith("/static/")
             or path.startswith("/images/")
+            # Routine webhooks authenticate via the unguessable path token
+            # (external callers don't have the web auth token). Validated in
+            # the handler via secrets.compare_digest.
+            or path.startswith("/api/routine/")
         ):
             return await call_next(request)
 
@@ -1111,6 +1115,39 @@ def create_app() -> FastAPI:
         seq = req.get("seq") if isinstance(req, dict) else None
         actions = checkpoints.rewind(int(seq) if seq else None)
         return {"ok": True, "actions": [{"path": p, "action": a} for p, a in actions]}
+
+    @app.post("/api/routine/{token}")
+    def run_routine_endpoint(token: str) -> dict[str, Any]:
+        """Webhook trigger: run a routine's recipe headless. Auth is the
+        unguessable path token. Restricted permissions unless the routine is
+        marked `yes` (auto-approve all)."""
+        from evi import recipes, routines
+
+        r = routines.get_by_token(token)
+        if r is None or not r.enabled:
+            raise HTTPException(404, "no such routine")
+        try:
+            recipe = recipes.load_recipe(r.recipe)
+        except recipes.RecipeError as exc:
+            raise HTTPException(400, str(exc))
+
+        cfg = Config.load()
+        toggles = asdict(cfg.tools)
+        agent = Agent(
+            client=make_client(cfg.llm),
+            config=cfg,
+            tools=get_enabled_tools(toggles),
+            memory=MemoryStore() if toggles.get("memory") else None,
+            skills=SkillStore() if toggles.get("skills") else None,
+        )
+        if r.yes:
+            agent.enable_auto_all()
+        else:
+            # Non-interactive: deny non-auto-approved tools rather than block.
+            agent.permission_callback = lambda *a, **k: False
+            agent.permission_batch_callback = None
+        results = recipes.run_recipe_headless(agent, recipe)
+        return {"ok": True, "routine": r.name, "results": results}
 
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
