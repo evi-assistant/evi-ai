@@ -269,6 +269,7 @@ MODELS_DIR = HOME / "models"
 PROFILES_DIR = HOME / "profiles"
 COMMANDS_DIR = HOME / "commands"
 INDICES_DIR = HOME / "indices"
+RECIPES_DIR = HOME / "recipes"
 
 
 def ensure_dirs() -> None:
@@ -288,6 +289,7 @@ def ensure_dirs() -> None:
         SCREENSHOT_DIR,
         UPLOADS_DIR,
         INDICES_DIR,
+        RECIPES_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
 
