@@ -2466,6 +2466,45 @@ initModes();
     if (isDesktop()) invoke('open_logs_cmd').catch(() => {});
     else openDialog('Logs', '<p class="sec-blurb">Logs are written to <code>~/.evi/logs</code>.</p>');
   }
+
+  // ---- silent auto-update progress toast (desktop) -------------------
+  function _updateToast() {
+    let t = document.getElementById('update-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'update-toast';
+      t.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2500;background:var(--panel);border:1px solid var(--accent);border-radius:8px;padding:8px 14px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.45);min-width:240px;text-align:center;color:var(--fg)';
+      t.innerHTML = '<div id="update-toast-text">Updating eVi…</div>'
+        + '<div class="rec-progress" style="margin-top:6px"><div class="rec-bar" id="update-toast-bar"></div></div>';
+      document.body.appendChild(t);
+    }
+    return t;
+  }
+  async function pollUpdate() {
+    if (!isDesktop()) return;
+    let s;
+    try { s = await invoke('update_status_cmd'); } catch { return; }
+    if (!s || !s.phase) return;
+    const t = _updateToast();
+    const text = t.querySelector('#update-toast-text');
+    const bar = t.querySelector('#update-toast-bar');
+    if (s.phase === 'downloading') {
+      const pct = s.total ? Math.round(s.downloaded * 100 / s.total) : 0;
+      text.textContent = `Downloading eVi ${s.version || ''} — ${pct}%`;
+      bar.style.width = pct + '%';
+      setTimeout(pollUpdate, 500);
+    } else if (s.phase === 'installing') {
+      text.textContent = 'Installing — eVi will restart…';
+      bar.style.width = '100%';
+      setTimeout(pollUpdate, 1000);
+    } else if (s.phase === 'error') {
+      text.textContent = 'Update failed — see Help → Open Logs.';
+      setTimeout(() => t.remove(), 5000);
+    }
+  }
+  function onUpdateStarted() { pollUpdate(); }
+  // Catch an auto-update that began before the page finished loading.
+  if (isDesktop()) setTimeout(pollUpdate, 1500);
   function openShortcuts() {
     const rows = [
       ['Enter', 'Send message'], ['Shift+Enter', 'New line'], ['Ctrl+,', 'Settings'],
@@ -2600,6 +2639,7 @@ initModes();
     openSettings, openDocs, openDiagnostics, checkForUpdates, openLogs,
     openShortcuts, toggleTheme, setThemePref, openExternal, closeDialog,
     newChat, exportChat, openFind, setZoom, handleMenu, rewindFiles,
+    onUpdateStarted,
   };
 })();
 </script>

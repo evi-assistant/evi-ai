@@ -231,17 +231,70 @@ fn spawn_update_check(handle: tauri::AppHandle) {
 /// _internal/VCRUNTIME140.dll), which Windows keeps locked while evi-server
 /// runs — otherwise the installer fails with "Error opening file for writing".
 async fn install_and_restart(handle: tauri::AppHandle, update: tauri_plugin_updater::Update) {
+    let version = update.version.clone();
+    // Announce the (silent) update so the webview can show a progress toast.
+    set_update(&handle, "downloading", &version);
+    if let Some(w) = handle.get_webview_window("main") {
+        let _ = w.eval(
+            "window.eviUI && window.eviUI.onUpdateStarted && window.eviUI.onUpdateStarted()",
+        );
+    }
     if let Some(mut child) = handle.state::<ServerHandle>().0.lock().unwrap().take() {
         let _ = child.kill();
         let _ = child.wait();
     }
-    match update.download_and_install(|_chunk, _total| {}, || {}).await {
+    let h = handle.clone();
+    let on_chunk = move |chunk: usize, total: Option<u64>| {
+        if let Some(st) = h.try_state::<UpdateState>() {
+            let mut p = st.0.lock().unwrap();
+            p.downloaded += chunk as u64;
+            if let Some(t) = total {
+                p.total = t;
+            }
+        }
+    };
+    match update.download_and_install(on_chunk, || {}).await {
         Ok(_) => {
+            set_update(&handle, "installing", &version);
             eprintln!("evi: update installed — restarting");
             handle.restart();
         }
-        Err(e) => eprintln!("evi: update install failed: {e}"),
+        Err(e) => {
+            set_update(&handle, "error", &version);
+            eprintln!("evi: update install failed: {e}");
+        }
     }
+}
+
+/// Live progress for the in-app update toast (polled via `update_status_cmd`).
+#[derive(Default, Clone, serde::Serialize)]
+struct UpdateProgress {
+    phase: String, // "" | downloading | installing | error
+    downloaded: u64,
+    total: u64,
+    version: String,
+}
+
+struct UpdateState(std::sync::Mutex<UpdateProgress>);
+
+fn set_update(handle: &tauri::AppHandle, phase: &str, version: &str) {
+    if let Some(st) = handle.try_state::<UpdateState>() {
+        let mut p = st.0.lock().unwrap();
+        p.phase = phase.to_string();
+        if !version.is_empty() {
+            p.version = version.to_string();
+        }
+        if phase == "downloading" {
+            p.downloaded = 0;
+            p.total = 0;
+        }
+    }
+}
+
+/// Current update progress for the webview's poll loop.
+#[tauri::command]
+fn update_status_cmd(app: tauri::AppHandle) -> UpdateProgress {
+    app.state::<UpdateState>().0.lock().unwrap().clone()
 }
 
 /// Verdict returned to the webview's Help → Check for Updates dialog.
@@ -494,11 +547,13 @@ fn main() {
 
     let app = tauri::Builder::default()
         .manage(server)
+        .manage(UpdateState(std::sync::Mutex::new(UpdateProgress::default())))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             check_for_update_cmd,
             open_logs_cmd,
-            open_external_cmd
+            open_external_cmd,
+            update_status_cmd
         ])
         .on_menu_event(|app, event| dispatch_menu_action(app, event.id().as_ref()))
         .setup(|app| {
