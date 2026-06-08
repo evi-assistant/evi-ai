@@ -80,6 +80,14 @@ def read_file(path: str) -> ToolOutput | str:
 )
 def write_file(path: str, content: str) -> str:
     p = Path(path).expanduser()
+    # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
+    # Best-effort — a checkpoint failure must never block the write itself.
+    try:
+        from evi.checkpoints import record_before_write
+
+        record_before_write(p)
+    except Exception:  # noqa: BLE001
+        pass
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return f"wrote {len(content)} chars to {p}"

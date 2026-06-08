@@ -2438,6 +2438,33 @@ initModes();
     openDialog('Keyboard shortcuts', `<div class="docs-body">${rows}</div>`);
   }
 
+  // ---- file rewind (undo eVi's file writes) --------------------------
+  async function rewindFiles() {
+    openDialog('Rewind file changes', '<p class="sec-blurb">Loading…</p>');
+    try {
+      const cps = (await (await fetch('/api/checkpoints')).json()).checkpoints || [];
+      if (!cps.length) { dlgContent.innerHTML = '<p class="sec-blurb">No file changes to undo.</p>'; return; }
+      const rows = cps.slice().reverse().map(c =>
+        `<div class="set-about-row"><span><span class="k">#${c.seq}</span> ${escapeHtml(c.op)} ${escapeHtml(c.path)}</span>` +
+        `<button class="set-action-btn" style="margin:0" data-seq="${c.seq}">Undo from here</button></div>`
+      ).join('');
+      dlgContent.innerHTML =
+        '<p class="sec-blurb">Undo eVi’s file writes. “Undo from here” reverts that write and every one after it.</p>' +
+        '<div class="docs-body">' + rows + '</div>';
+      dlgContent.querySelectorAll('button[data-seq]').forEach(b => b.onclick = async () => {
+        if (!confirm('Undo file changes from #' + b.dataset.seq + ' onward?')) return;
+        const res = await (await fetch('/api/rewind', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seq: Number(b.dataset.seq) }),
+        })).json();
+        const acts = res.actions || [];
+        dlgContent.innerHTML = `<p>Reverted ${acts.length} file(s).</p><div class="docs-body">` +
+          acts.map(a => `<div class="set-about-row"><span>${escapeHtml(a.path)}</span><span class="k">${escapeHtml(a.action)}</span></div>`).join('') +
+          '</div>';
+      });
+    } catch (e) { dlgContent.innerHTML = '<p class="sec-blurb">Rewind unavailable: ' + escapeHtml(e.message) + '</p>'; }
+  }
+
   // ---- keyboard: Ctrl+, opens settings; Esc closes overlays ----------
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
@@ -2520,6 +2547,7 @@ initModes();
       case 'get_support': openExternal('https://github.com/dmang-dev/evi-ai-releases/issues'); break;
       case 'check_updates': checkForUpdates(); break;
       case 'open_logs': openLogs(); break;
+      case 'rewind': rewindFiles(); break;
       case 'reload': location.reload(); break;
       case 'zoom_in': setZoom(0.1); break;
       case 'zoom_out': setZoom(-0.1); break;
@@ -2534,7 +2562,7 @@ initModes();
   window.eviUI = {
     openSettings, openDocs, openDiagnostics, checkForUpdates, openLogs,
     openShortcuts, toggleTheme, setThemePref, openExternal, closeDialog,
-    newChat, exportChat, openFind, setZoom, handleMenu,
+    newChat, exportChat, openFind, setZoom, handleMenu, rewindFiles,
   };
 })();
 </script>

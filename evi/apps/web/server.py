@@ -1086,6 +1086,22 @@ def create_app() -> FastAPI:
         return {"ok": True, "mode": mode,
                 "tools": sorted(t.name for t in sess.agent.tools.values())}
 
+    @app.get("/api/checkpoints")
+    def checkpoints_list() -> dict[str, Any]:
+        """Recent file checkpoints for the rewind UI."""
+        from evi import checkpoints
+
+        return {"checkpoints": checkpoints.list_checkpoints()}
+
+    @app.post("/api/rewind")
+    def rewind_files(req: dict[str, Any]) -> dict[str, Any]:
+        """Undo file writes from a checkpoint seq onward (or just the latest)."""
+        from evi import checkpoints
+
+        seq = req.get("seq") if isinstance(req, dict) else None
+        actions = checkpoints.rewind(int(seq) if seq else None)
+        return {"ok": True, "actions": [{"path": p, "action": a} for p, a in actions]}
+
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
         sess = sessions.get(req.session_id)

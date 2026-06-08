@@ -310,6 +310,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     let export_chat = MenuItemBuilder::with_id("export_chat", "Export Chat…")
         .accelerator("CmdOrCtrl+S")
         .build(app)?;
+    let rewind = MenuItemBuilder::with_id("rewind", "Undo File Change…").build(app)?;
     let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Exit")
         .accelerator("CmdOrCtrl+Q")
@@ -318,6 +319,7 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         .item(&new_chat)
         .item(&open_file)
         .item(&export_chat)
+        .item(&rewind)
         .separator()
         .item(&settings)
         .separator()

@@ -2245,6 +2245,41 @@ def recipe_run(
 
 
 @app.command()
+def rewind(
+    seq: int = typer.Argument(
+        0, help="Undo file writes from this checkpoint seq onward (0 = just the latest)."
+    ),
+    list_: bool = typer.Option(
+        False, "--list", "-l", help="List recent file checkpoints instead of undoing."
+    ),
+) -> None:
+    """Undo eVi's file writes — file-level rewind (see also `evi rewind --list`)."""
+    import datetime as _dt
+
+    from evi import checkpoints
+
+    if list_:
+        entries = checkpoints.list_checkpoints()
+        if not entries:
+            console.print("[dim]no file checkpoints yet.[/dim]")
+            return
+        for e in entries:
+            ts = _dt.datetime.fromtimestamp(e["ts"]).strftime("%H:%M:%S")
+            console.print(
+                f"  [cyan]{e['seq']:>4}[/cyan] [dim]{ts}[/dim] "
+                f"[yellow]{e['op']}[/yellow] {e['path']}"
+            )
+        console.print("\n[dim]undo from a point:[/dim] [cyan]evi rewind <seq>[/cyan]")
+        return
+    actions = checkpoints.rewind(seq or None)
+    if not actions:
+        console.print("[dim]nothing to rewind.[/dim]")
+        return
+    for path, action in actions:
+        console.print(f"[green]✓[/green] {action} — {path}")
+
+
+@app.command()
 def setup() -> None:
     """Interactive first-run wizard. Detects backends, recommends a model,
     optionally pulls it, writes config.toml."""
