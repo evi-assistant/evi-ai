@@ -30,9 +30,23 @@ def run_python(code: str) -> str:
     with tempfile.TemporaryDirectory(prefix="evi-py-") as tmp:
         script = Path(tmp) / "snippet.py"
         script.write_text(code, encoding="utf-8")
+        argv = [sys.executable, str(script)]
+        note = ""
+        try:
+            from evi.config import Config
+
+            if Config.load().tools.sandbox:
+                from evi import sandbox
+
+                if sandbox.available():
+                    argv = sandbox.wrap(argv, tmp, allow_network=False)
+                else:
+                    note = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
+        except Exception:  # noqa: BLE001
+            pass
         try:
             res = subprocess.run(
-                [sys.executable, str(script)],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=_TIMEOUT_SECONDS,
@@ -43,4 +57,4 @@ def run_python(code: str) -> str:
         out = (res.stdout or "") + (res.stderr or "")
         if len(out) > _MAX_OUTPUT:
             out = out[:_MAX_OUTPUT] + f"\n... [truncated, {len(out)} bytes total]"
-        return out or f"(no output, exit={res.returncode})"
+        return note + (out or f"(no output, exit={res.returncode})")

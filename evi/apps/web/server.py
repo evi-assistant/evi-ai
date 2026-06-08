@@ -1041,6 +1041,8 @@ def create_app() -> FastAPI:
 
         rec_chat = rec.chat.id if rec and rec.chat else ""
         rec_coder = rec.coder.id if rec and rec.coder else ""
+        from evi import sandbox as _sandbox
+
         return {
             "os": f"{_plat.system()} {_plat.release()}",
             "os_detail": _plat.platform(),
@@ -1059,6 +1061,7 @@ def create_app() -> FastAPI:
             },
             "backend": cfg.llm.backend,
             "current_model": cfg.llm.model,
+            "sandbox": {"enabled": cfg.tools.sandbox, **_sandbox.status()},
         }
 
     @app.get("/api/modes")

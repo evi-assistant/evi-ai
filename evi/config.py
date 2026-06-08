@@ -206,6 +206,10 @@ class ToolToggles:
     git: bool = False        # git read-only inspection tools
     ocr: bool = False        # tesseract OCR — needs the binary installed
     calendar: bool = False   # iCal / CalDAV calendar reading
+    # When true, run_python executes under an OS sandbox (read-only FS except a
+    # temp workdir, no network) where one is available (bwrap / sandbox-exec).
+    # Falls back to unsandboxed if no sandboxer is present. See evi/sandbox.py.
+    sandbox: bool = False
 
 
 @dataclass
