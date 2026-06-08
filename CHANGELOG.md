@@ -3,6 +3,36 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.0] — 2026-06-07
+
+### Added — settings screen, native menus, system tray, in-app docs
+
+A Claude-Desktop-style control surface across the web + desktop frontends.
+
+- **Settings screen** (⚙ / Ctrl+, / File → Settings): General, Model & Backend,
+  Tools, Permissions, Context, Integrations, Server, About. Backed by a new
+  `GET/POST /api/config` — full snapshot with secrets masked, plus a
+  section-patch that hot-reloads live sessions and rebuilds the LLM client on
+  backend/model changes.
+- **Native menus** (desktop): File / Edit / View / Help with accelerators. Edit
+  uses native undo/redo/cut/copy/paste/select-all; View has reload, zoom, theme
+  toggle, and **Toggle Developer Tools**.
+- **System tray + minimize-to-tray**: closing the window keeps eVi (and its warm
+  sidecar) running in the tray — quit via the tray or File → Exit.
+- **Force-update**: Help → Check for Updates triggers the signed updater on
+  demand (the launch-time auto-check still runs).
+- **In-app documentation** (Help → Documentation): renders `docs/*.md` offline
+  via a new dependency-free Markdown renderer (`evi/apps/web/mdlite.py`) — no CDN
+  needed; docs are bundled into the frozen sidecar.
+- **Diagnostics** (Help → Run Diagnostics): `evi doctor` checks in-app, via
+  `/api/doctor`.
+- **Light theme** + a system/dark/light toggle.
+
+### Testing
+
+New Playwright e2e tests cover the settings screen, the `/api/config`
+round-trip, in-app docs, and diagnostics. Desktop → 0.2.5.
+
 ## [0.24.3] — 2026-06-07
 
 ### Changed — rebranded to **eVi**
