@@ -24,6 +24,19 @@ fn pick_free_port() -> Result<u16, std::io::Error> {
     Ok(port)
 }
 
+/// Prefer a STABLE port so the webview origin (http://127.0.0.1:<port>) — and
+/// thus its localStorage (open tabs + session ids) — survives an app restart.
+/// Falls back to any free port if the preferred one is taken (e.g. a second
+/// eVi instance), accepting that that launch starts with a fresh origin.
+fn pick_port() -> Result<u16, std::io::Error> {
+    const PREFERRED: u16 = 8473;
+    if let Ok(listener) = TcpListener::bind(("127.0.0.1", PREFERRED)) {
+        drop(listener);
+        return Ok(PREFERRED);
+    }
+    pick_free_port()
+}
+
 /// Walk up from `start` looking for a directory containing `pyproject.toml`.
 /// Falls back to None if not found — caller should warn and exit cleanly.
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
@@ -513,7 +526,7 @@ fn main() {
                 // Local mode. Prefer a bundled sidecar (standalone build);
                 // otherwise fall back to spawning a system Python from the
                 // repo root (developer / source-checkout install).
-                let port = pick_free_port()?;
+                let port = pick_port()?;
                 let child = if let Some(side) = sidecar_path(app) {
                     spawn_sidecar(&side, port)?
                 } else {
