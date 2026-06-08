@@ -2139,6 +2139,16 @@ initModes();
       { type:'secret', section:'web', key:'auth_token', label:'Access token',
         help:'When set, the web UI requires this token. Blank = open localhost access.' },
     ]},
+    { id:'voice', title:'Voice', blurb:'Text-to-speech engine for spoken replies.', fields:[
+      { type:'select', section:'voice', key:'engine', label:'TTS engine',
+        options:['system','coqui','f5','piper'],
+        help:'system: zero-dep platform voice · coqui (XTTS) & f5: voice cloning from a sample · piper: light local voices. Neural engines are optional installs.' },
+      { type:'text', section:'voice', key:'model', label:'Model id / path',
+        help:'Engine-specific. Coqui: an XTTS model id (blank = xtts_v2). Piper: a voice .onnx path.' },
+      { type:'text', section:'voice', key:'clone_sample', label:'Clone sample (WAV path)',
+        help:'Reference audio for the cloning engines (coqui / f5).' },
+      { type:'text', section:'voice', key:'language', label:'Language', help:'ISO code, e.g. en.' },
+    ]},
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 

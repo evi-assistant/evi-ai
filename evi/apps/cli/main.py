@@ -665,7 +665,7 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
         toks = rep["buckets"][b]
         share = rep["pct_of_used"][b]
         fill = (share * width) // 100
-        bar = "█" * fill + "·" * (width - fill)
+        bar = "#" * fill + "-" * (width - fill)
         console.print(
             f"  [cyan]{labels[b]:<14}[/cyan] [dim]{bar}[/dim] "
             f"{toks:,} [dim]({share}%)[/dim]"
@@ -1331,18 +1331,27 @@ app.add_typer(voice_app, name="voice")
 
 
 @voice_app.command("speak")
-def voice_speak(text: str, rate: int | None = None) -> None:
-    """Speak `text` aloud via the platform TTS engine."""
+def voice_speak(
+    text: str,
+    rate: int | None = None,
+    engine: str = typer.Option(
+        "", "--engine", help="Override the [voice] engine: system|coqui|f5|piper."
+    ),
+) -> None:
+    """Speak `text` aloud via the configured TTS engine."""
+    from evi.config import Config
     from evi.voice import VoiceError, detect_backend, speak
 
-    backend = detect_backend()
-    if backend == "none":
-        console.print(
-            "[red]no TTS backend found[/red] — install espeak-ng on Linux"
-        )
+    vs = Config.load().voice
+    eng = engine or vs.engine or "system"
+    if eng == "system" and detect_backend() == "none":
+        console.print("[red]no TTS backend found[/red] — install espeak-ng on Linux")
         raise typer.Exit(1)
     try:
-        speak(text, rate=rate, blocking=True)
+        speak(
+            text, rate=rate, blocking=True, engine=eng,
+            model=vs.model, clone_sample=vs.clone_sample, language=vs.language,
+        )
     except VoiceError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -1350,10 +1359,27 @@ def voice_speak(text: str, rate: int | None = None) -> None:
 
 @voice_app.command("backend")
 def voice_backend() -> None:
-    """Show which TTS backend will be used."""
+    """Show which platform TTS backend will be used (the 'system' engine)."""
     from evi.voice import detect_backend
 
     console.print(detect_backend())
+
+
+@voice_app.command("engines")
+def voice_engines() -> None:
+    """List the TTS engines and whether each is installed."""
+    from evi.config import Config
+    from evi.voice import available_engines
+
+    active = Config.load().voice.engine or "system"
+    for name, ok in available_engines().items():
+        mark = "[green]installed[/green]" if ok else "[dim]not installed[/dim]"
+        star = " [cyan](active)[/cyan]" if name == active else ""
+        console.print(f"  [bold]{name:<7}[/bold] {mark}{star}")
+    console.print(
+        "[dim]set [/dim][cyan]engine[/cyan][dim] under the voice section of "
+        "config.toml (coqui/f5 also take a clone_sample WAV).[/dim]"
+    )
 
 
 @voice_app.command("listen")

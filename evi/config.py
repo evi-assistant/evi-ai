@@ -204,6 +204,28 @@ class StatusLineSettings:
 
 
 @dataclass
+class VoiceSettings:
+    """TTS engine selection (Phase 91).
+
+    `engine` picks how speech is synthesised:
+      - "system" — the zero-dep platform voice (Windows SAPI / macOS say / espeak)
+      - "coqui"  — Coqui XTTS v2 (multilingual, voice cloning from a sample)
+      - "f5"     — F5-TTS (fast zero-shot cloning)
+      - "piper"  — Piper (lightweight local neural voices; no cloning)
+
+    The neural engines are optional heavyweight installs (torch etc.); eVi
+    lazy-imports them and falls back to a clear error if the deps aren't
+    present. `clone_sample` is a reference WAV for the cloning engines;
+    `model` is an engine-specific model id/path (e.g. a Piper `.onnx`).
+    """
+
+    engine: str = "system"       # system | coqui | f5 | piper
+    model: str = ""              # engine-specific model id / path
+    clone_sample: str = ""       # reference audio for voice cloning (coqui/f5)
+    language: str = "en"
+
+
+@dataclass
 class ToolToggles:
     fs: bool = True
     code: bool = True
@@ -270,6 +292,7 @@ class Config:
     web: WebSettings = field(default_factory=WebSettings)
     telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
     statusline: StatusLineSettings = field(default_factory=StatusLineSettings)
+    voice: VoiceSettings = field(default_factory=VoiceSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -304,6 +327,7 @@ class Config:
             web=WebSettings(**data.get("web", {})),
             telemetry=TelemetrySettings(**data.get("telemetry", {})),
             statusline=StatusLineSettings(**data.get("statusline", {})),
+            voice=VoiceSettings(**data.get("voice", {})),
         )
 
     def save(self) -> None:
