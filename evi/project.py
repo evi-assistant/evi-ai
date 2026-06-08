@@ -60,23 +60,53 @@ def find_project_file(start: Path | None = None) -> Path | None:
     return None
 
 
+def find_project_files(start: Path | None = None) -> list[Path]:
+    """Every project file from the filesystem root down to `start` (outermost
+    first, nearest last), one per directory. Enables monorepo-style layered
+    context: a repo-root EVI.md plus a package-level one."""
+    cur: Path | None = (start or Path.cwd()).resolve()
+    found: list[Path] = []
+    while cur is not None:
+        for name in PROJECT_FILENAMES:
+            candidate = cur / name
+            if candidate.is_file():
+                found.append(candidate)
+                break  # one per directory
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    found.reverse()  # root → nearest, so the most-specific context comes last
+    return found
+
+
 def load_project_context(start: Path | None = None) -> ProjectContext | None:
-    """Return the parsed project file, or None if none exists / too large."""
-    path = find_project_file(start)
-    if path is None:
+    """Aggregate project files from root → cwd into one context.
+
+    A single file is returned verbatim (backwards compatible). Multiple levels
+    are concatenated with per-file headers, outermost first, capped at
+    `_MAX_BYTES` total — partial context beats none."""
+    files = find_project_files(start)
+    sections: list[tuple[Path, str]] = []
+    for path in files:
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        sections.append((path, text))
+    if not sections:
         return None
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    if len(data) > _MAX_BYTES:
-        # Truncate rather than refuse — partial context beats none.
-        data = data[:_MAX_BYTES]
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    return ProjectContext(path=path, content=text)
+
+    nearest = sections[-1][0]
+    if len(sections) == 1:
+        content = sections[0][1]
+    else:
+        content = "\n\n".join(f"### {p}\n\n{t.strip()}" for p, t in sections)
+    if len(content.encode("utf-8")) > _MAX_BYTES:
+        marker = "\n…(project context truncated)"
+        budget = _MAX_BYTES - len(marker.encode("utf-8"))
+        content = content.encode("utf-8")[:budget].decode("utf-8", errors="ignore") + marker
+    return ProjectContext(path=nearest, content=content)
 
 
 # --- per-project config overlay (Phase 74) ------------------------------
