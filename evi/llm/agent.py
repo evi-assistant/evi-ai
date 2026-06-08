@@ -485,6 +485,23 @@ class Agent:
     def _is_pre_approved(self, tool: Tool) -> bool:
         return self.auto_all or tool.category in self.auto_approve_categories
 
+    def _permission_decision(self, tool: Tool, args_json: str) -> str:
+        """'allow' | 'deny' | 'ask' for a tool call, via the permission policy
+        (mode + rules + auto-approve categories). `/auto on` forces allow."""
+        if self.auto_all:
+            return "allow"
+        from evi.permissions import decide
+
+        auto = getattr(self.config, "auto", None)
+        return decide(
+            getattr(auto, "mode", "ask"),
+            self.auto_approve_categories,
+            getattr(auto, "rules", []) or [],
+            tool.name,
+            tool.category,
+            args_json,
+        )
+
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
         """Return True iff the tool call is allowed to proceed."""
         if self._is_pre_approved(tool):
@@ -1301,10 +1318,14 @@ class Agent:
             tool = m["tool"]
             if tool is None:
                 m["perm"] = True  # unknown-tool error raised later, not a denial
-            elif self._is_pre_approved(tool):
+                continue
+            decision = self._permission_decision(tool, m["args"])
+            if decision == "allow":
                 m["perm"] = True
+            elif decision == "deny":
+                m["perm"] = False  # policy/mode/rule blocked it — no prompt
             elif self.permission_callback is None and self.permission_batch_callback is None:
-                m["perm"] = True  # no UI to ask (web/scheduler) → default allow
+                m["perm"] = True  # 'ask' but no UI to ask (web/scheduler) → default allow
             else:
                 m["perm"] = None  # undecided — needs a prompt
                 need_prompt.append(m)
