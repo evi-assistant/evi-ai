@@ -337,8 +337,17 @@ class Agent:
     # --- prompt composition ---------------------------------------------
 
     def _compose_system_prompt(self) -> str:
-        """Stitch base + memory + skills + project context together."""
+        """Stitch base + style + memory + skills + project context together."""
         parts = [self._base_system_prompt]
+        # Output style (response persona), if one is selected.
+        try:
+            from evi.styles import style_text
+
+            st = style_text(getattr(self.config.llm, "output_style", "") or "")
+            if st:
+                parts.append(st)
+        except Exception:  # noqa: BLE001
+            pass
         if self.memory is not None:
             mem = self.memory.format_for_prompt()
             if mem:

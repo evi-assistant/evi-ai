@@ -2291,6 +2291,47 @@ def run(
     print(res.text)
 
 
+style_app = typer.Typer(help="Output styles — switchable response personas.")
+app.add_typer(style_app, name="style")
+
+
+@style_app.command("list")
+def style_list() -> None:
+    """List available output styles (built-ins + ~/.evi/styles/*.md)."""
+    from evi import styles
+
+    active = Config.load().llm.output_style
+    console.print(f"[bold]active:[/bold] {active or '(default)'}")
+    for n in styles.list_styles():
+        mark = " [green]✓[/green]" if n == active else ""
+        console.print(f"  {n}{mark}")
+
+
+@style_app.command("show")
+def style_show(name: str) -> None:
+    """Print a style's instruction text."""
+    from evi import styles
+
+    text = styles.style_text(name)
+    console.print(text or f"[red]no such style:[/red] {name}")
+
+
+@style_app.command("use")
+def style_use(
+    name: str = typer.Argument("", help="Style name, or empty to clear (default voice)."),
+) -> None:
+    """Set the active output style."""
+    from evi import styles
+
+    if name and name not in styles.list_styles():
+        console.print(f"[red]no such style:[/red] {name}")
+        raise typer.Exit(1)
+    cfg = Config.load()
+    cfg.llm.output_style = name
+    cfg.save()
+    console.print(f"[green]output style:[/green] {name or '(default)'}")
+
+
 plugin_app = typer.Typer(help="Plugins — installable bundles of slash commands.")
 app.add_typer(plugin_app, name="plugin")
 

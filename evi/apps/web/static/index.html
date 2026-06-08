@@ -2027,6 +2027,8 @@ initModes();
     { id:'general', title:'General', blurb:'Appearance and reporting.', fields:[
       { type:'client-select', key:'theme', label:'Theme', options:['system','dark','light'],
         help:'eVi follows your OS by default. Also under View → Toggle Theme.' },
+      { type:'style', section:'llm', key:'output_style', label:'Output style',
+        help:'Response persona layered on the system prompt (concise / explanatory / teacher, or your own ~/.evi/styles/*.md).' },
       { type:'bool', section:'telemetry', key:'crash_reports', label:'Crash reporting',
         help:'Opt-in. Sends scrubbed reports only when a DSN is set. Off by default.' },
       { type:'secret', section:'telemetry', key:'dsn', label:'Telemetry DSN',
@@ -2089,7 +2091,7 @@ initModes();
   const contentEl = document.getElementById('settings-content');
   const statusEl = document.getElementById('settings-status');
   const saveBtn = document.getElementById('settings-save');
-  let cfg = null, pending = {}, activeSection = 'general', modelOptions = [];
+  let cfg = null, pending = {}, activeSection = 'general', modelOptions = [], styleOptions = [];
 
   const getVal = (s, k) =>
     (pending[s] && k in pending[s]) ? pending[s][k] : (cfg && cfg[s] ? cfg[s][k] : undefined);
@@ -2105,6 +2107,10 @@ initModes();
     try {
       const pr = await fetch('/api/model-picker');
       if (pr.ok) modelOptions = (await pr.json()).models || [];
+    } catch {}
+    try {
+      const sr = await fetch('/api/styles');
+      if (sr.ok) styleOptions = (await sr.json()).styles || [];
     } catch {}
   }
 
@@ -2304,6 +2310,13 @@ initModes();
         const v = f.type === 'int' ? parseInt(inp.value || '0', 10) : parseFloat(inp.value || '0');
         setVal(f.section, f.key, isNaN(v) ? 0 : v);
       };
+    } else if (f.type === 'style') {
+      inp = document.createElement('select');
+      const dflt = document.createElement('option');
+      dflt.value = ''; dflt.textContent = '(default)'; inp.appendChild(dflt);
+      styleOptions.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; inp.appendChild(op); });
+      inp.value = getVal(f.section, f.key) || '';
+      inp.onchange = () => setVal(f.section, f.key, inp.value);
     } else if (f.type === 'lines') {
       inp = document.createElement('textarea');
       inp.rows = 4;

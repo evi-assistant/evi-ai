@@ -117,6 +117,10 @@ class LLMSettings:
     # the LLM fallback (keyword-only routing).
     router_enabled: bool = False
     router_model: str = ""
+    # Output style (response persona) layered onto the system prompt — one of the
+    # built-ins (concise/explanatory/teacher) or a ~/.evi/styles/<name>.md file.
+    # Empty = eVi's default voice. See evi/styles.py.
+    output_style: str = ""
 
 
 @dataclass
@@ -281,6 +285,7 @@ PROFILES_DIR = HOME / "profiles"
 COMMANDS_DIR = HOME / "commands"
 INDICES_DIR = HOME / "indices"
 RECIPES_DIR = HOME / "recipes"
+STYLES_DIR = HOME / "styles"
 
 
 def ensure_dirs() -> None:
@@ -301,6 +306,7 @@ def ensure_dirs() -> None:
         UPLOADS_DIR,
         INDICES_DIR,
         RECIPES_DIR,
+        STYLES_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
 
