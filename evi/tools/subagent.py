@@ -7,8 +7,10 @@ conversation; its final assistant text becomes the tool result.
 
 from __future__ import annotations
 
-from evi.llm.subagent import SUBAGENT_PROFILES, run_subagent
+from evi.llm.subagent import SUBAGENT_PROFILES, run_subagent, run_subagents_parallel
 from evi.tools.base import tool
+
+_MAX_PARALLEL = 6
 
 
 @tool(
@@ -44,3 +46,28 @@ def delegate_plan(task: str) -> str:
         task=task,
         tool_categories=profile["tool_categories"],  # type: ignore[arg-type]
     )
+
+
+@tool(
+    description=(
+        "Research several sub-questions in PARALLEL. Pass a list of focused, "
+        "independent sub-questions; each runs at the same time as its own "
+        "read-only Explore subagent, and their findings are combined into one "
+        f"report. Best for broad investigations you can split up (max "
+        f"{_MAX_PARALLEL} at once). Synthesize the combined findings yourself."
+    ),
+    category="subagent",
+    long=True,
+)
+def parallel_research(tasks: list[str]) -> str:
+    cleaned = [str(t).strip() for t in (tasks or []) if str(t).strip()][:_MAX_PARALLEL]
+    if not cleaned:
+        return "ERROR: provide at least one sub-question in `tasks`."
+    profile = SUBAGENT_PROFILES["explore"]
+    results = run_subagents_parallel(
+        cleaned,
+        system_prompt=str(profile["system_prompt"]),
+        tool_categories=profile["tool_categories"],  # type: ignore[arg-type]
+    )
+    blocks = [f"### {i + 1}. {task}\n{findings}" for i, (task, findings) in enumerate(results)]
+    return "## Parallel research findings\n\n" + "\n\n".join(blocks)

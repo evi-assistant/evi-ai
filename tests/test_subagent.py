@@ -80,3 +80,48 @@ def test_delegate_plan_has_no_tools(stub_llm, monkeypatch) -> None:
     REGISTRY["delegate_plan"].call(json.dumps({"task": "design X"}))
     kwargs = _FakeAgent.last_init_kwargs
     assert kwargs["tools"] == []
+
+
+# --- parallel multi-agent research (Phase 61) ---------------------------
+
+
+def _echo(*, system_prompt, task, tool_categories=(), max_turns=6):
+    return f"found:{task}"
+
+
+def test_run_subagents_parallel_preserves_order(monkeypatch) -> None:
+    monkeypatch.setattr(subagent_mod, "run_subagent", _echo)
+    res = subagent_mod.run_subagents_parallel(["a", "b", "c"], system_prompt="x")
+    assert res == [("a", "found:a"), ("b", "found:b"), ("c", "found:c")]
+
+
+def test_run_subagents_parallel_isolates_errors(monkeypatch) -> None:
+    def flaky(*, system_prompt, task, tool_categories=(), max_turns=6):
+        if task == "boom":
+            raise RuntimeError("nope")
+        return f"ok:{task}"
+
+    monkeypatch.setattr(subagent_mod, "run_subagent", flaky)
+    res = dict(subagent_mod.run_subagents_parallel(["a", "boom", "c"], system_prompt="x"))
+    assert res["a"] == "ok:a" and res["c"] == "ok:c"
+    assert res["boom"].startswith("ERROR:")
+
+
+def test_parallel_research_tool_combines(monkeypatch) -> None:
+    monkeypatch.setattr(subagent_mod, "run_subagent", _echo)
+    out = REGISTRY["parallel_research"].call(
+        json.dumps({"tasks": ["where is X", "how does Y work"]})
+    )
+    assert "Parallel research findings" in out
+    assert "### 1. where is X" in out and "found:where is X" in out
+    assert "### 2. how does Y work" in out
+
+
+def test_parallel_research_caps_and_validates(monkeypatch) -> None:
+    monkeypatch.setattr(subagent_mod, "run_subagent", _echo)
+    out = REGISTRY["parallel_research"].call(
+        json.dumps({"tasks": [f"t{i}" for i in range(10)]})
+    )
+    assert out.count("### ") == 6  # capped at _MAX_PARALLEL
+    empty = REGISTRY["parallel_research"].call(json.dumps({"tasks": []}))
+    assert empty.startswith("ERROR:")
