@@ -2478,7 +2478,8 @@ def plugin_list() -> None:
     for p in items:
         ver = f" [dim]v{p.version}[/dim]" if p.version else ""
         desc = f" — {p.description}" if p.description else ""
-        console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({p.commands} cmds)[/dim]{desc}")
+        counts = f"{p.commands} cmds" + (f", {p.skills} skills" if p.skills else "")
+        console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({counts})[/dim]{desc}")
 
 
 @plugin_app.command("remove")
