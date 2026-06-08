@@ -229,10 +229,12 @@ locally and ship once that clears.
 
 - **Phase 79 — in-app update progress toast** — **✅ shipped (local)**: the
   silent auto-updater now shows a progress toast (downloading % → installing).
-- **Phase 80 — full plugin components** — hooks, MCP servers, and subagent
-  profiles bundled in a plugin (commands + skills already land). **M/L.**
-- **Phase 81 — HTTP hooks** — a hook type that POSTs to a URL (today's hooks are
-  shell-only). **S.**
+- **Phase 80 — full plugin components** — **✅ shipped (local)**: plugins now
+  bundle hooks (`hooks.toml`) and MCP servers (`mcp.json`, namespaced
+  `<plugin>:<name>`) on top of commands + skills. Subagent profiles in plugins
+  remain the one planned component type (code-defined dict — a larger change).
+- **Phase 81 — HTTP hooks** — **✅ shipped (local)**: a hook can POST its event
+  to a `url` instead of spawning a command; non-2xx vetoes a before-hook.
 - **Phase 82 — keybindings** — configurable REPL shortcuts. **S.**
 - **Phase 83 — channels** — push an external alert/notification into a running
   session (routines cover inbound webhook→recipe; this is push-into-live). **M.**
