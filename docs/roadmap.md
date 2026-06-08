@@ -235,7 +235,8 @@ locally and ship once that clears.
   remain the one planned component type (code-defined dict — a larger change).
 - **Phase 81 — HTTP hooks** — **✅ shipped (local)**: a hook can POST its event
   to a `url` instead of spawning a command; non-2xx vetoes a before-hook.
-- **Phase 82 — keybindings** — configurable REPL shortcuts. **S.**
+- **Phase 82 — keybindings** — **✅ shipped (local)**: `~/.evi/keybindings.toml`
+  maps a key to a slash command in the REPL (press → run).
 - **Phase 83 — channels** — push an external alert/notification into a running
   session (routines cover inbound webhook→recipe; this is push-into-live). **M.**
 - **Phase 84 — packaged CI action** — a reusable GitHub Action / workflow that

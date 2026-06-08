@@ -159,14 +159,41 @@ veto_on_nonzero  = true                 # non-zero exit blocks the tool
 name    = "notify"
 match   = "generate_image"
 command = ["notify-send", "Image ready"]
+
+[[after_tool_call]]
+name    = "webhook"
+match   = "*"
+url     = "https://example.com/evi-hook"   # POST instead of spawning a command
 ```
 
-Env vars set in the child process:
+Env vars set in the child process (command hooks):
 
 - `EVI_HOOK_EVENT` — `before_tool_call` or `after_tool_call`
 - `EVI_HOOK_TOOL` — fully-qualified tool name
 - `EVI_HOOK_ARGS_JSON` — JSON of the call arguments
 - `EVI_HOOK_RESULT` — tool output (after-hooks only, capped at 4 KB)
+
+A hook uses either `command` (argv, spawned) **or** `url` (HTTP POST of
+`{event, tool, args_json, result}`). For a url hook a 2xx response means
+success; any other status becomes the exit code, so `veto_on_nonzero` still
+gates the call.
+
+## Keybindings — `~/.evi/keybindings.toml`
+
+Map a key to a slash command in the interactive chat REPL — pressing it
+replaces the line with that command and submits it.
+
+```toml
+[keybindings]
+"c-t"      = "/tools"      # Ctrl-T
+"f2"       = "/model"      # F2
+"escape g" = "/goal"       # Esc then g (a two-key sequence)
+```
+
+Keys use prompt_toolkit names (`c-t`, `f2`, `escape`, …); a space-separated
+value is a multi-key sequence. Terminal essentials (`c-c`, `c-d`, `tab`,
+`enter`) are reserved and silently ignored, and an unknown key name is skipped
+without breaking the others.
 
 ## MCP — `~/.evi/mcp.json`
 
