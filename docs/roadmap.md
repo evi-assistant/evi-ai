@@ -167,6 +167,58 @@ choice persists and follows tab switches. `evi/modes.py` + `/api/modes` +
 - Smaller: long-context model awareness in the registry; `/recent` prompt
   history in the REPL.
 
+## Candidate phases — Claude Code parity review (2026-06-08)
+
+A pass over the [Claude Code docs](https://code.claude.com/docs/en/overview)
+surfaced these gaps. Each is a genuine *net-new* capability (eVi already has the
+agentic loop, subagents + parallel research, MCP client/publish, hooks,
+scheduler, skills, memory + tags, worktrees, routing, guardrails, vuln scanning,
+voice, computer-use, custom commands, recipes, and session modes). Ordered by
+value × fit with eVi's local-first, single-user, privacy-first stance.
+
+- **Phase 64 — File checkpointing + rewind** — **M**. Snapshot files before each
+  tool edit; `/rewind` (CLI + web) restores files and/or the conversation to a
+  prior point. eVi has conversation edit/branch/reroll but **no file-state undo**
+  — the biggest safety gap vs Claude Code's checkpointing.
+- **Phase 65 — Headless / print mode** — **M**. `evi -p "prompt"
+  [--output-format json|text] [--mode code]` for one-shot scripted/CI/cron use,
+  reusing the agent loop. JSON envelope = final text + tool trace + usage. The
+  foundation for any eVi automation story (and a thin SDK later).
+- **Phase 66 — Granular permissions + permission modes** — **M**. Beyond
+  category auto-approve: modes (ask / accept-edits / plan / yolo) and rule-based
+  allow/deny (per tool, per path glob, per shell-command prefix, per domain),
+  with a `/permissions` view in Settings.
+- **Phase 67 — Sandboxed shell** — **M/L**. Run the shell/code-exec tools in a
+  sandbox (read-only FS outside the project, no network) by default, opt-out per
+  call. OS-specific (bubblewrap/seccomp · sandbox-exec · restricted job object).
+  Hardens the riskiest tool.
+- **Phase 68 — Plugins + local marketplace** — **L** *(supersedes the pending
+  "plugin loader")*. A plugin bundles commands + skills + hooks + subagent
+  profiles + optional MCP servers; `evi plugin add <git-url|dir>` + a manifest +
+  a curated index. Subsumes much of the integrations backlog.
+- **Phase 69 — Output styles** — **S/M**. Switchable response personas (concise /
+  explanatory / teacher / reviewer) layered on the system prompt, independent of
+  the Chat/Cowork/Code *tool* modes. `~/.evi/styles/*.md` + a picker.
+- **Phase 70 — Multi-agent code review** — **M**. Upgrade `evi review` to fan out
+  parallel reviewers (correctness / security / perf / tests) via the new
+  `run_subagents_parallel`, then synthesize — a local take on Claude Code's
+  multi-agent review.
+- **Phase 71 — Session resume / fork (CLI)** — **S/M**. `evi --continue`,
+  `evi --resume <id>`, `evi --fork <id>` off the transcript store; list saved
+  sessions in the web tab bar. Completes session management.
+
+Lighter / optional: customizable **status line** (context % · model · branch ·
+mode); **routines/triggers** (event/webhook → run a recipe, opt-in, local-only);
+**project-level config** (`.evi/` overlay + nested project context for
+monorepos).
+
+**Explicitly not adopting** (philosophy mismatch): cloud/enterprise backends
+(Bedrock/Vertex/Foundry), org admin / managed settings, cloud Ultrareview /
+Ultraplan, S3/Redis session storage, usage analytics dashboards, and the agentic
+browser (already deferred in favour of MCP browser servers). A full public Agent
+SDK is deferred too — headless mode (Phase 65) covers the automation need without
+committing to a stable library surface.
+
 ## Integrations backlog
 
 A large, separately-tracked list (Home Assistant, Notion, Spotify, Slack,
