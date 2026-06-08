@@ -1,0 +1,135 @@
+name: "Run eVi"
+description: "Install eVi and run a single prompt headlessly, capturing the result."
+author: "eVi"
+branding:
+  icon: "cpu"
+  color: "purple"
+
+# A reusable composite action wrapping `evi run` (Phase 84). It installs
+# evi-assistant from PyPI, writes a throwaway config pointing at your backend,
+# and runs one headless prompt with tools auto-approved.
+#
+# eVi is the *app*, not the model — give it a backend via the `backend` /
+# `base_url` / `api_key` / `model` inputs (any OpenAI-compatible endpoint, or a
+# reachable Ollama). If you omit them, pre-populate $EVI_HOME/config.toml
+# yourself before this step. See docs/configuration.md.
+#
+# Example:
+#   - uses: <owner>/evi-ai/.github/actions/evi-run@main
+#     id: triage
+#     with:
+#       prompt: "Summarise the changes in this PR."
+#       format: json
+#       mode: code
+#       backend: openai_compat
+#       base_url: ${{ secrets.LLM_BASE_URL }}
+#       api_key: ${{ secrets.LLM_API_KEY }}
+#       model: ${{ secrets.LLM_MODEL }}
+#   - run: echo '${{ steps.triage.outputs.result }}'
+
+inputs:
+  prompt:
+    description: "The prompt to run. Required."
+    required: true
+  format:
+    description: "Output format: text | json."
+    required: false
+    default: "text"
+  mode:
+    description: "Tool preset: chat | cowork | code (blank = default toolset)."
+    required: false
+    default: ""
+  backend:
+    description: "LLM backend: lmstudio | ollama | llamacpp | openai_compat."
+    required: false
+    default: ""
+  base_url:
+    description: "OpenAI-compatible base URL (e.g. https://api.openai.com/v1)."
+    required: false
+    default: ""
+  api_key:
+    description: "API key for the backend."
+    required: false
+    default: ""
+  model:
+    description: "Model id to use."
+    required: false
+    default: ""
+  version:
+    description: "evi-assistant version spec (e.g. 0.31.0). Blank = latest."
+    required: false
+    default: ""
+  extras:
+    description: "pip extras to install."
+    required: false
+    default: "web,mcp,web-tools"
+  python-version:
+    description: "Python version."
+    required: false
+    default: "3.12"
+
+outputs:
+  result:
+    description: "The stdout of `evi run` (the answer, or the JSON object)."
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install eVi
+      shell: bash
+      env:
+        EVI_VERSION: ${{ inputs.version }}
+        EVI_EXTRAS: ${{ inputs.extras }}
+      run: |
+        python -m pip install --upgrade pip
+        spec="evi-assistant"
+        [ -n "$EVI_VERSION" ] && spec="${spec}==${EVI_VERSION}"
+        python -m pip install "${spec}[${EVI_EXTRAS}]"
+
+    - name: Configure backend
+      shell: bash
+      env:
+        EVI_HOME_DIR: ${{ github.workspace }}/.evi-ci
+        IN_BACKEND: ${{ inputs.backend }}
+        IN_BASE_URL: ${{ inputs.base_url }}
+        IN_API_KEY: ${{ inputs.api_key }}
+        IN_MODEL: ${{ inputs.model }}
+      run: |
+        mkdir -p "$EVI_HOME_DIR"
+        # Persist EVI_HOME for the following step (composite step env doesn't carry over).
+        echo "EVI_HOME=$EVI_HOME_DIR" >> "$GITHUB_ENV"
+        # Only write config when a backend was supplied; otherwise trust an
+        # $EVI_HOME the caller set up themselves.
+        if [ -n "$IN_BACKEND" ] || [ -n "$IN_BASE_URL" ]; then
+          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+          {
+            echo "[llm]"
+            [ -n "$IN_BACKEND" ]  && echo "backend = \"$(esc "$IN_BACKEND")\""
+            [ -n "$IN_BASE_URL" ] && echo "base_url = \"$(esc "$IN_BASE_URL")\""
+            [ -n "$IN_API_KEY" ]  && echo "api_key = \"$(esc "$IN_API_KEY")\""
+            [ -n "$IN_MODEL" ]    && echo "model = \"$(esc "$IN_MODEL")\""
+          } > "$EVI_HOME_DIR/config.toml"
+        fi
+
+    - name: Run prompt
+      id: run
+      shell: bash
+      env:
+        EVI_PROMPT: ${{ inputs.prompt }}
+        EVI_FORMAT: ${{ inputs.format }}
+        EVI_MODE: ${{ inputs.mode }}
+      run: |
+        args=(run "$EVI_PROMPT" --format "$EVI_FORMAT" --yes)
+        [ -n "$EVI_MODE" ] && args+=(--mode "$EVI_MODE")
+        out="$(evi "${args[@]}")"
+        printf '%s\n' "$out"
+        {
+          echo "result<<__EVI_EOF__"
+          printf '%s\n' "$out"
+          echo "__EVI_EOF__"
+        } >> "$GITHUB_OUTPUT"

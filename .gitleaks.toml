@@ -1,0 +1,21 @@
+title = "eVi gitleaks config"
+
+# Secret scanning config (Phase 92). Extends gitleaks' default ruleset and
+# allowlists the things in this repo that look secret-ish but aren't: test
+# fixtures and the well-known non-secret defaults baked into the code/docs.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and obvious non-secrets"
+paths = [
+  '''tests/.*''',
+]
+regexes = [
+  # LM Studio ignores its api_key but the SDK requires a value — this string
+  # is the documented default in evi/config.py, not a credential.
+  '''lm-studio''',
+  # Example/sample/dummy creds in docs and comments.
+  '''(?i)(example|sample|dummy|fake|your)[-_]?(api[-_]?)?(key|token|secret)''',
+]

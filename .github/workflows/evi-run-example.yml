@@ -1,0 +1,45 @@
+name: evi-run (example)
+
+# Demonstrates the reusable composite action (Phase 84). Manual-dispatch only so
+# it never runs on its own. Needs an LLM backend reachable from the runner —
+# set LLM_BASE_URL / LLM_API_KEY / LLM_MODEL repo secrets (any OpenAI-compatible
+# endpoint works).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt to run"
+        required: true
+        default: "In one sentence, what does this repository do?"
+      mode:
+        description: "chat | cowork | code"
+        required: false
+        default: "code"
+
+permissions:
+  contents: read
+
+jobs:
+  ask:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run eVi
+        id: evi
+        uses: ./.github/actions/evi-run
+        with:
+          prompt: ${{ inputs.prompt }}
+          format: text
+          mode: ${{ inputs.mode }}
+          backend: openai_compat
+          base_url: ${{ secrets.LLM_BASE_URL }}
+          api_key: ${{ secrets.LLM_API_KEY }}
+          model: ${{ secrets.LLM_MODEL }}
+
+      - name: Show result
+        run: |
+          echo "::group::eVi answer"
+          printf '%s\n' "${{ steps.evi.outputs.result }}"
+          echo "::endgroup::"

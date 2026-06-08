@@ -36,7 +36,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 FROM python:${PYTHON_VERSION} AS runtime
 LABEL org.opencontainers.image.title="Evi"
 LABEL org.opencontainers.image.description="Local-first personal AI assistant — server image"
-LABEL org.opencontainers.image.source="https://github.com/your-user/evi"
+LABEL org.opencontainers.image.source="https://github.com/dmang-dev/evi-ai"
 
 # Runtime-only deps: git for `evi worktree`, ca-certificates for HTTPS calls.
 RUN apt-get update && apt-get install -y --no-install-recommends \
