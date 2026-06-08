@@ -172,3 +172,36 @@ is on a network you don't control, you should:
 
 eVi has no built-in auth on the web UI by design — it assumes a trusted
 network.
+
+## Syncing your state across machines (`evi sync`)
+
+The three machines above can share the *knowledge* that should follow you —
+memory, skills, profiles, saved commands, routes, the MCP server list, and
+hooks — via a git remote (any private repo works):
+
+```bash
+# On the first machine: point at an (empty) private git repo + push.
+evi sync init git@github.com:you/evi-home.git
+evi sync push
+
+# On each other machine: same remote, then pull to adopt the synced state.
+evi sync init git@github.com:you/evi-home.git
+evi sync pull
+```
+
+Day to day: `evi sync push` after you teach eVi something, `evi sync pull` when
+you sit down at another machine. `evi sync status` shows the remote + what's
+changed.
+
+**What travels:** `memory/ skills/ profiles/ commands/ routes.json mcp.json
+hooks.toml`.
+
+**What stays local** (and why): `config.toml` (backend URLs + secrets differ per
+machine — your server runs Ollama, your laptop points at it), `tokens/` (OAuth
+secrets), `models/` + `indices/` (large, and rebuildable), and
+`logs/ images/ screenshots/ uploads/ transcripts/ scheduled/` (machine-local).
+A managed `.gitignore` enforces this, so even new files default to *not* synced.
+
+> First `evi sync pull` on a machine adopts the remote state (it force-checks-out
+> the synced paths). Anything you'd created locally under those paths first
+> should be pushed from there before pulling elsewhere.
