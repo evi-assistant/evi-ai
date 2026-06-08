@@ -1,11 +1,17 @@
 """Plugins — installable bundles that extend eVi.
 
-A plugin is a directory with a ``plugin.toml`` manifest and a ``commands/``
-folder of slash commands (more component types — skills, hooks, subagent
-profiles — are a planned follow-up). Installed plugins live under
-``~/.evi/plugins/<name>/``; the command loader scans each plugin's ``commands/``
-automatically (exposed as ``/<plugin>:<command>``), so install/remove is just
-managing the plugin directory — no copying into the user's own dirs, no clobber.
+A plugin is a directory with a ``plugin.toml`` manifest that can bundle several
+component types, each auto-discovered from a well-known sub-path:
+
+    commands/     slash commands       -> /<plugin>:<command>
+    skills/       skills (SKILL.md)    -> picked up by the skill loader
+    hooks.toml    before/after-tool hooks (merged after the user's own)
+    mcp.json      MCP servers          -> namespaced <plugin>:<name>
+
+(Subagent profiles in plugins are the one remaining planned type.) Installed
+plugins live under ``~/.evi/plugins/<name>/``; loaders scan each plugin
+directory automatically, so install/remove is just managing that directory —
+no copying into the user's own dirs, no clobber.
 
     plugin.toml:
         name = "git-helpers"
@@ -22,6 +28,7 @@ All functions take an optional ``root`` (the eVi home) for tests.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -53,6 +60,8 @@ class Plugin:
     path: Path
     commands: int
     skills: int = 0
+    hooks: int = 0
+    mcp: int = 0
 
 
 def _plugins_dir(root: Path | None = None) -> Path:
@@ -71,6 +80,28 @@ def _read_manifest(d: Path) -> dict:
         return tomllib.loads(m.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise PluginError(f"bad plugin.toml: {exc}") from exc
+
+
+def _count_hooks(p: Path) -> int:
+    """Count hook entries in a plugin's hooks.toml (0 if absent/malformed)."""
+    if not p.is_file():
+        return 0
+    try:
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return 0
+    return sum(len(data.get(ev, []) or []) for ev in ("before_tool_call", "after_tool_call"))
+
+
+def _count_mcp(p: Path) -> int:
+    """Count server entries in a plugin's mcp.json (0 if absent/malformed)."""
+    if not p.is_file():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    return len(data) if isinstance(data, list) else 0
 
 
 def _looks_like_git(source: str) -> bool:
@@ -114,6 +145,15 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def plugin_dirs(root: Path | None = None) -> list[Path]:
+    """Installed plugin directories (each has a plugin.toml). Used by the hook
+    and MCP loaders to pick up `<plugin>/hooks.toml` and `<plugin>/mcp.json`."""
+    d = _plugins_dir(root)
+    if not d.is_dir():
+        return []
+    return [p for p in sorted(d.iterdir()) if p.is_dir() and (p / "plugin.toml").is_file()]
+
+
 def list_plugins(root: Path | None = None) -> list[Plugin]:
     d = _plugins_dir(root)
     out: list[Plugin] = []
@@ -135,6 +175,8 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
                     path=pd,
                     commands=ncmd,
                     skills=nskill,
+                    hooks=_count_hooks(pd / "hooks.toml"),
+                    mcp=_count_mcp(pd / "mcp.json"),
                 )
             )
     return out

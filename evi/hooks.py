@@ -88,21 +88,17 @@ class HookResult:
 # --- loader ---------------------------------------------------------------
 
 
-def load_hooks(path: Path | None = None) -> "HookRegistry":
-    """Parse `~/.evi/hooks.toml` (or `path`) into a `HookRegistry`.
-
-    Missing file = empty registry, not an error. Malformed entries are
-    skipped with a warning so one bad row doesn't take down the system.
-    """
-    p = path or HOOKS_CONFIG_PATH
+def _parse_hook_file(p: Path) -> list[Hook]:
+    """Parse one hooks.toml into a list of Hooks. Missing file = []; a malformed
+    file or entry is skipped with a warning (one bad row can't take the rest down)."""
     if not p.is_file():
-        return HookRegistry()
+        return []
     try:
         with p.open("rb") as f:
             data = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         logger.warning("hooks file unreadable (%s); ignoring", exc)
-        return HookRegistry()
+        return []
 
     hooks: list[Hook] = []
     for event in ("before_tool_call", "after_tool_call"):
@@ -111,6 +107,24 @@ def load_hooks(path: Path | None = None) -> "HookRegistry":
                 hooks.append(_parse_entry(event, entry))
             except (KeyError, ValueError, TypeError) as exc:
                 logger.warning("skipping malformed hook entry: %s (%s)", entry, exc)
+    return hooks
+
+
+def load_hooks(path: Path | None = None) -> "HookRegistry":
+    """Parse `~/.evi/hooks.toml` (or `path`) plus every installed plugin's
+    `hooks.toml` into one `HookRegistry`.
+
+    Missing files = empty registry, not an error. Plugin hooks are appended
+    after the user's own so user rules are evaluated first.
+    """
+    hooks = _parse_hook_file(path or HOOKS_CONFIG_PATH)
+    try:
+        from evi.plugins import plugin_dirs
+
+        for pd in plugin_dirs():
+            hooks.extend(_parse_hook_file(pd / "hooks.toml"))
+    except Exception as exc:  # plugin scanning must never break core hooks
+        logger.warning("plugin hook scan failed (%s); ignoring", exc)
     return HookRegistry(hooks=hooks)
 
 
