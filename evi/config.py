@@ -278,6 +278,13 @@ class Config:
         overlay = load_profile_overlay()
         if overlay:
             data = merge_overlay(data, overlay)
+        # Per-project `.evi.toml` (walked up from cwd) wins over user + profile,
+        # so a repo can pin its own model / tools / permissions.
+        from evi.project import load_project_config_overlay
+
+        project_overlay = load_project_config_overlay()
+        if project_overlay:
+            data = merge_overlay(data, project_overlay)
         return cls(
             llm=LLMSettings(**data.get("llm", {})),
             comfy=ComfySettings(**data.get("comfy", {})),
