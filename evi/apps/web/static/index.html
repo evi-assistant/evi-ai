@@ -462,6 +462,8 @@
   .set-action-btn:hover { border-color: var(--accent); color: var(--accent); }
   .set-about-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
   .set-about-row .k { color: var(--dim); }
+  .rec-progress { height: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+  .rec-bar { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   .docs-body { line-height: 1.6; }
   .docs-body pre { background: var(--bg); padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
   .docs-body code { background: var(--bg); padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 12px; }
@@ -2059,6 +2061,94 @@ resetBtn.addEventListener('click', async () => {
     }
     if (sec.custom === 'about') return renderAbout();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
+    if (sec.id === 'model') renderModelExtras();
+  }
+
+  // System stats + hardware-recommended model (Settings → Model & Backend).
+  function renderModelExtras() {
+    const box = document.createElement('div');
+    box.style.marginTop = '20px';
+    box.innerHTML = '<div class="sec-blurb">Loading system info…</div>';
+    contentEl.appendChild(box);
+    fetch('/api/system').then(r => r.json()).then(sys => {
+      const rows = [];
+      rows.push(['OS', sys.os_detail || sys.os]);
+      rows.push(['RAM', sys.ram_gb + ' GB']);
+      const gpu = (sys.gpus || [])[0];
+      if (gpu) {
+        rows.push(['GPU', gpu.name]);
+        const free = gpu.vram_free_mb != null ? ` (${(gpu.vram_free_mb / 1024).toFixed(1)} free)` : '';
+        rows.push(['VRAM', `${(gpu.vram_total_mb / 1024).toFixed(1)} GB${free}`]);
+        rows.push(['Driver / CUDA cc', `${gpu.driver || '?'}${gpu.compute ? ' · cc ' + gpu.compute : ''}`]);
+      } else {
+        rows.push(['GPU', 'none detected — CPU inference']);
+      }
+      rows.push(['Inference mode', sys.mode]);
+      let html = '<div class="set-group-title">System</div>';
+      html += rows.map(([k, v]) =>
+        `<div class="set-about-row"><span class="k">${escapeHtml(k)}</span><span>${escapeHtml(String(v))}</span></div>`
+      ).join('');
+      const rec = sys.recommended || {};
+      if (rec.chat) {
+        html += '<div class="set-group-title">Recommended for your hardware</div>'
+          + `<div class="set-about-row"><span>${escapeHtml(rec.chat)}</span><span id="rec-action"></span></div>`
+          + '<div class="rec-progress" id="rec-progress" style="display:none"><div class="rec-bar" id="rec-bar"></div></div>'
+          + '<div class="help" id="rec-status"></div>';
+      }
+      box.innerHTML = html;
+      if (!rec.chat) return;
+      const action = box.querySelector('#rec-action');
+      if (rec.chat === sys.current_model) {
+        action.innerHTML = '<span style="color:var(--user)">✓ current</span>';
+      } else if (rec.chat_installed) {
+        action.appendChild(_recBtn('Use', () => useRecommended(rec.chat)));
+      } else if (sys.backend === 'ollama') {
+        action.appendChild(_recBtn('Pull', () => pullRecommended(rec.chat, box)));
+      } else {
+        action.innerHTML = '<span class="help">pull it via your backend, then select it above</span>';
+      }
+    }).catch(() => { box.innerHTML = '<div class="sec-blurb">System info unavailable.</div>'; });
+  }
+  function _recBtn(label, fn) {
+    const b = document.createElement('button');
+    b.className = 'set-action-btn'; b.style.margin = '0'; b.textContent = label; b.onclick = fn;
+    return b;
+  }
+  async function useRecommended(model) {
+    try {
+      await fetch('/api/model-picker', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      });
+      if (typeof loadPicker === 'function') loadPicker();
+      await loadConfig();
+      renderSection();
+    } catch {}
+  }
+  function pullRecommended(model, box) {
+    const prog = box.querySelector('#rec-progress');
+    const bar = box.querySelector('#rec-bar');
+    const status = box.querySelector('#rec-status');
+    const action = box.querySelector('#rec-action');
+    if (action) action.innerHTML = '<span class="help">downloading…</span>';
+    prog.style.display = 'block';
+    status.textContent = 'Starting download…';
+    const qs = 'model=' + encodeURIComponent(model) + '&' + (typeof authQuery === 'function' ? authQuery() : '');
+    const es = new EventSource('/api/backend/pull?' + qs);
+    es.onmessage = (e) => {
+      let d; try { d = JSON.parse(e.data); } catch { return; }
+      if (d.kind === 'progress') {
+        if (d.pct != null) bar.style.width = d.pct + '%';
+        status.textContent = (d.status || 'downloading') + (d.pct != null ? ` (${d.pct}%)` : '');
+      } else if (d.kind === 'done') {
+        es.close(); bar.style.width = '100%'; status.textContent = 'Installed ✓';
+        if (typeof loadPicker === 'function') loadPicker();
+        setTimeout(() => loadConfig().then(renderSection), 700);
+      } else if (d.kind === 'error') {
+        es.close(); status.textContent = 'Error: ' + (d.message || 'download failed');
+      }
+    };
+    es.onerror = () => { es.close(); status.textContent = 'Connection lost during download.'; };
   }
 
   function fieldWidget(f) {
@@ -2254,16 +2344,23 @@ resetBtn.addEventListener('click', async () => {
   // ---- updates / logs / shortcuts ------------------------------------
   async function checkForUpdates() {
     if (!isDesktop()) {
-      openDialog('Updates', '<p class="sec-blurb">Automatic updates run in the desktop app. The CLI/web package updates with <code>pip install -U evi-assistant</code>.</p>');
+      openDialog('Updates', '<p class="sec-blurb">Auto-update runs in the desktop app. The CLI/web package updates with <code>pip install -U evi-assistant</code>.</p>');
       return;
     }
-    openDialog('Updates', '<p class="sec-blurb">Checking…</p>');
+    openDialog('Updates', '<p class="sec-blurb">⟳ Checking for updates…</p>');
     try {
       const res = await invoke('check_for_update_cmd');
-      dlgContent.innerHTML = res && res.available
-        ? `<p>Update <b>${escapeHtml(res.version || '')}</b> is available. Downloading in the background — eVi will restart when ready.</p>`
-        : `<p>You’re up to date${res && res.current ? ' (v' + escapeHtml(res.current) + ')' : ''}.</p>`;
-    } catch (e) { dlgContent.innerHTML = '<p class="sec-blurb">Update check failed: ' + escapeHtml(String(e)) + '</p>'; }
+      if (res && res.available) {
+        dlgContent.innerHTML =
+          `<p><b>Update available — ${escapeHtml(res.version || '')}</b></p>` +
+          `<p class="sec-blurb">⤓ Downloading in the background${res.current ? ' (you have ' + escapeHtml(res.current) + ')' : ''} — eVi will restart automatically when it’s ready.</p>`;
+      } else {
+        dlgContent.innerHTML =
+          `<p>✓ You’re up to date${res && res.current ? ' (v' + escapeHtml(res.current) + ')' : ''}.</p>`;
+      }
+    } catch (e) {
+      dlgContent.innerHTML = '<p class="sec-blurb">⚠ Update check failed: ' + escapeHtml(String(e)) + '</p>';
+    }
   }
   function openLogs() {
     if (isDesktop()) invoke('open_logs_cmd').catch(() => {});
