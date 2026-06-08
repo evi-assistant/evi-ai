@@ -30,6 +30,7 @@ from evi.tools.base import tool
         "thereafter. Returns the number of chunks indexed."
     ),
     category="index",
+    long=True,
 )
 def index_project(path: str) -> str:
     from pathlib import Path

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from evi.config import Config
-from evi.llm.agent import Agent, Done, TextDelta, ToolCall, ToolResult
+from evi.llm.agent import Agent, Done, TextDelta, ToolCall, ToolProgress, ToolResult
 from evi.tools.base import Tool
 
 
@@ -621,3 +621,59 @@ def test_skills_injected_into_system_prompt(tmp_path) -> None:
     assert "Available skills" in system
     assert "summarize" in system
     assert "invoke_skill" in system
+
+
+def test_tool_progress_heartbeat(monkeypatch) -> None:
+    """A slow tool emits ToolProgress heartbeats (Phase 60) — including an
+    immediate elapsed=0 announce for tools flagged long — and still returns
+    its result."""
+    import time as _time
+
+    import evi.llm.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "PROGRESS_INTERVAL", 0.05)
+
+    script = [
+        [
+            _Chunk(
+                [
+                    _Choice(
+                        _Delta(
+                            tool_calls=[
+                                _ToolCallDelta(
+                                    index=0,
+                                    id="call_1",
+                                    function=_FnDelta(name="slow", arguments="{}"),
+                                )
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            )
+        ],
+        [_text_chunk("done", finish="stop")],
+    ]
+
+    def _slow() -> str:
+        _time.sleep(0.2)
+        return "ok"
+
+    slow_tool = Tool(
+        name="slow",
+        description="a slow tool",
+        parameters={"type": "object", "properties": {}, "required": []},
+        func=_slow,
+        long=True,
+    )
+
+    agent = Agent(client=_FakeClient(script), config=Config(), tools=[slow_tool])
+    events = list(agent.chat("go"))
+
+    progs = [e for e in events if isinstance(e, ToolProgress)]
+    assert progs, "expected at least one ToolProgress heartbeat"
+    assert all("slow" in p.names for p in progs)
+    assert any(p.elapsed == 0.0 for p in progs)  # immediate long= announce
+    assert any(p.elapsed > 0 for p in progs)  # plus interval heartbeats
+    # the tool still produced its result
+    assert any(isinstance(e, ToolResult) and e.output == "ok" for e in events)
