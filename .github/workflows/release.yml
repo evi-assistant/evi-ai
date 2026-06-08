@@ -36,10 +36,24 @@ jobs:
           python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index]"
           pytest -q --timeout=30
 
+      # Trusted Publishing also generates PEP 740 (sigstore) attestations for
+      # the uploaded files on PyPI by default.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+      # Keyless (OIDC) sigstore signing of the release artifacts (Phase 94).
+      # Runs AFTER the PyPI upload so the *.sigstore.json bundles aren't sent to
+      # PyPI; they ride along on the GitHub Release for independent verification:
+      #   python -m sigstore verify identity evi_assistant-X-py3-none-any.whl \
+      #     --bundle evi_assistant-X-py3-none-any.whl.sigstore.json \
+      #     --cert-identity <release-workflow-url> \
+      #     --cert-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Sign artifacts (sigstore)
+        uses: sigstore/gh-action-sigstore-python@v3
+        with:
+          inputs: ./dist/*.tar.gz ./dist/*.whl
 
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
@@ -48,3 +62,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.whl
+            dist/*.sigstore.json

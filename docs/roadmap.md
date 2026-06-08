@@ -239,8 +239,9 @@ locally and ship once that clears.
   maps a key to a slash command in the REPL (press → run).
 - **Phase 83 — channels** — push an external alert/notification into a running
   session (routines cover inbound webhook→recipe; this is push-into-live). **M.**
-- **Phase 84 — packaged CI action** — a reusable GitHub Action / workflow that
-  wraps `evi run` headless. **S/M.**
+- **Phase 84 — packaged CI action** — **✅ shipped (local)**: a composite action
+  `.github/actions/evi-run` installs eVi, writes a backend config, and runs one
+  `evi run` headless prompt (output `result`); `evi-run-example.yml` demos it.
 - **Phase 85 — agent dispatch view** — a dashboard to manage many concurrent
   sessions / subagents. **L.**
 - **Phase 86 — dynamic workflows** — a small scriptable multi-agent
@@ -261,12 +262,17 @@ locally and ship once that clears.
   off-device/optional). **L.**
 - **Phase 91 — voice cloning for AutoSpeaker** — optional local TTS voice
   cloning (e.g. F5-TTS / XTTS) behind the existing voice seam. **L.**
-- **Phase 92 — CodeQL / secret-scanning** — security scanning on the private
-  repo (self-hosted gitleaks + CodeQL CLI, since GHAS isn't free). **M.**
-- **Phase 93 — Docker image push** — publish a container image in `release.yml`
-  (CLI/web server in a box). **M.**
-- **Phase 94 — sigstore wheel signing** — keyless signing of the PyPI wheels for
-  supply-chain provenance. **S/M.**
+- **Phase 92 — CodeQL / secret-scanning** — **✅ shipped (local, untested until
+  CI billing clears)**: `security.yml` gained a gitleaks job (pinned binary +
+  `.gitleaks.toml` allowlist) and a CodeQL job (python + javascript,
+  `upload: false` → SARIF artifact, so no GHAS needed on the private repo).
+- **Phase 93 — Docker image push** — **✅ shipped (local)**: new `docker.yml`
+  builds the existing two-stage `Dockerfile` and pushes to GHCR on `v*` tags
+  (semver + `latest` tags, buildx + gha cache).
+- **Phase 94 — sigstore wheel signing** — **✅ shipped (local)**: `release.yml`
+  signs the sdist + wheel with keyless sigstore after the PyPI upload and
+  attaches the `*.sigstore.json` bundles to the GitHub Release (PyPI also gets
+  PEP 740 attestations via Trusted Publishing).
 
 ## Integrations backlog
 

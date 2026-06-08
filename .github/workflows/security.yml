@@ -58,3 +58,60 @@ jobs:
           tool: cargo-audit
       - name: cargo-audit (vulnerabilities only)
         run: cargo audit --file desktop/src-tauri/Cargo.lock
+
+  secret-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan full history, not just the tip
+
+      # Pin the open-source binary directly — avoids the gitleaks-action license
+      # gate and works the same on public or private repos.
+      - name: Install gitleaks
+        run: |
+          VER=8.21.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+
+      - name: Scan for secrets
+        run: gitleaks detect --source . --no-banner --redact --config .gitleaks.toml
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write   # used only when GHAS code-scanning is available
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      # GHAS isn't free on private repos, so don't push to code-scanning; run
+      # the analysis and publish the SARIF as a build artifact instead. On a
+      # public repo (or with GHAS) flip `upload: true` to get the Security tab.
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: false
+          output: codeql-results
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ matrix.language }}
+          path: codeql-results
+          if-no-files-found: warn
