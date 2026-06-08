@@ -2354,6 +2354,92 @@ def style_use(
     console.print(f"[green]output style:[/green] {name or '(default)'}")
 
 
+routine_app = typer.Typer(help="Routines — trigger a recipe from a webhook.")
+app.add_typer(routine_app, name="routine")
+
+
+@routine_app.command("add")
+def routine_add(
+    name: str,
+    recipe: str = typer.Option(..., "--recipe", "-r", help="The recipe this routine runs."),
+    yes: bool = typer.Option(False, "--yes", help="Auto-approve all tools for this routine."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing routine."),
+) -> None:
+    """Create a webhook-triggered routine bound to a recipe."""
+    from evi import recipes, routines
+
+    try:
+        recipes.load_recipe(recipe)
+    except recipes.RecipeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    try:
+        r = routines.add(name, recipe, yes=yes, overwrite=overwrite)
+    except routines.RoutineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]created routine[/green] {r.name} → recipe [cyan]{r.recipe}[/cyan]")
+    console.print(
+        "[dim]Trigger it against your running `evi web` server:[/dim]\n"
+        f"  [cyan]curl -X POST http://localhost:8000/api/routine/{r.token}[/cyan]"
+    )
+
+
+@routine_app.command("list")
+def routine_list() -> None:
+    """List routines (with their webhook tokens)."""
+    from evi import routines
+
+    items = routines.load()
+    if not items:
+        console.print(
+            "[dim]no routines. Add one:[/dim] "
+            "[cyan]evi routine add <name> --recipe <recipe>[/cyan]"
+        )
+        return
+    for r in items:
+        auto = " [yellow](auto-approve)[/yellow]" if r.yes else ""
+        state = "" if r.enabled else " [red](disabled)[/red]"
+        console.print(f"  [bold]{r.name}[/bold] → {r.recipe}{auto}{state}")
+        console.print(f"    [dim]POST /api/routine/{r.token}[/dim]")
+
+
+@routine_app.command("remove")
+def routine_remove(name: str) -> None:
+    """Remove a routine."""
+    from evi import routines
+
+    if not routines.remove(name):
+        console.print(f"[red]no such routine:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
+@routine_app.command("run")
+def routine_run(name: str) -> None:
+    """Run a routine's recipe locally (the same way the webhook would)."""
+    from evi import recipes, routines
+
+    r = routines.get(name)
+    if r is None:
+        console.print(f"[red]no such routine:[/red] {name}")
+        raise typer.Exit(1)
+    try:
+        recipe = recipes.load_recipe(r.recipe)
+    except recipes.RecipeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    agent = _build_agent()
+    if r.yes:
+        agent.enable_auto_all()
+    for res in recipes.run_recipe_headless(agent, recipe):
+        console.print(f"\n[bold cyan]{res['label'] or 'step'}[/bold cyan]")
+        if res["error"]:
+            console.print(f"[red]error:[/red] {res['error']}")
+        else:
+            console.print(Markdown(res["text"] or "(no output)"))
+
+
 plugin_app = typer.Typer(help="Plugins — installable bundles of slash commands.")
 app.add_typer(plugin_app, name="plugin")
 
