@@ -95,6 +95,18 @@ Opt-in, privacy-first telemetry so we learn about crashes.
   interface — only viable via a token-holding serverless relay (no shippable
   token), and re-implements dedup/rate-limit/scrub that Sentry gives free.
 
+### Phase 56 — Desktop UX: settings, menus, tray, in-app docs — **✅ shipped (0.25.0 / desktop 0.2.5)**
+
+A Claude-Desktop-style control surface (the "UI enhancements" detour).
+
+- **Settings screen** (⚙ / Ctrl+, / File→Settings) backed by `GET/POST /api/config`
+  (masked secrets; section-patch that hot-reloads live sessions).
+- **Native menus** (File/Edit/View/Help + accelerators, dev tools) and **system
+  tray** with **minimize-to-tray**; **force-update** via Help→Check for Updates.
+- **In-app docs** (`/api/docs` + dependency-free `mdlite.py`, bundled offline) and
+  **diagnostics** (`/api/doctor`); **light theme** toggle.
+- Public docs **wiki** mirror on `evi-ai-releases`; Playwright e2e for the lot.
+
 ## Larger backlog (unsequenced — L unless noted)
 
 - ✅ **MCP-server-publish** — **shipped (0.24.0, Phases 53–54)**: `evi mcp serve`
@@ -110,12 +122,19 @@ Opt-in, privacy-first telemetry so we learn about crashes.
   adapter that keeps the loop unchanged. Local backends stay on Chat
   Completions. Remaining: verify against a live Responses endpoint; extend the
   compaction/variant helpers (still chat-only — fine for OpenAI cloud).
-- **Cross-machine sync** of `~/.evi/` (git/rclone) — **M**; fits the documented
-  3-machine setup (memory/skills/profiles/routes move with you).
-- **`evi recipe`** — saved multi-turn workflows ("morning standup" = calendar +
-  commits + email) under `~/.evi/recipes/`. **M**.
-- **Memory tags** (`recall_by_tag`), **plugin loader** (`~/.evi/plugins/`),
-  **background tool execution** (progress events for long tools). **M** each.
+- ✅ **Cross-machine sync** of `~/.evi/` — **shipped (0.26.0, Phase 57)**:
+  `evi sync init/push/pull/status` over a git remote. Syncs
+  memory/skills/profiles/commands/routes/mcp/hooks; a managed `.gitignore` keeps
+  per-machine config, secrets, and large/rebuildable data local.
+- ✅ **`evi recipe`** — **shipped (0.26.0, Phase 58)**: saved multi-turn
+  workflows under `~/.evi/recipes/*.toml`, run through one shared conversation
+  (`evi recipe new/list/show/run`, `--yes` for unattended).
+- ✅ **Memory tags** — **shipped (0.26.0, Phase 59)**: tags + `recall_by_tag`
+  (invisible marker, backward-compatible with untagged memories).
+- ✅ **Background tool execution** — **shipped (0.26.0, Phase 60)**: ToolProgress
+  heartbeats for slow tools (CLI + web) instead of an apparent hang; `long=True`
+  tools announce immediately.
+- **Plugin loader** (`~/.evi/plugins/`) — **M**; drop-in user tools.
 - **Multi-user web mode** — per-user auth/paths/permissions for small teams.
 - **Federation / inter-agent protocol** — eVi-to-eVi delegation across machines
   (pairs with profiles + remote backend).

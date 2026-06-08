@@ -3,6 +3,28 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.26.0] — 2026-06-07
+
+### Added — sync, recipes, memory tags, tool progress
+
+Four roadmap phases (57–60).
+
+- **Cross-machine sync** (`evi sync init/push/pull/status`) — git-backed sync of
+  the portable `~/.evi` state (memory, skills, profiles, commands, routes,
+  mcp.json, hooks). A managed `.gitignore` keeps per-machine config, secrets
+  (`tokens/`), and large/rebuildable data (`models/`, `indices/`) local. First
+  pull on a new machine adopts the remote state.
+- **Recipes** (`evi recipe new/list/show/run`) — saved multi-turn workflows in
+  `~/.evi/recipes/*.toml`, run through one shared conversation so later steps
+  build on earlier answers. `run --yes` for unattended runs.
+- **Memory tags** — `remember(..., tags="a, b")` + `recall_by_tag`; tags stored
+  as an invisible marker, fully backward-compatible with untagged memories.
+- **Tool progress heartbeats** — slow tools (web fetch/search, index build) now
+  stream `ToolProgress` status to the CLI + web instead of an apparent hang;
+  tools flagged `long` announce immediately.
+
+Desktop → 0.2.6.
+
 ## [0.25.0] — 2026-06-07
 
 ### Added — settings screen, native menus, system tray, in-app docs
