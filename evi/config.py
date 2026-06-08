@@ -214,11 +214,18 @@ class AutoSettings:
 
     `subagent` and `shell` deliberately default to NOT auto-approved — they
     spawn things you may want to see before they happen.
+
+    `mode` layers on top (see evi/permissions.py): "ask" (default) prompts for
+    non-approved tools, "accept_edits" auto-allows file edits, "plan" denies all
+    tools, "yolo" allows everything. `rules` is a first-match allow/deny list of
+    `<allow|deny> <tool-glob> [arg-glob]` strings (e.g. "deny shell rm*").
     """
 
     auto_approve: list[str] = field(
         default_factory=lambda: ["fs", "code", "memory", "skills", "image"]
     )
+    mode: str = "ask"  # ask | accept_edits | plan | yolo
+    rules: list[str] = field(default_factory=list)
 
 
 @dataclass

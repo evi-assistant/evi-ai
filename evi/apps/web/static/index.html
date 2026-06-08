@@ -2054,8 +2054,15 @@ initModes();
     ]},
     { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
       fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) })) },
-    { id:'permissions', title:'Permissions', blurb:'Categories that run without asking each time.',
-      applies:'new-chat', fields:[ { type:'auto-approve', section:'auto', key:'auto_approve' } ] },
+    { id:'permissions', title:'Permissions', blurb:'How tool calls are approved.',
+      applies:'new-chat', fields:[
+        { type:'select', section:'auto', key:'mode', label:'Permission mode',
+          options:['ask','accept_edits','plan','yolo'],
+          help:'ask: prompt for non-approved tools · accept_edits: auto-allow file edits · plan: no tools · yolo: allow everything' },
+        { type:'auto-approve', section:'auto', key:'auto_approve' },
+        { type:'lines', section:'auto', key:'rules', label:'Rules (one per line)',
+          help:'allow|deny <tool-glob> [arg-glob] — e.g. "deny shell rm*", "allow web", "deny fs *.env"' },
+      ] },
     { id:'context', title:'Context', blurb:'When eVi compacts long conversations.', fields:[
       { type:'int', section:'llm', key:'compact_after_messages', label:'Compact after N messages', help:'0 disables.' },
       { type:'int', section:'llm', key:'compact_keep_recent', label:'Keep recent turns' },
@@ -2295,6 +2302,13 @@ initModes();
         const v = f.type === 'int' ? parseInt(inp.value || '0', 10) : parseFloat(inp.value || '0');
         setVal(f.section, f.key, isNaN(v) ? 0 : v);
       };
+    } else if (f.type === 'lines') {
+      inp = document.createElement('textarea');
+      inp.rows = 4;
+      inp.style.cssText = 'width:100%;padding:7px 9px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;font:inherit;resize:vertical';
+      inp.value = (getVal(f.section, f.key) || []).join('\n');
+      inp.oninput = () => setVal(f.section, f.key,
+        inp.value.split('\n').map(s => s.trim()).filter(Boolean));
     } else {
       inp = document.createElement('input'); inp.type = 'text';
       inp.value = getVal(f.section, f.key) || '';
