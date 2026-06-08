@@ -45,6 +45,73 @@ command = "echo done"
     assert reg.hooks[2].command == ["echo done"]
 
 
+# ---- http hooks (Phase 81) ----------------------------------------------
+
+
+def test_load_parses_url_hook(tmp_path: Path) -> None:
+    p = tmp_path / "hooks.toml"
+    p.write_text(
+        '[[after_tool_call]]\nname = "wh"\nmatch = "*"\nurl = "https://x/y"\n',
+        encoding="utf-8",
+    )
+    h = load_hooks(p).hooks[0]
+    assert h.url == "https://x/y" and h.command == []
+
+
+def test_url_hook_posts_and_succeeds() -> None:
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: dict = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            n = int(self.headers.get("Content-Length", 0))
+            received.update(json.loads(self.rfile.read(n) or b"{}"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):  # silence
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/hook"
+
+    hook = Hook(name="wh", event="after_tool_call", match="*", command=[], url=url, timeout=5)
+    res = _run_hook(hook, "write_file", '{"path":"x"}', result_output="done")
+    srv.server_close()
+
+    assert res.exit_code == 0 and not res.vetoed
+    assert received["tool"] == "write_file" and received["result"] == "done"
+
+
+def test_url_hook_non_2xx_vetoes() -> None:
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(403)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/hook"
+
+    hook = Hook(name="gate", event="before_tool_call", match="*", command=[], url=url,
+                veto_on_nonzero=True, timeout=5)
+    reg = HookRegistry(hooks=[hook])
+    _, veto = reg.run_before("write_file", "{}")
+    srv.server_close()
+    assert veto is not None and veto.exit_code == 403
+
+
 def test_load_skips_malformed_entries(tmp_path: Path) -> None:
     p = tmp_path / "hooks.toml"
     p.write_text(
