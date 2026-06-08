@@ -207,10 +207,13 @@ computer-use, custom commands, recipes, and session modes).
   `evi --resume <id>`, `evi --fork <id>` off the transcript store; list saved
   sessions in the web tab bar. Completes session management.
 
-Lighter / optional: customizable **status line** (context % · model · branch ·
-mode); **routines/triggers** (event/webhook → run a recipe, opt-in, local-only);
-**project-level config** (`.evi/` overlay + nested project context for
-monorepos).
+✅ **Shipped in 0.30.0:** customizable **status line** (Phase 72 — format
+template or custom command in the CLI REPL); **routines/triggers** (Phase 73 —
+`POST /api/routine/<token>` runs a recipe headless); **project-level config**
+(Phase 74 — repo-local `.evi.toml` overlay + AGENTS.md recognition).
+
+Still open: **plugin component types beyond commands** (skills/hooks/MCP/subagent
+profiles in a plugin) and the integrations backlog below.
 
 **Explicitly not adopting** (philosophy mismatch): cloud/enterprise backends
 (Bedrock/Vertex/Foundry), org admin / managed settings, cloud Ultrareview /

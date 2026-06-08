@@ -3,6 +3,25 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.0] — 2026-06-08
+
+### Added
+
+- **Customizable status line** (Phase 72) — `[statusline] enabled` prints a dim
+  status line above each REPL prompt; customize via a `format` template
+  ({model}/{pct}/{branch}/{goal}/…) or a `command` that gets the state as JSON
+  on stdin. Off by default.
+- **Routines / webhook triggers** (Phase 73) — `evi routine add <name>
+  --recipe <r>` mints a token; `POST /api/routine/<token>` runs that recipe
+  headless (auth = the path token; restricted tool perms unless `--yes`). Lets
+  any external service trigger an eVi workflow over HTTP.
+- **Project-level config** (Phase 74) — a repo-local `.evi.toml` (walked up from
+  cwd) overlays the user config + active profile (project wins), so a repo can
+  pin its own model/tools/permissions. Project context now also recognises
+  **AGENTS.md** (EVI.md still wins).
+
+Desktop → 0.2.11.
+
 ## [desktop 0.2.10] — 2026-06-08
 
 ### Fixed — "Command … not allowed by ACL" on desktop IPC
