@@ -1002,6 +1002,60 @@ def create_app() -> FastAPI:
             "summary": {"ok": ok, "warn": warn, "fail": fail},
         }
 
+    @app.get("/api/system")
+    def system_info() -> dict[str, Any]:
+        """Hardware + OS stats for the Settings → Model & Backend page, plus the
+        hardware-recommended model and whether it's already installed."""
+        import platform as _plat
+
+        from evi import hardware
+        from evi.recommend import recommend
+
+        hw = hardware.detect()
+        gpus = [
+            {
+                "name": g.name,
+                "vram_total_mb": g.vram_total_mb,
+                "vram_free_mb": g.vram_free_mb,
+                "driver": g.driver_version,
+                "compute": g.compute_capability,
+            }
+            for g in hw.gpus
+        ]
+        try:
+            rec = recommend(hw)
+        except Exception:  # noqa: BLE001
+            rec = None
+
+        cfg = Config.load()
+        installed: list[str] = []
+        try:
+            installed = [m.id for m in get_backend(cfg.llm).list_models()]
+        except Exception:  # noqa: BLE001
+            installed = []
+
+        rec_chat = rec.chat.id if rec and rec.chat else ""
+        rec_coder = rec.coder.id if rec and rec.coder else ""
+        return {
+            "os": f"{_plat.system()} {_plat.release()}",
+            "os_detail": _plat.platform(),
+            "python": _plat.python_version(),
+            "platform": hw.platform,
+            "ram_gb": round(hw.ram_total_gb, 1),
+            "gpus": gpus,
+            "gpu_vendor": "nvidia" if gpus else "none",
+            "mode": rec.mode if rec else "unknown",
+            "recommended": {
+                "chat": rec_chat,
+                "coder": rec_coder,
+                "chat_installed": rec_chat in installed if rec_chat else False,
+                "coder_installed": rec_coder in installed if rec_coder else False,
+                "notes": rec.notes if rec else [],
+            },
+            "backend": cfg.llm.backend,
+            "current_model": cfg.llm.model,
+        }
+
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
         sess = sessions.get(req.session_id)

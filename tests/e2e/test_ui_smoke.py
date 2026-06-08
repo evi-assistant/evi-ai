@@ -103,3 +103,20 @@ def test_diagnostics_dialog_renders(page: Page, evi_base_url: str):
     page.evaluate("window.eviUI.openDiagnostics()")
     expect(page.locator("#dialog-overlay")).to_be_visible()
     expect(page.locator("#dialog-content .set-about-row").first).to_be_visible(timeout=10000)
+
+
+def test_menu_bridge_opens_settings(page: Page, evi_base_url: str):
+    """Native File→Settings calls window.eviUI.handleMenu('settings'); guard
+    that bridge target (the desktop menu uses eval to call it). Regression for
+    the menu-event-not-delivered bug."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.handleMenu('settings')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+
+
+def test_settings_model_shows_system_panel(page: Page, evi_base_url: str):
+    """Settings → Model & Backend shows the System stats panel (/api/system)."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('model')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#settings-content")).to_contain_text("System", timeout=10000)

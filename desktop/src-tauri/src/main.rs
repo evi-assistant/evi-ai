@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Wraps the spawned Python server process so we can kill it on shutdown.
 struct ServerHandle(Mutex<Option<Child>>);
@@ -388,9 +388,19 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
         .build()
 }
 
+/// Run a webview-side menu action by calling the JS bridge directly. We use
+/// `eval` rather than `emit` because the window loads a remote http:// URL (the
+/// local server) where withGlobalTauri's event module isn't reliably injected —
+/// so an emitted event may have no listener. eval always reaches the page.
+fn run_webview_action(app: &tauri::AppHandle, id: &str) {
+    if let Some(w) = app.get_webview_window("main") {
+        // ids are fixed [a-z_] literals, so no escaping is needed.
+        let _ = w.eval(&format!("window.eviUI && window.eviUI.handleMenu('{id}')"));
+    }
+}
+
 /// Route a menu/tray action. Devtools + quit are handled natively here; every
-/// other id is forwarded to the webview as an `evi-menu` event, where the JS
-/// bridge (window.eviUI) runs the matching action.
+/// other id is run in the webview via the JS bridge (window.eviUI.handleMenu).
 fn dispatch_menu_action(app: &tauri::AppHandle, id: &str) {
     match id {
         "toggle_devtools" => {
@@ -403,9 +413,7 @@ fn dispatch_menu_action(app: &tauri::AppHandle, id: &str) {
             }
         }
         "quit" => app.exit(0),
-        other => {
-            let _ = app.emit("evi-menu", other);
-        }
+        other => run_webview_action(app, other),
     }
 }
 
@@ -444,12 +452,8 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
             show_main_window(app);
             match id {
-                "tray_new_chat" => {
-                    let _ = app.emit("evi-menu", "new_chat");
-                }
-                "tray_updates" => {
-                    let _ = app.emit("evi-menu", "check_updates");
-                }
+                "tray_new_chat" => run_webview_action(app, "new_chat"),
+                "tray_updates" => run_webview_action(app, "check_updates"),
                 _ => {}
             }
         })
