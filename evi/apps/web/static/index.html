@@ -1392,7 +1392,15 @@ async function handleEvent(ev, assistant) {
     const b = addBubble('tool');
     b.textContent = `→ ${ev.name}(${ev.arguments})`;
     assistant = null;  // next TextDelta starts a fresh bubble
+  } else if (ev.kind === 'ToolProgress') {
+    // A single self-updating "running" bubble so a slow tool shows live
+    // status instead of an apparent hang. Cleared when results arrive.
+    let p = document.getElementById('tool-progress');
+    if (!p) { p = addBubble('tool'); p.id = 'tool-progress'; }
+    p.textContent = `… ${ev.names.join(', ')} running (${Math.round(ev.elapsed)}s)`;
   } else if (ev.kind === 'ToolResult') {
+    const pp = document.getElementById('tool-progress');
+    if (pp) pp.remove();
     const b = addBubble('tool');
     renderToolResult(b, ev.name, ev.output, ev.citations || []);
     maybeRenderImages(b, ev.output);

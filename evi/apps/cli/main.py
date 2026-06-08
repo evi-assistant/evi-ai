@@ -33,6 +33,7 @@ from evi.llm.agent import (
     TextDelta,
     ThinkingDelta,
     ToolCall,
+    ToolProgress,
     ToolResult,
     UsageStats,
 )
@@ -799,6 +800,10 @@ def _run_repl(agent: Agent) -> None:
             elif isinstance(event, ToolCall):
                 console.print()
                 console.print(f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}")
+            elif isinstance(event, ToolProgress):
+                console.print(
+                    f"[dim]… {', '.join(event.names)} running ({event.elapsed:.0f}s)[/dim]"
+                )
             elif isinstance(event, ToolResult):
                 preview = event.output if len(event.output) < 400 else event.output[:400] + "…"
                 console.print(f"[yellow]← result[/yellow] {preview}")
@@ -2138,6 +2143,10 @@ def _print_turn(agent: Agent, prompt: str) -> None:
             console.print(event.text, end="", soft_wrap=True, highlight=False)
         elif isinstance(event, ToolCall):
             console.print(f"\n[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}")
+        elif isinstance(event, ToolProgress):
+            console.print(
+                f"[dim]… {', '.join(event.names)} running ({event.elapsed:.0f}s)[/dim]"
+            )
         elif isinstance(event, ToolResult):
             preview = event.output if len(event.output) < 400 else event.output[:400] + "…"
             console.print(f"[yellow]← result[/yellow] {preview}")

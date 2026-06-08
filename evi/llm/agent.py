@@ -11,6 +11,7 @@ Events yielded by `Agent.chat`:
 from __future__ import annotations
 
 import secrets
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
@@ -195,6 +196,17 @@ class ToolResult:
 
 
 @dataclass
+class ToolProgress:
+    """Heartbeat emitted while one or more tools are still running, so the CLI
+    and web UIs show live status instead of appearing to hang during a slow
+    call (index build, web fetch, model pull, …). `names` are the tools still
+    running; `elapsed` is seconds since this batch started."""
+
+    names: list[str]
+    elapsed: float
+
+
+@dataclass
 class UsageStats:
     """Real token counts from the backend, when available.
 
@@ -253,9 +265,12 @@ class Error:
 
 
 Event = (
-    TextDelta | ThinkingDelta | ToolCall | ToolResult | UsageStats
+    TextDelta | ThinkingDelta | ToolCall | ToolResult | ToolProgress | UsageStats
     | LogProbs | Guardrail | Done | Error
 )
+
+# Seconds between ToolProgress heartbeats while tools are still running.
+PROGRESS_INTERVAL = 2.0
 
 
 # --- Agent ---------------------------------------------------------------
@@ -1167,14 +1182,36 @@ class Agent:
                         ): i
                         for i, m in runnable
                     }
-                    for fut in _futures.as_completed(future_to_idx):
-                        i = future_to_idx[fut]
-                        try:
-                            outputs[i] = fut.result()
-                        except Exception as exc:
-                            outputs[i] = ToolOutput(
-                                text=f"ERROR: {type(exc).__name__}: {exc}"
-                            )
+                    # Instead of blocking silently until tools finish (the old
+                    # `as_completed`), poll with a timeout and emit ToolProgress
+                    # heartbeats so a slow tool shows live status. Tools flagged
+                    # `long` announce immediately (elapsed 0); any tool still
+                    # running past PROGRESS_INTERVAL announces on each tick.
+                    start = time.monotonic()
+                    long_now = [
+                        m["name"] for _, m in runnable
+                        if getattr(m["tool"], "long", False)
+                    ]
+                    if long_now:
+                        yield ToolProgress(long_now, 0.0)
+                    pending = set(future_to_idx)
+                    while pending:
+                        done, pending = _futures.wait(
+                            pending,
+                            timeout=PROGRESS_INTERVAL,
+                            return_when=_futures.FIRST_COMPLETED,
+                        )
+                        for fut in done:
+                            i = future_to_idx[fut]
+                            try:
+                                outputs[i] = fut.result()
+                            except Exception as exc:
+                                outputs[i] = ToolOutput(
+                                    text=f"ERROR: {type(exc).__name__}: {exc}"
+                                )
+                        if pending:
+                            names = [calls_meta[future_to_idx[f]]["name"] for f in pending]
+                            yield ToolProgress(names, round(time.monotonic() - start, 1))
 
             # Emit results + append history in the ORIGINAL order so
             # tool_call_id pairing stays consistent.

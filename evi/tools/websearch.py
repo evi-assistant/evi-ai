@@ -34,6 +34,7 @@ _HTTP_TIMEOUT = 30.0
         "training data."
     ),
     category="web",
+    long=True,
 )
 def web_search(query: str, limit: int = 5) -> str:
     if not query.strip():
@@ -68,6 +69,7 @@ def web_search(query: str, limit: int = 5) -> str:
         "Use after `web_search` to read a result. Returns up to ~16 KB."
     ),
     category="web",
+    long=True,
 )
 def web_fetch(url: str):
     from evi.citations import Citation, ToolOutput, trim_excerpt

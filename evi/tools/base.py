@@ -30,6 +30,10 @@ class Tool:
     parameters: dict[str, Any]  # JSON-schema object
     func: Callable[..., Any]
     category: str = "general"
+    # Known-slow tools (web fetch, index build, model pull). The agent emits a
+    # ToolProgress heartbeat immediately when one starts (rather than only after
+    # the first interval) so the UI shows status without an apparent hang.
+    long: bool = False
 
     def openai_schema(self) -> dict[str, Any]:
         return {
@@ -106,11 +110,14 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     category: str = "general",
+    long: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator: register a function as an LLM tool.
 
     Reads parameter types from type hints. The function's first docstring line
-    is used as the description if `description` is not supplied.
+    is used as the description if `description` is not supplied. Pass
+    ``long=True`` for known-slow tools so the agent announces progress as soon
+    as they start (see Agent's ToolProgress).
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -139,6 +146,7 @@ def tool(
             },
             func=fn,
             category=category,
+            long=long,
         )
         REGISTRY[tool_name] = t
         return fn
