@@ -886,6 +886,18 @@ def create_app() -> FastAPI:
         used, ceiling = sess.agent.token_usage()
         return {"used": used, "ceiling": ceiling}
 
+    @app.get("/api/session/{session_id}/context")
+    def session_context(session_id: str) -> dict[str, object]:
+        """Per-category breakdown of where the context window is spent (Ph 88)."""
+        from evi.context_report import context_breakdown
+
+        sess = sessions.get(session_id)
+        if sess is None:
+            return context_breakdown([], 0)
+        return context_breakdown(
+            sess.agent.history, sess.agent.config.llm.context_size or 0
+        )
+
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
         """Snapshot for the picker UI: available models + current settings."""

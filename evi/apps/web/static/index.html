@@ -317,6 +317,18 @@
   .picker-toggle.on .switch { background: var(--accent); }
   .picker-toggle.on .switch::after { left: 14px; background: #0f1419; }
 
+  /* Context-window breakdown popover (Phase 88) */
+  .ctx-pop { position: fixed; z-index: 60; min-width: 230px; padding: 10px 12px;
+    background: var(--panel, #1a2027); border: 1px solid var(--border, #2b333d);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12px; }
+  .ctx-pop .ctx-head { color: var(--dim); margin-bottom: 8px; }
+  .ctx-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .ctx-row .ctx-lbl { width: 84px; color: var(--fg); }
+  .ctx-row .ctx-bar { flex: 1; height: 8px; background: var(--border, #2b333d);
+    border-radius: 4px; overflow: hidden; }
+  .ctx-row .ctx-bar i { display: block; height: 100%; background: var(--accent, #4aa3df); }
+  .ctx-row .ctx-val { width: 64px; text-align: right; color: var(--dim); }
+
   /* Responsive / mobile */
   @media (max-width: 640px) {
     header { padding: 8px 12px; gap: 8px; }
@@ -711,6 +723,43 @@ async function refreshUsage() {
     chipUsage.style.color = pct >= 85 ? 'var(--err)' : (pct >= 70 ? 'var(--tool)' : 'var(--dim)');
   } catch {}
 }
+
+// Click the usage chip for a per-category context breakdown (Phase 88).
+chipUsage.style.cursor = 'pointer';
+chipUsage.title = 'Context breakdown — click';
+let _ctxPop = null;
+function _closeCtxPop() { if (_ctxPop) { _ctxPop.remove(); _ctxPop = null; } }
+chipUsage.addEventListener('click', async (ev) => {
+  ev.stopPropagation();
+  if (_ctxPop) { _closeCtxPop(); return; }
+  let rep;
+  try {
+    const r = await fetch(`/api/session/${sessionId}/context`);
+    if (!r.ok) return;
+    rep = await r.json();
+  } catch { return; }
+  const k = n => n >= 1000 ? Math.round(n / 1000) + 'k' : '' + n;
+  const labels = { system: 'system prompt', user: 'you', assistant: 'assistant', tools: 'tools' };
+  const pop = document.createElement('div');
+  pop.className = 'ctx-pop';
+  let html = `<div class="ctx-head">~${rep.used.toLocaleString()} tokens`
+    + (rep.ceiling ? ` / ${rep.ceiling.toLocaleString()} (${rep.pct}%)` : '')
+    + ` · ${rep.messages} msgs</div>`;
+  for (const b of ['system', 'user', 'assistant', 'tools']) {
+    const toks = (rep.buckets && rep.buckets[b]) || 0;
+    const share = (rep.pct_of_used && rep.pct_of_used[b]) || 0;
+    html += `<div class="ctx-row"><span class="ctx-lbl">${labels[b]}</span>`
+      + `<span class="ctx-bar"><i style="width:${share}%"></i></span>`
+      + `<span class="ctx-val">${k(toks)} ${share}%</span></div>`;
+  }
+  pop.innerHTML = html;
+  document.body.appendChild(pop);
+  const rect = chipUsage.getBoundingClientRect();
+  pop.style.top = (rect.bottom + 6) + 'px';
+  pop.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+  _ctxPop = pop;
+  setTimeout(() => document.addEventListener('click', _closeCtxPop, { once: true }), 0);
+});
 
 // --- conversation tabs ---------------------------------------------------
 //

@@ -145,7 +145,7 @@ Phase 79 in-app update progress, **Phase 80** plugin hooks + MCP servers,
 
 Still open (lighter / later): subagent profiles in plugins, deep links, a plugin
 marketplace index, "channels" push-into-session, a packaged CI action, an agent
-dispatch view, context-window viz, OpenTelemetry. See [roadmap.md](roadmap.md)
+dispatch view, OpenTelemetry. See [roadmap.md](roadmap.md)
 for the full Phase 83–94 plan. Explicitly **not** planned: cloud/enterprise
 backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
 public Agent SDK.
