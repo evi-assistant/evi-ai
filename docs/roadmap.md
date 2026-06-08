@@ -251,7 +251,11 @@ locally and ship once that clears.
 - **Phase 88 — context-window visualization** — **✅ shipped (local)**: `/context`
   (`/ctx`) in the REPL and a click-the-chip popover in the web UI break tokens
   down by system / you / assistant / tools (`/api/session/{id}/context`).
-- **Phase 89 — OpenTelemetry / metrics** — opt-in traces/metrics export. **M.**
+- **Phase 89 — OpenTelemetry / metrics** — **✅ shipped (local)**: opt-in
+  `[telemetry] traces/metrics` + `otlp_endpoint` (or `EVI_OTLP_ENDPOINT`) export
+  spans around tool calls + tool counters/durations via OTLP. No-op unless the
+  `[otel]` extra is installed and an endpoint is set; `evi/otel.py` wraps
+  `_dispatch_run`. Configurable in Settings → General (telemetry).
 - Smaller: long-context awareness in the model registry · `/recent` REPL history
   · deep links (`evi://`).
 

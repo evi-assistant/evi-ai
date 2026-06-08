@@ -24,6 +24,7 @@ from evi.hooks import HookRegistry
 
 if TYPE_CHECKING:
     from evi.guardrails import Guardrails
+from evi import otel
 from evi.memory import MemoryStore
 from evi.project import ProjectContext
 from evi.skills import SkillStore
@@ -1367,11 +1368,18 @@ class Agent:
         the tool produced.
         """
         dlog("tool.call", {"name": name, "args": args_json})
-        try:
-            output = tool.call_rich(args_json)
-        except Exception as exc:
-            # Belt-and-braces: Tool.call_rich already catches most exceptions.
-            output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
+        _t0 = time.monotonic()
+        with otel.span("evi.tool", **{"tool.name": name}):
+            try:
+                output = tool.call_rich(args_json)
+            except Exception as exc:
+                # Belt-and-braces: Tool.call_rich already catches most exceptions.
+                output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
+        otel.record_tool(
+            name,
+            ok=not output.text.startswith("ERROR:"),
+            duration_ms=(time.monotonic() - _t0) * 1000.0,
+        )
         dlog("tool.result", {"name": name, "output": output.text})
         if self.hooks is not None:
             self.hooks.run_after(name, args_json, output.text)

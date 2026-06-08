@@ -187,6 +187,13 @@ class TelemetrySettings:
     crash_reports: bool = False
     dsn: str = ""
     backend: str = "sentry"   # "sentry" | "none"
+    # OpenTelemetry traces/metrics (Phase 89). OFF by default; nothing is
+    # exported without an `otlp_endpoint` (or EVI_OTLP_ENDPOINT) and the
+    # `evi-assistant[otel]` deps. Separate from crash reporting above.
+    traces: bool = False
+    metrics: bool = False
+    otlp_endpoint: str = ""   # base OTLP/HTTP URL, e.g. http://localhost:4318
+    service_name: str = "evi"
 
 
 @dataclass

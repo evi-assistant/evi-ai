@@ -443,6 +443,8 @@ def create_app() -> FastAPI:
     # sidecar too, since it runs this same app.
     from evi.reporting import init_reporting
     init_reporting()
+    from evi import otel
+    otel.init_telemetry()
 
     mcp_manager: MCPManager | None = None
     scheduler_obj: object | None = None

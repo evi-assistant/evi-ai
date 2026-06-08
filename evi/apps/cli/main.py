@@ -151,6 +151,10 @@ def _global_options(
     # then still printed normally.
     from evi.reporting import init_reporting, install_excepthook
     install_excepthook(init_reporting())
+    # Opt-in OpenTelemetry traces/metrics (no-op unless [telemetry] traces/metrics
+    # + an endpoint are set and the otel deps are installed).
+    from evi import otel
+    otel.init_telemetry()
 
 
 def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
