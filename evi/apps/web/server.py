@@ -1064,6 +1064,13 @@ def create_app() -> FastAPI:
             "sandbox": {"enabled": cfg.tools.sandbox, **_sandbox.status()},
         }
 
+    @app.get("/api/styles")
+    def styles_list() -> dict[str, Any]:
+        """Available output styles for the settings picker."""
+        from evi import styles
+
+        return {"styles": styles.list_styles(), "active": Config.load().llm.output_style}
+
     @app.get("/api/modes")
     def modes_list() -> dict[str, Any]:
         """The session modes for the Chat/Cowork/Code switcher."""
