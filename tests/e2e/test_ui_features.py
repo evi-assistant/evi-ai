@@ -126,6 +126,31 @@ def test_guardrails_editor(page: Page, evi_base_url: str):
     expect(page.locator("#gr-status")).to_contain_text("Error", timeout=10000)
 
 
+def test_plugins_browser(page: Page, evi_base_url: str, tmp_path):
+    """Settings → Plugins lists installed plugins and can install from a local
+    directory, then remove — a real round-trip against the running server."""
+    src = tmp_path / "e2e-plugin"
+    src.mkdir()
+    (src / "plugin.toml").write_text(
+        'name = "e2e-plugin"\nversion = "9.9.9"\ndescription = "from e2e"\n',
+        encoding="utf-8",
+    )
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('plugins')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#plugins-box")).to_be_visible(timeout=10000)
+    # install from a local directory
+    page.fill("#pl-source", str(src))
+    page.click("#pl-add")
+    row = page.locator(".pl-row", has_text="e2e-plugin")
+    expect(row).to_be_visible(timeout=10000)
+    # remove it again to restore the empty state for other tests
+    page.locator('.pl-row button[data-remove="e2e-plugin"]').click()
+    expect(page.locator('.pl-row button[data-remove="e2e-plugin"]')).to_have_count(
+        0, timeout=10000
+    )
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -138,6 +163,7 @@ def test_guardrails_editor(page: Page, evi_base_url: str):
         ("server", "Server"),
         ("voice", "Voice"),
         ("guardrails", "Guardrails"),
+        ("plugins", "Plugins"),
         ("about", "About"),
     ],
 )

@@ -137,6 +137,17 @@ evi plugin index add <name> <source> [--desc D]     Add/replace a local index en
 - `evi plugin index init` writes a starter `marketplace.json` (refuses to overwrite an existing file unless you pass `--overwrite`).
 - `evi plugin index add` adds or replaces an entry by name. `--tags` takes a comma-separated list.
 
+### Web / Desktop — the Plugins panel
+
+The web and desktop apps have a **Settings → Plugins** panel (no CLI needed):
+
+- lists installed plugins with their component counts (commands / skills / hooks / MCP / agents) and a **Remove** button each;
+- a **Marketplace** list with a filter box and per-entry **Install** button (entries you already have are marked *installed*);
+- an **Install from a directory or git URL** field for one-off installs.
+
+It is backed by `GET /api/plugins` and `POST /api/plugins/{install,remove}` —
+the same `evi.plugins` / `evi.marketplace` functions the CLI uses.
+
 ### Where installed components show up
 
 - **Slash commands** appear as `/<plugin>:<command>` in the REPL and web UI.

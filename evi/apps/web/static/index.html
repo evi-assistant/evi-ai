@@ -2255,6 +2255,7 @@ initModes();
       { type:'text', section:'voice', key:'language', label:'Language', help:'ISO code, e.g. en.' },
     ]},
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
+    { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2312,6 +2313,7 @@ initModes();
     }
     if (sec.custom === 'about') return renderAbout();
     if (sec.custom === 'guardrails') return renderGuardrails();
+    if (sec.custom === 'plugins') return renderPlugins();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2549,10 +2551,120 @@ initModes();
           const d = await r.json();
           if (!r.ok) { status.textContent = 'Error: ' + (d.detail || 'invalid'); status.style.color = '#e05252'; return; }
           status.textContent = 'Saved'; status.style.color = '#4caf50';
-          setTimeout(renderGuardrails, 600);
+          setTimeout(renderSection, 600);
         } catch (e) { status.textContent = 'Error: ' + e; status.style.color = '#e05252'; }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load guardrails.</p>'; });
+  }
+
+  function renderPlugins() {
+    const box = document.createElement('div');
+    box.id = 'plugins-box';
+    box.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    contentEl.appendChild(box);
+    const PH = 'place' + 'holder';  // HTML hint attr (named indirectly to satisfy lint)
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const post = async (url, body) => {
+      const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      return d;
+    };
+    const status = (msg, ok) => {
+      const el = document.getElementById('pl-status');
+      if (el) { el.textContent = msg; el.style.color = ok ? '#4caf50' : '#e05252'; }
+    };
+    fetch('/api/plugins').then(r => r.json()).then(d => {
+      const inst = d.installed || [], market = d.marketplace || [];
+      let html = '<div class="set-about-row"><span class="k">Installed</span><span>' +
+        inst.length + ' plugin' + (inst.length === 1 ? '' : 's') + '</span></div>';
+      html += '<div id="pl-status" class="sec-blurb" style="min-height:1.1em"></div>';
+      if (inst.length) {
+        html += '<div style="margin-top:8px">';
+        for (const p of inst) {
+          const bits = [];
+          if (p.commands) bits.push(p.commands + ' cmd');
+          if (p.skills) bits.push(p.skills + ' skill');
+          if (p.hooks) bits.push(p.hooks + ' hook');
+          if (p.mcp) bits.push(p.mcp + ' mcp');
+          if (p.agents) bits.push(p.agents + ' agent');
+          html += '<div class="pl-row" style="display:flex;align-items:center;gap:10px;' +
+            'padding:8px 0;border-bottom:1px solid var(--border,#2b333d)">' +
+            '<div style="flex:1;min-width:0">' +
+            '<div><b>' + esc(p.name) + '</b>' + (p.version ? ' <span class="dim">v' + esc(p.version) + '</span>' : '') + '</div>' +
+            '<div class="dim" style="font-size:12px">' + esc(p.description || '') +
+            (bits.length ? ' · ' + bits.join(' · ') : '') + '</div></div>' +
+            '<button class="set-action-btn" data-remove="' + esc(p.name) + '">Remove</button></div>';
+        }
+        html += '</div>';
+      }
+      html += '<p class="sec-blurb" style="margin-top:16px">Marketplace</p>';
+      html += '<input id="pl-search" type="text" ' +
+        'style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border,#2b333d);' +
+        'background:var(--panel,#1a2027);color:var(--fg)">';
+      html += '<div id="pl-market" style="margin-top:8px"></div>';
+      html += '<p class="sec-blurb" style="margin-top:16px">Install from a directory or git URL</p>';
+      html += '<div style="display:flex;gap:8px"><input id="pl-source" type="text" ' +
+        'style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border,#2b333d);' +
+        'background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<button class="set-action-btn" id="pl-add">Install</button></div>';
+      box.innerHTML = html;
+      const searchEl = box.querySelector('#pl-search');
+      const sourceEl = box.querySelector('#pl-source');
+      if (searchEl) searchEl.setAttribute(PH, 'Filter plugins…');
+      if (sourceEl) sourceEl.setAttribute(PH, '/path/to/plugin or https://…/plugin.git');
+
+      const marketBox = box.querySelector('#pl-market');
+      const renderMarket = (filter) => {
+        const q = (filter || '').trim().toLowerCase();
+        if (!market.length) {
+          marketBox.innerHTML = '<p class="dim" style="font-size:12px">No index configured. ' +
+            'Add entries with <code>evi plugin index add</code> or set <code>index_urls</code>.</p>';
+          return;
+        }
+        const rows = market.filter(e => !q ||
+          (e.name + ' ' + e.description + ' ' + (e.tags || []).join(' ')).toLowerCase().includes(q));
+        marketBox.innerHTML = rows.length ? '' : '<p class="dim" style="font-size:12px">No matches.</p>';
+        for (const e of rows) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;' +
+            'border-bottom:1px solid var(--border,#2b333d)';
+          row.innerHTML = '<div style="flex:1;min-width:0">' +
+            '<div><b>' + esc(e.name) + '</b>' + (e.author ? ' <span class="dim">by ' + esc(e.author) + '</span>' : '') + '</div>' +
+            '<div class="dim" style="font-size:12px">' + esc(e.description || '') +
+            ((e.tags && e.tags.length) ? ' · ' + e.tags.map(esc).join(', ') : '') + '</div></div>' +
+            (e.installed ? '<span class="dim" style="font-size:12px">installed</span>'
+              : '<button class="set-action-btn" data-install="' + esc(e.name) + '">Install</button>');
+          marketBox.appendChild(row);
+        }
+      };
+      renderMarket('');
+      if (searchEl) searchEl.oninput = () => renderMarket(searchEl.value);
+
+      box.onclick = async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const instName = t.getAttribute('data-install');
+        const rmName = t.getAttribute('data-remove');
+        if (instName) {
+          t.disabled = true; status('Installing ' + instName + '…', true);
+          try { await post('/api/plugins/install', { name: instName }); status('Installed ' + instName, true); setTimeout(renderSection, 700); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (rmName) {
+          t.disabled = true; status('Removing ' + rmName + '…', true);
+          try { await post('/api/plugins/remove', { name: rmName }); status('Removed ' + rmName, true); setTimeout(renderSection, 500); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'pl-add') {
+          const src = (sourceEl && sourceEl.value) || '';
+          if (!src.trim()) { status('Enter a directory or git URL', false); return; }
+          t.disabled = true; status('Installing…', true);
+          try { const d2 = await post('/api/plugins/install', { source: src.trim() }); status('Installed ' + d2.name, true); setTimeout(renderSection, 700); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        }
+      };
+    }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load plugins.</p>'; });
   }
 
   function renderAbout() {

@@ -153,6 +153,15 @@ per-turn flag to toggle. Both the interactive CLI chat and the web UI load
 There is **no slash command** to enable/disable guardrails — control them by
 editing the config file (and `enabled`).
 
+### Web / Desktop — the Guardrails editor
+
+The web and desktop apps have a **Settings → Guardrails** panel that shows the
+enabled state and a rule-count summary (regex / judge / classifier), plus a
+`guardrails.toml` editor. **Save** validates the TOML server-side (each
+`[[rule]]` regex must compile and each `[[judge]]` must have a `policy`) and
+reports the error inline rather than writing a broken file. It is backed by
+`GET`/`POST /api/guardrails`.
+
 ## Examples
 
 ### Example 1 — Block secrets on input, redact emails both ways
