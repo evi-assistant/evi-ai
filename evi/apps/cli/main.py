@@ -65,6 +65,7 @@ import evi.tools.pdf  # noqa: F401
 import evi.tools.sqlite  # noqa: F401
 import evi.tools.index  # noqa: F401
 import evi.tools.git  # noqa: F401
+import evi.tools.federation  # noqa: F401
 import evi.tools.ocr  # noqa: F401
 import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
@@ -2525,6 +2526,48 @@ def eval_run(
         )
     if report["passed"] < report["total"]:
         raise typer.Exit(1)
+
+
+peer_app = typer.Typer(help="Federation — delegate tasks to trusted peer eVi instances.")
+app.add_typer(peer_app, name="peer")
+
+
+@peer_app.command("list")
+def peer_list() -> None:
+    """List configured peers (~/.evi/peers.json)."""
+    from evi import federation
+
+    peers = federation.load_peers()
+    if not peers:
+        console.print(
+            "[dim]no peers.[/dim] add one to ~/.evi/peers.json: "
+            '[cyan][{"name":"gpu","url":"http://host:8473","token":"…"}][/cyan]'
+        )
+        return
+    for p in peers:
+        tok = " [dim](token set)[/dim]" if p.token else " [dim](no token)[/dim]"
+        console.print(f"  [bold]{p.name}[/bold] [dim]{p.url}[/dim]{tok}")
+
+
+@peer_app.command("run")
+def peer_run(
+    name: str = typer.Argument(..., help="Peer name from ~/.evi/peers.json."),
+    task: str = typer.Argument(..., help="The task to delegate."),
+) -> None:
+    """Delegate a task to a peer eVi and print its answer."""
+    from evi import federation
+
+    p = federation.get_peer(name)
+    if p is None:
+        console.print(f"[red]no peer named[/red] {name} [dim](try `evi peer list`)[/dim]")
+        raise typer.Exit(1)
+    try:
+        with console.status(f"delegating to {p.name}…", spinner="dots"):
+            answer = federation.delegate(p, task)
+    except federation.FederationError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(answer)
 
 
 @app.command("agents")

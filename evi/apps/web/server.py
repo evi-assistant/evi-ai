@@ -55,6 +55,7 @@ import evi.tools.pdf  # noqa: F401
 import evi.tools.sqlite  # noqa: F401
 import evi.tools.index  # noqa: F401
 import evi.tools.git  # noqa: F401
+import evi.tools.federation  # noqa: F401
 import evi.tools.ocr  # noqa: F401
 import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
@@ -1027,6 +1028,43 @@ def create_app() -> FastAPI:
         except _wf.WorkflowError as exc:
             raise HTTPException(400, str(exc))
         return {"ok": True, "outputs": outputs}
+
+    @app.post("/api/federate")
+    def federate(req: dict[str, Any]) -> dict[str, Any]:
+        """Run a task delegated by a trusted peer eVi (federation). Off unless
+        `[federation] serve = true`. Runs non-interactively — tools not already
+        auto-approved are denied, so a remote task can't trigger surprises."""
+        cfg = Config.load()
+        if not cfg.federation.serve:
+            raise HTTPException(
+                403, "federation serving is disabled (set [federation] serve = true)"
+            )
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        task = str(req.get("task") or "").strip()
+        if not task:
+            raise HTTPException(400, "task is required")
+
+        from evi.headless import run_headless
+
+        toggles = asdict(cfg.tools)
+        agent = Agent(
+            client=make_client(cfg.llm),
+            config=cfg,
+            tools=get_enabled_tools(toggles),
+            memory=MemoryStore() if toggles.get("memory") else None,
+            skills=SkillStore() if toggles.get("skills") else None,
+        )
+        mode = str(req.get("mode") or "")
+        if mode:
+            from evi.modes import mode_tools
+
+            agent.tools = {t.name: t for t in mode_tools(mode)}
+        # Non-interactive: deny tools not already in the auto-approve list.
+        agent.permission_callback = lambda *a, **k: False
+        agent.permission_batch_callback = None
+        res = run_headless(agent, task)
+        return {"text": res.text, "error": res.error}
 
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
