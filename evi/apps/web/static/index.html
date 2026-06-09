@@ -2183,6 +2183,8 @@ initModes();
     { id:'server', title:'Server', blurb:'Web access control.', fields:[
       { type:'secret', section:'web', key:'auth_token', label:'Access token',
         help:'When set, the web UI requires this token. Blank = open localhost access.' },
+      { type:'bool', section:'web', key:'multi_user', label:'Multi-user logins',
+        help:'Opt-in: each user logs in with their own token from ~/.evi/users.json (manage with `evi web-config users`). Shared workspace.' },
     ]},
     { id:'voice', title:'Voice', blurb:'Text-to-speech engine for spoken replies.', fields:[
       { type:'select', section:'voice', key:'engine', label:'TTS engine',

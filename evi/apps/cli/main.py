@@ -3482,6 +3482,51 @@ app.add_typer(web_app, name="web-config")
 token_app = typer.Typer(help="Manage the web UI bearer token.")
 web_app.add_typer(token_app, name="token")
 
+users_app = typer.Typer(help="Multi-user web logins (~/.evi/users.json).")
+web_app.add_typer(users_app, name="users")
+
+
+@users_app.command("list")
+def web_users_list() -> None:
+    """List configured web users (multi-user mode)."""
+    from evi import users as _users
+
+    items = _users.load_users()
+    if not items:
+        console.print(
+            "[dim]no users.[/dim] add one with [cyan]evi web-config users add <name>[/cyan] "
+            "and set [cyan]web.multi_user = true[/cyan]"
+        )
+        return
+    for u in items:
+        console.print(f"  [bold]{u.name}[/bold] [dim](token set)[/dim]")
+
+
+@users_app.command("add")
+def web_users_add(name: str) -> None:
+    """Add (or re-issue) a web user with a fresh token. Prints it once."""
+    from evi import users as _users
+
+    try:
+        u = _users.add_user(name)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]added[/green] {u.name}")
+    console.print(f"  token: [cyan]{u.token}[/cyan] [dim](shown once)[/dim]")
+    console.print("[dim]enable with [/dim][cyan]web.multi_user = true[/cyan][dim] in config.toml[/dim]")
+
+
+@users_app.command("remove")
+def web_users_remove(name: str) -> None:
+    """Revoke a web user (drops them from users.json)."""
+    from evi import users as _users
+
+    if not _users.remove_user(name):
+        console.print(f"[red]no such user:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
 
 @token_app.command("show")
 def web_token_show() -> None:
