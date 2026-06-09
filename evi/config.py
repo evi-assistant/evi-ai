@@ -33,6 +33,7 @@ SCHEDULED_LOG_DIR = LOG_DIR / "scheduled"
 HOOKS_CONFIG_PATH = HOME / "hooks.toml"
 KEYBINDINGS_PATH = HOME / "keybindings.toml"
 MARKETPLACE_PATH = HOME / "marketplace.json"
+PEERS_PATH = HOME / "peers.json"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 DREAM_LOG_DIR = LOG_DIR / "dreams"
 SCREENSHOT_DIR = HOME / "screenshots"
@@ -212,6 +213,16 @@ class StatusLineSettings:
 
 
 @dataclass
+class FederationSettings:
+    """eVi↔eVi federation. `serve` opts this instance in to answering
+    `POST /api/federate` (run a delegated task for a trusted peer). OFF by
+    default — you choose to be a peer. The peers you delegate *to* live in
+    `~/.evi/peers.json` (so per-peer tokens stay out of synced config)."""
+
+    serve: bool = False
+
+
+@dataclass
 class PluginsSettings:
     """Plugin marketplace (lighter/later item). `index_urls` are extra remote
     plugin-index JSON files merged with the local `~/.evi/marketplace.json` for
@@ -262,6 +273,7 @@ class ToolToggles:
     sqlite: bool = False     # read-only SQLite queries
     index: bool = False      # semantic project search (needs embed model)
     git: bool = False        # git read-only inspection tools
+    federation: bool = False # delegate_peer — call a trusted peer eVi (network)
     ocr: bool = False        # tesseract OCR — needs the binary installed
     calendar: bool = False   # iCal / CalDAV calendar reading
     # When true, run_python executes under an OS sandbox (read-only FS except a
@@ -311,6 +323,7 @@ class Config:
     statusline: StatusLineSettings = field(default_factory=StatusLineSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     plugins: PluginsSettings = field(default_factory=PluginsSettings)
+    federation: FederationSettings = field(default_factory=FederationSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -347,6 +360,7 @@ class Config:
             statusline=StatusLineSettings(**data.get("statusline", {})),
             voice=VoiceSettings(**data.get("voice", {})),
             plugins=PluginsSettings(**data.get("plugins", {})),
+            federation=FederationSettings(**data.get("federation", {})),
         )
 
     def save(self) -> None:
