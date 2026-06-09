@@ -139,13 +139,15 @@ planned (philosophy mismatch / separate big track).
 - **Phase 78** — consume-side MCP server allowlist (`tools.mcp_allow`).
 
 ✅ **Also shipped (local, since 0.31.0 — pending the Actions billing block):**
-Phase 79 in-app update progress, **Phase 80** plugin hooks + MCP servers,
-**Phase 81** HTTP hook type, **Phase 82** configurable keybindings
-(`keybindings.toml`).
+the full Phase 79–94 batch — 79 in-app update progress, **80** plugin hooks +
+MCP, **81** HTTP hooks, **82** keybindings, **83** channels (push-into-session),
+**84** packaged CI action, **87** cross-device handoff, **88** context-window
+breakdown, **89** OpenTelemetry, **90** fine-tune export, **91** voice engines
+(coqui/f5/piper), **92** CodeQL + gitleaks, **93** Docker→GHCR, **94** sigstore
+signing.
 
 Still open (lighter / later): subagent profiles in plugins, deep links, a plugin
-marketplace index, "channels" push-into-session, a packaged CI action, an agent
-dispatch view, OpenTelemetry. See [roadmap.md](roadmap.md)
-for the full Phase 83–94 plan. Explicitly **not** planned: cloud/enterprise
+marketplace index, an agent dispatch view, a dynamic-workflows DSL (Phase 85/86).
+See [roadmap.md](roadmap.md). Explicitly **not** planned: cloud/enterprise
 backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
 public Agent SDK.
