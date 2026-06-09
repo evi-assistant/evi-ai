@@ -175,10 +175,10 @@ class WebSettings:
 
     Generate a token with `evi web token rotate`.
 
-    `multi_user` (opt-in) lets a trusted small team each log in with their own
-    revocable token from `~/.evi/users.json` instead of sharing `auth_token`.
-    It's a shared workspace — sessions/memory are common to all authenticated
-    users; per-user data isolation is a separate, larger feature.
+    `multi_user` (opt-in) lets a team each log in with their own revocable token
+    from `~/.evi/users.json` instead of sharing `auth_token`. Each user gets an
+    isolated workspace — their web sessions, transcripts, and memory live under
+    `~/.evi/users/<name>/` and are not visible to other users.
     """
 
     auth_token: str = ""

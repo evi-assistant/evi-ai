@@ -84,3 +84,65 @@ def test_multi_user_off_is_open(monkeypatch, tmp_path):
     # No auth_token + multi_user off => open access (single-user default).
     client = _client(monkeypatch, tmp_path, multi_user=False)
     assert client.get("/api/whoami").status_code == 200
+
+
+def _isolation_client(monkeypatch, tmp_path):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    import evi.apps.web.server as server_mod
+    import evi.config as config_mod
+    from evi.config import Config
+    from evi.llm.agent import Done, TextDelta
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[web]\nmulti_user = true\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    monkeypatch.setattr("evi.users.USERS_PATH", tmp_path / "users.json")
+    _write_users(tmp_path / "users.json",
+                 [{"name": "alice", "token": "A"}, {"name": "bob", "token": "B"}])
+
+    class _FakeAgent:
+        def __init__(self, *_, **__):
+            self.config = Config()
+            self.tools: dict = {}
+            self.history: list[dict] = [{"role": "system", "content": "s"}]
+            self.pending: dict = {}
+
+        def chat(self, *a, **k):
+            yield TextDelta("ok")
+            yield Done(reason="stop")
+
+        def token_usage(self):
+            return (0, 0)
+
+    monkeypatch.setattr(server_mod, "Agent", _FakeAgent)
+    monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
+    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
+    monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path)
+    return TestClient(server_mod.create_app(), raise_server_exceptions=False)
+
+
+def test_sessions_isolated_per_user(monkeypatch, tmp_path):
+    """The crux: same session id, different users -> fully separate sessions."""
+    client = _isolation_client(monkeypatch, tmp_path)
+    A = {"Authorization": "Bearer A"}
+    B = {"Authorization": "Bearer B"}
+
+    # Both push to a session called "s1" (creates it in each user's bucket).
+    client.post("/api/session/s1/channel", json={"text": "secret-A"}, headers=A)
+    client.post("/api/session/s1/channel", json={"text": "hello-B"}, headers=B)
+
+    amsgs = client.get("/api/session/s1/channel", headers=A).json()["messages"]
+    bmsgs = client.get("/api/session/s1/channel", headers=B).json()["messages"]
+    # Each user sees ONLY their own message — no cross-user leak.
+    assert [m["text"] for m in amsgs] == ["secret-A"]
+    assert [m["text"] for m in bmsgs] == ["hello-B"]
+
+    # The dispatch view is scoped per user too.
+    da = client.get("/api/dispatch", headers=A).json()
+    db = client.get("/api/dispatch", headers=B).json()
+    assert [s["id"] for s in da["sessions"]] == ["s1"]
+    assert [s["id"] for s in db["sessions"]] == ["s1"]
+    assert client.get("/api/whoami", headers=A).json()["user"] == "alice"

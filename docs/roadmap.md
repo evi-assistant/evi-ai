@@ -304,7 +304,10 @@ Follow-on additions from the same review — **✅ shipped (local)**:
 - **Fuller Responses API** — `[llm] responses_tools` enables OpenAI hosted tools
   (web_search/code_interpreter/file_search) on the Responses path.
 - **Multi-user web (opt-in)** — `[web] multi_user` + `~/.evi/users.json`
-  (`evi web-config users …`): per-user revocable tokens, shared workspace.
+  (`evi web-config users …`): per-user revocable tokens **and isolated
+  workspaces** — each user's web sessions, transcripts, and memory live under
+  `~/.evi/users/<name>/` (a ContextVar-scoped per-user session registry +
+  per-user data roots; cross-user leakage is covered by a test).
 
 ### Previously-deferred, now planned
 
