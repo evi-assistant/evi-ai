@@ -57,6 +57,7 @@ class EvalCase:
     equals: str | None = None
     ignore_case: bool = False
     mode: str = ""
+    judge: str = ""   # LLM-as-judge rubric; graded by a model (needs judge_fn)
 
 
 @dataclass
@@ -106,6 +107,7 @@ def load_suite_file(path: Path) -> EvalSuite:
                 equals=(str(c["equals"]) if "equals" in c else None),
                 ignore_case=bool(c.get("ignore_case", False)),
                 mode=str(c.get("mode", "")).strip(),
+                judge=str(c.get("judge", "")).strip(),
             )
         )
     return EvalSuite(
@@ -162,15 +164,31 @@ def check_case(case: EvalCase, output: str) -> tuple[bool, list[str]]:
 
 
 def run_eval(
-    suite: EvalSuite, run_one: Callable[[EvalCase], str]
+    suite: EvalSuite,
+    run_one: Callable[[EvalCase], str],
+    judge_fn: Callable[[EvalCase, str], tuple[bool, str]] | None = None,
 ) -> dict[str, Any]:
     """Run every case through `run_one(case) -> output text`. Returns a report:
-    {name, total, passed, pass_rate, cases: [{name, passed, failures, output}]}."""
+    {name, total, passed, pass_rate, cases: [{name, passed, failures, output}]}.
+
+    A case with a `judge` rubric is additionally graded by `judge_fn(case,
+    output) -> (passed, reason)`; both the deterministic checks and the judge
+    must pass. If a case needs a judge but none is provided, it fails.
+    """
     results = []
     passed = 0
     for case in suite.cases:
         output = run_one(case)
         ok, failures = check_case(case, output)
+        if case.judge:
+            if judge_fn is None:
+                ok = False
+                failures.append("judge rubric set but no grader available")
+            else:
+                jok, reason = judge_fn(case, output)
+                if not jok:
+                    ok = False
+                    failures.append(f"judge: {reason}")
         if ok:
             passed += 1
         results.append(
@@ -200,6 +218,11 @@ name = "no-refusal"
 prompt = "List three uses for a paperclip."
 not_contains = ["I cannot", "I can't"]
 ignore_case = true
+
+[[case]]
+name = "tone"
+prompt = "Explain recursion to a five-year-old."
+judge = "The explanation is simple, friendly, and uses an everyday analogy."
 '''
 
 

@@ -81,3 +81,40 @@ def test_run_eval_report():
     by = {c["name"]: c for c in report["cases"]}
     assert by["a"]["passed"] and not by["b"]["passed"]
     assert by["b"]["failures"]
+
+
+# ---- LLM-as-judge --------------------------------------------------------
+
+
+def test_judge_pass():
+    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="is friendly")])
+    report = evals.run_eval(
+        suite, run_one=lambda c: "hi friend!", judge_fn=lambda c, o: (True, "friendly")
+    )
+    assert report["passed"] == 1
+
+
+def test_judge_fail_reason():
+    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="is friendly")])
+    report = evals.run_eval(
+        suite, run_one=lambda c: "go away", judge_fn=lambda c, o: (False, "rude")
+    )
+    assert report["passed"] == 0
+    assert any("judge: rude" in f for f in report["cases"][0]["failures"])
+
+
+def test_judge_without_grader_fails():
+    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="x")])
+    report = evals.run_eval(suite, run_one=lambda c: "out")  # no judge_fn
+    assert report["passed"] == 0 and report["cases"][0]["failures"]
+
+
+def test_judge_and_deterministic_both_required():
+    # deterministic check fails even though judge passes -> case fails
+    suite = EvalSuite(name="s", cases=[
+        EvalCase(name="j", prompt="p", contains=["MISSING"], judge="ok"),
+    ])
+    report = evals.run_eval(
+        suite, run_one=lambda c: "text", judge_fn=lambda c, o: (True, "ok")
+    )
+    assert report["passed"] == 0
