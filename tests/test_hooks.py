@@ -112,6 +112,52 @@ def test_url_hook_non_2xx_vetoes() -> None:
     assert veto is not None and veto.exit_code == 403
 
 
+# ---- lifecycle hooks (expanded events) ----------------------------------
+
+
+def test_load_lifecycle_events(tmp_path: Path) -> None:
+    p = tmp_path / "hooks.toml"
+    p.write_text(
+        '[[user_prompt_submit]]\nname="u"\ncommand=["true"]\n'
+        '[[before_compact]]\nname="c"\ncommand=["true"]\n'
+        '[[stop]]\nname="s"\ncommand=["true"]\n',
+        encoding="utf-8",
+    )
+    reg = load_hooks(p)
+    assert {h.event for h in reg.hooks} == {"user_prompt_submit", "before_compact", "stop"}
+
+
+def test_lifecycle_veto_blocks() -> None:
+    hook = Hook(
+        name="block", event="user_prompt_submit", match="*",
+        command=[sys.executable, "-c", "import sys; sys.exit(1)"],
+        veto_on_nonzero=True, timeout=10,
+    )
+    _results, veto = HookRegistry(hooks=[hook]).run_lifecycle("user_prompt_submit", payload="hi")
+    assert veto is not None and veto.vetoed
+
+
+def test_lifecycle_zero_exit_no_veto() -> None:
+    hook = Hook(
+        name="ok", event="user_prompt_submit", match="*",
+        command=[sys.executable, "-c", "pass"], veto_on_nonzero=True, timeout=10,
+    )
+    _results, veto = HookRegistry(hooks=[hook]).run_lifecycle("user_prompt_submit", payload="hi")
+    assert veto is None
+
+
+def test_lifecycle_payload_in_env(tmp_path: Path) -> None:
+    out = tmp_path / "p.txt"
+    code = (
+        "import os, pathlib; "
+        f"pathlib.Path({out.as_posix()!r}).write_text(os.environ.get('EVI_HOOK_ARGS_JSON',''))"
+    )
+    hook = Hook(name="probe", event="stop", match="*",
+                command=[sys.executable, "-c", code], timeout=10)
+    HookRegistry(hooks=[hook]).run_lifecycle("stop", payload="the-prompt")
+    assert out.read_text() == "the-prompt"
+
+
 def test_load_skips_malformed_entries(tmp_path: Path) -> None:
     p = tmp_path / "hooks.toml"
     p.write_text(

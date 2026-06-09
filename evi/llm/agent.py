@@ -448,6 +448,10 @@ class Agent:
         if not middle:
             return 0
 
+        # Lifecycle hook: a before_compact hook may veto to keep history intact.
+        if self._fire_lifecycle("before_compact", str(len(middle))):
+            return 0
+
         # Render the slice we want to summarise as a plain transcript.
         rendered = _render_for_summary(middle)
         summary_prompt = (
@@ -686,6 +690,12 @@ class Agent:
                 return
             user_msg = gres.text  # use the redacted text downstream
 
+        # Lifecycle hook: a user_prompt_submit hook may veto (block) the turn
+        # before the model ever sees it.
+        if self._fire_lifecycle("user_prompt_submit", user_msg):
+            yield Done("hook_blocked")
+            return
+
         composed = user_msg
         if self.goal:
             composed = (
@@ -761,6 +771,19 @@ class Agent:
             parallel_tool_calls=parallel_tool_calls,
             logit_bias=logit_bias,
         )
+        # Lifecycle hook: the turn finished (notification; veto ignored).
+        self._fire_lifecycle("stop")
+
+    def _fire_lifecycle(self, event: str, payload: str = "") -> bool:
+        """Run lifecycle hooks for `event`. Returns True if a hook vetoed.
+        No-op (returns False) when no hooks are configured or scanning fails."""
+        if self.hooks is None:
+            return False
+        try:
+            _results, veto = self.hooks.run_lifecycle(event, payload=payload)  # type: ignore[arg-type]
+            return veto is not None
+        except Exception:
+            return False
 
     def continue_chat(self, max_turns: int = 6) -> Iterator[Event]:
         """Resume inference against the current `history` without appending a
