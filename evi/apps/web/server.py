@@ -1341,6 +1341,13 @@ def create_app() -> FastAPI:
             raise HTTPException(404, f"no such plugin: {name}")
         return {"ok": True}
 
+    @app.get("/api/stats")
+    def stats_get(days: int = 0) -> dict[str, Any]:
+        """Local usage analytics from transcripts (same data as `evi stats`)."""
+        from evi import stats as _stats
+
+        return _stats.compute_stats(days=(days or None))
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""
