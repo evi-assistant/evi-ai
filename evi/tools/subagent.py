@@ -7,10 +7,38 @@ conversation; its final assistant text becomes the tool result.
 
 from __future__ import annotations
 
-from evi.llm.subagent import SUBAGENT_PROFILES, run_subagent, run_subagents_parallel
+from evi.llm.subagent import (
+    SUBAGENT_PROFILES,
+    get_profile,
+    run_subagent,
+    run_subagents_parallel,
+)
 from evi.tools.base import tool
 
 _MAX_PARALLEL = 6
+
+
+@tool(
+    description=(
+        "Delegate a task to a named subagent profile. Built-in profiles: "
+        "'explore' (read-only investigation), 'plan' (planning). Plugins add "
+        "more, named '<plugin>:<name>'. Pass the profile name + the task; "
+        "returns the subagent's report. Run `evi agents` to see options."
+    ),
+    category="subagent",
+)
+def delegate(profile: str, task: str) -> str:
+    p = get_profile(str(profile).strip())
+    if p is None:
+        return (
+            f"ERROR: unknown subagent profile {profile!r}. "
+            "Run `evi agents` to list available profiles."
+        )
+    return run_subagent(
+        system_prompt=str(p["system_prompt"]),
+        task=task,
+        tool_categories=p.get("tool_categories", ()),  # type: ignore[arg-type]
+    )
 
 
 @tool(

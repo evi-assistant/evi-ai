@@ -2328,6 +2328,23 @@ def recipe_run(
     console.print("\n[green]recipe complete[/green]")
 
 
+@app.command("agents")
+def agents_cmd() -> None:
+    """List subagent profiles (built-in + plugin) usable via the `delegate` tool."""
+    from evi.llm.subagent import SUBAGENT_PROFILES, all_profiles
+
+    for name, p in all_profiles().items():
+        cats = ", ".join(p.get("tool_categories") or ()) or "no tools"  # type: ignore[arg-type]
+        origin = "built-in" if name in SUBAGENT_PROFILES else "plugin"
+        sp = str(p.get("system_prompt", ""))[:72]
+        console.print(f"  [bold]{name}[/bold] [dim]({cats} · {origin})[/dim]")
+        console.print(f"    [dim]{sp}…[/dim]")
+    console.print(
+        "\n[dim]use via the [/dim][cyan]delegate(profile, task)[/cyan][dim] tool, or add your "
+        "own in a plugin's [/dim]agents.toml[dim].[/dim]"
+    )
+
+
 workflow_app = typer.Typer(
     help="Dynamic workflows — multi-step, parallel multi-agent orchestration."
 )
@@ -2673,6 +2690,8 @@ def plugin_list() -> None:
             parts.append(f"{p.hooks} hooks")
         if p.mcp:
             parts.append(f"{p.mcp} mcp")
+        if p.agents:
+            parts.append(f"{p.agents} agents")
         counts = ", ".join(parts)
         console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({counts})[/dim]{desc}")
 
