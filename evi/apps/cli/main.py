@@ -1023,6 +1023,13 @@ def guardrails_list() -> None:
             f"  [bold]{jr.name}[/bold] [magenta]judge[/magenta] "
             f"[dim]({jr.applies_to})[/dim] — {jr.policy[:60]}"
         )
+    for cr in g.classifier_rules:
+        labels = ", ".join(cr.labels) if cr.labels else "any"
+        console.print(
+            f"  [bold]{cr.name}[/bold] [blue]classifier[/blue] "
+            f"[dim]({cr.applies_to})[/dim] — {cr.model or 'default'} "
+            f"[dim]>= {cr.threshold} on {labels}[/dim]"
+        )
 
 
 @guardrails_app.command("test")
