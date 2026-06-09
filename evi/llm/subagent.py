@@ -9,7 +9,14 @@ assistant text. Used by `evi.tools.subagent` to back `delegate_explore`,
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Iterable
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover
+    import tomli as tomllib
 
 from evi.config import Config
 from evi.llm.agent import Agent, Done, Error, TextDelta, ToolResult
@@ -137,3 +144,52 @@ SUBAGENT_PROFILES: dict[str, dict[str, object]] = {
         "tool_categories": (),
     },
 }
+
+
+def load_plugin_profiles(root: Path | None = None) -> dict[str, dict[str, object]]:
+    """Subagent profiles bundled by installed plugins, from
+    ``<plugin>/agents.toml``. Each profile is namespaced ``<plugin>:<name>`` so
+    it can't shadow a built-in. Malformed files/entries are skipped.
+
+        [[agent]]
+        name = "security"
+        system_prompt = "You are a security reviewer…"
+        tools = ["fs"]          # tool *categories* the subagent may use
+    """
+    out: dict[str, dict[str, object]] = {}
+    try:
+        from evi.plugins import plugin_dirs
+
+        for pd in plugin_dirs(root):
+            f = pd / "agents.toml"
+            if not f.is_file():
+                continue
+            try:
+                data = tomllib.loads(f.read_text(encoding="utf-8"))
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            for entry in data.get("agent", []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name") or "").strip()
+                sp = str(entry.get("system_prompt") or "").strip()
+                if not name or not sp:
+                    continue
+                raw = entry.get("tools", entry.get("tool_categories", [])) or []
+                cats = tuple(str(c) for c in raw) if isinstance(raw, list) else ()
+                out[f"{pd.name}:{name}"] = {"system_prompt": sp, "tool_categories": cats}
+    except Exception:  # plugin scanning must never break core subagents
+        pass
+    return out
+
+
+def all_profiles(root: Path | None = None) -> dict[str, dict[str, object]]:
+    """Built-in profiles plus every plugin-supplied one (built-ins win)."""
+    merged: dict[str, dict[str, object]] = dict(SUBAGENT_PROFILES)
+    for k, v in load_plugin_profiles(root).items():
+        merged.setdefault(k, v)
+    return merged
+
+
+def get_profile(name: str, root: Path | None = None) -> dict[str, object] | None:
+    return all_profiles(root).get(name)

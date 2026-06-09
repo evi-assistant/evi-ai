@@ -3,13 +3,13 @@
 A plugin is a directory with a ``plugin.toml`` manifest that can bundle several
 component types, each auto-discovered from a well-known sub-path:
 
-    commands/     slash commands       -> /<plugin>:<command>
-    skills/       skills (SKILL.md)    -> picked up by the skill loader
+    commands/     slash commands         -> /<plugin>:<command>
+    skills/       skills (SKILL.md)      -> picked up by the skill loader
     hooks.toml    before/after-tool hooks (merged after the user's own)
-    mcp.json      MCP servers          -> namespaced <plugin>:<name>
+    mcp.json      MCP servers            -> namespaced <plugin>:<name>
+    agents.toml   subagent profiles      -> namespaced <plugin>:<name>
 
-(Subagent profiles in plugins are the one remaining planned type.) Installed
-plugins live under ``~/.evi/plugins/<name>/``; loaders scan each plugin
+Installed plugins live under ``~/.evi/plugins/<name>/``; loaders scan each plugin
 directory automatically, so install/remove is just managing that directory —
 no copying into the user's own dirs, no clobber.
 
@@ -62,6 +62,7 @@ class Plugin:
     skills: int = 0
     hooks: int = 0
     mcp: int = 0
+    agents: int = 0
 
 
 def _plugins_dir(root: Path | None = None) -> Path:
@@ -102,6 +103,17 @@ def _count_mcp(p: Path) -> int:
     except (OSError, json.JSONDecodeError):
         return 0
     return len(data) if isinstance(data, list) else 0
+
+
+def _count_agents(p: Path) -> int:
+    """Count subagent profiles in a plugin's agents.toml (0 if absent/malformed)."""
+    if not p.is_file():
+        return 0
+    try:
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return 0
+    return len(data.get("agent", []) or [])
 
 
 def _looks_like_git(source: str) -> bool:
@@ -177,6 +189,7 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
                     skills=nskill,
                     hooks=_count_hooks(pd / "hooks.toml"),
                     mcp=_count_mcp(pd / "mcp.json"),
+                    agents=_count_agents(pd / "agents.toml"),
                 )
             )
     return out
