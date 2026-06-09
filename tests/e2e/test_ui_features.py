@@ -107,3 +107,29 @@ def test_settings_voice_section(page: Page, evi_base_url: str):
     expect(content).to_contain_text("TTS engine", timeout=10000)
     # the engine <select> offers the four engines
     expect(content.locator("select")).to_contain_text("coqui")
+
+
+@pytest.mark.parametrize(
+    "section,title",
+    [
+        ("general", "General"),
+        ("model", "Model & Backend"),
+        ("tools", "Tools"),
+        ("permissions", "Permissions"),
+        ("context", "Context"),
+        ("integrations", "Integrations"),
+        ("server", "Server"),
+        ("voice", "Voice"),
+        ("about", "About"),
+    ],
+)
+def test_every_settings_section_renders(page: Page, evi_base_url: str, section, title):
+    """Every settings screen opens + renders its nav entry with no console
+    errors — covers all sections in one sweep."""
+    errors = _console_errors(page)
+    page.goto(evi_base_url)
+    page.evaluate(f"window.eviUI.openSettings('{section}')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#settings-nav button", has_text=title)).to_be_visible()
+    expect(page.locator("#settings-content")).to_be_visible()
+    assert errors == [], f"console errors on settings/{section}: {errors}"
