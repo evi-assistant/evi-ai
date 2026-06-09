@@ -25,8 +25,8 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `routine` | webhook → recipe | ◐ `/api/routine/{token}` | ◐ | inbound trigger |
 | `style` | output styles | ✅ settings (llm.output_style) | ✅ | |
 | `voice` | TTS engine/speak/listen | ✅ settings → Voice; speak toggle | ✅ | |
-| `guardrails` | content filter rules | ➕ (file `guardrails.toml`) | ➕ | events surface in chat; no editor UI |
-| `plugin` | add/list/remove/search/install | ➕ | ➕ | file/CLI managed |
+| `guardrails` | content filter rules | ✅ settings → Guardrails | ✅ | validated `guardrails.toml` editor + rule summary |
+| `plugin` | add/list/remove/search/install | ✅ settings → Plugins | ✅ | list installed, search marketplace, install/remove |
 | `mcp` | MCP servers/serve | ◐ settings (mcp toggle + allowlist) | ◐ | |
 | `models` | list/use/info/pull | ✅ Model picker + settings | ✅ | recommended-pull flow |
 | `config` | show/path | ✅ full settings screen | ✅ | the settings UI *is* config |
@@ -68,6 +68,8 @@ Several commands are **CLI-only by design** — they're machine admin (`sync`,
 those adds surface without value.
 
 The **gaps worth filling** (➕) — a web/desktop face for things a non-CLI user
-might want — are: a **guardrails editor**, **plugin browser/installer**, an
-**evals results** panel, a **stats** view, and **recipe/route** management.
-These are tracked in [roadmap.md](roadmap.md) under "surface parity".
+might want. Two are now shipped: the **guardrails editor** (settings →
+Guardrails) and the **plugin browser/installer** (settings → Plugins). The
+remaining ones are an **evals results** panel, a **stats** view, and
+**recipe/route** management. These are tracked in [roadmap.md](roadmap.md) under
+"surface parity".

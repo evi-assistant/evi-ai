@@ -1279,6 +1279,68 @@ def create_app() -> FastAPI:
                 "summary": {"regex": len(g.rules), "judge": len(g.judge_rules),
                             "classifier": len(g.classifier_rules)}}
 
+    @app.get("/api/plugins")
+    def plugins_list() -> dict[str, Any]:
+        """Installed plugins + the marketplace index (with an `installed` flag)."""
+        from evi import marketplace, plugins
+
+        installed = plugins.list_plugins()
+        names = {p.name.lower() for p in installed}
+        try:
+            entries = marketplace.load_index(index_urls=Config.load().plugins.index_urls)
+        except Exception:  # index is best-effort; never wedge the page
+            entries = []
+        return {
+            "installed": [
+                {"name": p.name, "description": p.description, "version": p.version,
+                 "commands": p.commands, "skills": p.skills, "hooks": p.hooks,
+                 "mcp": p.mcp, "agents": p.agents}
+                for p in installed
+            ],
+            "marketplace": [
+                {"name": e.name, "description": e.description, "author": e.author,
+                 "source": e.source, "tags": e.tags,
+                 "installed": e.name.lower() in names}
+                for e in entries
+            ],
+        }
+
+    @app.post("/api/plugins/install")
+    def plugins_install(req: dict[str, Any]) -> dict[str, Any]:
+        """Install a plugin — by marketplace `name`, or directly from a `source`
+        (local dir or git URL)."""
+        from evi import marketplace, plugins
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object")
+        source = str(req.get("source") or "").strip()
+        name = str(req.get("name") or "").strip()
+        if not source and name:
+            entries = marketplace.load_index(index_urls=Config.load().plugins.index_urls)
+            entry = marketplace.resolve(name, entries)
+            if entry is None:
+                raise HTTPException(404, f"no plugin named {name!r} in the index")
+            source = entry.source
+        if not source:
+            raise HTTPException(400, "expected {name} or {source}")
+        try:
+            installed = plugins.install(source)
+        except plugins.PluginError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "name": installed}
+
+    @app.post("/api/plugins/remove")
+    def plugins_remove(req: dict[str, Any]) -> dict[str, Any]:
+        """Remove an installed plugin by name."""
+        from evi import plugins
+
+        name = str((req or {}).get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        if not plugins.remove(name):
+            raise HTTPException(404, f"no such plugin: {name}")
+        return {"ok": True}
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""
