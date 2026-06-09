@@ -299,6 +299,32 @@ index_urls = ["https://example.com/evi-plugins.json"]
 the name through the index and installs its `source`. `evi plugin index init` /
 `evi plugin index add <name> <source>` manage the local index.
 
+## Federation — `~/.evi/peers.json`
+
+Delegate a task to a trusted peer eVi (e.g. a GPU box):
+
+```json
+[ { "name": "gpu", "url": "http://gpu-box:8473", "token": "<peer web token>" } ]
+```
+
+`evi peer run gpu "summarise this repo"` (or the `delegate_peer` tool, category
+`federation`, off by default) POSTs to the peer's `/api/federate`. The peer must
+opt in with `[federation] serve = true`; it runs the task non-interactively
+(tools not auto-approved are denied).
+
+## Multi-user web — `~/.evi/users.json`
+
+Opt-in (`[web] multi_user = true`): each person logs in with their own revocable
+token instead of sharing `auth_token`.
+
+```json
+[ { "name": "alice", "token": "…" }, { "name": "bob", "token": "…" } ]
+```
+
+Manage with `evi web-config users add/list/remove`. It's a **shared workspace**
+(sessions/memory are common to all authenticated users); per-user data isolation
+is a separate feature. Drop a user from the file to revoke access.
+
 ## Deep links — `evi://`
 
 The desktop app registers the `evi://` URL scheme. `evi://session/<id>` focuses
