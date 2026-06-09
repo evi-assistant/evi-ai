@@ -14,7 +14,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `chat` | interactive chat | ✅ main view | ✅ | the core loop |
 | `run` | headless one-shot | ◐ `/api/chat` | ◐ | scripting; no "run once" button (not needed) |
 | `batch` | many prompts → JSONL | ⌨️ | ⌨️ | batch/scripting |
-| `eval` | prompt→assertion suites | ➕ | ➕ | could surface a results panel |
+| `eval` | prompt→assertion suites | ✅ settings → Evals | ✅ | browse suites/cases + run with per-case PASS/FAIL |
 | `agents` | list subagent profiles | ◐ used by `delegate` | ◐ | a "profiles" list could live in Dispatch |
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
 | `peer` | federation peers | ⌨️ | ⌨️ | `~/.evi/peers.json`; `/api/federate` serves |
@@ -68,8 +68,8 @@ Several commands are **CLI-only by design** — they're machine admin (`sync`,
 those adds surface without value.
 
 The **gaps worth filling** (➕) — a web/desktop face for things a non-CLI user
-might want. Three are now shipped: the **guardrails editor** (settings →
-Guardrails), the **plugin browser/installer** (settings → Plugins), and the
-**usage/stats view** (settings → Usage). The remaining ones are an **evals
-results** panel and **recipe/route** management. These are tracked in
-[roadmap.md](roadmap.md) under "surface parity".
+might want. Most are now shipped: the **guardrails editor** (settings →
+Guardrails), the **plugin browser/installer** (settings → Plugins), the
+**usage/stats view** (settings → Usage), and the **evals results panel**
+(settings → Evals). The one remaining is **recipe/route** management. These are
+tracked in [roadmap.md](roadmap.md) under "surface parity".

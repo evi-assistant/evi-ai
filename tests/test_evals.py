@@ -118,3 +118,49 @@ def test_judge_and_deterministic_both_required():
         suite, run_one=lambda c: "text", judge_fn=lambda c, o: (True, "ok")
     )
     assert report["passed"] == 0
+
+
+# ---- make_runners (shared by CLI `evi eval run` + web POST /api/evals/run) --
+
+
+def test_make_runners_run_one_and_judge(monkeypatch):
+    from evi.headless import HeadlessResult
+
+    class FakeAgent:
+        def __init__(self):
+            self.tools = {"x": object()}
+            self.auto = False
+
+        def enable_auto_all(self):
+            self.auto = True
+
+    def fake_run_headless(agent, prompt):
+        # The judge prompt carries "RUBRIC:"; answer prompts don't.
+        return HeadlessResult(
+            text=("PASS looks good" if "RUBRIC:" in prompt else "the answer is 4")
+        )
+
+    monkeypatch.setattr("evi.headless.run_headless", fake_run_headless)
+
+    run_one, judge_fn = evals.make_runners(FakeAgent)
+    assert run_one(EvalCase(name="c", prompt="2+2?", contains=["4"])) == "the answer is 4"
+    ok, reason = judge_fn(EvalCase(name="j", prompt="x", judge="be nice"), "hi")
+    assert ok is True and "looks good" in reason
+
+
+def test_make_runners_judge_fail(monkeypatch):
+    from evi.headless import HeadlessResult
+
+    class FakeAgent:
+        def __init__(self):
+            self.tools = {}
+
+        def enable_auto_all(self):
+            pass
+
+    monkeypatch.setattr(
+        "evi.headless.run_headless", lambda a, p: HeadlessResult(text="FAIL too terse")
+    )
+    _, judge_fn = evals.make_runners(FakeAgent)
+    ok, reason = judge_fn(EvalCase(name="j", prompt="x", judge="r"), "out")
+    assert ok is False and "too terse" in reason

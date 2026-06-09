@@ -165,6 +165,21 @@ def test_usage_stats_panel(page: Page, evi_base_url: str):
     expect(page.locator("#stats-body")).to_be_visible(timeout=10000)
 
 
+def test_evals_panel(page: Page, evi_base_url: str):
+    """Settings → Evals lists the seeded suite and runs it against the fake
+    backend — a deterministic 1-of-2 pass (greets ✓, missing ✗)."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('evals')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#evals-box")).to_be_visible(timeout=10000)
+    card = page.locator(".eval-suite", has_text="smoke")
+    expect(card).to_be_visible()
+    card.locator('button[data-run="smoke"]').click()
+    expect(card.locator(".eval-status")).to_contain_text("1/2 passed", timeout=30000)
+    expect(card.locator('.eval-case[data-case="greets"] .eval-mark')).to_have_text("✓")
+    expect(card.locator('.eval-case[data-case="missing"] .eval-mark')).to_have_text("✗")
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -179,6 +194,7 @@ def test_usage_stats_panel(page: Page, evi_base_url: str):
         ("guardrails", "Guardrails"),
         ("plugins", "Plugins"),
         ("stats", "Usage"),
+        ("evals", "Evals"),
         ("about", "About"),
     ],
 )

@@ -108,6 +108,16 @@ All evals live under the `evi eval` command group.
 
 **Exit codes**: `evi eval run` exits `0` only when every case passes; it exits `1` if any case fails, and `2` if the suite can't be loaded (missing/malformed). That makes it a drop-in CI gate.
 
+### Web / Desktop — the Evals panel
+
+The web and desktop apps have a **Settings → Evals** panel that lists every
+suite in `~/.evi/evals/` with its cases and the assertions each one checks. Each
+suite has a **Run** button: it runs the suite server-side (one model call per
+case, plus one per judged case — `GET /api/evals` lists, `POST /api/evals/run`
+runs), then marks each case ✓/✗ in place and shows the pass-rate. The run uses
+the same `evals.make_runners` + `run_eval` machinery as `evi eval run`, so the
+verdicts match the CLI exactly.
+
 ### Running a suite on a schedule (drift watch)
 
 Use the scheduler to re-run a suite automatically. Note `--eval` takes the **suite name** (not a prompt):
@@ -118,7 +128,7 @@ evi schedule add --name "nightly-smoke" --cron "0 3 * * *" --eval smoke
 
 When it fires, the scheduler runs the suite (with the judge grader wired in) and writes a log to `~/.evi/logs/scheduled/`. The task's `last_status` becomes `ok (P/T)` when all cases pass or `fail (P/T)` otherwise — so drift shows up directly in `evi schedule list`. The scheduler must be running (`evi scheduler`, or any `evi web` process, which starts it in-process).
 
-> There is no dedicated REPL slash command or Web button for running suites — evals are driven through `evi eval …` (and `evi schedule … --eval` for the scheduled variant).
+> There is no dedicated REPL slash command for running suites — from the CLI evals are driven through `evi eval …` (and `evi schedule … --eval` for the scheduled variant); the web/desktop app drives them from **Settings → Evals**.
 
 ## Examples
 

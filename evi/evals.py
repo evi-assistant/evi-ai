@@ -204,6 +204,46 @@ def run_eval(
     }
 
 
+def make_runners(
+    agent_factory: Callable[[], Any],
+    *,
+    default_mode: str = "",
+) -> tuple[Callable[[EvalCase], str], Callable[[EvalCase, str], tuple[bool, str]]]:
+    """Build the ``(run_one, judge_fn)`` pair that :func:`run_eval` expects.
+
+    ``agent_factory()`` must return a fresh Agent (one per call — cases must not
+    share conversation state). This is the single home for the headless-run and
+    LLM-as-judge grading logic, shared by the CLI ``evi eval run`` and the web
+    ``POST /api/evals/run`` so the two surfaces can never drift.
+    """
+    from evi.headless import run_headless
+    from evi.modes import mode_tools
+
+    def run_one(case: EvalCase) -> str:
+        agent = agent_factory()
+        m = case.mode or default_mode
+        if m:
+            agent.tools = {t.name: t for t in mode_tools(m)}
+        agent.enable_auto_all()
+        res = run_headless(agent, case.prompt)
+        return res.text or (f"ERROR: {res.error}" if res.error else "")
+
+    def judge_fn(case: EvalCase, output: str) -> tuple[bool, str]:
+        agent = agent_factory()
+        agent.tools = {}  # the grader answers from text alone, no tools
+        prompt = (
+            "Grade the ANSWER against the RUBRIC. Reply with exactly PASS or FAIL "
+            "on the first line, then a one-line reason.\n\n"
+            f"RUBRIC: {case.judge}\n\nANSWER:\n{output}"
+        )
+        res = run_headless(agent, prompt)
+        text = (res.text or "").strip()
+        first = text.splitlines()[0] if text else ""
+        return first.strip().upper().startswith("PASS"), (first[:200] or "no judge output")
+
+    return run_one, judge_fn
+
+
 _TEMPLATE = '''\
 name = "{name}"
 description = "What this suite checks"
