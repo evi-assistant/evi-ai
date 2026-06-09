@@ -138,3 +138,31 @@ def test_stream_chat_via_responses_maps_kwargs_and_ignores_chat_only():
     assert kw["max_output_tokens"] == 100
     assert kw["stream"] is True
     assert chunks[0].choices[0].delta.content == "hi"
+
+
+def test_builtin_tool_spec():
+    assert R.builtin_tool_spec("web_search") == {"type": "web_search"}
+    ci = R.builtin_tool_spec("code_interpreter")
+    assert ci["type"] == "code_interpreter" and ci["container"] == {"type": "auto"}
+
+
+def test_stream_includes_builtin_tools():
+    client = _FakeClient()
+    list(R.stream_chat_via_responses(
+        client,
+        model="gpt-x",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        builtin_tools=["web_search", "code_interpreter"],
+    ))
+    types = [t.get("type") for t in client.responses.kwargs["tools"]]
+    assert "function" in types and "web_search" in types and "code_interpreter" in types
+
+
+def test_builtin_tools_only_no_function_tools():
+    client = _FakeClient()
+    list(R.stream_chat_via_responses(
+        client, model="gpt-x", messages=[{"role": "user", "content": "hi"}],
+        builtin_tools=["web_search"],
+    ))
+    assert client.responses.kwargs["tools"] == [{"type": "web_search"}]

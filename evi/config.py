@@ -50,6 +50,10 @@ class LLMSettings:
     # support. "responses" opts into the newer Responses API — only for
     # endpoints that implement it (e.g. OpenAI cloud). Env: EVI_LLM_API.
     api: str = "chat"           # "chat" | "responses"
+    # When api="responses", also enable these OpenAI server-side built-in tools
+    # (executed by the model host, results folded into the reply): e.g.
+    # ["web_search", "code_interpreter", "file_search"]. Ignored on chat.
+    responses_tools: list[str] = field(default_factory=list)
     model: str = "qwen2.5-7b-instruct"
     temperature: float = 0.7
     max_tokens: int = 4096

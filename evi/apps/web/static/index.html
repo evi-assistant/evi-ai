@@ -2137,6 +2137,8 @@ initModes();
         help:'Local backends ignore this; cloud endpoints need it.' },
       { type:'select', section:'llm', key:'api', label:'API shape', options:['chat','responses'],
         help:'Chat for local backends; Responses only for endpoints that implement it.' },
+      { type:'lines', section:'llm', key:'responses_tools', label:'Responses built-in tools',
+        help:'When API shape is Responses: OpenAI hosted tools to enable, one per line (web_search, code_interpreter, file_search).' },
       { type:'number', section:'llm', key:'temperature', label:'Temperature', step:0.1, min:0, max:2 },
       { type:'int', section:'llm', key:'max_tokens', label:'Max tokens' },
       { type:'int', section:'llm', key:'context_size', label:'Context size' },
