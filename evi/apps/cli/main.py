@@ -265,6 +265,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/auto [on|off]", "auto-approve every tool call for this session"),
         ("/compact", "summarise older history into one note to free context"),
         ("/context, /ctx", "show where the context window is being spent"),
+        ("/recent [n]", "list recent sessions (resume via `evi sessions resume`)"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
         ("/effort [low|medium|high|max]", "set reasoning effort"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
@@ -677,10 +678,38 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     return "continue"
 
 
+def _handle_recent(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """List recent sessions (read-only). Resume one with /exit then
+    `evi sessions resume <id>` (or open evi://session/<id>)."""
+    from evi.sessions import fmt_when, list_sessions
+
+    try:
+        n = int(args.strip()) if args.strip() else 8
+    except ValueError:
+        n = 8
+    items = list_sessions(days=30, limit=max(1, n))
+    if not items:
+        console.print("[dim]no past sessions (is tools.transcripts on?)[/dim]")
+        return "continue"
+    console.print("[bold]Recent sessions:[/bold]")
+    for s in items:
+        when = fmt_when(s.ended_at or s.started_at)
+        console.print(
+            f"  [cyan]{s.session_id[:8]}[/cyan] [dim]{when} · "
+            f"{s.message_count} msgs[/dim] {s.first_user_message}"
+        )
+    console.print(
+        "[dim]resume: [/dim][cyan]evi sessions resume <id>[/cyan][dim] "
+        "(after /exit), or [/dim][cyan]evi link <id>[/cyan]"
+    )
+    return "continue"
+
+
 _BUILTINS: dict[str, callable] = {
     "help": _handle_help,
     "context": _handle_context,
     "ctx": _handle_context,
+    "recent": _handle_recent,
     "?": _handle_help,
     "reset": _handle_reset,
     "exit": _handle_exit,
@@ -3319,6 +3348,11 @@ def models_info(model_id: str) -> None:
         console.print(f"  quantization: {info.quantization}")
     if info.size_bytes:
         console.print(f"  size: {_fmt_size(info.size_bytes)}")
+    from evi.recommend import context_window_for
+
+    win = context_window_for(model_id)
+    if win:
+        console.print(f"  context window: ~{win // 1024}K tokens [dim](native)[/dim]")
 
 
 @models_app.command("use")
@@ -3334,6 +3368,23 @@ def models_use(model_id: str) -> None:
     cfg.llm.model = model_id
     cfg.save()
     console.print(f"[green]using[/green] {model_id}")
+
+    # Long-context awareness: nudge if the configured context_size doesn't match
+    # the model's known native window.
+    from evi.recommend import context_window_for
+
+    win = context_window_for(model_id)
+    if win:
+        cur = cfg.llm.context_size or 0
+        if cur > win:
+            console.print(
+                f"[yellow]note:[/yellow] {model_id} supports ~{win // 1024}K tokens "
+                f"but [cyan]llm.context_size[/cyan] is {cur} — lower it to avoid truncation."
+            )
+        elif cur == 0:
+            console.print(
+                f"[dim]tip: set [cyan]llm.context_size[/cyan] (~{win} for this model).[/dim]"
+            )
 
 
 @models_app.command("pull")
