@@ -86,6 +86,9 @@ class ChatRequest(BaseModel):
     # Optional local audio file paths. Omni models get raw input_audio
     # parts; others fall back to local Whisper transcription.
     audio: list[str] | None = None
+    # Structured Outputs: a JSON Schema (object) or inline-JSON string to
+    # constrain this turn's output. Wrapped into response_format.
+    output_schema: dict | str | None = None
 
 
 class DecisionRequest(BaseModel):
@@ -1492,6 +1495,20 @@ def create_app() -> FastAPI:
             req.session_id, loop, enqueue,
         )
 
+        response_format = None
+        if req.output_schema:
+            from evi.structured import SchemaError, as_response_format, load_schema
+
+            try:
+                raw = (
+                    req.output_schema
+                    if isinstance(req.output_schema, dict)
+                    else load_schema(req.output_schema)
+                )
+                response_format = as_response_format(raw)
+            except SchemaError as exc:
+                raise HTTPException(400, f"bad schema: {exc}")
+
         def worker() -> None:
             try:
                 for event in sess.agent.chat(
@@ -1501,6 +1518,7 @@ def create_app() -> FastAPI:
                     parallel_tool_calls=req.parallel_tool_calls,
                     logit_bias=req.logit_bias,
                     audio=req.audio,
+                    response_format=response_format,
                 ):
                     payload = {"kind": _event_kind(event)}
                     if is_dataclass(event):
