@@ -152,6 +152,37 @@ def test_load_judge_only_enables(tmp_path):
     assert g.enabled and not g.rules and len(g.judge_rules) == 1
 
 
+def test_editor_helpers_roundtrip(tmp_path):
+    import evi.guardrails as gr
+
+    p = tmp_path / "guardrails.toml"
+    assert gr.read_raw(p) == ""  # absent → empty
+    text = 'enabled = true\n[[rule]]\nname = "k"\npattern = "secret"\naction = "block"\n'
+    assert gr.validate(text) is None
+    gr.write_raw(text, p)
+    assert gr.read_raw(p) == text
+    assert Guardrails.load(p).rules[0].name == "k"
+
+
+def test_validate_rejects_bad_toml():
+    import evi.guardrails as gr
+
+    assert gr.validate("this = = bad") is not None
+
+
+def test_validate_rejects_bad_regex():
+    import evi.guardrails as gr
+
+    err = gr.validate('[[rule]]\nname = "x"\npattern = "([unclosed"\n')
+    assert err and "regex" in err.lower()
+
+
+def test_validate_rejects_judge_without_policy():
+    import evi.guardrails as gr
+
+    assert gr.validate('[[judge]]\nname = "j"\n') is not None
+
+
 def test_load_classifier(tmp_path):
     p = tmp_path / "g.toml"
     p.write_text(

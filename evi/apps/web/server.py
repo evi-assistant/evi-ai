@@ -1242,6 +1242,43 @@ def create_app() -> FastAPI:
         return {"ok": True, "touched": touched, "deferred": deferred,
                 "config": _config_snapshot(cfg)}
 
+    @app.get("/api/guardrails")
+    def guardrails_get() -> dict[str, Any]:
+        """The content-filter config: raw guardrails.toml + a parsed summary."""
+        from evi.guardrails import Guardrails, read_raw
+
+        g = Guardrails.load()
+        return {
+            "raw": read_raw(),
+            "enabled": g.enabled,
+            "summary": {
+                "regex": len(g.rules),
+                "judge": len(g.judge_rules),
+                "classifier": len(g.classifier_rules),
+            },
+            "rules": [{"name": r.name, "action": r.action, "applies_to": r.applies_to}
+                      for r in g.rules],
+            "judge": [{"name": j.name, "applies_to": j.applies_to} for j in g.judge_rules],
+            "classifier": [{"name": c.name, "model": c.model} for c in g.classifier_rules],
+        }
+
+    @app.post("/api/guardrails")
+    def guardrails_set(req: dict[str, Any]) -> dict[str, Any]:
+        """Validate + save guardrails.toml from the editor. 400 on bad TOML."""
+        from evi.guardrails import Guardrails, validate, write_raw
+
+        if not isinstance(req, dict) or "raw" not in req:
+            raise HTTPException(400, "expected {raw: <toml>}")
+        raw = str(req["raw"])
+        err = validate(raw)
+        if err:
+            raise HTTPException(400, err)
+        write_raw(raw)
+        g = Guardrails.load()
+        return {"ok": True, "enabled": g.enabled,
+                "summary": {"regex": len(g.rules), "judge": len(g.judge_rules),
+                            "classifier": len(g.classifier_rules)}}
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""

@@ -286,3 +286,45 @@ class Guardrails:
             redacted_by=redacted,
             notes=notes,
         )
+
+
+# --- editor helpers (the Web guardrails editor reads/validates/writes raw) ---
+
+
+def read_raw(path: Path | None = None) -> str:
+    """The raw guardrails.toml text ('' when the file is absent)."""
+    p = path or GUARDRAILS_PATH
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else ""
+    except OSError:
+        return ""
+
+
+def validate(text: str) -> str | None:
+    """Validate guardrails TOML. Returns an error string, or None if valid
+    (parses + every regex rule compiles + judge rules have a policy)."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return f"invalid TOML: {exc}"
+    if not isinstance(data, dict):
+        return "guardrails.toml must be a table"
+    for r in data.get("rule", []) or []:
+        pat = (r.get("pattern") or "").strip() if isinstance(r, dict) else ""
+        if not pat:
+            return "a [[rule]] is missing a non-empty pattern"
+        try:
+            re.compile(pat)
+        except re.error as exc:
+            return f"bad regex in rule {r.get('name', pat)!r}: {exc}"
+    for j in data.get("judge", []) or []:
+        if not (isinstance(j, dict) and str(j.get("policy", "")).strip()):
+            return "a [[judge]] rule is missing a non-empty policy"
+    return None
+
+
+def write_raw(text: str, path: Path | None = None) -> None:
+    """Persist guardrails.toml (caller should validate() first)."""
+    p = path or GUARDRAILS_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")

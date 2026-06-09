@@ -2254,6 +2254,7 @@ initModes();
         help:'Reference audio for the cloning engines (coqui / f5).' },
       { type:'text', section:'voice', key:'language', label:'Language', help:'ISO code, e.g. en.' },
     ]},
+    { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2310,6 +2311,7 @@ initModes();
       n.innerHTML = '<em>Changes here apply to new chats.</em>'; contentEl.appendChild(n);
     }
     if (sec.custom === 'about') return renderAbout();
+    if (sec.custom === 'guardrails') return renderGuardrails();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2504,6 +2506,53 @@ initModes();
     wrap.appendChild(inp);
     if (f.help) { const hp = document.createElement('div'); hp.className = 'help'; hp.textContent = f.help; wrap.appendChild(hp); }
     return wrap;
+  }
+
+  function renderGuardrails() {
+    const box = document.createElement('div');
+    box.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    contentEl.appendChild(box);
+    fetch('/api/guardrails').then(r => r.json()).then(g => {
+      const s = g.summary || {};
+      box.innerHTML =
+        '<div class="set-about-row"><span class="k">Status</span><span>' +
+        (g.enabled ? '<span style="color:#4caf50">enabled</span>' : 'disabled') +
+        '</span></div>' +
+        '<div class="set-about-row"><span class="k">Rules</span><span>' +
+        `${s.regex || 0} regex · ${s.judge || 0} judge · ${s.classifier || 0} classifier` +
+        '</span></div>';
+      const help = document.createElement('p');
+      help.className = 'sec-blurb';
+      help.textContent = 'Edit ~/.evi/guardrails.toml below. Saved changes are validated server-side.';
+      box.appendChild(help);
+      const ta = document.createElement('textarea');
+      ta.id = 'gr-editor';
+      ta.value = g.raw && g.raw.trim() ? g.raw : '# eVi content guardrails\nenabled = true\n';
+      ta.style.cssText = 'width:100%;min-height:280px;font-family:monospace;font-size:12px;' +
+        'background:var(--panel,#1a2027);color:var(--fg);border:1px solid var(--border,#2b333d);' +
+        'border-radius:8px;padding:10px;white-space:pre;';
+      box.appendChild(ta);
+      const bar = document.createElement('div');
+      bar.style.marginTop = '10px';
+      const save = document.createElement('button');
+      save.className = 'set-action-btn'; save.id = 'gr-save'; save.textContent = 'Save guardrails';
+      const status = document.createElement('span');
+      status.id = 'gr-status'; status.style.marginLeft = '12px';
+      bar.appendChild(save); bar.appendChild(status); box.appendChild(bar);
+      save.onclick = async () => {
+        status.textContent = 'Saving…'; status.style.color = 'var(--dim)';
+        try {
+          const r = await fetch('/api/guardrails', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ raw: ta.value }),
+          });
+          const d = await r.json();
+          if (!r.ok) { status.textContent = 'Error: ' + (d.detail || 'invalid'); status.style.color = '#e05252'; return; }
+          status.textContent = 'Saved'; status.style.color = '#4caf50';
+          setTimeout(renderGuardrails, 600);
+        } catch (e) { status.textContent = 'Error: ' + e; status.style.color = '#e05252'; }
+      };
+    }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load guardrails.</p>'; });
   }
 
   function renderAbout() {
