@@ -32,6 +32,7 @@ SCHEDULED_DIR = HOME / "scheduled"
 SCHEDULED_LOG_DIR = LOG_DIR / "scheduled"
 HOOKS_CONFIG_PATH = HOME / "hooks.toml"
 KEYBINDINGS_PATH = HOME / "keybindings.toml"
+MARKETPLACE_PATH = HOME / "marketplace.json"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 DREAM_LOG_DIR = LOG_DIR / "dreams"
 SCREENSHOT_DIR = HOME / "screenshots"
@@ -211,6 +212,15 @@ class StatusLineSettings:
 
 
 @dataclass
+class PluginsSettings:
+    """Plugin marketplace (lighter/later item). `index_urls` are extra remote
+    plugin-index JSON files merged with the local `~/.evi/marketplace.json` for
+    `evi plugin search` / `evi plugin install <name>`."""
+
+    index_urls: list[str] = field(default_factory=list)
+
+
+@dataclass
 class VoiceSettings:
     """TTS engine selection (Phase 91).
 
@@ -300,6 +310,7 @@ class Config:
     telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
     statusline: StatusLineSettings = field(default_factory=StatusLineSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
+    plugins: PluginsSettings = field(default_factory=PluginsSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -335,6 +346,7 @@ class Config:
             telemetry=TelemetrySettings(**data.get("telemetry", {})),
             statusline=StatusLineSettings(**data.get("statusline", {})),
             voice=VoiceSettings(**data.get("voice", {})),
+            plugins=PluginsSettings(**data.get("plugins", {})),
         )
 
     def save(self) -> None:
