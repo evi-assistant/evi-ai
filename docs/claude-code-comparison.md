@@ -120,7 +120,7 @@ planned (philosophy mismatch / separate big track).
 | Evals | `evi eval` (assertions + LLM-as-judge; `--eval` on a schedule) | ✅ |
 | Usage analytics | `evi stats` (local, from transcripts) | ✅ local-only |
 | Responses API built-in tools | `[llm] responses_tools` (web_search/code_interpreter/…) | ✅ opt-in |
-| Multi-user / teams | `[web] multi_user` + `users.json` (shared workspace) | ⚠️ per-user auth; shared data |
+| Multi-user / teams | `[web] multi_user` + `users.json` (per-user tokens + isolated sessions/transcripts/memory) | ✅ opt-in |
 | Federation (agent↔agent across machines) | `evi peer` / `delegate_peer` / `/api/federate` | ✅ eVi-unique |
 | Permissions SDK | permission policy (Ph 66) | ✅ |
 | Public Agent SDK (library) | headless covers automation | 🚫 deferred (no stable lib surface) |

@@ -321,9 +321,11 @@ token instead of sharing `auth_token`.
 [ { "name": "alice", "token": "…" }, { "name": "bob", "token": "…" } ]
 ```
 
-Manage with `evi web-config users add/list/remove`. It's a **shared workspace**
-(sessions/memory are common to all authenticated users); per-user data isolation
-is a separate feature. Drop a user from the file to revoke access.
+Manage with `evi web-config users add/list/remove`. Each user gets an **isolated
+workspace** — their web sessions, transcripts, and memory live under
+`~/.evi/users/<name>/` and aren't visible to other users. Drop a user from the
+file to revoke access. (Skills/plugins/config stay shared — they're capabilities,
+not personal data.)
 
 ## Deep links — `evi://`
 

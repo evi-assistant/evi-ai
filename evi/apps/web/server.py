@@ -19,8 +19,10 @@ import asyncio
 import json
 import logging
 import secrets
+import re
 import threading
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -33,7 +35,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from evi.backends import get_backend
 from evi.commands import CommandStore
-from evi.config import IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
+from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
 from evi.llm.agent import Agent, Done, Error, Event
 from evi.llm.client import make_client
 from evi.mcp import MCPManager, filter_allowed, load_servers
@@ -187,6 +189,17 @@ _HOT_SECTIONS = (
     "llm", "auto", "tools", "telemetry", "comfy",
     "web", "google", "microsoft", "obsidian",
 )
+
+# Multi-user (opt-in): the authenticated user for the in-flight request, set by
+# the auth middleware. None = single-user / open access (the default). Read in
+# the request task to scope sessions + data dirs per user.
+_CURRENT_USER: ContextVar[str | None] = ContextVar("evi_current_user", default=None)
+
+
+def _safe_user(name: str) -> str:
+    """Filesystem-safe slug for a user's data dir (blocks path traversal)."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip()).strip("._-")
+    return slug or "user"
 
 
 def _config_snapshot(cfg: Config) -> dict[str, Any]:
@@ -493,7 +506,29 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="eVi", lifespan=lifespan)
 
-    sessions: dict[str, WebSession] = {}
+    # Per-user session registry: {user -> {session_id -> WebSession}}. With
+    # multi_user off, everything lives in the "" bucket (single workspace).
+    # `_sessions()` returns the CURRENT request's user bucket, so every lookup +
+    # iteration is automatically scoped — no per-call-site prefixing to forget.
+    _user_sessions: dict[str, dict[str, WebSession]] = {}
+
+    def _my_sessions() -> dict[str, WebSession]:
+        return _user_sessions.setdefault(_CURRENT_USER.get() or "", {})
+
+    def _all_sessions():
+        """Every live session across all users — for global config push only."""
+        for bucket in _user_sessions.values():
+            yield from bucket.values()
+
+    def _user_data_roots() -> tuple[Path | None, Path | None]:
+        """(transcripts_root, memory_root) for the current user, else (None,
+        None) → the shared defaults (single-user behaviour)."""
+        u = _CURRENT_USER.get()
+        if not u:
+            return (None, None)
+        base = HOME / "users" / _safe_user(u)
+        return (base / "transcripts", base / "memory")
+
     cmd_store = CommandStore()  # rescans the dir per call, safe to share
 
     # --- bearer-token auth (optional) -----------------------------------
@@ -520,6 +555,7 @@ def create_app() -> FastAPI:
         # means `evi web token rotate` takes effect without a restart.
         from evi.users import authenticate, load_users
 
+        _CURRENT_USER.set(None)  # reset per request; set below when authenticated
         cfg = Config.load()
         token = cfg.web.auth_token.strip()
         users = load_users() if cfg.web.multi_user else []
@@ -550,9 +586,11 @@ def create_app() -> FastAPI:
             user = authenticate(provided, users)
             if user is not None:
                 request.state.evi_user = user.name
+                _CURRENT_USER.set(user.name)
                 return await call_next(request)
             if token and provided and secrets.compare_digest(provided, token):
                 request.state.evi_user = "owner"
+                _CURRENT_USER.set("owner")
                 return await call_next(request)
         # Single-user: the one shared token.
         elif provided and secrets.compare_digest(provided, token):
@@ -596,17 +634,20 @@ def create_app() -> FastAPI:
             result["user"] = user.name
         return result
 
-    def _make_permission_callback(session_id: str, loop: asyncio.AbstractEventLoop,
-                                  enqueue):
+    def _make_permission_callback(bucket: dict, session_id: str,
+                                  loop: asyncio.AbstractEventLoop, enqueue):
         """Build a permission_callback that bridges worker thread → SSE client.
 
         The callback (invoked on a worker thread inside Agent.chat) generates
         a decision_id, pushes a PermissionRequest into the SSE queue via
         `enqueue`, and blocks on a threading.Event until /api/decide flips it.
+
+        `bucket` is captured here (in the request task) so the worker-thread
+        lookup resolves the right user's session without the ContextVar.
         """
         def callback(tool_name: str, args_json: str, category: str) -> bool:
             decision_id = secrets.token_hex(8)
-            sess = sessions.get(session_id)
+            sess = bucket.get(session_id)
             if sess is None:
                 return False
             pending = PendingDecision(event=threading.Event())
@@ -625,13 +666,16 @@ def create_app() -> FastAPI:
         return callback
 
     def get_session(session_id: str) -> WebSession:
-        sess = sessions.get(session_id)
+        bucket = _my_sessions()
+        sess = bucket.get(session_id)
         if sess is None:
             config = Config.load()
             client = make_client(config.llm)
             toggles = asdict(config.tools)
             tools = get_enabled_tools(toggles)
-            memory = MemoryStore() if toggles.get("memory") else None
+            # Per-user data dirs in multi-user mode (None → shared defaults).
+            tr_root, mem_root = _user_data_roots()
+            memory = MemoryStore(root=mem_root) if toggles.get("memory") else None
             skills = SkillStore() if toggles.get("skills") else None
             from evi.guardrails import Guardrails
             from evi.transcripts import TranscriptStore
@@ -647,16 +691,17 @@ def create_app() -> FastAPI:
                 # Persist per-turn so a chat survives a server/app restart, and
                 # write under the CLIENT's session id so the transcript file
                 # matches the tab. permission_callback is attached per-request.
-                transcripts=TranscriptStore() if toggles.get("transcripts") else None,
+                transcripts=TranscriptStore(root=tr_root) if toggles.get("transcripts") else None,
                 session_id=session_id,
             )
             # Revive history from disk if this session was seen before (e.g. the
             # desktop app was closed + reopened). The composed system prompt at
             # index 0 stays; everything after is rebuilt from the transcript.
+            # Scoped to the user's own transcript dir so revival can't cross users.
             try:
                 from evi.sessions import find_session, history_from_transcript
 
-                path = find_session(session_id)
+                path = find_session(session_id, root=tr_root)
                 if path is not None:
                     restored = history_from_transcript(path)
                     if restored:
@@ -664,7 +709,7 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
             sess = WebSession(agent=agent)
-            sessions[session_id] = sess
+            bucket[session_id] = sess
         return sess
 
     @app.get("/")
@@ -679,7 +724,7 @@ def create_app() -> FastAPI:
             "ok": True,
             "version": __version__,
             "model": cfg.llm.model,
-            "sessions": len(sessions),
+            "sessions": sum(len(b) for b in _user_sessions.values()),
         }
 
     # --- LLM backend availability (so the UI can warn + offer to start one) -
@@ -902,7 +947,7 @@ def create_app() -> FastAPI:
         cfg.save()
 
         # Apply to every live session (rebuild the client for the new backend).
-        for sess in sessions.values():
+        for sess in _all_sessions():
             sess.agent.config.llm.backend = cfg.llm.backend
             sess.agent.config.llm.base_url = cfg.llm.base_url
             sess.agent.config.llm.api_key = cfg.llm.api_key
@@ -917,7 +962,7 @@ def create_app() -> FastAPI:
     @app.get("/api/session/{session_id}/usage")
     def session_usage(session_id: str) -> dict[str, int]:
         """Return approximate token usage for the named session."""
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             return {"used": 0, "ceiling": 0}
         used, ceiling = sess.agent.token_usage()
@@ -928,7 +973,7 @@ def create_app() -> FastAPI:
         """Per-category breakdown of where the context window is spent (Ph 88)."""
         from evi.context_report import context_breakdown
 
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             return context_breakdown([], 0)
         return context_breakdown(
@@ -958,7 +1003,7 @@ def create_app() -> FastAPI:
     @app.get("/api/session/{session_id}/channel")
     def list_channel(session_id: str) -> dict[str, Any]:
         """Recent channel messages pushed into this session (for a UI badge)."""
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         return {"messages": sess.channel_log if sess is not None else []}
 
     @app.post("/api/session/{session_id}/handoff")
@@ -993,7 +1038,7 @@ def create_app() -> FastAPI:
         from evi import workflows as _wf
 
         sess_list = []
-        for sid, s in sessions.items():
+        for sid, s in _my_sessions().items():
             try:
                 used, ceiling = s.agent.token_usage()
             except Exception:
@@ -1142,7 +1187,7 @@ def create_app() -> FastAPI:
         cfg.save()
         # Push into every live session so the current chat reflects the new
         # settings on the next turn.
-        for sess in sessions.values():
+        for sess in _all_sessions():
             sess.agent.config.llm.model = cfg.llm.model
             sess.agent.config.llm.fast_model = cfg.llm.fast_model
             sess.agent.config.llm.reasoning_effort = cfg.llm.reasoning_effort
@@ -1175,7 +1220,7 @@ def create_app() -> FastAPI:
         touched = _apply_config_patch(cfg, patch)
         cfg.save()
 
-        for sess in sessions.values():
+        for sess in _all_sessions():
             ac = sess.agent.config
             for section in _HOT_SECTIONS:
                 if section not in touched:
@@ -1378,14 +1423,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
-        sess = sessions.get(req.session_id)
+        sess = _my_sessions().get(req.session_id)
         if sess is not None:
             sess.agent.reset()
         return {"status": "ok"}
 
     @app.post("/api/decide")
     def decide(req: DecisionRequest) -> dict[str, object]:
-        sess = sessions.get(req.session_id)
+        sess = _my_sessions().get(req.session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         pending = sess.pending.get(req.decision_id)
@@ -1429,14 +1474,14 @@ def create_app() -> FastAPI:
     def session_title(session_id: str) -> dict[str, object]:
         """Generate a short LLM-written title for the tab. Returns
         `{title}` (empty string if the model couldn't produce one)."""
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         return {"title": sess.agent.suggest_title()}
 
     @app.post("/api/session/{session_id}/truncate")
     def session_truncate(session_id: str, req: TruncateRequest) -> dict[str, object]:
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         removed = sess.agent.truncate_history(req.after_index)
@@ -1444,7 +1489,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/session/{session_id}/edit")
     def session_edit(session_id: str, req: EditRequest) -> dict[str, object]:
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         ok = sess.agent.edit_message(req.at_index, req.content)
@@ -1458,7 +1503,7 @@ def create_app() -> FastAPI:
 
         Returns `{new_session_id}` so the client can switch to it.
         """
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         cutoff = max(1, req.at_index + 1)
@@ -1477,7 +1522,7 @@ def create_app() -> FastAPI:
     async def session_reroll(session_id: str) -> EventSourceResponse:
         """Drop the last assistant turn (and any tool messages after the
         last user) and regenerate. SSE shape matches /api/chat."""
-        sess = sessions.get(session_id)
+        sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
         if not sess.agent.rewind_to_last_user():
@@ -1499,7 +1544,7 @@ def create_app() -> FastAPI:
             loop.call_soon_threadsafe(queue.put_nowait, payload)
 
         sess.agent.permission_callback = _make_permission_callback(
-            session_id, loop, enqueue,
+            _my_sessions(), session_id, loop, enqueue,
         )
 
         def worker() -> None:
@@ -1560,7 +1605,7 @@ def create_app() -> FastAPI:
 
         # Attach a session-scoped permission_callback for this turn.
         sess.agent.permission_callback = _make_permission_callback(
-            req.session_id, loop, enqueue,
+            _my_sessions(), req.session_id, loop, enqueue,
         )
 
         response_format = None
