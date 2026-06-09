@@ -56,6 +56,21 @@ def to_responses_tools(tools: list[dict] | None) -> list[dict]:
     return out
 
 
+def builtin_tool_spec(name: str) -> dict:
+    """Minimal valid Responses spec for an OpenAI hosted tool name.
+
+    These run server-side (the model host executes them and folds results into
+    the reply), so eVi doesn't see them as function calls. `file_search` needs
+    `vector_store_ids` configured on the account/request to actually return
+    hits; we pass the bare type and let the backend report if more is needed.
+    """
+    n = name.strip().lower()
+    if n == "code_interpreter":
+        return {"type": "code_interpreter", "container": {"type": "auto"}}
+    # web_search, file_search, image_generation, … → bare type is valid.
+    return {"type": n}
+
+
 def to_responses_input(messages: list[dict]) -> list[dict]:
     """Chat messages -> Responses `input` items.
 
@@ -170,17 +185,23 @@ def stream_chat_via_responses(client: Any, *, model: str, messages: list[dict],
                               temperature: float | None = None,
                               max_tokens: int | None = None,
                               max_completion_tokens: int | None = None,
+                              builtin_tools: list[str] | None = None,
                               **_ignored: Any) -> Iterator[SimpleNamespace]:
     """Call `client.responses.create(stream=True)` with chat-shaped kwargs and
     yield Chat-Completion-shaped chunks. Chat-only kwargs (tool_choice,
-    stream_options, logprobs, penalties, …) are accepted and ignored."""
+    stream_options, logprobs, penalties, …) are accepted and ignored.
+
+    `builtin_tools` are OpenAI hosted tool names (web_search, code_interpreter,
+    …) appended alongside eVi's own function tools."""
+    fn_tools = to_responses_tools(tools)
+    fn_tools += [builtin_tool_spec(t) for t in builtin_tools or [] if t.strip()]
     kwargs: dict[str, Any] = {
         "model": model,
         "input": to_responses_input(messages),
         "stream": True,
     }
-    if tools:
-        kwargs["tools"] = to_responses_tools(tools)
+    if fn_tools:
+        kwargs["tools"] = fn_tools
     if temperature is not None:
         kwargs["temperature"] = temperature
     budget = max_completion_tokens or max_tokens

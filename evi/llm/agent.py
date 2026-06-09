@@ -1030,7 +1030,11 @@ class Agent:
                 import os as _os
                 if (_os.environ.get("EVI_LLM_API") or self.config.llm.api) == "responses":
                     from evi.llm.responses import stream_chat_via_responses
-                    stream = stream_chat_via_responses(self.client, **create_kwargs)
+                    stream = stream_chat_via_responses(
+                        self.client,
+                        builtin_tools=self.config.llm.responses_tools,
+                        **create_kwargs,
+                    )
                 else:
                     stream = self.client.chat.completions.create(**create_kwargs)
             except Exception as e:  # network / model not loaded / etc.
