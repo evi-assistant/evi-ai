@@ -3569,6 +3569,35 @@ def sessions_continue() -> None:
     _run_repl(agent)
 
 
+@sessions_app.command("handoff")
+def sessions_handoff(
+    session_id: str = typer.Argument(
+        None, help="Session to hand off (default: the most recent)."
+    ),
+) -> None:
+    """Print how to pick a session up on another device (Phase 87).
+
+    Transcripts persist per-turn, so a session is resumable once it has any
+    turns. Sync first (`evi sync`), then on the other device run the resume
+    command or open the URL.
+    """
+    from evi.sessions import handoff_info, most_recent_session_id
+
+    sid = session_id or most_recent_session_id()
+    if sid is None:
+        console.print("[dim]no sessions to hand off[/dim]")
+        raise typer.Exit(1)
+    info = handoff_info(sid)
+    if info is None:
+        console.print(f"[red]no session[/red] {sid}")
+        raise typer.Exit(1)
+    console.print(f"[cyan]handoff {sid}[/cyan] [dim]({info['messages']} messages)[/dim]")
+    console.print("  1. sync this device:   [bold]evi sync push[/bold]")
+    console.print("  2. on the other device: [bold]evi sync pull[/bold], then either")
+    console.print(f"       [green]{info['resume_cmd']}[/green]")
+    console.print(f"       or open [green]{info['resume_url']}[/green] in the web UI")
+
+
 @sessions_app.command("fork")
 def sessions_fork(session_id: str) -> None:
     """Fork a past session into a NEW session — the original is left intact."""

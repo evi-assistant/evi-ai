@@ -1798,7 +1798,20 @@ window.addEventListener('keydown', e => {
 // Initial load: pick up the model picker state + restore the active tab's
 // history (when we have one from a previous visit).
 loadPicker();
-if (_loaded) {
+// Cross-device handoff (Phase 87): /?session=<id> opens (or adds) that session.
+const _wantSession = (() => {
+  try { return new URLSearchParams(location.search).get('session'); }
+  catch { return null; }
+})();
+if (_wantSession) {
+  let i = tabs.findIndex(t => t.id === _wantSession);
+  if (i < 0) { tabs.push({ id: _wantSession, label: 'resumed' }); i = tabs.length - 1; }
+  activeIdx = i;
+  sessionId = tabs[i].id;
+  saveTabsState();
+  renderTabs();
+}
+if (_loaded || _wantSession) {
   rebuildHistory();
 }
 // Warn up front if no LLM backend is reachable (common on a fresh desktop

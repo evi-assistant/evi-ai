@@ -133,6 +133,31 @@ def list_sessions(
     return out
 
 
+def handoff_info(
+    session_id: str, *, base_url: str = "", root: Path | None = None
+) -> dict[str, Any] | None:
+    """Resume affordances for picking a session up on another device (Phase 87).
+
+    Returns ``{session_id, day, messages, resume_cmd, resume_url}`` or None when
+    the session isn't persisted on disk (nothing to hand off yet). Because
+    transcripts are written per-turn, the on-disk copy is current as of the last
+    completed turn — `evi sync` it, then resume on the other device.
+    """
+    path = find_session(session_id, root=root)
+    if path is None:
+        return None
+    day = path.parent.name
+    info = _summarize(path, day)
+    base = base_url.rstrip("/")
+    return {
+        "session_id": session_id,
+        "day": day,
+        "messages": info.message_count if info else 0,
+        "resume_cmd": f"evi sessions resume {session_id}",
+        "resume_url": f"{base}/?session={session_id}",
+    }
+
+
 def most_recent_session_id(*, root: Path | None = None) -> str | None:
     """The id of the most recently active session (by last timestamp), or None.
 

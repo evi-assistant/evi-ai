@@ -927,6 +927,30 @@ def create_app() -> FastAPI:
         sess = sessions.get(session_id)
         return {"messages": sess.channel_log if sess is not None else []}
 
+    @app.post("/api/session/{session_id}/handoff")
+    def handoff_session(session_id: str, request: Request) -> dict[str, Any]:
+        """Hand a session off to another device (Phase 87).
+
+        Transcripts are written per-turn, so the on-disk copy is current as of
+        the last completed turn; this returns the resume affordances (a
+        `/?session=<id>` URL the web UI opens, and the `evi sessions resume`
+        command). `evi sync` the ~/.evi state, then open either on the other
+        device. 404 if the session has no transcript yet (send a turn first,
+        with transcripts enabled).
+        """
+        from evi import sessions as _sessions
+
+        info = _sessions.handoff_info(
+            session_id, base_url=str(request.base_url)
+        )
+        if info is None:
+            raise HTTPException(
+                404,
+                "session not persisted yet — send a message first "
+                "(tools.transcripts must be on)",
+            )
+        return {"ok": True, **info}
+
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
         """Snapshot for the picker UI: available models + current settings."""
