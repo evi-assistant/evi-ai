@@ -43,7 +43,8 @@ _EFFORT_LEVELS = ("low", "medium", "high", "max")
 _BUILTIN_COMMANDS = (
     "help", "reset", "exit", "quit", "tools", "model", "goal", "plan",
     "auto", "compact", "context", "ctx", "recent", "image", "img", "effort",
-    "fast", "json", "notools", "forcetool", "reload", "audio", "speak", "predict",
+    "fast", "json", "schema", "notools", "forcetool", "reload", "audio", "speak",
+    "predict",
 )
 
 

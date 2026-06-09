@@ -270,6 +270,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/effort [low|medium|high|max]", "set reasoning effort"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
         ("/json <prompt>", "force JSON-object output for the next turn"),
+        ("/schema <file> [prompt]", "constrain the next turn to a JSON Schema"),
         ("/notools <prompt>", "answer the next turn without using any tools"),
         ("/forcetool <name> <prompt>", "force the model to call a specific tool"),
         ("/reload", "re-read config.toml without restarting"),
@@ -434,6 +435,39 @@ def _handle_json(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         return "continue"
     agent._pending_response_format = {"type": "json_object"}  # type: ignore[attr-defined]
     return prompt
+
+
+def _handle_schema(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/schema <file|inline-json> [prompt]` — constrain the next turn to a JSON
+    Schema (Structured Outputs). With no prompt it arms the schema for your next
+    message; `/schema off` clears it."""
+    from evi.structured import SchemaError, as_response_format, load_schema
+
+    args = args.strip()
+    if not args:
+        console.print(
+            "[yellow]usage:[/yellow] /schema <file|inline-json> [prompt]"
+            "  [dim]·[/dim]  /schema off"
+        )
+        return "continue"
+    if args.lower() == "off":
+        agent._pending_response_format = None  # type: ignore[attr-defined]
+        console.print("[dim]schema cleared[/dim]")
+        return "continue"
+    if args.startswith("{"):
+        spec, prompt = args, ""
+    else:
+        spec, _, prompt = args.partition(" ")
+    try:
+        rf = as_response_format(load_schema(spec))
+    except SchemaError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return "continue"
+    agent._pending_response_format = rf  # type: ignore[attr-defined]
+    if prompt.strip():
+        return prompt.strip()
+    console.print("[dim]schema armed for your next message[/dim]")
+    return "continue"
 
 
 def _handle_notools(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
@@ -725,6 +759,7 @@ _BUILTINS: dict[str, callable] = {
     "effort": _handle_effort,
     "fast": _handle_fast,
     "json": _handle_json,
+    "schema": _handle_schema,
     "notools": _handle_notools,
     "forcetool": _handle_forcetool,
     "reload": _handle_reload,
@@ -2548,6 +2583,9 @@ def run(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve all tool calls (unattended)."
     ),
+    schema: str = typer.Option(
+        "", "--schema", help="Constrain output to a JSON Schema (file or inline JSON)."
+    ),
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
@@ -2577,7 +2615,17 @@ def run(
         agent.permission_callback = lambda *a, **k: False
         agent.permission_batch_callback = None
 
-    res = _hl.run_headless(agent, text)
+    response_format = None
+    if schema:
+        from evi.structured import SchemaError, as_response_format, load_schema
+
+        try:
+            response_format = as_response_format(load_schema(schema))
+        except SchemaError as exc:
+            print(f"error: {exc}", file=_sys.stderr)
+            raise typer.Exit(2)
+
+    res = _hl.run_headless(agent, text, response_format=response_format)
     if format == "json":
         print(_hl.to_json(res))
         return

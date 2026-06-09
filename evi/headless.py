@@ -22,11 +22,20 @@ class HeadlessResult:
     error: str | None = None
 
 
-def run_headless(agent, prompt: str, max_turns: int = 12) -> HeadlessResult:
-    """Run one prompt through `agent` to completion and collect the result."""
+def run_headless(
+    agent, prompt: str, max_turns: int = 12, response_format: dict | None = None
+) -> HeadlessResult:
+    """Run one prompt through `agent` to completion and collect the result.
+
+    `response_format` (e.g. a json_schema wrapper) is forwarded to the backend
+    for Structured Outputs when the agent supports it.
+    """
     parts: list[str] = []
     res = HeadlessResult()
-    for event in agent.chat(prompt, max_turns=max_turns):
+    chat_kwargs = {"max_turns": max_turns}
+    if response_format is not None:
+        chat_kwargs["response_format"] = response_format
+    for event in agent.chat(prompt, **chat_kwargs):
         if isinstance(event, TextDelta):
             parts.append(event.text)
         elif isinstance(event, ToolResult):
