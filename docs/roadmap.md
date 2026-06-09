@@ -292,8 +292,19 @@ local-friendly gaps — **✅ shipped (local)**:
 - **Evals harness** — `evi eval` runs prompt→assertion suites with a pass-rate
   (`evi/evals.py`); gates CI on failures.
 
-Still open from that review (larger, awaiting decision): **multi-user web mode**,
-**federation / eVi↔eVi delegation**, and a fuller **Responses-API migration**.
+Follow-on additions from the same review — **✅ shipped (local)**:
+
+- **LLM-as-judge evals** — a `judge` rubric assertion graded by a model.
+- **Web structured outputs** — `/api/chat output_schema` (JSON-Schema constrained).
+- **Local `evi stats`** — usage/tool/session analytics from transcripts.
+- **Scheduled evals** — `evi schedule add --eval <suite>` (drift watch).
+- **Federation** — `evi peer run` / `delegate_peer` tool / `POST /api/federate`:
+  delegate a task to a trusted peer eVi (peers in `~/.evi/peers.json`;
+  `[federation] serve` to answer).
+- **Fuller Responses API** — `[llm] responses_tools` enables OpenAI hosted tools
+  (web_search/code_interpreter/file_search) on the Responses path.
+- **Multi-user web (opt-in)** — `[web] multi_user` + `~/.evi/users.json`
+  (`evi web-config users …`): per-user revocable tokens, shared workspace.
 
 ### Previously-deferred, now planned
 
