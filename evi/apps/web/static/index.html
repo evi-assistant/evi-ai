@@ -329,6 +329,16 @@
   .ctx-row .ctx-bar i { display: block; height: 100%; background: var(--accent, #4aa3df); }
   .ctx-row .ctx-val { width: 64px; text-align: right; color: var(--dim); }
 
+  /* Working status — spinner + timer + live tokens while a turn runs */
+  .work-status { display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+    font-size: 12px; color: var(--dim); border-top: 1px solid var(--border, #2b333d); }
+  .work-status .work-spin { width: 12px; height: 12px; flex: none; border-radius: 50%;
+    border: 2px solid var(--border, #3a4350); border-top-color: var(--accent, #4aa3df);
+    animation: work-spin .8s linear infinite; }
+  @keyframes work-spin { to { transform: rotate(360deg); } }
+  .work-status .work-label { color: var(--fg); }
+  .work-status .work-meta { margin-left: auto; font-variant-numeric: tabular-nums; }
+
   /* Dispatch view (Phase 85) */
   .dispatch-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5);
     display: flex; align-items: flex-start; justify-content: center; }
@@ -559,6 +569,11 @@
 <div class="tabs" id="tabs"></div>
 <div id="backend-banner" style="display:none;margin:10px 16px;padding:12px 14px;border:1px solid #b45309;background:#3b2a16;color:#fde68a;border-radius:8px;font-size:13px;line-height:1.5;"></div>
 <div id="log"></div>
+<div id="work-status" class="work-status" style="display:none">
+  <span class="work-spin"></span>
+  <span class="work-label">working…</span>
+  <span class="work-meta"></span>
+</div>
 <form id="form">
   <button type="button" id="attach" class="attach-btn" title="Attach a file">📎</button>
   <input type="file" id="file-input" style="display:none">
@@ -1348,6 +1363,40 @@ async function onBackendAction(e) {
   await checkBackend();
 }
 
+// Working-status bar: spinner + elapsed timer + live token count while a turn
+// runs. Tokens are an estimate (chars/4) from streamed text until the backend's
+// exact UsageStats arrives, then we show the real total.
+const workStatus = (() => {
+  const el = document.getElementById('work-status');
+  const labelEl = el.querySelector('.work-label');
+  const metaEl = el.querySelector('.work-meta');
+  let startedAt = 0, timer = null, approxTokens = 0, exactTokens = null, phase = 'working…';
+  const fmtElapsed = ms => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  };
+  function render() {
+    labelEl.textContent = phase;
+    const toks = exactTokens != null ? exactTokens : approxTokens;
+    const parts = [fmtElapsed(Date.now() - startedAt)];
+    if (toks > 0) parts.push(`${toks.toLocaleString()} tok`);
+    metaEl.textContent = parts.join(' · ');
+  }
+  return {
+    start() {
+      startedAt = Date.now(); approxTokens = 0; exactTokens = null; phase = 'working…';
+      el.style.display = 'flex'; render();
+      if (timer) clearInterval(timer);
+      timer = setInterval(render, 1000);
+    },
+    setPhase(p) { phase = p; render(); },
+    addText(t) { if (t) { approxTokens += Math.ceil(t.length / 4); render(); } },
+    setTokens(n) { if (typeof n === 'number') { exactTokens = n; render(); } },
+    stop() { if (timer) clearInterval(timer); timer = null; el.style.display = 'none'; },
+  };
+})();
+window.workStatus = workStatus;  // exposed for e2e tests
+
 async function sendMessage(text, images) {
   // Don't fire a real LLM turn into the void. Slash commands (/help, /reset,
   // …) are handled without a model, so only gate normal messages.
@@ -1370,6 +1419,7 @@ async function sendMessage(text, images) {
   addBubble('user').textContent = text;
   let assistant = null;  // built lazily on first TextDelta
   send.disabled = true;
+  workStatus.start();
   // The plan badge is one-shot — clear it once a turn starts.
   if (planArmed && !text.startsWith('/')) {
     planArmed = false;
@@ -1420,6 +1470,7 @@ async function sendMessage(text, images) {
   } catch (err) {
     addBubble('error').textContent = `error: ${err.message}`;
   } finally {
+    workStatus.stop();
     send.disabled = false;
     input.focus();
     refreshUsage();
@@ -1458,6 +1509,8 @@ async function handleEvent(ev, assistant) {
       bubble.innerHTML = `<details open><summary>thinking…</summary><div class="think-body"></div></details>`;
     }
     bubble.querySelector('.think-body').textContent += ev.text;
+    workStatus.setPhase('thinking…');
+    workStatus.addText(ev.text);
     return assistant;
   }
   // Any non-thinking event ends the current thinking block (collapsed by default).
@@ -1471,11 +1524,14 @@ async function handleEvent(ev, assistant) {
     if (!assistant) assistant = addBubble('assistant');
     const cur = assistant.dataset.source || '';
     renderMarkdownInto(assistant, cur + ev.text);
+    workStatus.setPhase('responding…');
+    workStatus.addText(ev.text);
     // Stream completed sentences into the browser's TTS queue.
     maybeSpeak(assistant);
   } else if (ev.kind === 'ToolCall') {
     const b = addBubble('tool');
     b.textContent = `→ ${ev.name}(${ev.arguments})`;
+    workStatus.setPhase(`running ${ev.name}…`);
     assistant = null;  // next TextDelta starts a fresh bubble
   } else if (ev.kind === 'ToolProgress') {
     // A single self-updating "running" bubble so a slow tool shows live
@@ -1483,6 +1539,7 @@ async function handleEvent(ev, assistant) {
     let p = document.getElementById('tool-progress');
     if (!p) { p = addBubble('tool'); p.id = 'tool-progress'; }
     p.textContent = `… ${ev.names.join(', ')} running (${Math.round(ev.elapsed)}s)`;
+    workStatus.setPhase(`running ${ev.names.join(', ')}…`);
   } else if (ev.kind === 'ToolResult') {
     const pp = document.getElementById('tool-progress');
     if (pp) pp.remove();
@@ -1497,6 +1554,7 @@ async function handleEvent(ev, assistant) {
     const ceiling = pickerState && pickerState.active ? null : null; // keep ceiling untouched
     chipUsage.textContent = `${ev.total_tokens.toLocaleString()} tokens (prompt ${ev.prompt_tokens.toLocaleString()})`;
     chipUsage.style.display = 'inline-block';
+    workStatus.setTokens(ev.total_tokens);
   } else if (ev.kind === 'Guardrail') {
     const bubble = addBubble('system');
     bubble.style.color = ev.blocked ? '#e05252' : '#d4a017';
