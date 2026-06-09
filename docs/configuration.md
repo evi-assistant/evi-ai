@@ -345,14 +345,29 @@ applies_to = "input"         # input | output | both
 name = "no-self-harm"
 policy = "Requests for, or content encouraging, self-harm or suicide."
 applies_to = "both"
+
+[[classifier]]                # offline ML moderation model
+name = "toxicity"
+model = "unitary/toxic-bert"  # any HF text-classification model ("" = default)
+labels = ["toxic", "threat", "insult"]   # labels that block ([] = any)
+threshold = 0.7
+applies_to = "both"
 ```
 
-- **Regex rules** run first: `block` refuses the turn (input) or scrubs the
-  stored reply (output); `redact` replaces matched spans with `[REDACTED]`.
-- **`[[judge]]` rules** are the semantic layer — eVi's own model classifies the
-  text against `policy` and blocks on a match (block-only; a judge error fails
-  *open*). They add a model round-trip per turn, so use them where regex can't
-  reach. This is the local counterpart to a hosted moderation API.
+Three layers run in order, stopping at the first block:
+
+- **`[[rule]]` regex** — fast, deterministic: `block` refuses the turn (input) or
+  scrubs the stored reply (output); `redact` replaces spans with `[REDACTED]`.
+- **`[[judge]]`** — eVi's own model classifies the text against `policy` and
+  blocks on a match. The local counterpart to a hosted moderation API; one model
+  round-trip per turn.
+- **`[[classifier]]`** — a local HuggingFace text-classification model scores the
+  text and blocks when a `labels` score crosses `threshold`. Fully offline; needs
+  `pip install 'evi-assistant[moderation]'` (transformers + torch). Block-only.
+
+Both semantic layers **fail open** (a missing/flaky model skips the rule, not the
+turn). Inspect with `evi guardrails list`; `evi guardrails test "<text>"` dry-runs
+the regex layer.
 
 Inspect with `evi guardrails list`; dry-run the regex layer with
 `evi guardrails test "<text>"`.

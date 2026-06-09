@@ -23,12 +23,24 @@ regex-first and fully local. Off by default. Rules live in
     policy = "Requests for, or content encouraging, self-harm or suicide."
     applies_to = "both"
 
-`[[judge]]` rules are the semantic layer: instead of a regex, an LLM classifies
-the text against the `policy` and blocks on a match. They only run when the
-caller passes a `judge_fn` (the agent supplies one backed by its own model), so
-the filter stays local + model-free here. Judge rules are block-only (you can't
-redact a span the regex didn't find); a judge error fails *open* (skips the
-rule) so a flaky model can't wedge the chat.
+    [[classifier]]               # offline ML moderation model
+    name = "toxicity"
+    model = "unitary/toxic-bert" # any HF text-classification model ("" = default)
+    labels = ["toxic", "threat", "insult"]   # labels that block ([] = any)
+    threshold = 0.7
+    applies_to = "both"
+
+Three rule kinds layer together (regex → judge → classifier):
+- `[[rule]]` regex — fast, deterministic, can block OR redact.
+- `[[judge]]` — an LLM classifies the text against `policy` (needs a `judge_fn`,
+  supplied by the agent's own model). Block-only.
+- `[[classifier]]` — a local HuggingFace text-classification model scores the
+  text; blocks when a `labels` score crosses `threshold` (needs a `classify_fn`;
+  install `evi-assistant[moderation]`). Block-only, fully offline.
+
+The semantic kinds only run when their injected fn is provided, so this module
+stays model-free. Both fail *open* (a missing/flaky model skips the rule, not
+the turn).
 
 Semantics:
 - **input** rules run on the user's message BEFORE it hits the LLM. A
@@ -94,6 +106,20 @@ class JudgeRule:
 
 
 @dataclass
+class ClassifierRule:
+    """A rule scored by a local ML text-classification model."""
+
+    name: str
+    model: str = ""                          # HF model id ("" → default)
+    labels: list[str] = field(default_factory=list)  # block labels ([] = any)
+    threshold: float = 0.5
+    applies_to: str = "both"
+
+    def covers(self, direction: str) -> bool:
+        return self.applies_to in (direction, "both")
+
+
+@dataclass
 class GuardrailResult:
     allowed: bool                 # False => a block rule matched
     text: str                     # possibly-redacted text
@@ -114,10 +140,12 @@ class Guardrails:
         rules: list[GuardrailRule],
         *,
         judge_rules: list[JudgeRule] | None = None,
+        classifier_rules: list[ClassifierRule] | None = None,
         enabled: bool = True,
     ) -> None:
         self.rules = rules
         self.judge_rules = judge_rules or []
+        self.classifier_rules = classifier_rules or []
         self.enabled = enabled
 
     @classmethod
@@ -161,16 +189,43 @@ class Guardrails:
                 applies_to = "both"
             judge_rules.append(JudgeRule(name=name, policy=policy, applies_to=applies_to))
 
-        enabled = bool(data.get("enabled", True)) and bool(rules or judge_rules)
-        return cls(rules=rules, judge_rules=judge_rules, enabled=enabled)
+        classifier_rules: list[ClassifierRule] = []
+        for raw in data.get("classifier", []):
+            name = (raw.get("name") or "classifier").strip()
+            model = str(raw.get("model", "")).strip()
+            raw_labels = raw.get("labels") or []
+            labels = [str(x).lower() for x in raw_labels] if isinstance(raw_labels, list) else []
+            try:
+                threshold = float(raw.get("threshold", 0.5))
+            except (TypeError, ValueError):
+                threshold = 0.5
+            applies_to = (raw.get("applies_to") or "both").strip().lower()
+            if applies_to not in ("input", "output", "both"):
+                applies_to = "both"
+            classifier_rules.append(
+                ClassifierRule(name=name, model=model, labels=labels,
+                               threshold=threshold, applies_to=applies_to)
+            )
 
-    def check(self, text: str, direction: str, judge_fn=None) -> GuardrailResult:
+        enabled = bool(data.get("enabled", True)) and bool(
+            rules or judge_rules or classifier_rules
+        )
+        return cls(
+            rules=rules,
+            judge_rules=judge_rules,
+            classifier_rules=classifier_rules,
+            enabled=enabled,
+        )
+
+    def check(self, text: str, direction: str, judge_fn=None, classify_fn=None) -> GuardrailResult:
         """Apply all rules covering `direction` ('input' or 'output').
 
-        Regex rules run first (block/redact). Then, if `judge_fn(policy, text)
-        -> (allowed, reason)` is supplied and there are `[[judge]]` rules for
-        this direction (and nothing already blocked), the semantic layer runs.
-        A judge that raises fails *open* — the rule is skipped, not the turn.
+        Layers, in order, stopping at the first block: regex `[[rule]]`
+        (block/redact) → `[[judge]]` (needs `judge_fn(policy, text) ->
+        (allowed, reason)`) → `[[classifier]]` (needs `classify_fn(model, text)
+        -> {label: score}`). The semantic layers only run when their fn is
+        supplied; either failing raises are swallowed (fail *open*) so a flaky
+        model skips the rule, not the turn.
         """
         if not self.enabled or not text:
             return GuardrailResult(allowed=True, text=text)
@@ -203,6 +258,26 @@ class Guardrails:
                     blocked.append(jr.name)
                     if reason:
                         notes.append(f"{jr.name}: {reason}")
+
+        # Offline-classifier layer — same gating (only if nothing blocked yet).
+        if classify_fn is not None and not blocked:
+            for cr in self.classifier_rules:
+                if not cr.covers(direction):
+                    continue
+                try:
+                    scores = classify_fn(cr.model, out) or {}
+                except Exception:
+                    continue  # fail open
+                pairs = [
+                    (lbl, sc) for lbl, sc in scores.items()
+                    if not cr.labels or str(lbl).lower() in cr.labels
+                ]
+                if not pairs:
+                    continue
+                lbl, top = max(pairs, key=lambda kv: kv[1])
+                if top >= cr.threshold:
+                    blocked.append(cr.name)
+                    notes.append(f"{cr.name}: {lbl} {top:.2f}")
 
         return GuardrailResult(
             allowed=not blocked,
