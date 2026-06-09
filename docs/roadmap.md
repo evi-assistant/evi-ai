@@ -273,8 +273,10 @@ locally and ship once that clears.
   (`evi/deeplinks.py`, Tauri `evi` scheme, `evi link`) · plugin marketplace index
   (`evi/marketplace.py`, `evi plugin search/install/index`, `[plugins]
   index_urls`).
-- Still smaller / unscheduled: long-context awareness in the model registry ·
-  `/recent` REPL history.
+- **Final small items** — **✅ shipped (local)**: long-context awareness in the
+  model registry (`ModelRec.context_window` + `recommend.context_window_for()`;
+  surfaced in `evi models info` and a nudge on `evi models use`) · `/recent`
+  REPL command (lists recent sessions). **The roadmap is now fully cleared.**
 
 ### Previously-deferred, now planned
 

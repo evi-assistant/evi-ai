@@ -11,7 +11,7 @@ Add more as you go.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from evi.hardware import HardwareInfo
 
@@ -36,6 +36,7 @@ class ModelRec:
     tool_calling: str        # "excellent" | "good" | "ok" | "poor"
     role: str                # "chat" | "coder" | "small"
     notes: str = ""
+    context_window: int = 0  # native max context (tokens); 0 = backfilled by family
 
 
 # The registry. Order matters: we prefer earlier entries within a tier.
@@ -166,6 +167,51 @@ REGISTRY: list[ModelRec] = [
         notes="Absolute floor. Acceptable for plain chat only.",
     ),
 ]
+
+
+# Native context windows per model family (tokens). Used to backfill the
+# registry and to answer context_window_for() for ids we don't list verbatim.
+_FAMILY_CONTEXT: dict[str, int] = {
+    "qwen2.5-coder": 32768,
+    "qwen2.5": 32768,
+    "qwen3": 32768,
+    "hermes3": 131072,
+    "llama3.1": 131072,
+    "llama3.2": 131072,
+    "llama3.3": 131072,
+    "mistral": 32768,
+    "mixtral": 32768,
+    "gemma2": 8192,
+    "phi3": 131072,
+    "phi4": 16384,
+    "deepseek-r1": 65536,
+    "command-r": 131072,
+}
+
+# Backfill each registry entry's context_window from its family when unset, so
+# the registry itself is context-aware.
+REGISTRY = [
+    m if m.context_window else replace(m, context_window=_FAMILY_CONTEXT.get(m.family, 0))
+    for m in REGISTRY
+]
+
+
+def context_window_for(model_id: str) -> int | None:
+    """Best-effort native context window (tokens) for a model id, or None.
+
+    Tries an exact registry id, then a family-prefix match (so unlisted tags
+    like ``qwen2.5:14b-instruct-q8_0`` still resolve). Longer family keys win.
+    """
+    mid = (model_id or "").strip().lower()
+    if not mid:
+        return None
+    for m in REGISTRY:
+        if m.id.lower() == mid and m.context_window:
+            return m.context_window
+    for fam in sorted(_FAMILY_CONTEXT, key=len, reverse=True):
+        if mid.startswith(fam) or f"/{fam}" in mid:
+            return _FAMILY_CONTEXT[fam]
+    return None
 
 
 @dataclass

@@ -42,8 +42,8 @@ _EFFORT_LEVELS = ("low", "medium", "high", "max")
 # we duplicate here so this module doesn't depend on the CLI module.
 _BUILTIN_COMMANDS = (
     "help", "reset", "exit", "quit", "tools", "model", "goal", "plan",
-    "auto", "compact", "context", "ctx", "image", "img", "effort", "fast",
-    "json", "notools", "forcetool", "reload", "audio", "speak", "predict",
+    "auto", "compact", "context", "ctx", "recent", "image", "img", "effort",
+    "fast", "json", "notools", "forcetool", "reload", "audio", "speak", "predict",
 )
 
 
