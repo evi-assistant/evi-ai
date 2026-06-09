@@ -30,17 +30,28 @@ A hook uses `command` (argv, spawned) OR `url` (HTTP POST). For a url hook a
 `veto_on_nonzero = true` on a before-hook url that returns 4xx/5xx blocks the
 call.
 
+Besides the tool events, hooks can fire on lifecycle events (use `match = "*"`,
+the default):
+
+    [[user_prompt_submit]]   # before each turn; veto_on_nonzero blocks the prompt
+    name = "no-secrets"
+    command = ["python3", "/path/check_prompt.py"]
+    veto_on_nonzero = true
+
+    [[before_compact]]       # before history compaction; veto keeps it intact
+    [[stop]]                 # after a turn completes (notification; veto ignored)
+
 When a hook fires we set these env vars in the child process:
 
-  EVI_HOOK_EVENT    "before_tool_call" | "after_tool_call"
-  EVI_HOOK_TOOL     fully-qualified tool name
-  EVI_HOOK_ARGS_JSON  json of the call arguments
+  EVI_HOOK_EVENT    the event name (before_tool_call, user_prompt_submit, …)
+  EVI_HOOK_TOOL     tool name for tool events; the event name for lifecycle ones
+  EVI_HOOK_ARGS_JSON  tool call args; the prompt for user_prompt_submit
   EVI_HOOK_RESULT   only for after_tool_call: the tool's stringified output
                     (truncated to 4 KB to avoid blowing the env limit)
 
-A before-hook with `veto_on_nonzero = true` that exits non-zero blocks the
-tool call; its stderr becomes the tool result the LLM sees. After-hooks'
-exit codes are logged but never block.
+A before-hook (or user_prompt_submit / before_compact) with
+`veto_on_nonzero = true` that exits non-zero blocks the action; for a tool, its
+stderr becomes the tool result the LLM sees. After-hooks and `stop` never block.
 """
 
 from __future__ import annotations
@@ -64,7 +75,19 @@ from evi.config import HOOKS_CONFIG_PATH
 logger = logging.getLogger(__name__)
 
 
-HookEvent = Literal["before_tool_call", "after_tool_call"]
+HookEvent = Literal[
+    "before_tool_call",
+    "after_tool_call",
+    # Lifecycle events (not tied to a tool). Match against "*" (the default).
+    "user_prompt_submit",   # fires before a turn; veto blocks the prompt
+    "before_compact",       # fires before history compaction; veto skips it
+    "stop",                 # fires after a turn completes (notification)
+]
+
+# Tool-scoped events match against a tool name; lifecycle events don't.
+TOOL_EVENTS = ("before_tool_call", "after_tool_call")
+LIFECYCLE_EVENTS = ("user_prompt_submit", "before_compact", "stop")
+ALL_EVENTS = TOOL_EVENTS + LIFECYCLE_EVENTS
 
 
 _ENV_RESULT_LIMIT = 4 * 1024  # don't blow OS arg/env limits
@@ -113,7 +136,7 @@ def _parse_hook_file(p: Path) -> list[Hook]:
         return []
 
     hooks: list[Hook] = []
-    for event in ("before_tool_call", "after_tool_call"):
+    for event in ALL_EVENTS:
         for entry in data.get(event, []) or []:
             try:
                 hooks.append(_parse_entry(event, entry))
@@ -205,6 +228,21 @@ class HookRegistry:
                     hook.name, res.exit_code, res.stderr[:200],
                 )
         return results
+
+    def run_lifecycle(
+        self, event: HookEvent, *, payload: str = ""
+    ) -> tuple[list[HookResult], HookResult | None]:
+        """Run hooks for a non-tool lifecycle event (user_prompt_submit,
+        before_compact, stop). `payload` (e.g. the prompt) is exposed to the
+        hook as EVI_HOOK_ARGS_JSON. Returns (results, veto) — veto is the first
+        hook that exited non-zero with veto_on_nonzero (blocks the action)."""
+        results: list[HookResult] = []
+        for hook in self.for_event(event, ""):
+            res = _run_hook(hook, event, payload, result_output=None)
+            results.append(res)
+            if hook.veto_on_nonzero and res.vetoed:
+                return results, res
+        return results, None
 
 
 def _run_http_hook(
