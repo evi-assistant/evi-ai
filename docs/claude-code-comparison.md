@@ -38,6 +38,7 @@ planned (philosophy mismatch / separate big track).
 | Auto-mode config (trusted dirs / domains) | `auto.trusted_dirs` + `trusted_domains` (Ph 77) | ✅ |
 | Sandboxed bash/code | `[tools] sandbox` (Ph 67) | ✅ |
 | Security / vuln review | guardrails, `security.yml` (pip/cargo audit), `review --multi` | ✅ |
+| Content moderation / safety filter | `guardrails.toml` — regex (block/redact) **+ LLM-judge** rules on input/output | ✅ (no in-harness equivalent in Claude Code) |
 
 ## Extension & customization
 

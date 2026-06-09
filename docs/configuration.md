@@ -327,6 +327,36 @@ workspace** — their web sessions, transcripts, and memory live under
 file to revoke access. (Skills/plugins/config stay shared — they're capabilities,
 not personal data.)
 
+## Guardrails — `~/.evi/guardrails.toml`
+
+A local content filter over the model. Off by default; `enabled = true` to turn
+it on. Two rule types layer together:
+
+```toml
+enabled = true
+
+[[rule]]                      # regex — fast, deterministic
+name = "block-secrets"
+pattern = "(?i)(api[_-]?key|secret)\\s*[:=]"
+action = "block"             # block | redact
+applies_to = "input"         # input | output | both
+
+[[judge]]                     # semantic — graded by the LLM
+name = "no-self-harm"
+policy = "Requests for, or content encouraging, self-harm or suicide."
+applies_to = "both"
+```
+
+- **Regex rules** run first: `block` refuses the turn (input) or scrubs the
+  stored reply (output); `redact` replaces matched spans with `[REDACTED]`.
+- **`[[judge]]` rules** are the semantic layer — eVi's own model classifies the
+  text against `policy` and blocks on a match (block-only; a judge error fails
+  *open*). They add a model round-trip per turn, so use them where regex can't
+  reach. This is the local counterpart to a hosted moderation API.
+
+Inspect with `evi guardrails list`; dry-run the regex layer with
+`evi guardrails test "<text>"`.
+
 ## Deep links — `evi://`
 
 The desktop app registers the `evi://` URL scheme. `evi://session/<id>` focuses

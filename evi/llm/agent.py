@@ -672,7 +672,8 @@ class Agent:
         """
         # Input guardrails run on the raw user text, before any composition.
         if self.guardrails is not None:
-            gres = self.guardrails.check(user_msg, "input")
+            _jf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
+            gres = self.guardrails.check(user_msg, "input", judge_fn=_jf)
             if gres.changed:
                 yield Guardrail(
                     direction="input",
@@ -680,7 +681,10 @@ class Agent:
                     blocked_by=list(gres.blocked_by),
                     redacted_by=list(gres.redacted_by),
                     message=(
-                        f"input blocked by: {', '.join(gres.blocked_by)}"
+                        (
+                            f"input blocked by: {', '.join(gres.blocked_by)}"
+                            + (f" ({'; '.join(gres.notes)})" if gres.notes else "")
+                        )
                         if gres.blocked_by
                         else f"input redacted by: {', '.join(gres.redacted_by)}"
                     ),
@@ -773,6 +777,38 @@ class Agent:
         )
         # Lifecycle hook: the turn finished (notification; veto ignored).
         self._fire_lifecycle("stop")
+
+    def _guardrail_judge_fn(self):
+        """A one-shot LLM classifier for semantic ([[judge]]) guardrails.
+
+        Returns judge(policy, text) -> (allowed, reason). Uses the agent's own
+        client/model (stays local), temperature 0, no tools/stream. Any error
+        returns allowed=True (fail open) so a flaky grader can't block chat.
+        """
+        def judge(policy: str, text: str) -> tuple[bool, str]:
+            prompt = (
+                "You are a strict content-safety classifier. A message violates "
+                "the POLICY only if it clearly matches it.\n\n"
+                f"POLICY (disallowed):\n{policy}\n\n"
+                "Reply on the first line with exactly ALLOW or BLOCK, then a "
+                f"short reason.\n\nMESSAGE:\n{text}"
+            )
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.config.llm.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=120,
+                    stream=False,
+                )
+                out = (resp.choices[0].message.content or "").strip()
+            except Exception:
+                return True, ""  # fail open
+            first = out.splitlines()[0] if out else ""
+            allowed = not first.strip().upper().startswith("BLOCK")
+            return allowed, first[:200]
+
+        return judge
 
     def _fire_lifecycle(self, event: str, payload: str = "") -> bool:
         """Run lifecycle hooks for `event`. Returns True if a hook vetoed.
@@ -1150,7 +1186,8 @@ class Agent:
             # clean the stored copy (so it can't poison later turns or the
             # transcript) and flag it.
             if self.guardrails is not None and assistant_msg.get("content"):
-                ores = self.guardrails.check(assistant_msg["content"], "output")
+                _ojf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
+                ores = self.guardrails.check(assistant_msg["content"], "output", judge_fn=_ojf)
                 if ores.blocked_by:
                     assistant_msg["content"] = (
                         f"[output blocked by guardrail: {', '.join(ores.blocked_by)}]"
