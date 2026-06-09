@@ -542,6 +542,22 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Map an `evi://` deep link to the in-app web path to load. Mirrors
+/// `evi.deeplinks.to_web_path`. Unknown routes fall back to `/`.
+fn deep_link_to_path(raw: &str) -> Option<String> {
+    let u = url::Url::parse(raw).ok()?;
+    if u.scheme() != "evi" {
+        return None;
+    }
+    let kind = u.host_str().unwrap_or("");
+    let value = u.path().trim_start_matches('/').to_string();
+    Some(match kind {
+        "session" if !value.is_empty() => format!("/?session={}", value),
+        "workflow" if !value.is_empty() => format!("/?workflow={}", value),
+        _ => "/".to_string(),
+    })
+}
+
 fn main() {
     let server = ServerHandle(Mutex::new(None));
 
@@ -549,6 +565,7 @@ fn main() {
         .manage(server)
         .manage(UpdateState(std::sync::Mutex::new(UpdateProgress::default())))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             check_for_update_cmd,
             open_logs_cmd,
@@ -560,6 +577,10 @@ fn main() {
             // `local_port` is Some in local mode; the loading shim polls that
             // port and redirects once the server is up.
             let mut local_port: Option<u16> = None;
+            // Origin to navigate to when an evi:// deep link arrives. Both the
+            // remote and local branches below set it before it's read.
+            #[allow(unused_assignments)]
+            let mut nav_base: Option<String> = None;
 
             // Remote mode: skip the Python spawn and just navigate to the URL.
             // Useful when this laptop is a thin client pointed at the AI server.
@@ -576,6 +597,7 @@ fn main() {
                         trimmed
                     );
                 }
+                nav_base = Some(trimmed.trim_end_matches('/').to_string());
                 WebviewUrl::External(trimmed.parse().map_err(|e: url::ParseError| e.to_string())?)
             } else {
                 // Local mode. Prefer a bundled sidecar (standalone build);
@@ -597,6 +619,7 @@ fn main() {
                 };
                 app.state::<ServerHandle>().0.lock().unwrap().replace(child);
                 local_port = Some(port);
+                nav_base = Some(format!("http://127.0.0.1:{}", port));
 
                 // Show the loading shim immediately — do NOT block here waiting
                 // for health. The onefile sidecar's cold start (unpacking +
@@ -631,6 +654,29 @@ fn main() {
                     let _ = win.hide();
                 }
             });
+
+            // evi:// deep links — focus the app on the linked session/workflow.
+            // The installer registers the scheme via tauri.conf.json; we also
+            // register at runtime (best-effort) for dev / portable runs.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+                let dl_win = window.clone();
+                let dl_base = nav_base.clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        if let Some(path) = deep_link_to_path(url.as_str()) {
+                            let full = match &dl_base {
+                                Some(b) => format!("{}{}", b, path),
+                                None => path,
+                            };
+                            let _ = dl_win.eval(&format!("window.location.href = {:?};", full));
+                            let _ = dl_win.show();
+                            let _ = dl_win.set_focus();
+                        }
+                    }
+                });
+            }
 
             // Background self-update against our signed GitHub releases (built
             // by desktop-release.yml). Never blocks launch. Skipped in remote

@@ -2328,6 +2328,46 @@ def recipe_run(
     console.print("\n[green]recipe complete[/green]")
 
 
+@app.command("link")
+def link_cmd(
+    target: str = typer.Argument(
+        None, help="Session id (default: most recent), or 'new'."
+    ),
+    open_url: str = typer.Option(
+        "", "--open", help="Parse an evi:// URL and show the in-app path it routes to."
+    ),
+) -> None:
+    """Make an evi:// deep link (or resolve one with --open).
+
+    The desktop app registers the evi:// scheme; opening a link focuses the app
+    on that session/workflow. The same links work in a browser via the web UI's
+    /?session= and /?workflow= params.
+    """
+    from evi import deeplinks
+
+    if open_url:
+        try:
+            kind, value, _ = deeplinks.parse_link(open_url)
+        except deeplinks.DeepLinkError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        console.print(
+            f"[dim]{kind}[/dim] {value} -> [cyan]{deeplinks.to_web_path(open_url)}[/cyan]"
+        )
+        return
+
+    if target == "new":
+        console.print(deeplinks.build_link("new"))
+        return
+    from evi.sessions import most_recent_session_id
+
+    sid = target or most_recent_session_id()
+    if sid is None:
+        console.print("[dim]no sessions — pass a session id or 'new'[/dim]")
+        raise typer.Exit(1)
+    console.print(deeplinks.build_link("session", sid))
+
+
 @app.command("agents")
 def agents_cmd() -> None:
     """List subagent profiles (built-in + plugin) usable via the `delegate` tool."""
