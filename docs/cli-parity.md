@@ -21,7 +21,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `link` | make `evi://` deep links | n/a | ✅ scheme handler | desktop opens the links |
 | `stats` | local usage analytics | ✅ settings → Usage | ✅ | sessions/messages/tokens, roles, top tools, busy days |
 | `sessions` | list/resume/fork/handoff | ✅ tabs/history; handoff API | ✅ | resume via `/?session=` |
-| `recipe` | saved multi-turn flows | ➕ | ➕ | run via `routine` webhook today |
+| `recipe` | saved multi-turn flows | ✅ settings → Routes & Recipes | ✅ | browse steps + run; also via `routine` webhook |
 | `routine` | webhook → recipe | ◐ `/api/routine/{token}` | ◐ | inbound trigger |
 | `style` | output styles | ✅ settings (llm.output_style) | ✅ | |
 | `voice` | TTS engine/speak/listen | ✅ settings → Voice; speak toggle | ✅ | |
@@ -30,7 +30,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `mcp` | MCP servers/serve | ◐ settings (mcp toggle + allowlist) | ◐ | |
 | `models` | list/use/info/pull | ✅ Model picker + settings | ✅ | recommended-pull flow |
 | `config` | show/path | ✅ full settings screen | ✅ | the settings UI *is* config |
-| `route` | multi-model routing | ➕ | ➕ | config-driven |
+| `route` | multi-model routing | ✅ settings → Routes & Recipes | ✅ | add/list/remove routing rules |
 | `sync` | git sync of ~/.evi | ⌨️ | ⌨️ | machine admin |
 | `backup` | backup/restore state | ⌨️ | ⌨️ | machine admin |
 | `calendar`/`obsidian` | integrations | ◐ settings → Integrations | ◐ | |
@@ -64,12 +64,13 @@ Many CLI REPL builtins have a web equivalent or are inherently REPL-only:
 
 Several commands are **CLI-only by design** — they're machine admin (`sync`,
 `backup`, `worktree`, `profile`, `scheduler`), batch/scripting (`run`, `batch`,
-`eval`, `finetune`, `review`), or developer tooling. Forcing a web button for
-those adds surface without value.
+`finetune`, `review`), or developer tooling. Forcing a web button for those adds
+surface without value.
 
 The **gaps worth filling** (➕) — a web/desktop face for things a non-CLI user
-might want. Most are now shipped: the **guardrails editor** (settings →
-Guardrails), the **plugin browser/installer** (settings → Plugins), the
-**usage/stats view** (settings → Usage), and the **evals results panel**
-(settings → Evals). The one remaining is **recipe/route** management. These are
-tracked in [roadmap.md](roadmap.md) under "surface parity".
+might want — are now all shipped as settings sections: the **guardrails editor**
+(Guardrails), the **plugin browser/installer** (Plugins), the **usage/stats
+view** (Usage), the **evals results panel** (Evals), and **routes + recipes
+management** (Routes & Recipes). Suite/recipe *authoring* still happens in TOML
+files (or via `evi eval new` / `evi recipe new`), but browsing and running them
+no longer requires the CLI.

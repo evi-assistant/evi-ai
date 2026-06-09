@@ -140,6 +140,14 @@ def evi_base_url(tmp_path_factory):
         '[[case]]\nname = "missing"\nprompt = "hi"\ncontains = ["definitely-not-present"]\n',
         encoding="utf-8",
     )
+    # A tiny recipe so the Routes & Recipes panel has a runnable recipe.
+    recipes_dir = home / "recipes"
+    recipes_dir.mkdir()
+    (recipes_dir / "smoke.toml").write_text(
+        'name = "smoke"\ndescription = "e2e smoke recipe"\n'
+        '[[steps]]\nlabel = "greet"\nprompt = "say hi"\n',
+        encoding="utf-8",
+    )
     fake = uvicorn.Server(uvicorn.Config(_make_fake_llm_app(), host="127.0.0.1",
                                          port=fake_port, log_level="error"))
     threading.Thread(target=fake.run, daemon=True).start()

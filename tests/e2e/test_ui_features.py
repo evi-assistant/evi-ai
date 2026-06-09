@@ -180,6 +180,37 @@ def test_evals_panel(page: Page, evi_base_url: str):
     expect(card.locator('.eval-case[data-case="missing"] .eval-mark')).to_have_text("✗")
 
 
+def test_automation_routes_crud(page: Page, evi_base_url: str):
+    """Settings → Routes & Recipes: add a route via the form, see it listed,
+    then remove it."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('automation')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#automation-box")).to_be_visible(timeout=10000)
+    page.fill("#rt-name", "e2e-route")
+    page.fill("#rt-model", "some-model")
+    page.fill("#rt-kw", "alpha, beta")
+    page.click("#rt-add")
+    row = page.locator(".rt-row", has_text="e2e-route")
+    expect(row).to_be_visible(timeout=10000)
+    expect(row).to_contain_text("some-model")
+    page.locator('.rt-row button[data-rt-remove="e2e-route"]').click()
+    expect(page.locator('.rt-row button[data-rt-remove="e2e-route"]')).to_have_count(
+        0, timeout=10000
+    )
+
+
+def test_automation_recipe_run(page: Page, evi_base_url: str):
+    """The seeded smoke recipe runs against the fake backend and shows output."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('automation')")
+    card = page.locator(".recipe-card", has_text="smoke")
+    expect(card).to_be_visible(timeout=10000)
+    card.locator('button[data-recipe-run="smoke"]').click()
+    # the fake backend always replies "Hello from the fake backend! …"
+    expect(card.locator(".recipe-out")).to_contain_text("Hello", timeout=30000)
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -195,6 +226,7 @@ def test_evals_panel(page: Page, evi_base_url: str):
         ("plugins", "Plugins"),
         ("stats", "Usage"),
         ("evals", "Evals"),
+        ("automation", "Routes & Recipes"),
         ("about", "About"),
     ],
 )
