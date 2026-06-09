@@ -278,6 +278,23 @@ locally and ship once that clears.
   surfaced in `evi models info` and a nudge on `evi models use`) · `/recent`
   REPL command (lists recent sessions). **The roadmap is now fully cleared.**
 
+### OpenAI / Claude-Code parity additions (post-roadmap review)
+
+From a review of developers.openai.com + code.claude.com — the genuinely-new,
+local-friendly gaps — **✅ shipped (local)**:
+
+- **Structured Outputs** — JSON-Schema-constrained output (`/schema`,
+  `evi run --schema`, `evi/structured.py`) beyond `/json`.
+- **Batch mode** — `evi batch <file>` runs many prompts headless → JSONL
+  (`evi/batch.py`); the local analog of the Batch API.
+- **Expanded hook lifecycle events** — `user_prompt_submit` (veto blocks the
+  prompt), `before_compact`, `stop`, on top of before/after-tool.
+- **Evals harness** — `evi eval` runs prompt→assertion suites with a pass-rate
+  (`evi/evals.py`); gates CI on failures.
+
+Still open from that review (larger, awaiting decision): **multi-user web mode**,
+**federation / eVi↔eVi delegation**, and a fuller **Responses-API migration**.
+
 ### Previously-deferred, now planned
 
 - **Phase 90 — fine-tune from transcripts** — **✅ shipped (local)**: `evi

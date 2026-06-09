@@ -48,7 +48,7 @@ planned (philosophy mismatch / separate big track).
 | Skills | `SkillStore` | ✅ |
 | Subagents | `delegate_*` + `parallel_research` (Ph 61) | ✅ |
 | Output styles | `[llm] output_style` (Ph 69) | ✅ |
-| Hooks (incl. HTTP hooks) | `hooks.toml` (command **or** `url`) | ✅ |
+| Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
 | Keybindings | — | ❌ buildable |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
@@ -115,7 +115,9 @@ planned (philosophy mismatch / separate big track).
 | Headless mode | `evi run --format json` (Ph 65) | ✅ |
 | Custom tools | `@tool` decorator | ✅ |
 | File checkpointing | `evi rewind` (Ph 64) | ✅ |
-| Structured outputs | `/json`, `response_format` | ✅ |
+| Structured outputs | `/json` + JSON-Schema (`/schema`, `evi run --schema`) | ✅ |
+| Batch API | `evi batch <file>` → JSONL (parallel) | ✅ |
+| Evals | `evi eval` (prompt→assertion suites, pass-rate, CI gate) | ✅ |
 | Permissions SDK | permission policy (Ph 66) | ✅ |
 | Public Agent SDK (library) | headless covers automation | 🚫 deferred (no stable lib surface) |
 | Session storage (S3/Redis) | local JSONL transcripts | 🚫 local-first |

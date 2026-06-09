@@ -178,6 +178,18 @@ A hook uses either `command` (argv, spawned) **or** `url` (HTTP POST of
 success; any other status becomes the exit code, so `veto_on_nonzero` still
 gates the call.
 
+Besides the tool events, hooks fire on **lifecycle events** (use `match = "*"`):
+
+```toml
+[[user_prompt_submit]]   # before each turn — veto blocks the prompt
+name = "no-secrets"
+command = ["python3", "/path/check_prompt.py"]   # prompt is in EVI_HOOK_ARGS_JSON
+veto_on_nonzero = true
+
+[[before_compact]]       # before history compaction — veto keeps it intact
+[[stop]]                 # after a turn completes (notification; never blocks)
+```
+
 ## Keybindings — `~/.evi/keybindings.toml`
 
 Map a key to a slash command in the interactive chat REPL — pressing it
