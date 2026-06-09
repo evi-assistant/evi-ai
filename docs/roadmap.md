@@ -237,8 +237,11 @@ locally and ship once that clears.
   to a `url` instead of spawning a command; non-2xx vetoes a before-hook.
 - **Phase 82 — keybindings** — **✅ shipped (local)**: `~/.evi/keybindings.toml`
   maps a key to a slash command in the REPL (press → run).
-- **Phase 83 — channels** — push an external alert/notification into a running
-  session (routines cover inbound webhook→recipe; this is push-into-live). **M.**
+- **Phase 83 — channels** — **✅ shipped (local)**: `POST /api/session/{id}/channel`
+  injects an external alert as a `[channel:<source>]` system note so the
+  assistant sees it on its next turn (`GET` lists recent pushes for a UI badge).
+  Routines cover inbound webhook→recipe; this is push-into-live. *(live UI toast
+  is a follow-up; the inject + history mechanism is complete.)*
 - **Phase 84 — packaged CI action** — **✅ shipped (local)**: a composite action
   `.github/actions/evi-run` installs eVi, writes a backend config, and runs one
   `evi run` headless prompt (output `result`); `evi-run-example.yml` demos it.

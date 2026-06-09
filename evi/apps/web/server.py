@@ -287,6 +287,7 @@ class WebSession:
     agent: Agent
     pending: dict[str, PendingDecision] = field(default_factory=dict)
     mode: str = "chat"  # Chat / Cowork / Code — gates the agent's tool set
+    channel_log: list[dict[str, str]] = field(default_factory=list)  # pushed-in alerts (Ph 83)
 
 
 # ---- event serialization -------------------------------------------------
@@ -899,6 +900,32 @@ def create_app() -> FastAPI:
         return context_breakdown(
             sess.agent.history, sess.agent.config.llm.context_size or 0
         )
+
+    @app.post("/api/session/{session_id}/channel")
+    def push_channel(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        """Push an external alert/notification into a (live or revived) session
+        (Phase 83). The text is added as a system note so the assistant sees it
+        on its next turn; an external sender (webhook, script) authenticates with
+        the normal web token. Live-session context — not persisted across reloads.
+        """
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        text = str(req.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        source = (str(req.get("source") or "channel").strip() or "channel")[:64]
+        sess = get_session(session_id)
+        sess.agent.history.append(
+            {"role": "system", "content": f"[channel:{source}] {text}"}
+        )
+        sess.channel_log.append({"source": source, "text": text})
+        return {"ok": True, "source": source, "pending": len(sess.channel_log)}
+
+    @app.get("/api/session/{session_id}/channel")
+    def list_channel(session_id: str) -> dict[str, Any]:
+        """Recent channel messages pushed into this session (for a UI badge)."""
+        sess = sessions.get(session_id)
+        return {"messages": sess.channel_log if sess is not None else []}
 
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
