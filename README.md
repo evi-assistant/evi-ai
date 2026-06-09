@@ -147,7 +147,9 @@ Per-user config lives in `~/.evi/`. Highlights:
   logs/               run logs (dreams, scheduled tasks)
 ```
 
-See [docs/configuration.md](docs/configuration.md) for the full reference.
+See [docs/configuration.md](docs/configuration.md) for the full reference, the
+[feature catalog](docs/features.md) for what every feature does + how to use it,
+and [surface parity](docs/cli-parity.md) for the CLI ↔ Web ↔ Desktop map.
 
 ## Optional dependency groups
 
