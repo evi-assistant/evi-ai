@@ -3939,6 +3939,43 @@ def backup_restore(
     )
 
 
+@app.command("stats")
+def stats_cmd(
+    days: int = typer.Option(0, "--days", help="Only the last N days (0 = all)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the raw stats as JSON."),
+) -> None:
+    """Local usage analytics from your transcripts (sessions, tools, busy days)."""
+    from evi import stats as _stats
+    from evi.sessions import fmt_when
+
+    data = _stats.compute_stats(days=(days or None))
+    if json_out:
+        import json as _json
+
+        print(_json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    if not data["sessions"]:
+        console.print("[dim]no transcripts yet (is tools.transcripts on?)[/dim]")
+        return
+    span = ""
+    if data["first_ts"] and data["last_ts"]:
+        span = f"  [dim]{fmt_when(data['first_ts'])} - {fmt_when(data['last_ts'])}[/dim]"
+    console.print(
+        f"[bold]{data['sessions']}[/bold] sessions · [bold]{data['messages']}[/bold] messages "
+        f"· ~[bold]{data['approx_tokens'] // 1000}k[/bold] tokens{span}"
+    )
+    if data["roles"]:
+        parts = ", ".join(f"{k}: {v}" for k, v in data["roles"].items())
+        console.print(f"  [dim]roles:[/dim] {parts}")
+    if data["tools"]:
+        top = list(data["tools"].items())[:8]
+        parts = ", ".join(f"{k} ({v})" for k, v in top)
+        console.print(f"  [dim]top tools:[/dim] {parts}")
+    if data["busiest_days"]:
+        parts = ", ".join(f"{d} ({n})" for d, n in data["busiest_days"].items())
+        console.print(f"  [dim]busiest days:[/dim] {parts}")
+
+
 finetune_app = typer.Typer(
     help="Fine-tune dataset tools — curate transcripts into training data."
 )
