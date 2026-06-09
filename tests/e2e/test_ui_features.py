@@ -109,6 +109,23 @@ def test_settings_voice_section(page: Page, evi_base_url: str):
     expect(content.locator("select")).to_contain_text("coqui")
 
 
+def test_guardrails_editor(page: Page, evi_base_url: str):
+    """Settings → Guardrails loads the editor, saves valid TOML, rejects bad."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('guardrails')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    editor = page.locator("#gr-editor")
+    expect(editor).to_be_visible(timeout=10000)
+    # save valid TOML
+    editor.fill('enabled = true\n[[rule]]\nname = "k"\npattern = "secret"\naction = "block"\n')
+    page.click("#gr-save")
+    expect(page.locator("#gr-status")).to_have_text("Saved", timeout=10000)
+    # invalid TOML surfaces an error, not a crash
+    page.locator("#gr-editor").fill('[[rule]]\nname="x"\npattern="([bad"\n')
+    page.click("#gr-save")
+    expect(page.locator("#gr-status")).to_contain_text("Error", timeout=10000)
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -120,6 +137,7 @@ def test_settings_voice_section(page: Page, evi_base_url: str):
         ("integrations", "Integrations"),
         ("server", "Server"),
         ("voice", "Voice"),
+        ("guardrails", "Guardrails"),
         ("about", "About"),
     ],
 )
