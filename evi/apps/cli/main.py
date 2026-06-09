@@ -2493,7 +2493,20 @@ def eval_run(
         res = run_headless(agent, case.prompt)
         return res.text or (f"ERROR: {res.error}" if res.error else "")
 
-    report = evals.run_eval(suite, run_one)
+    def judge_fn(case, output) -> tuple[bool, str]:
+        agent = _build_agent()
+        agent.tools = {}  # the grader answers from text alone, no tools
+        prompt = (
+            "Grade the ANSWER against the RUBRIC. Reply with exactly PASS or FAIL "
+            "on the first line, then a one-line reason.\n\n"
+            f"RUBRIC: {case.judge}\n\nANSWER:\n{output}"
+        )
+        res = run_headless(agent, prompt)
+        text = (res.text or "").strip()
+        first = text.splitlines()[0] if text else ""
+        return first.strip().upper().startswith("PASS"), (first[:200] or "no judge output")
+
+    report = evals.run_eval(suite, run_one, judge_fn=judge_fn)
     if json_out:
         import json as _json
 
