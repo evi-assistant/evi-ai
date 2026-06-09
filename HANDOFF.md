@@ -2,6 +2,28 @@
 
 _Last updated: 2026-06-07 · version 0.24.3 (desktop app 0.2.4)_
 
+> **⚠ The body of this file below is stale (0.24.3 / Phase 48 era).** For the
+> authoritative current state see the per-session memory note
+> `~/.claude/projects/C--evi/memory/evi-project-status.md`. Quick snapshot as of
+> **2026-06-09**:
+>
+> - **Released line:** v0.31.0 (desktop 0.2.12), but **all releases are PAUSED on
+>   a GitHub Actions billing block** (account-level; USER-only fix — do not touch
+>   billing). Local `main` is far ahead of the last release, committed but not
+>   pushed/released.
+> - **Done locally:** the entire roadmap Phase 79–94, plus a docs-review parity
+>   batch (Structured Outputs, Batch, expanded hooks, Evals + LLM-judge, stats,
+>   scheduled evals, federation, Responses API, multi-user web, semantic
+>   guardrails: regex→judge→classifier).
+> - **All 5 cli-parity web/desktop gaps now shipped** as Settings sections:
+>   **Guardrails** editor, **Plugins** browser, **Usage** stats, **Evals** panel,
+>   **Routes & Recipes** — each with `/api/*` endpoints + unit/api/e2e tests +
+>   docs. See `docs/cli-parity.md`.
+> - **Tests:** 954 passed, 2 skipped; e2e `test_ui_features` 25 passed (run e2e
+>   with `--timeout=120`). Clean ruff.
+> - **Desktop build works locally** (see Gotchas: build via bash/cmd redirection,
+>   not PowerShell `*>>`).
+
 This is a working-state snapshot for picking the project up on another machine.
 Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
 **Migration**.
