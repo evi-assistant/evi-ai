@@ -1003,7 +1003,7 @@ def guardrails_list() -> None:
     from evi.guardrails import Guardrails
 
     g = Guardrails.load()
-    if not g.rules:
+    if not g.rules and not g.judge_rules:
         console.print("[dim]no guardrail rules[/dim]")
         from evi.guardrails import GUARDRAILS_PATH
 
@@ -1017,6 +1017,11 @@ def guardrails_list() -> None:
             f"  [bold]{r.name}[/bold] "
             f"[{action_color}]{r.action}[/{action_color}] "
             f"[dim]({r.applies_to})[/dim] — /{r.pattern}/"
+        )
+    for jr in g.judge_rules:
+        console.print(
+            f"  [bold]{jr.name}[/bold] [magenta]judge[/magenta] "
+            f"[dim]({jr.applies_to})[/dim] — {jr.policy[:60]}"
         )
 
 
