@@ -1348,6 +1348,67 @@ def create_app() -> FastAPI:
 
         return _stats.compute_stats(days=(days or None))
 
+    def _case_summary(case) -> dict[str, Any]:
+        """A compact, assertion-focused view of a case for the evals browser."""
+        checks = []
+        if case.contains:
+            checks.append("contains " + ", ".join(case.contains))
+        if case.not_contains:
+            checks.append("not " + ", ".join(case.not_contains))
+        if case.regex:
+            checks.append(f"regex /{case.regex}/")
+        if case.equals is not None:
+            checks.append(f"equals {case.equals!r}")
+        if case.judge:
+            checks.append("judge: " + case.judge)
+        return {"name": case.name, "prompt": case.prompt, "checks": checks,
+                "mode": case.mode}
+
+    @app.get("/api/evals")
+    def evals_list() -> dict[str, Any]:
+        """List eval suites with their cases (read-only; no model calls)."""
+        from evi import evals
+
+        return {"suites": [
+            {"name": s.name, "description": s.description,
+             "cases": [_case_summary(c) for c in s.cases]}
+            for s in evals.list_suites()
+        ]}
+
+    @app.post("/api/evals/run")
+    def evals_run(req: dict[str, Any]) -> dict[str, Any]:
+        """Run an eval suite server-side and return the report. This calls the
+        model once per case (plus once per judged case), so it blocks until the
+        whole suite finishes — fine for the small local suites evals are meant
+        to be."""
+        from evi import evals
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        try:
+            suite = evals.load_suite(name)
+        except evals.EvalError as exc:
+            raise HTTPException(404, str(exc))
+
+        def agent_factory():
+            cfg = Config.load()
+            toggles = asdict(cfg.tools)
+            return Agent(
+                client=make_client(cfg.llm),
+                config=cfg,
+                tools=get_enabled_tools(toggles),
+                memory=MemoryStore() if toggles.get("memory") else None,
+                skills=SkillStore() if toggles.get("skills") else None,
+            )
+
+        run_one, judge_fn = evals.make_runners(
+            agent_factory, default_mode=str(req.get("mode") or "")
+        )
+        return evals.run_eval(suite, run_one, judge_fn=judge_fn)
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""

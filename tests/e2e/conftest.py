@@ -129,6 +129,17 @@ def evi_base_url(tmp_path_factory):
         'auth_token = ""\n',
         encoding="utf-8",
     )
+    # A tiny eval suite so the Evals panel has something to list + run. The fake
+    # backend always replies with FAKE_REPLY ("Hello from the fake backend! …"),
+    # so "greets" passes and "missing" fails — a deterministic 1/2.
+    evals_dir = home / "evals"
+    evals_dir.mkdir()
+    (evals_dir / "smoke.toml").write_text(
+        'name = "smoke"\ndescription = "e2e smoke suite"\n'
+        '[[case]]\nname = "greets"\nprompt = "hi"\ncontains = ["Hello"]\n'
+        '[[case]]\nname = "missing"\nprompt = "hi"\ncontains = ["definitely-not-present"]\n',
+        encoding="utf-8",
+    )
     fake = uvicorn.Server(uvicorn.Config(_make_fake_llm_app(), host="127.0.0.1",
                                          port=fake_port, log_level="error"))
     threading.Thread(target=fake.run, daemon=True).start()

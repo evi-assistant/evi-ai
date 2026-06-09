@@ -2488,8 +2488,6 @@ def eval_run(
     """Run an eval suite and report the pass-rate. Exit code is non-zero if any
     case fails (so it gates CI)."""
     from evi import evals
-    from evi.headless import run_headless
-    from evi.modes import mode_tools
 
     try:
         suite = evals.load_suite(name)
@@ -2497,28 +2495,7 @@ def eval_run(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
 
-    def run_one(case) -> str:
-        agent = _build_agent()
-        m = case.mode or mode
-        if m:
-            agent.tools = {t.name: t for t in mode_tools(m)}
-        agent.enable_auto_all()
-        res = run_headless(agent, case.prompt)
-        return res.text or (f"ERROR: {res.error}" if res.error else "")
-
-    def judge_fn(case, output) -> tuple[bool, str]:
-        agent = _build_agent()
-        agent.tools = {}  # the grader answers from text alone, no tools
-        prompt = (
-            "Grade the ANSWER against the RUBRIC. Reply with exactly PASS or FAIL "
-            "on the first line, then a one-line reason.\n\n"
-            f"RUBRIC: {case.judge}\n\nANSWER:\n{output}"
-        )
-        res = run_headless(agent, prompt)
-        text = (res.text or "").strip()
-        first = text.splitlines()[0] if text else ""
-        return first.strip().upper().startswith("PASS"), (first[:200] or "no judge output")
-
+    run_one, judge_fn = evals.make_runners(_build_agent, default_mode=mode)
     report = evals.run_eval(suite, run_one, judge_fn=judge_fn)
     if json_out:
         import json as _json

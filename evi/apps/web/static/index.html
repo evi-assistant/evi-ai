@@ -2257,6 +2257,7 @@ initModes();
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
+    { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2316,6 +2317,7 @@ initModes();
     if (sec.custom === 'guardrails') return renderGuardrails();
     if (sec.custom === 'plugins') return renderPlugins();
     if (sec.custom === 'stats') return renderStats();
+    if (sec.custom === 'evals') return renderEvals();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2728,6 +2730,94 @@ initModes();
       bar.appendChild(b);
     });
     load(0);
+  }
+
+  function renderEvals() {
+    const box = document.createElement('div');
+    box.id = 'evals-box';
+    box.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    contentEl.appendChild(box);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    fetch('/api/evals').then(r => r.json()).then(d => {
+      const suites = d.suites || [];
+      if (!suites.length) {
+        box.innerHTML = '<p class="sec-blurb">No eval suites yet. Create one with ' +
+          '<code>evi eval new &lt;name&gt;</code> (suites live in <code>~/.evi/evals/</code>).</p>';
+        return;
+      }
+      box.innerHTML = '';
+      for (const s of suites) {
+        const card = document.createElement('div');
+        card.className = 'eval-suite';
+        card.style.cssText = 'margin-bottom:16px;border:1px solid var(--border,#2b333d);' +
+          'border-radius:8px;padding:12px';
+        let head = '<div style="display:flex;align-items:center;gap:10px">' +
+          '<div style="flex:1;min-width:0"><b>' + esc(s.name) + '</b>' +
+          ' <span class="dim" style="font-size:12px">' + s.cases.length + ' case' +
+          (s.cases.length === 1 ? '' : 's') + '</span>' +
+          (s.description ? '<div class="dim" style="font-size:12px">' + esc(s.description) + '</div>' : '') +
+          '</div><button class="set-action-btn" data-run="' + esc(s.name) + '">Run</button></div>';
+        let cases = '<div style="margin-top:8px">';
+        for (const c of s.cases) {
+          cases += '<div class="eval-case" data-case="' + esc(c.name) + '" ' +
+            'style="padding:6px 0;border-top:1px solid var(--border,#2b333d)">' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span class="eval-mark" style="font-size:12px;color:var(--dim)">○</span>' +
+            '<b style="font-size:13px">' + esc(c.name) + '</b>' +
+            (c.mode ? ' <span class="dim" style="font-size:11px">[' + esc(c.mode) + ']</span>' : '') +
+            '</div>' +
+            (c.checks && c.checks.length ?
+              '<div class="dim" style="font-size:11px;margin-left:20px">' +
+              c.checks.map(esc).join(' · ') + '</div>' : '') +
+            '<div class="eval-fail dim" style="font-size:11px;margin-left:20px;color:#e05252"></div>' +
+            '</div>';
+        }
+        cases += '</div>';
+        card.innerHTML = head + '<div class="eval-status sec-blurb" style="min-height:1em"></div>' + cases;
+        box.appendChild(card);
+      }
+      box.onclick = async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const runName = t.getAttribute('data-run');
+        if (!runName) return;
+        const card = t.closest('.eval-suite');
+        const statusEl = card.querySelector('.eval-status');
+        t.disabled = true;
+        statusEl.textContent = 'Running ' + runName + '… (this calls the model per case)';
+        statusEl.style.color = 'var(--dim)';
+        // reset marks
+        card.querySelectorAll('.eval-case').forEach(el => {
+          el.querySelector('.eval-mark').textContent = '○';
+          el.querySelector('.eval-mark').style.color = 'var(--dim)';
+          el.querySelector('.eval-fail').textContent = '';
+        });
+        try {
+          const r = await fetch('/api/evals/run', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: runName }),
+          });
+          const rep = await r.json();
+          if (!r.ok) { statusEl.textContent = 'Error: ' + (rep.detail || 'failed'); statusEl.style.color = '#e05252'; t.disabled = false; return; }
+          const byName = {};
+          (rep.cases || []).forEach(c => { byName[c.name] = c; });
+          card.querySelectorAll('.eval-case').forEach(el => {
+            const c = byName[el.getAttribute('data-case')];
+            if (!c) return;
+            const mark = el.querySelector('.eval-mark');
+            mark.textContent = c.passed ? '✓' : '✗';
+            mark.style.color = c.passed ? '#4caf50' : '#e05252';
+            if (!c.passed && c.failures) el.querySelector('.eval-fail').textContent = c.failures.join('; ');
+          });
+          const pct = Math.round((rep.pass_rate || 0) * 100);
+          statusEl.textContent = rep.passed + '/' + rep.total + ' passed (' + pct + '%)';
+          statusEl.style.color = rep.passed === rep.total ? '#4caf50' : '#e0a800';
+        } catch (e) {
+          statusEl.textContent = 'Error: ' + e; statusEl.style.color = '#e05252';
+        } finally { t.disabled = false; }
+      };
+    }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load evals.</p>'; });
   }
 
   function renderAbout() {
