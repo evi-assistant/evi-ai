@@ -34,6 +34,7 @@ HOOKS_CONFIG_PATH = HOME / "hooks.toml"
 KEYBINDINGS_PATH = HOME / "keybindings.toml"
 MARKETPLACE_PATH = HOME / "marketplace.json"
 PEERS_PATH = HOME / "peers.json"
+USERS_PATH = HOME / "users.json"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 DREAM_LOG_DIR = LOG_DIR / "dreams"
 SCREENSHOT_DIR = HOME / "screenshots"
@@ -173,9 +174,15 @@ class WebSettings:
     src and streaming endpoints that can't carry custom headers).
 
     Generate a token with `evi web token rotate`.
+
+    `multi_user` (opt-in) lets a trusted small team each log in with their own
+    revocable token from `~/.evi/users.json` instead of sharing `auth_token`.
+    It's a shared workspace — sessions/memory are common to all authenticated
+    users; per-user data isolation is a separate, larger feature.
     """
 
     auth_token: str = ""
+    multi_user: bool = False
 
 
 @dataclass

@@ -518,8 +518,13 @@ def create_app() -> FastAPI:
     async def auth_middleware(request: Request, call_next):
         # Config is cheap to re-read (small TOML); doing it per-request
         # means `evi web token rotate` takes effect without a restart.
-        token = Config.load().web.auth_token.strip()
-        if not token:
+        from evi.users import authenticate, load_users
+
+        cfg = Config.load()
+        token = cfg.web.auth_token.strip()
+        users = load_users() if cfg.web.multi_user else []
+        # Open access only when no auth is configured at all.
+        if not token and not users:
             return await call_next(request)
         path = request.url.path
         if (
@@ -539,14 +544,29 @@ def create_app() -> FastAPI:
             provided = header[7:].strip()
         if not provided:
             provided = request.query_params.get("token", "")
-        # Constant-time compare so an attacker can't time character mismatches.
-        if provided and secrets.compare_digest(provided, token):
+
+        # Multi-user: any user token (or the owner's auth_token) authenticates.
+        if users:
+            user = authenticate(provided, users)
+            if user is not None:
+                request.state.evi_user = user.name
+                return await call_next(request)
+            if token and provided and secrets.compare_digest(provided, token):
+                request.state.evi_user = "owner"
+                return await call_next(request)
+        # Single-user: the one shared token.
+        elif provided and secrets.compare_digest(provided, token):
             return await call_next(request)
         return JSONResponse(
             {"error": "unauthorized"},
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    @app.get("/api/whoami")
+    def whoami(request: Request) -> dict[str, object]:
+        """The authenticated user's name (multi-user mode), else null."""
+        return {"user": getattr(request.state, "evi_user", None)}
 
     @app.get("/api/auth/check")
     def auth_check(request: Request) -> dict[str, object]:
@@ -556,15 +576,25 @@ def create_app() -> FastAPI:
         `Authorization` header. If auth is disabled (`auth_token=""`),
         `required=false` and the overlay never shows.
         """
-        token = Config.load().web.auth_token.strip()
-        if not token:
+        from evi.users import authenticate, load_users
+
+        cfg = Config.load()
+        token = cfg.web.auth_token.strip()
+        users = load_users() if cfg.web.multi_user else []
+        if not token and not users:
             return {"ok": True, "required": False}
         header = request.headers.get("Authorization", "")
         provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
         if not provided:
             provided = request.query_params.get("token", "")
         ok = bool(provided) and secrets.compare_digest(provided, token)
-        return {"ok": ok, "required": True}
+        user = authenticate(provided, users) if users else None
+        if user is not None:
+            ok = True
+        result: dict[str, object] = {"ok": ok, "required": True}
+        if user is not None:
+            result["user"] = user.name
+        return result
 
     def _make_permission_callback(session_id: str, loop: asyncio.AbstractEventLoop,
                                   enqueue):
