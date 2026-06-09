@@ -249,8 +249,10 @@ locally and ship once that clears.
   sessions / subagents. **L.**
 - **Phase 86 — dynamic workflows** — a small scriptable multi-agent
   orchestration format (beyond recipes + parallel research). **L.**
-- **Phase 87 — cross-device session handoff** — continue a live session from
-  another device. **M.**
+- **Phase 87 — cross-device session handoff** — **✅ shipped (local)**: `evi
+  sessions handoff` + `POST /api/session/{id}/handoff` return resume
+  affordances; the web UI opens `/?session=<id>`. Sync (`evi sync`) the
+  per-turn transcript, then resume on the other device (CLI or URL).
 - **Phase 88 — context-window visualization** — **✅ shipped (local)**: `/context`
   (`/ctx`) in the REPL and a click-the-chip popover in the web UI break tokens
   down by system / you / assistant / tools (`/api/session/{id}/context`).
