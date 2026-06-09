@@ -1409,6 +1409,88 @@ def create_app() -> FastAPI:
         )
         return evals.run_eval(suite, run_one, judge_fn=judge_fn)
 
+    @app.get("/api/routes")
+    def routes_get() -> dict[str, Any]:
+        """List multi-model routing rules (~/.evi/routes.json)."""
+        from evi.routing import RouterStore
+
+        return {"routes": [asdict(r) for r in RouterStore().load()]}
+
+    @app.post("/api/routes")
+    def routes_add(req: dict[str, Any]) -> dict[str, Any]:
+        """Add or replace a route. Keywords may be a list or a comma string."""
+        from evi.routing import Route, RouterStore
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()
+        model = str(req.get("model") or "").strip()
+        if not name or not model:
+            raise HTTPException(400, "name and model are required")
+        kws_in = req.get("keywords") or []
+        if isinstance(kws_in, str):
+            kws = [k.strip() for k in kws_in.split(",") if k.strip()]
+        elif isinstance(kws_in, list):
+            kws = [str(k).strip() for k in kws_in if str(k).strip()]
+        else:
+            kws = []
+        route = Route(name=name, model=model,
+                      description=str(req.get("description") or ""), match_keywords=kws)
+        # The UI edits in place, so default to overwrite (single-user, local).
+        RouterStore().add(route, overwrite=bool(req.get("overwrite", True)))
+        return {"ok": True, "name": name}
+
+    @app.post("/api/routes/remove")
+    def routes_remove(req: dict[str, Any]) -> dict[str, Any]:
+        """Remove a route by name."""
+        from evi.routing import RouterStore
+
+        name = str((req or {}).get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        if not RouterStore().remove(name):
+            raise HTTPException(404, f"no such route: {name}")
+        return {"ok": True}
+
+    @app.get("/api/recipes")
+    def recipes_get() -> dict[str, Any]:
+        """List saved multi-turn recipes (~/.evi/recipes/)."""
+        from evi import recipes
+
+        return {"recipes": [
+            {"name": r.name, "description": r.description,
+             "steps": [{"label": s.label, "prompt": s.prompt} for s in r.steps]}
+            for r in recipes.list_recipes()
+        ]}
+
+    @app.post("/api/recipes/run")
+    def recipes_run(req: dict[str, Any]) -> dict[str, Any]:
+        """Run a recipe's steps through one shared agent (calls the model per
+        step). Returns [{label, prompt, text, error}, …]."""
+        from evi import recipes
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        try:
+            recipe = recipes.load_recipe(name)
+        except recipes.RecipeError as exc:
+            raise HTTPException(404, str(exc))
+        cfg = Config.load()
+        toggles = asdict(cfg.tools)
+        agent = Agent(
+            client=make_client(cfg.llm),
+            config=cfg,
+            tools=get_enabled_tools(toggles),
+            memory=MemoryStore() if toggles.get("memory") else None,
+            skills=SkillStore() if toggles.get("skills") else None,
+        )
+        agent.enable_auto_all()
+        results = recipes.run_recipe_headless(agent, recipe)
+        return {"ok": True, "name": recipe.name, "steps": results}
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""

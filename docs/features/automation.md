@@ -93,6 +93,23 @@ evi recipe run <name> [--yes | -y]    # run the steps in one shared conversation
 
 `evi recipe run` streams each turn (text + tool activity) to the console. `--yes`/`-y` auto-approves every tool call for an unattended run.
 
+#### Web / Desktop — the Routes & Recipes panel
+
+The web and desktop apps expose recipes and multi-model routes together under
+**Settings → Routes & Recipes**:
+
+- **Recipes** — each saved recipe is listed with its steps; a **Run** button
+  runs the recipe headless server-side (`POST /api/recipes/run`, one shared
+  agent across steps, auto-approved) and shows each step's output inline.
+- **Routes** — add / list / remove the multi-model routing rules in
+  `~/.evi/routes.json` (`GET`/`POST /api/routes`, `POST /api/routes/remove`),
+  the same store the CLI's `evi route` commands manage. Each rule maps a set of
+  keywords to a model; the default and classifier models are set under
+  Settings → Model & Backend.
+
+Authoring still happens in TOML for recipes (`evi recipe new`), but everyday
+browsing and running no longer needs the CLI.
+
 ### Routines — `evi routine`
 
 ```text

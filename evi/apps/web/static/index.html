@@ -2258,6 +2258,7 @@ initModes();
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
     { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
+    { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2318,6 +2319,7 @@ initModes();
     if (sec.custom === 'plugins') return renderPlugins();
     if (sec.custom === 'stats') return renderStats();
     if (sec.custom === 'evals') return renderEvals();
+    if (sec.custom === 'automation') return renderAutomation();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2818,6 +2820,159 @@ initModes();
         } finally { t.disabled = false; }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load evals.</p>'; });
+  }
+
+  function renderAutomation() {
+    const box = document.createElement('div');
+    box.id = 'automation-box';
+    contentEl.appendChild(box);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const PH = 'place' + 'holder';
+    const post = async (url, body) => {
+      const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      return d;
+    };
+    const inp = (id, hint, flex) => {
+      const e = document.createElement('input');
+      e.type = 'text'; e.id = id;
+      e.setAttribute(PH, hint);
+      e.style.cssText = 'flex:' + (flex || '1') + ';min-width:0;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)';
+      return e;
+    };
+
+    // ---- Routes ----
+    const routesWrap = document.createElement('div');
+    box.appendChild(routesWrap);
+    const renderRoutes = () => {
+      routesWrap.innerHTML = '<p class="sec-blurb" style="margin-top:0">Multi-model routing</p>' +
+        '<div id="rt-status" class="sec-blurb" style="min-height:1em"></div>';
+      fetch('/api/routes').then(r => r.json()).then(d => {
+        const routes = d.routes || [];
+        const list = document.createElement('div');
+        if (!routes.length) {
+          list.innerHTML = '<p class="dim" style="font-size:12px">No routes yet — add one below.</p>';
+        } else {
+          for (const rt of routes) {
+            const row = document.createElement('div');
+            row.className = 'rt-row';
+            row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;' +
+              'border-bottom:1px solid var(--border,#2b333d)';
+            const kw = (rt.match_keywords || []).join(', ');
+            row.innerHTML = '<div style="flex:1;min-width:0">' +
+              '<div><b>' + esc(rt.name) + '</b> <span class="dim">→ ' + esc(rt.model) + '</span></div>' +
+              '<div class="dim" style="font-size:12px">' +
+              (kw ? 'keywords: ' + esc(kw) : '<i>classifier-only</i>') +
+              (rt.description ? ' · ' + esc(rt.description) : '') + '</div></div>' +
+              '<button class="set-action-btn" data-rt-remove="' + esc(rt.name) + '">Remove</button>';
+            list.appendChild(row);
+          }
+        }
+        routesWrap.appendChild(list);
+        // add form
+        const form = document.createElement('div');
+        form.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:10px';
+        const nm = inp('rt-name', 'name', '1'), md = inp('rt-model', 'model id', '1');
+        const kws = inp('rt-kw', 'keywords (comma-sep)', '1'), desc = inp('rt-desc', 'description (optional)', '2');
+        const add = document.createElement('button');
+        add.className = 'set-action-btn'; add.id = 'rt-add'; add.textContent = 'Add route';
+        form.append(nm, md, kws, desc, add);
+        routesWrap.appendChild(form);
+        add.onclick = async () => {
+          const status = document.getElementById('rt-status');
+          if (!nm.value.trim() || !md.value.trim()) {
+            status.textContent = 'name and model are required'; status.style.color = '#e05252'; return;
+          }
+          add.disabled = true;
+          try {
+            await post('/api/routes', { name: nm.value.trim(), model: md.value.trim(),
+              keywords: kws.value, description: desc.value.trim() });
+            renderRoutes();
+          } catch (e) { add.disabled = false; status.textContent = 'Error: ' + e.message; status.style.color = '#e05252'; }
+        };
+        list.onclick = async (ev) => {
+          const t = ev.target;
+          if (!(t instanceof HTMLElement)) return;
+          const rm = t.getAttribute('data-rt-remove');
+          if (!rm) return;
+          t.disabled = true;
+          try { await post('/api/routes/remove', { name: rm }); renderRoutes(); }
+          catch (e) { t.disabled = false; const s = document.getElementById('rt-status'); s.textContent = 'Error: ' + e.message; s.style.color = '#e05252'; }
+        };
+      }).catch(() => { routesWrap.innerHTML = '<p class="sec-blurb">Could not load routes.</p>'; });
+    };
+    renderRoutes();
+
+    // ---- Recipes ----
+    const recipesWrap = document.createElement('div');
+    recipesWrap.style.marginTop = '24px';
+    box.appendChild(recipesWrap);
+    recipesWrap.innerHTML = '<p class="sec-blurb">Saved recipes</p>' +
+      '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    fetch('/api/recipes').then(r => r.json()).then(d => {
+      const recipes = d.recipes || [];
+      recipesWrap.innerHTML = '<p class="sec-blurb">Saved recipes</p>';
+      if (!recipes.length) {
+        recipesWrap.innerHTML += '<p class="dim" style="font-size:12px">No recipes yet. ' +
+          'Create one with <code>evi recipe new &lt;name&gt;</code> ' +
+          '(they live in <code>~/.evi/recipes/</code>).</p>';
+        return;
+      }
+      for (const rc of recipes) {
+        const card = document.createElement('div');
+        card.className = 'recipe-card';
+        card.style.cssText = 'margin-bottom:14px;border:1px solid var(--border,#2b333d);' +
+          'border-radius:8px;padding:12px';
+        let steps = '<ol style="margin:6px 0 0;padding-left:20px">';
+        for (const s of rc.steps) {
+          steps += '<li style="font-size:12px;margin-bottom:3px">' +
+            (s.label ? '<b>' + esc(s.label) + ':</b> ' : '') +
+            '<span class="dim">' + esc(s.prompt.length > 120 ? s.prompt.slice(0, 120) + '…' : s.prompt) + '</span></li>';
+        }
+        steps += '</ol>';
+        card.innerHTML = '<div style="display:flex;align-items:center;gap:10px">' +
+          '<div style="flex:1;min-width:0"><b>' + esc(rc.name) + '</b> ' +
+          '<span class="dim" style="font-size:12px">' + rc.steps.length + ' step' +
+          (rc.steps.length === 1 ? '' : 's') + '</span>' +
+          (rc.description ? '<div class="dim" style="font-size:12px">' + esc(rc.description) + '</div>' : '') +
+          '</div><button class="set-action-btn" data-recipe-run="' + esc(rc.name) + '">Run</button></div>' +
+          '<div class="recipe-status sec-blurb" style="min-height:1em"></div>' + steps +
+          '<div class="recipe-out"></div>';
+        recipesWrap.appendChild(card);
+      }
+      recipesWrap.onclick = async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const runName = t.getAttribute('data-recipe-run');
+        if (!runName) return;
+        const card = t.closest('.recipe-card');
+        const statusEl = card.querySelector('.recipe-status');
+        const outEl = card.querySelector('.recipe-out');
+        t.disabled = true; outEl.innerHTML = '';
+        statusEl.textContent = 'Running ' + runName + '… (calls the model per step)';
+        statusEl.style.color = 'var(--dim)';
+        try {
+          const rep = await post('/api/recipes/run', { name: runName });
+          statusEl.textContent = 'Done — ' + (rep.steps || []).length + ' step(s)';
+          statusEl.style.color = '#4caf50';
+          let html = '';
+          for (const s of (rep.steps || [])) {
+            html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border,#2b333d)">' +
+              '<div style="font-size:12px"><b>' + esc(s.label || 'step') + '</b></div>' +
+              (s.error ? '<div style="font-size:12px;color:#e05252">' + esc(s.error) + '</div>'
+                : '<div style="font-size:12px;white-space:pre-wrap">' + esc(s.text || '') + '</div>') +
+              '</div>';
+          }
+          outEl.innerHTML = html;
+        } catch (e) {
+          statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = '#e05252';
+        } finally { t.disabled = false; }
+      };
+    }).catch(() => { recipesWrap.innerHTML = '<p class="sec-blurb">Could not load recipes.</p>'; });
   }
 
   function renderAbout() {
