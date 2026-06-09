@@ -77,30 +77,12 @@ def _make_fake_llm_app():
     ])
 
 
-@pytest.fixture(scope="session")
-def evi_base_url(tmp_path_factory):
+def _spawn_evi(home: Path):
+    """Start the real eVi web server as a subprocess against `home`. Returns
+    (base_url, terminate_fn). Raises if it doesn't become healthy."""
     import httpx
-    import uvicorn
 
-    home = tmp_path_factory.mktemp("evi-home")
-    fake_port = _free_port()
     evi_port = _free_port()
-
-    (home / "config.toml").write_text(
-        "[llm]\n"
-        'backend = "openai_compat"\n'
-        f'base_url = "http://127.0.0.1:{fake_port}/v1"\n'
-        'api_key = "test"\n'
-        'model = "fake"\n'
-        "[web]\n"
-        'auth_token = ""\n',
-        encoding="utf-8",
-    )
-
-    fake = uvicorn.Server(uvicorn.Config(_make_fake_llm_app(), host="127.0.0.1",
-                                         port=fake_port, log_level="error"))
-    threading.Thread(target=fake.run, daemon=True).start()
-
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "evi.apps.web.server:app",
          "--host", "127.0.0.1", "--port", str(evi_port)],
@@ -117,11 +99,91 @@ def evi_base_url(tmp_path_factory):
             time.sleep(0.3)
         else:
             raise RuntimeError("evi web server did not become healthy")
-        yield base
-    finally:
+    except Exception:
+        proc.terminate()
+        raise
+
+    def terminate() -> None:
         proc.terminate()
         try:
             proc.wait(timeout=10)
         except Exception:  # noqa: BLE001
             proc.kill()
+
+    return base, terminate
+
+
+@pytest.fixture(scope="session")
+def evi_base_url(tmp_path_factory):
+    import uvicorn
+
+    home = tmp_path_factory.mktemp("evi-home")
+    fake_port = _free_port()
+    (home / "config.toml").write_text(
+        "[llm]\n"
+        'backend = "openai_compat"\n'
+        f'base_url = "http://127.0.0.1:{fake_port}/v1"\n'
+        'api_key = "test"\n'
+        'model = "fake"\n'
+        "[web]\n"
+        'auth_token = ""\n',
+        encoding="utf-8",
+    )
+    fake = uvicorn.Server(uvicorn.Config(_make_fake_llm_app(), host="127.0.0.1",
+                                         port=fake_port, log_level="error"))
+    threading.Thread(target=fake.run, daemon=True).start()
+    base, terminate = _spawn_evi(home)
+    try:
+        yield base
+    finally:
+        terminate()
         fake.should_exit = True
+
+
+# --- real Ollama (opt-in; skips cleanly when Ollama isn't running) ---------
+
+OLLAMA_BASE = os.environ.get("EVI_TEST_OLLAMA", "http://127.0.0.1:11434")
+# Smallest-first so the real-LLM tests stay quick.
+_OLLAMA_PREFER = ("qwen2.5:1.5b", "llama3.2:3b", "qwen2.5:3b", "qwen2.5:7b")
+
+
+def _ollama_model() -> str | None:
+    try:
+        import httpx
+
+        r = httpx.get(OLLAMA_BASE + "/api/tags", timeout=2)
+        names = [m["name"] for m in r.json().get("models", [])] if r.status_code == 200 else []
+    except Exception:  # noqa: BLE001
+        return None
+    if not names:
+        return None
+    for pref in _OLLAMA_PREFER:
+        for n in names:
+            if n.startswith(pref):
+                return n
+    return names[0]
+
+
+@pytest.fixture(scope="session")
+def evi_ollama_url(tmp_path_factory):
+    """Real eVi server pointed at a local Ollama — so a chat turn is a genuine
+    model response. Skips if Ollama isn't reachable / has no models."""
+    model = _ollama_model()
+    if not model:
+        pytest.skip("Ollama not reachable or has no models — skipping real-LLM e2e")
+    home = tmp_path_factory.mktemp("evi-ollama-home")
+    (home / "config.toml").write_text(
+        "[llm]\n"
+        'backend = "openai_compat"\n'
+        f'base_url = "{OLLAMA_BASE}/v1"\n'
+        'api_key = "ollama"\n'
+        f'model = "{model}"\n'
+        "[web]\n"
+        'auth_token = ""\n',
+        encoding="utf-8",
+    )
+    base, terminate = _spawn_evi(home)
+    try:
+        yield base
+    finally:
+        terminate()
