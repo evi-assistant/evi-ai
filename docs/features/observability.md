@@ -103,6 +103,8 @@ evi stats [--days N] [--json]
 
 The human-readable output shows session/message counts, an approximate token total (in thousands), the date span, the role breakdown, the top 8 tools, and the busiest days. If there are no transcripts it prints a hint that `tools.transcripts` may be off.
 
+The same numbers are available in the web/desktop app under **Settings → Usage** (backed by `GET /api/stats?days=N`), with **All / 30d / 7d** range buttons and the role/tool/busy-day breakdowns shown as chips.
+
 ### OpenTelemetry — automatic once enabled
 
 There is no separate command. Once `traces`/`metrics` are enabled, an `otlp_endpoint` is set, and the `[otel]` extra is installed, eVi instruments tool calls automatically every time you run a chat (CLI or web). Spans and metrics flow to your collector in the background.

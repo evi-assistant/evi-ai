@@ -151,6 +151,20 @@ def test_plugins_browser(page: Page, evi_base_url: str, tmp_path):
     )
 
 
+def test_usage_stats_panel(page: Page, evi_base_url: str):
+    """Settings → Usage renders the stats panel with range buttons. The e2e home
+    has no transcripts, so it shows the empty-state message gracefully."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('stats')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#stats-box")).to_be_visible(timeout=10000)
+    # the range selector offers All / 30d / 7d
+    expect(page.locator("#stats-box button", has_text="All")).to_be_visible()
+    expect(page.locator("#stats-box button", has_text="7d")).to_be_visible()
+    # body resolves to either the summary rows or the no-transcripts message
+    expect(page.locator("#stats-body")).to_be_visible(timeout=10000)
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -164,6 +178,7 @@ def test_plugins_browser(page: Page, evi_base_url: str, tmp_path):
         ("voice", "Voice"),
         ("guardrails", "Guardrails"),
         ("plugins", "Plugins"),
+        ("stats", "Usage"),
         ("about", "About"),
     ],
 )

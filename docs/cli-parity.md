@@ -19,7 +19,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
 | `peer` | federation peers | ⌨️ | ⌨️ | `~/.evi/peers.json`; `/api/federate` serves |
 | `link` | make `evi://` deep links | n/a | ✅ scheme handler | desktop opens the links |
-| `stats` | local usage analytics | ➕ | ➕ | could add a stats view |
+| `stats` | local usage analytics | ✅ settings → Usage | ✅ | sessions/messages/tokens, roles, top tools, busy days |
 | `sessions` | list/resume/fork/handoff | ✅ tabs/history; handoff API | ✅ | resume via `/?session=` |
 | `recipe` | saved multi-turn flows | ➕ | ➕ | run via `routine` webhook today |
 | `routine` | webhook → recipe | ◐ `/api/routine/{token}` | ◐ | inbound trigger |
@@ -68,8 +68,8 @@ Several commands are **CLI-only by design** — they're machine admin (`sync`,
 those adds surface without value.
 
 The **gaps worth filling** (➕) — a web/desktop face for things a non-CLI user
-might want. Two are now shipped: the **guardrails editor** (settings →
-Guardrails) and the **plugin browser/installer** (settings → Plugins). The
-remaining ones are an **evals results** panel, a **stats** view, and
-**recipe/route** management. These are tracked in [roadmap.md](roadmap.md) under
-"surface parity".
+might want. Three are now shipped: the **guardrails editor** (settings →
+Guardrails), the **plugin browser/installer** (settings → Plugins), and the
+**usage/stats view** (settings → Usage). The remaining ones are an **evals
+results** panel and **recipe/route** management. These are tracked in
+[roadmap.md](roadmap.md) under "surface parity".

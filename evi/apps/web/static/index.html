@@ -2256,6 +2256,7 @@ initModes();
     ]},
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
+    { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2314,6 +2315,7 @@ initModes();
     if (sec.custom === 'about') return renderAbout();
     if (sec.custom === 'guardrails') return renderGuardrails();
     if (sec.custom === 'plugins') return renderPlugins();
+    if (sec.custom === 'stats') return renderStats();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2665,6 +2667,67 @@ initModes();
         }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load plugins.</p>'; });
+  }
+
+  function renderStats() {
+    const box = document.createElement('div');
+    box.id = 'stats-box';
+    contentEl.appendChild(box);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    // range selector
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:12px';
+    bar.innerHTML = '<span class="dim" style="font-size:12px">Range:</span>';
+    const body = document.createElement('div');
+    body.id = 'stats-body';
+    box.appendChild(bar); box.appendChild(body);
+    const fmtTs = (ts) => { try { return new Date(ts * 1000).toLocaleDateString(); } catch (e) { return ''; } };
+    const load = (days) => {
+      body.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+      fetch('/api/stats?days=' + days).then(r => r.json()).then(d => {
+        if (!d.sessions) {
+          body.innerHTML = '<p class="sec-blurb">No transcripts yet ' +
+            '(enable <code>tools.transcripts</code> to record sessions).</p>';
+          return;
+        }
+        const span = (d.first_ts && d.last_ts) ? (fmtTs(d.first_ts) + ' – ' + fmtTs(d.last_ts)) : '';
+        let html = '<div class="set-about-row"><span class="k">Sessions</span><span>' + d.sessions + '</span></div>' +
+          '<div class="set-about-row"><span class="k">Messages</span><span>' + d.messages + '</span></div>' +
+          '<div class="set-about-row"><span class="k">Approx. tokens</span><span>~' +
+          Math.round((d.approx_tokens || 0) / 1000) + 'k</span></div>';
+        if (span) html += '<div class="set-about-row"><span class="k">Span</span><span>' + esc(span) + '</span></div>';
+        const kvList = (title, obj, n) => {
+          const items = Object.entries(obj || {}).slice(0, n || 99);
+          if (!items.length) return '';
+          return '<p class="sec-blurb" style="margin-top:14px;margin-bottom:4px">' + title + '</p>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+            items.map(([k, v]) => '<span style="font-size:12px;padding:3px 8px;border-radius:10px;' +
+              'background:var(--panel,#1a2027);border:1px solid var(--border,#2b333d)">' +
+              esc(k) + ' <b>' + v + '</b></span>').join('') + '</div>';
+        };
+        html += kvList('Roles', d.roles);
+        html += kvList('Top tools', d.tools, 10);
+        html += kvList('Busiest days', d.busiest_days, 7);
+        body.innerHTML = html;
+      }).catch(() => { body.innerHTML = '<p class="sec-blurb">Could not load stats.</p>'; });
+    };
+    const ranges = [['All', 0], ['30d', 30], ['7d', 7]];
+    let active = 0;
+    ranges.forEach(([label, days]) => {
+      const b = document.createElement('button');
+      b.className = 'set-action-btn'; b.textContent = label;
+      b.style.padding = '3px 10px';
+      if (days === active) b.style.outline = '2px solid var(--accent,#4a9eff)';
+      b.onclick = () => {
+        active = days;
+        bar.querySelectorAll('button').forEach(x => { x.style.outline = ''; });
+        b.style.outline = '2px solid var(--accent,#4a9eff)';
+        load(days);
+      };
+      bar.appendChild(b);
+    });
+    load(0);
   }
 
   function renderAbout() {
