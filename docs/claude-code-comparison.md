@@ -146,9 +146,10 @@ breakdown, **89** OpenTelemetry, **90** fine-tune export, **91** voice engines
 (coqui/f5/piper), **92** CodeQL + gitleaks, **93** Docker→GHCR, **94** sigstore
 signing.
 
-With Phases 85 (agent dispatch view) + 86 (dynamic-workflows DSL) now done too,
-the whole roadmap 79–94 batch is shipped (local). Still open (lighter / later):
-subagent profiles in plugins, deep links, a plugin marketplace index. See
-[roadmap.md](roadmap.md). Explicitly **not** planned: cloud/enterprise backends,
-IDE extensions, mobile, agentic browser, cost/analytics dashboards, public
-Agent SDK.
+The whole roadmap 79–94 batch is shipped (local), and the last lighter/later
+items too: **subagent profiles in plugins** (`agents.toml` + the `delegate`
+tool / `evi agents`), **`evi://` deep links** (`evi/deeplinks.py` + Tauri scheme
++ `evi link`), and a **plugin marketplace index** (`evi/marketplace.py` + `evi
+plugin search/install/index`). Explicitly **not** planned: cloud/enterprise
+backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
+public Agent SDK.

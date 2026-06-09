@@ -268,8 +268,13 @@ locally and ship once that clears.
   spans around tool calls + tool counters/durations via OTLP. No-op unless the
   `[otel]` extra is installed and an endpoint is set; `evi/otel.py` wraps
   `_dispatch_run`. Configurable in Settings → General (telemetry).
-- Smaller: long-context awareness in the model registry · `/recent` REPL history
-  · deep links (`evi://`).
+- **Lighter/later items** — **✅ shipped (local)**: subagent profiles in plugins
+  (`agents.toml` + the `delegate` tool / `evi agents`) · `evi://` deep links
+  (`evi/deeplinks.py`, Tauri `evi` scheme, `evi link`) · plugin marketplace index
+  (`evi/marketplace.py`, `evi plugin search/install/index`, `[plugins]
+  index_urls`).
+- Still smaller / unscheduled: long-context awareness in the model registry ·
+  `/recent` REPL history.
 
 ### Previously-deferred, now planned
 

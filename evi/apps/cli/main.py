@@ -2747,6 +2747,99 @@ def plugin_remove(name: str) -> None:
     console.print(f"[yellow]removed[/yellow] {name}")
 
 
+def _load_marketplace():
+    from evi import marketplace
+    from evi.config import Config
+
+    urls = Config.load().plugins.index_urls
+    return marketplace, marketplace.load_index(index_urls=urls)
+
+
+@plugin_app.command("search")
+def plugin_search(query: str = typer.Argument("", help="Filter by name/desc/tag.")) -> None:
+    """Search the plugin marketplace index (~/.evi/marketplace.json + index_urls)."""
+    marketplace, entries = _load_marketplace()
+    hits = marketplace.search(query, entries)
+    if not hits:
+        console.print(
+            "[dim]no matches.[/dim] add an index entry with "
+            "[cyan]evi plugin index add <name> <source>[/cyan] "
+            "or set [cyan]index_urls[/cyan][dim] under the plugins config[/dim]"
+        )
+        return
+    for e in hits:
+        tags = f" [dim]#{' #'.join(e.tags)}[/dim]" if e.tags else ""
+        by = f" [dim]· {e.author}[/dim]" if e.author else ""
+        console.print(f"  [bold]{e.name}[/bold]{by}{tags}")
+        if e.description:
+            console.print(f"    [dim]{e.description}[/dim]")
+        console.print(f"    [dim]{e.source}[/dim]")
+
+
+@plugin_app.command("install")
+def plugin_install(name: str) -> None:
+    """Install a plugin by name, resolved through the marketplace index."""
+    from evi import plugins
+
+    marketplace, entries = _load_marketplace()
+    entry = marketplace.resolve(name, entries)
+    if entry is None:
+        console.print(
+            f"[red]no plugin named[/red] {name} [dim]in the index "
+            "(try `evi plugin search`)[/dim]"
+        )
+        raise typer.Exit(1)
+    try:
+        installed = plugins.install(entry.source)
+    except plugins.PluginError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]installed[/green] {installed} [dim](from {entry.source})[/dim]"
+    )
+
+
+plugin_index_app = typer.Typer(help="Manage the local plugin index (marketplace.json).")
+plugin_app.add_typer(plugin_index_app, name="index")
+
+
+@plugin_index_app.command("init")
+def plugin_index_init(
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace if it exists.")
+) -> None:
+    """Write a starter ~/.evi/marketplace.json."""
+    from evi import marketplace
+
+    try:
+        path = marketplace.create_index(overwrite=overwrite)
+    except marketplace.MarketplaceError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]created[/green] {path}")
+
+
+@plugin_index_app.command("add")
+def plugin_index_add(
+    name: str,
+    source: str = typer.Argument(..., help="A directory path or git URL."),
+    description: str = typer.Option("", "--desc", help="Short description."),
+    author: str = typer.Option("", "--author", help="Author."),
+    tags: str = typer.Option("", "--tags", help="Comma-separated tags."),
+) -> None:
+    """Add (or replace) an entry in the local plugin index."""
+    from evi import marketplace
+
+    entry = marketplace.MarketplaceEntry(
+        name=name,
+        source=source,
+        description=description,
+        author=author,
+        tags=[t.strip() for t in tags.split(",") if t.strip()],
+    )
+    marketplace.add_entry(entry)
+    console.print(f"[green]indexed[/green] {name} [dim]-> {source}[/dim]")
+
+
 @app.command()
 def rewind(
     seq: int = typer.Argument(

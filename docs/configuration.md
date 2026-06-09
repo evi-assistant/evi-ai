@@ -258,6 +258,42 @@ prompt = "Synthesize a balanced take.\nUpsides:\n{pros}\nDownsides:\n{cons}"
 runs it (`--json` for machine output). The desktop **🗂 Dispatch** panel lists
 and launches workflows and shows every live session.
 
+## Plugins — `~/.evi/plugins/<name>/` + marketplace
+
+A plugin bundles any of: `commands/`, `skills/`, `hooks.toml`, `mcp.json`, and
+`agents.toml` (subagent profiles, used via the `delegate` tool — see
+`evi agents`). Install from a directory or git URL with `evi plugin add`, or by
+name from the marketplace index:
+
+```json
+// ~/.evi/marketplace.json
+{
+  "plugins": [
+    { "name": "git-helpers",
+      "source": "https://github.com/you/evi-git-helpers.git",
+      "description": "Handy git slash commands",
+      "tags": ["git"] }
+  ]
+}
+```
+
+```toml
+# config.toml — extra remote index files merged with the local one
+[plugins]
+index_urls = ["https://example.com/evi-plugins.json"]
+```
+
+`evi plugin search [query]` lists matches; `evi plugin install <name>` resolves
+the name through the index and installs its `source`. `evi plugin index init` /
+`evi plugin index add <name> <source>` manage the local index.
+
+## Deep links — `evi://`
+
+The desktop app registers the `evi://` URL scheme. `evi://session/<id>` focuses
+a session, `evi://workflow/<name>` opens the dispatch panel, `evi://new` starts a
+chat. `evi link [id|new]` prints a link; `evi link --open <url>` shows where it
+routes. The same targets work in a browser via `/?session=` and `/?workflow=`.
+
 ## MCP — `~/.evi/mcp.json`
 
 ```json
