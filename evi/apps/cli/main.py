@@ -2432,6 +2432,88 @@ def link_cmd(
     console.print(deeplinks.build_link("session", sid))
 
 
+eval_app = typer.Typer(help="Evals — regression-test prompts/skills/models against assertions.")
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command("list")
+def eval_list() -> None:
+    """List eval suites (~/.evi/evals/)."""
+    from evi import evals
+
+    items = evals.list_suites()
+    if not items:
+        console.print("[dim]no suites.[/dim] create one with [cyan]evi eval new <name>[/cyan]")
+        return
+    for s in items:
+        desc = f" — {s.description}" if s.description else ""
+        console.print(f"  [bold]{s.name}[/bold] [dim]({len(s.cases)} cases)[/dim]{desc}")
+
+
+@eval_app.command("new")
+def eval_new(
+    name: str,
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace if it exists."),
+) -> None:
+    """Write a starter eval suite."""
+    from evi import evals
+
+    try:
+        path = evals.create_suite(name, overwrite=overwrite)
+    except evals.EvalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]created[/green] {path}")
+
+
+@eval_app.command("run")
+def eval_run(
+    name: str,
+    mode: str = typer.Option("", "--mode", "-m", help="Default tool preset for cases."),
+    json_out: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
+) -> None:
+    """Run an eval suite and report the pass-rate. Exit code is non-zero if any
+    case fails (so it gates CI)."""
+    from evi import evals
+    from evi.headless import run_headless
+    from evi.modes import mode_tools
+
+    try:
+        suite = evals.load_suite(name)
+    except evals.EvalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    def run_one(case) -> str:
+        agent = _build_agent()
+        m = case.mode or mode
+        if m:
+            agent.tools = {t.name: t for t in mode_tools(m)}
+        agent.enable_auto_all()
+        res = run_headless(agent, case.prompt)
+        return res.text or (f"ERROR: {res.error}" if res.error else "")
+
+    report = evals.run_eval(suite, run_one)
+    if json_out:
+        import json as _json
+
+        print(_json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        for c in report["cases"]:
+            mark = "[green]PASS[/green]" if c["passed"] else "[red]FAIL[/red]"
+            console.print(f"  {mark} [bold]{c['name']}[/bold]")
+            for f in c["failures"]:
+                console.print(f"       [dim]{f}[/dim]")
+        pct = round(report["pass_rate"] * 100)
+        color = "green" if report["passed"] == report["total"] else "yellow"
+        console.print(
+            f"\n[{color}]{report['passed']}/{report['total']} passed "
+            f"({pct}%)[/{color}] — [bold]{report['name']}[/bold]"
+        )
+    if report["passed"] < report["total"]:
+        raise typer.Exit(1)
+
+
 @app.command("agents")
 def agents_cmd() -> None:
     """List subagent profiles (built-in + plugin) usable via the `delegate` tool."""
