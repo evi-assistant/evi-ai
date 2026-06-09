@@ -2635,6 +2635,69 @@ def run(
     print(res.text)
 
 
+@app.command()
+def batch(
+    input_file: str = typer.Argument(..., help="Prompts file (.jsonl/.json or one-per-line)."),
+    out: str = typer.Option("", "--out", "-o", help="Write JSONL results here (default: stdout)."),
+    parallel: int = typer.Option(1, "--parallel", "-j", help="Run N prompts concurrently."),
+    mode: str = typer.Option("", "--mode", "-m", help="Default tool preset for items without one."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-approve all tool calls."),
+) -> None:
+    """Headless batch: run every prompt in a file, one JSON result per line.
+
+    Each item gets its own agent (per-item `mode`/`schema` override the flags).
+    Local analog of a Batch API — good for evals, bulk extraction, translations.
+    """
+    import sys as _sys
+
+    from evi import batch as _batch
+    from evi.headless import run_headless
+    from evi.modes import mode_tools
+    from evi.structured import as_response_format, load_schema
+
+    try:
+        items = _batch.parse_batch_file(input_file)
+    except _batch.BatchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    if not items:
+        console.print("[dim]no prompts in input[/dim]")
+        raise typer.Exit(1)
+
+    def run_one(item: dict) -> dict:
+        agent = _build_agent()
+        m = str(item.get("mode") or mode)
+        if m:
+            agent.tools = {t.name: t for t in mode_tools(m)}
+        if yes:
+            agent.enable_auto_all()
+        else:
+            agent.permission_callback = lambda *a, **k: False
+            agent.permission_batch_callback = None
+        rf = None
+        if item.get("schema"):
+            rf = as_response_format(load_schema(str(item["schema"])))
+        res = run_headless(agent, str(item["prompt"]), response_format=rf)
+        return {
+            "id": item.get("id"),
+            "prompt": item["prompt"],
+            "text": res.text,
+            "error": res.error,
+            "usage": res.usage,
+        }
+
+    results = _batch.run_batch(items, run_one, parallel=max(1, parallel))
+    payload = _batch.to_jsonl(results)
+    if out:
+        from pathlib import Path as _Path
+
+        _Path(out).write_text(payload + "\n", encoding="utf-8")
+        ok = sum(1 for r in results if not r.get("error"))
+        console.print(f"[green]wrote[/green] {len(results)} results ({ok} ok) -> [cyan]{out}[/cyan]")
+    else:
+        print(payload, file=_sys.stdout)
+
+
 style_app = typer.Typer(help="Output styles — switchable response personas.")
 app.add_typer(style_app, name="style")
 
