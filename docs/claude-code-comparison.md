@@ -146,8 +146,9 @@ breakdown, **89** OpenTelemetry, **90** fine-tune export, **91** voice engines
 (coqui/f5/piper), **92** CodeQL + gitleaks, **93** Docker→GHCR, **94** sigstore
 signing.
 
-Still open (lighter / later): subagent profiles in plugins, deep links, a plugin
-marketplace index, an agent dispatch view, a dynamic-workflows DSL (Phase 85/86).
-See [roadmap.md](roadmap.md). Explicitly **not** planned: cloud/enterprise
-backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
-public Agent SDK.
+With Phases 85 (agent dispatch view) + 86 (dynamic-workflows DSL) now done too,
+the whole roadmap 79–94 batch is shipped (local). Still open (lighter / later):
+subagent profiles in plugins, deep links, a plugin marketplace index. See
+[roadmap.md](roadmap.md). Explicitly **not** planned: cloud/enterprise backends,
+IDE extensions, mobile, agentic browser, cost/analytics dashboards, public
+Agent SDK.

@@ -215,6 +215,49 @@ falls back to a clear error if the deps/binaries aren't present. `evi voice
 engines` shows which are installed and which is active; switch the engine in the
 desktop **Settings → Voice** screen or by editing `[voice]`.
 
+## Workflows — `~/.evi/workflows/<name>.toml`
+
+Where a recipe is a sequence of turns through one conversation, a **workflow**
+orchestrates independent steps — each its own headless agent — with parallel
+fan-out and variable interpolation.
+
+```toml
+name = "research"
+description = "Plan, research two angles in parallel, then synthesize."
+
+[vars]
+topic = "local-first AI"
+
+[[steps]]
+id = "plan"
+prompt = "Outline an approach to research {topic}."
+
+[[steps]]
+id = "pros"
+parallel = true
+prompt = "List the upsides of {topic} given this plan:\n{plan}"
+
+[[steps]]
+id = "cons"
+parallel = true
+prompt = "List the downsides of {topic} given this plan:\n{plan}"
+
+[[steps]]
+id = "synth"
+prompt = "Synthesize a balanced take.\nUpsides:\n{pros}\nDownsides:\n{cons}"
+```
+
+- Steps run in file order; a contiguous run of `parallel = true` steps runs
+  concurrently. A following sequential step is the natural fan-in point.
+- Prompts interpolate workflow `[vars]` and earlier step outputs by id —
+  `{topic}`, `{plan}`, … (escape literal braces as `{{` / `}}`).
+- Each step is an unattended (auto-approved) headless agent; set `mode` on a
+  step for a tool preset (`chat`/`cowork`/`code`).
+
+`evi workflow new <name>` scaffolds one; `evi workflow run <name> --var topic=…`
+runs it (`--json` for machine output). The desktop **🗂 Dispatch** panel lists
+and launches workflows and shows every live session.
+
 ## MCP — `~/.evi/mcp.json`
 
 ```json

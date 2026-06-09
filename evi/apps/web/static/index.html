@@ -329,6 +329,23 @@
   .ctx-row .ctx-bar i { display: block; height: 100%; background: var(--accent, #4aa3df); }
   .ctx-row .ctx-val { width: 64px; text-align: right; color: var(--dim); }
 
+  /* Dispatch view (Phase 85) */
+  .dispatch-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5);
+    display: flex; align-items: flex-start; justify-content: center; }
+  .dispatch-panel { margin-top: 6vh; width: min(720px, 94vw); max-height: 84vh; overflow: auto;
+    background: var(--panel, #1a2027); border: 1px solid var(--border, #2b333d);
+    border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.5); padding: 16px 18px; }
+  .dispatch-panel h2 { margin: 0 0 4px; font-size: 16px; }
+  .dispatch-panel h3 { margin: 16px 0 6px; font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+  .dispatch-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 4px 0;
+    border: 1px solid var(--border, #2b333d); border-radius: 8px; }
+  .dispatch-row .grow { flex: 1; min-width: 0; }
+  .dispatch-row .d-title { font-weight: 600; }
+  .dispatch-row .d-sub { color: var(--dim); font-size: 12px; }
+  .dispatch-row button { white-space: nowrap; }
+  .dispatch-empty { color: var(--dim); font-size: 13px; padding: 6px 2px; }
+  .dispatch-close { float: right; }
+
   /* Responsive / mobile */
   @media (max-width: 640px) {
     header { padding: 8px 12px; gap: 8px; }
@@ -535,6 +552,7 @@
   <span class="chip" id="chip-plan" style="display:none">plan</span>
   <span class="chip" id="chip-auto" style="display:none">auto</span>
   <button id="speak-btn" type="button" title="Auto-speak replies (sentence-by-sentence TTS)">🔇</button>
+  <button id="dispatch-btn" type="button" title="Dispatch — sessions & workflows" style="margin-left:8px">🗂</button>
   <button id="settings-btn" type="button" title="Settings (Ctrl+,)" style="margin-left:8px">⚙</button>
   <button id="reset" type="button" style="margin-left:8px">Reset</button>
 </header>
@@ -2478,6 +2496,76 @@ initModes();
   document.getElementById('settings-cancel').addEventListener('click', closeSettings);
   saveBtn.addEventListener('click', save);
   overlay.addEventListener('click', e => { if (e.target === overlay) closeSettings(); });
+
+  // ---- dispatch view (Phase 85) --------------------------------------
+  function openSessionById(id) {
+    let i = tabs.findIndex(t => t.id === id);
+    if (i < 0) { tabs.push({ id, label: id.slice(0, 8) }); i = tabs.length - 1; renderTabs(); }
+    if (i !== activeIdx) switchTab(i);
+  }
+  const _k = n => n >= 1000 ? Math.round(n / 1000) + 'k' : '' + n;
+  async function openDispatch() {
+    let data;
+    try {
+      const r = await fetch('/api/dispatch');
+      if (!r.ok) return;
+      data = await r.json();
+    } catch { return; }
+    const ov = document.createElement('div');
+    ov.className = 'dispatch-overlay';
+    const sessRows = (data.sessions || []).map(s => {
+      const ctx = s.ceiling ? ` · ${_k(s.used)}/${_k(s.ceiling)} ctx` : '';
+      const pend = s.pending ? ` · ${s.pending} pending` : '';
+      const chan = s.channels ? ` · ${s.channels} channel` : '';
+      const label = (tabs.find(t => t.id === s.id) || {}).label || s.id.slice(0, 8);
+      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${escapeHtml(label)}</div>`
+        + `<div class="d-sub">${escapeHtml(s.mode)} · ${s.messages} msgs${ctx}${pend}${chan}</div></div>`
+        + `<button data-open="${escapeHtml(s.id)}">Open</button></div>`;
+    }).join('') || '<div class="dispatch-empty">No active sessions.</div>';
+    const wfRows = (data.workflows || []).map(w => {
+      const par = w.parallel ? `, ${w.parallel} parallel` : '';
+      const desc = w.description ? ' · ' + escapeHtml(w.description) : '';
+      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${escapeHtml(w.name)}</div>`
+        + `<div class="d-sub">${w.steps} steps${par}${desc}</div></div>`
+        + `<button data-run="${escapeHtml(w.name)}">Run</button></div>`;
+    }).join('') || '<div class="dispatch-empty">No workflows — create one with <code>evi workflow new</code>.</div>';
+    ov.innerHTML = `<div class="dispatch-panel"><button class="dispatch-close" data-close>✕</button>`
+      + `<h2>Dispatch</h2><div class="d-sub">Active sessions and runnable workflows.</div>`
+      + `<h3>Sessions (${(data.sessions || []).length})</h3>${sessRows}`
+      + `<h3>Workflows</h3>${wfRows}`
+      + `<div id="dispatch-result"></div></div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('click', async (e) => {
+      if (e.target === ov || e.target.hasAttribute('data-close')) { ov.remove(); return; }
+      const openId = e.target.getAttribute('data-open');
+      if (openId) { ov.remove(); openSessionById(openId); return; }
+      const runName = e.target.getAttribute('data-run');
+      if (runName) {
+        e.target.disabled = true; e.target.textContent = 'Running…';
+        const out = document.getElementById('dispatch-result');
+        out.innerHTML = `<h3>Running ${escapeHtml(runName)}…</h3>`;
+        try {
+          const r = await fetch(`/api/dispatch/workflow/${encodeURIComponent(runName)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          const d = await r.json();
+          if (!r.ok) {
+            out.innerHTML = `<div class="dispatch-empty">error: ${escapeHtml(d.detail || 'failed')}</div>`;
+          } else {
+            out.innerHTML = `<h3>${escapeHtml(runName)} — result</h3>` +
+              Object.entries(d.outputs || {}).map(([id, v]) =>
+                `<div class="dispatch-row"><div class="grow"><div class="d-title">${escapeHtml(id)}</div>`
+                + `<div class="d-sub" style="white-space:pre-wrap">${escapeHtml(String(v).slice(0, 2000))}</div></div></div>`
+              ).join('');
+          }
+        } catch (err) {
+          out.innerHTML = `<div class="dispatch-empty">error: ${escapeHtml(String(err))}</div>`;
+        }
+        e.target.disabled = false; e.target.textContent = 'Run';
+      }
+    });
+  }
+  document.getElementById('dispatch-btn').addEventListener('click', openDispatch);
 
   // ---- in-app documentation ------------------------------------------
   let docsPages = [];

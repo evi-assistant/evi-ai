@@ -951,6 +951,80 @@ def create_app() -> FastAPI:
             )
         return {"ok": True, **info}
 
+    @app.get("/api/dispatch")
+    def dispatch_snapshot() -> dict[str, Any]:
+        """Dashboard data (Phase 85): every live session + its state, plus the
+        workflows you can launch. Powers the dispatch view for managing many
+        concurrent sessions at once."""
+        from evi import workflows as _wf
+
+        sess_list = []
+        for sid, s in sessions.items():
+            try:
+                used, ceiling = s.agent.token_usage()
+            except Exception:
+                used, ceiling = 0, 0
+            sess_list.append(
+                {
+                    "id": sid,
+                    "mode": s.mode,
+                    "messages": len(getattr(s.agent, "history", [])),
+                    "used": used,
+                    "ceiling": ceiling,
+                    "pending": len(s.pending),
+                    "channels": len(s.channel_log),
+                }
+            )
+        wfs = [
+            {
+                "name": w.name,
+                "description": w.description,
+                "steps": len(w.steps),
+                "parallel": sum(1 for st in w.steps if st.parallel),
+            }
+            for w in _wf.list_workflows()
+        ]
+        return {"sessions": sess_list, "workflows": wfs}
+
+    @app.post("/api/dispatch/workflow/{name}")
+    def dispatch_run_workflow(name: str, req: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run a workflow headless, server-side (each step its own auto-approved
+        agent; parallel blocks concurrent). Returns {step_id: output}."""
+        from evi import workflows as _wf
+        from evi.headless import run_headless
+        from evi.modes import mode_tools
+
+        try:
+            wf = _wf.load_workflow(name)
+        except _wf.WorkflowError as exc:
+            raise HTTPException(404, str(exc))
+
+        variables: dict[str, str] = {}
+        if isinstance(req, dict) and isinstance(req.get("vars"), dict):
+            variables = {str(k): str(v) for k, v in req["vars"].items()}
+
+        def run_step(prompt: str, step) -> str:
+            cfg = Config.load()
+            toggles = asdict(cfg.tools)
+            agent = Agent(
+                client=make_client(cfg.llm),
+                config=cfg,
+                tools=get_enabled_tools(toggles),
+                memory=MemoryStore() if toggles.get("memory") else None,
+                skills=SkillStore() if toggles.get("skills") else None,
+            )
+            if step.mode:
+                agent.tools = {t.name: t for t in mode_tools(step.mode)}
+            agent.enable_auto_all()
+            res = run_headless(agent, prompt)
+            return res.text or (f"ERROR: {res.error}" if res.error else "")
+
+        try:
+            outputs = _wf.run_workflow(wf, run_step=run_step, variables=variables)
+        except _wf.WorkflowError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "outputs": outputs}
+
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
         """Snapshot for the picker UI: available models + current settings."""
