@@ -25,7 +25,8 @@ class ScheduledTask:
     id: str
     name: str
     cron: str                 # crontab-style: "min hour dom month dow"
-    prompt: str
+    prompt: str               # for kind="eval", this is the eval suite name
+    kind: str = "prompt"      # "prompt" | "eval"
     enabled: bool = True
     created_at: float = field(default_factory=time.time)
     last_run: float | None = None
@@ -41,6 +42,7 @@ class ScheduledTask:
             name=str(data.get("name", data["id"])),
             cron=str(data["cron"]),
             prompt=str(data["prompt"]),
+            kind=str(data.get("kind", "prompt")),
             enabled=bool(data.get("enabled", True)),
             created_at=float(data.get("created_at", time.time())),
             last_run=data.get("last_run"),
@@ -65,6 +67,7 @@ class TaskStore:
         name: str,
         cron: str,
         prompt: str,
+        kind: str = "prompt",
         enabled: bool = True,
     ) -> ScheduledTask:
         if not name or not cron or not prompt:
@@ -74,6 +77,7 @@ class TaskStore:
             name=name,
             cron=cron,
             prompt=prompt,
+            kind=kind,
             enabled=enabled,
         )
         self._write(task)

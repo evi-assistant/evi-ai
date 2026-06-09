@@ -135,9 +135,12 @@ def _execute(task: ScheduledTask, store: TaskStore) -> str:
     config = Config.load()
     log_path = SCHEDULED_LOG_DIR / _log_name(task)
     try:
-        text = _run_agent_once(task, config)
+        if task.kind == "eval":
+            text, status = _run_eval_once(task, config)
+        else:
+            text, status = _run_agent_once(task, config), "ok"
         log_path.write_text(text, encoding="utf-8")
-        store.record_run(task.id, status="ok")
+        store.record_run(task.id, status=status)
         return str(log_path)
     except Exception as exc:
         msg = f"ERROR: {type(exc).__name__}: {exc}"
@@ -200,6 +203,49 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> str:
     if trace:
         tail = "\n\n## trace\n\n" + "\n".join(trace)
     return header + body + tail + "\n"
+
+
+def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
+    """Run an eval suite (task.prompt = suite name). Returns (log_text, status)
+    where status is "ok (P/T)" when all pass, else "fail (P/T)" — so drift shows
+    up in `evi schedule list`."""
+    from evi import evals
+    from evi.headless import run_headless
+
+    suite = evals.load_suite(task.prompt)
+
+    def run_one(case) -> str:
+        agent = Agent(client=make_client(config.llm), config=config,
+                      tools=get_enabled_tools(asdict(config.tools)))
+        agent.enable_auto_all()
+        res = run_headless(agent, case.prompt)
+        return res.text or (f"ERROR: {res.error}" if res.error else "")
+
+    def judge_fn(case, output) -> tuple[bool, str]:
+        agent = Agent(client=make_client(config.llm), config=config, tools=[])
+        prompt = (
+            "Grade the ANSWER against the RUBRIC. Reply PASS or FAIL on the first "
+            f"line, then a one-line reason.\n\nRUBRIC: {case.judge}\n\nANSWER:\n{output}"
+        )
+        res = run_headless(agent, prompt)
+        first = (res.text or "").strip().splitlines()[0] if res.text else ""
+        return first.strip().upper().startswith("PASS"), first[:200]
+
+    report = evals.run_eval(suite, run_one, judge_fn=judge_fn)
+    p, t = report["passed"], report["total"]
+    status = f"ok ({p}/{t})" if p == t else f"fail ({p}/{t})"
+    lines = [
+        f"# scheduled eval: {task.name}",
+        f"# suite: {suite.name}  ({p}/{t} passed)",
+        f"# fired_at: {datetime.now().isoformat(timespec='seconds')}",
+        "",
+    ]
+    for c in report["cases"]:
+        mark = "PASS" if c["passed"] else "FAIL"
+        lines.append(f"[{mark}] {c['name']}")
+        for f in c["failures"]:
+            lines.append(f"    {f}")
+    return "\n".join(lines) + "\n", status
 
 
 def _log_name(task: ScheduledTask) -> str:

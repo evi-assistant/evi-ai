@@ -125,6 +125,58 @@ def test_execute_writes_log_and_records_status(
     assert refetched.last_run is not None
 
 
+# ---- scheduled evals -----------------------------------------------------
+
+
+def test_kind_persists(store: TaskStore) -> None:
+    t = store.add(name="nightly", cron="0 3 * * *", prompt="smoke", kind="eval")
+    assert store.get(t.id).kind == "eval"
+
+
+def test_kind_defaults_to_prompt_for_old_files() -> None:
+    t = ScheduledTask.from_dict({"id": "x", "cron": "* * * * *", "prompt": "hi"})
+    assert t.kind == "prompt"
+
+
+def _canned_report(passed, total):
+    return {
+        "name": "smoke", "total": total, "passed": passed,
+        "pass_rate": passed / total,
+        "cases": [
+            {"name": f"c{i}", "passed": i < passed, "failures": ([] if i < passed else ["x"]),
+             "output": ""}
+            for i in range(total)
+        ],
+    }
+
+
+def test_execute_eval_all_pass(stubbed_runtime, tmp_path, monkeypatch) -> None:
+    from evi import evals
+    from evi.evals import EvalSuite
+
+    monkeypatch.setattr(evals, "load_suite", lambda name, root=None: EvalSuite(name="smoke"))
+    monkeypatch.setattr(evals, "run_eval", lambda s, r, judge_fn=None: _canned_report(2, 2))
+    store = TaskStore(root=tmp_path / "store")
+    task = store.add(name="nightly", cron="0 3 * * *", prompt="smoke", kind="eval")
+
+    body = Path(scheduler_mod._execute(task, store)).read_text("utf-8")
+    assert "scheduled eval" in body and "PASS" in body and "2/2" in body
+    assert store.get(task.id).last_status == "ok (2/2)"
+
+
+def test_execute_eval_failure_status(stubbed_runtime, tmp_path, monkeypatch) -> None:
+    from evi import evals
+    from evi.evals import EvalSuite
+
+    monkeypatch.setattr(evals, "load_suite", lambda name, root=None: EvalSuite(name="smoke"))
+    monkeypatch.setattr(evals, "run_eval", lambda s, r, judge_fn=None: _canned_report(1, 2))
+    store = TaskStore(root=tmp_path / "store")
+    task = store.add(name="nightly", cron="0 3 * * *", prompt="smoke", kind="eval")
+
+    Path(scheduler_mod._execute(task, store))
+    assert store.get(task.id).last_status == "fail (1/2)"
+
+
 def test_execute_records_error_on_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stubbed_runtime: Path
 ) -> None:

@@ -4508,13 +4508,25 @@ app.add_typer(schedule_app, name="schedule")
 def schedule_add(
     name: str = typer.Option(..., help="Human-friendly task name."),
     cron: str = typer.Option(..., help='Crontab string, e.g. "0 9 * * *".'),
-    prompt: str = typer.Option(..., help="The prompt to send to eVi."),
+    prompt: str = typer.Option(
+        "", help="The prompt to send to eVi (or, with --eval, the suite name)."
+    ),
+    eval: str = typer.Option(
+        "", "--eval", help="Run an eval suite by name on this schedule (drift watch)."
+    ),
     disabled: bool = typer.Option(False, help="Create the task in disabled state."),
 ) -> None:
-    """Save a new scheduled task."""
+    """Save a new scheduled task — a recurring prompt, or (with --eval) an eval run."""
     store = TaskStore()
-    task = store.add(name=name, cron=cron, prompt=prompt, enabled=not disabled)
-    console.print(f"[green]added[/green] {task.id} — {task.name}")
+    if eval:
+        kind, payload = "eval", eval
+    elif prompt:
+        kind, payload = "prompt", prompt
+    else:
+        console.print("[red]give either --prompt or --eval[/red]")
+        raise typer.Exit(2)
+    task = store.add(name=name, cron=cron, prompt=payload, kind=kind, enabled=not disabled)
+    console.print(f"[green]added[/green] {task.id} — {task.name} [dim]({kind})[/dim]")
 
 
 @schedule_app.command("list")
