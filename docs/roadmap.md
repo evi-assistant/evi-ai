@@ -245,10 +245,17 @@ locally and ship once that clears.
 - **Phase 84 — packaged CI action** — **✅ shipped (local)**: a composite action
   `.github/actions/evi-run` installs eVi, writes a backend config, and runs one
   `evi run` headless prompt (output `result`); `evi-run-example.yml` demos it.
-- **Phase 85 — agent dispatch view** — a dashboard to manage many concurrent
-  sessions / subagents. **L.**
-- **Phase 86 — dynamic workflows** — a small scriptable multi-agent
-  orchestration format (beyond recipes + parallel research). **L.**
+- **Phase 85 — agent dispatch view** — **✅ shipped (local)**: a 🗂 Dispatch
+  panel (and `GET /api/dispatch`) lists every live session with its state
+  (mode / messages / context / pending / channels) — click to open — plus the
+  runnable workflows; `POST /api/dispatch/workflow/{name}` launches one
+  server-side and shows the per-step output.
+- **Phase 86 — dynamic workflows** — **✅ shipped (local)**:
+  `~/.evi/workflows/<name>.toml` orchestrates multi-step, multi-agent runs —
+  each step its own headless agent, contiguous `parallel = true` steps run
+  concurrently, and prompts interpolate earlier outputs/vars via `{step_id}` /
+  `{var}`. `evi workflow new/list/show/run` (+ the dispatch panel). Engine is
+  LLM-decoupled (`run_step` callable) so it's fully tested.
 - **Phase 87 — cross-device session handoff** — **✅ shipped (local)**: `evi
   sessions handoff` + `POST /api/session/{id}/handoff` return resume
   affordances; the web UI opens `/?session=<id>`. Sync (`evi sync`) the

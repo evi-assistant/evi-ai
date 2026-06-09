@@ -2328,6 +2328,132 @@ def recipe_run(
     console.print("\n[green]recipe complete[/green]")
 
 
+workflow_app = typer.Typer(
+    help="Dynamic workflows — multi-step, parallel multi-agent orchestration."
+)
+app.add_typer(workflow_app, name="workflow")
+
+
+@workflow_app.command("list")
+def workflow_list() -> None:
+    """List saved workflows (~/.evi/workflows/)."""
+    from evi import workflows
+
+    items = workflows.list_workflows()
+    if not items:
+        console.print(
+            "[dim]no workflows.[/dim] create one with "
+            "[cyan]evi workflow new <name>[/cyan]"
+        )
+        return
+    for w in items:
+        par = sum(1 for s in w.steps if s.parallel)
+        extra = f", {par} parallel" if par else ""
+        desc = f" — {w.description}" if w.description else ""
+        console.print(f"  [bold]{w.name}[/bold] [dim]({len(w.steps)} steps{extra})[/dim]{desc}")
+
+
+@workflow_app.command("show")
+def workflow_show(name: str) -> None:
+    """Show a workflow's steps and variables."""
+    from evi import workflows
+
+    try:
+        w = workflows.load_workflow(name)
+    except workflows.WorkflowError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    desc = f" — {w.description}" if w.description else ""
+    console.print(f"[bold cyan]{w.name}[/bold cyan]{desc}")
+    if w.vars:
+        console.print("[dim]vars: " + ", ".join(f"{k}={v}" for k, v in w.vars.items()) + "[/dim]")
+    for i, s in enumerate(w.steps, 1):
+        tag = " [magenta](parallel)[/magenta]" if s.parallel else ""
+        lbl = f" · {s.label}" if s.label else ""
+        console.print(f"  [cyan]{i}. {s.id}[/cyan]{tag}{lbl}")
+        console.print(f"     [dim]{s.prompt[:120]}[/dim]")
+
+
+@workflow_app.command("new")
+def workflow_new(
+    name: str,
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace if it exists."),
+) -> None:
+    """Write a starter workflow template."""
+    from evi import workflows
+
+    try:
+        path = workflows.create_workflow(name, overwrite=overwrite)
+    except workflows.WorkflowError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]created[/green] {path}")
+
+
+@workflow_app.command("run")
+def workflow_run(
+    name: str,
+    var: list[str] = typer.Option(
+        None, "--var", help="Override a workflow var: k=v (repeatable)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Print {step: output} as JSON."),
+) -> None:
+    """Run a workflow — each step is its own headless agent; parallel blocks run
+    concurrently (tools auto-approved, since runs are unattended)."""
+    from evi import workflows
+    from evi.headless import run_headless
+    from evi.modes import mode_tools
+
+    try:
+        w = workflows.load_workflow(name)
+    except workflows.WorkflowError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    variables: dict[str, str] = {}
+    for kv in var or []:
+        if "=" not in kv:
+            console.print(f"[red]bad --var {kv!r}[/red] (expected k=v)")
+            raise typer.Exit(2)
+        k, _, v = kv.partition("=")
+        variables[k.strip()] = v
+
+    def run_step(prompt: str, step) -> str:
+        agent = _build_agent()
+        if step.mode:
+            agent.tools = {t.name: t for t in mode_tools(step.mode)}
+        agent.enable_auto_all()  # workflows are unattended
+        if not json_out:
+            tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
+            console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
+        res = run_headless(agent, prompt)
+        out = res.text or (f"ERROR: {res.error}" if res.error else "")
+        if not json_out:
+            console.print(out)
+        return out
+
+    if not json_out:
+        console.print(
+            Panel.fit(
+                Text.assemble(
+                    (f"workflow {w.name} ", "bold cyan"), (f"· {len(w.steps)} steps", "dim")
+                ),
+                border_style="cyan",
+            )
+        )
+    try:
+        outputs = workflows.run_workflow(w, run_step=run_step, variables=variables)
+    except workflows.WorkflowError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    if json_out:
+        import json as _json
+
+        print(_json.dumps(outputs, ensure_ascii=False, indent=2))
+    else:
+        console.print("\n[green]workflow complete[/green]")
+
+
 @app.command()
 def run(
     prompt: str = typer.Argument(None, help="The prompt. If omitted, read from stdin."),
