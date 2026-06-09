@@ -1832,6 +1832,12 @@ if (_wantSession) {
 if (_loaded || _wantSession) {
   rebuildHistory();
 }
+// evi://workflow/<name> → /?workflow=<name> opens the dispatch panel (Phase 85).
+(() => {
+  let wf = null;
+  try { wf = new URLSearchParams(location.search).get('workflow'); } catch {}
+  if (wf) setTimeout(() => { try { openDispatch(); } catch {} }, 400);
+})();
 // Warn up front if no LLM backend is reachable (common on a fresh desktop
 // install before LM Studio / Ollama is started).
 checkBackend();
