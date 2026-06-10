@@ -212,6 +212,30 @@ def test_import_skill_overwrite(tmp_path: Path) -> None:
     assert "v2" in (dest_root / "dup" / "SKILL.md").read_text(encoding="utf-8")
 
 
+def test_remove_skill(tmp_path: Path) -> None:
+    from evi import skills
+
+    dest_root = tmp_path / "skills"
+    src = _make_skill(tmp_path, "gone", "d", "b")
+    skills.import_skill(str(src), root=dest_root)
+    assert (dest_root / "gone").is_dir()
+    assert skills.remove("gone", root=dest_root) is True
+    assert not (dest_root / "gone").exists()
+
+
+def test_remove_skill_unknown_returns_false(tmp_path: Path) -> None:
+    from evi import skills
+
+    assert skills.remove("ghost", root=tmp_path / "skills") is False
+
+
+def test_remove_rejects_plugin_skill(tmp_path: Path) -> None:
+    from evi import skills
+
+    with pytest.raises(skills.SkillError):
+        skills.remove("someplugin:askill", root=tmp_path / "skills")
+
+
 def test_import_skill_rewrite_paths(tmp_path: Path) -> None:
     from evi import skills
 
