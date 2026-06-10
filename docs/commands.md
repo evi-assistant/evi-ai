@@ -1,5 +1,9 @@
 # Slash commands
 
+> Quick reference. For the **full guide** — every built-in with its arguments,
+> the web/desktop subset, aliases, and worked examples — see
+> [features/slash-commands.md](features/slash-commands.md).
+
 Type `/` at the start of a message to run a command (in the REPL or the web
 chat). Built-ins cover the session controls — `/help`, `/model`, `/effort`,
 `/fast`, `/plan`, `/auto`, `/goal`, `/compact`, `/reset`, `/tools`, `/json`,
