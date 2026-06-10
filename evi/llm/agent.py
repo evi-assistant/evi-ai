@@ -10,6 +10,7 @@ Events yielded by `Agent.chat`:
 
 from __future__ import annotations
 
+import json
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -49,6 +50,102 @@ BatchPermissionCallback = Callable[[list[tuple[str, str, str]]], list[bool]]
 
 def _generate_session_id() -> str:
     return secrets.token_hex(6)
+
+
+def _find_json_blobs(text: str) -> list[str]:
+    """Return top-level balanced ``{...}`` / ``[...]`` spans in ``text``
+    (string-aware, so braces inside quotes don't confuse the scan)."""
+    blobs: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] in "{[":
+            depth, in_str, esc, j = 0, False, False, i
+            while j < n:
+                ch = text[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                elif ch == '"':
+                    in_str = True
+                elif ch in "{[":
+                    depth += 1
+                elif ch in "}]":
+                    depth -= 1
+                    if depth == 0:
+                        blobs.append(text[i : j + 1])
+                        break
+                j += 1
+            i = j + 1
+        else:
+            i += 1
+    return blobs
+
+
+def _loads_tolerant(blob: str):
+    """Parse a JSON-ish object, tolerating the malformed output local models
+    often emit: single-quoted strings and Python literals. Returns the parsed
+    value or None. (Local models sometimes wrap values in single quotes when the
+    value itself contains a double quote, producing invalid JSON.)"""
+    try:
+        return json.loads(blob)
+    except (ValueError, TypeError):
+        pass
+    import ast
+
+    try:  # handles single-quoted strings + True/False/None
+        return ast.literal_eval(blob)
+    except (ValueError, SyntaxError):
+        pass
+    # Normalize JSON literals to Python, then retry (e.g. lowercase `false`).
+    import re as _re
+
+    norm = _re.sub(r"\bfalse\b", "False", blob)
+    norm = _re.sub(r"\btrue\b", "True", norm)
+    norm = _re.sub(r"\bnull\b", "None", norm)
+    try:
+        return ast.literal_eval(norm)
+    except (ValueError, SyntaxError):
+        return None
+
+
+def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
+    """Recover tool calls that a model emitted as TEXT instead of via the
+    structured ``tool_calls`` field — a common local-model (e.g. qwen via
+    Ollama) behaviour where the assistant prints a ``{"name": ..., "arguments":
+    ...}`` JSON object (often fenced) as content.
+
+    Returns ``[{"name", "arguments"(json str)}, …]`` for blobs whose ``name`` is
+    a known tool. Only the first blob that yields calls is used. Returns ``[]``
+    when nothing matches.
+    """
+    if not text or "{" not in text:
+        return []
+    for blob in _find_json_blobs(text):
+        obj = _loads_tolerant(blob)
+        if obj is None:
+            continue
+        items = obj if isinstance(obj, list) else [obj]
+        out: list[dict[str, str]] = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fn = it.get("function") if isinstance(it.get("function"), dict) else {}
+            name = it.get("name") or fn.get("name")
+            args = it.get("arguments")
+            if args is None:
+                args = fn.get("arguments")
+            if args is None:
+                args = it.get("parameters")
+            if name in known and args is not None:
+                args_str = args if isinstance(args, str) else json.dumps(args)
+                out.append({"name": str(name), "arguments": args_str})
+        if out:
+            return out
+    return []
 
 
 def _approx_tokens(messages: list[dict[str, Any]]) -> int:
@@ -1178,6 +1275,25 @@ class Agent:
                     low_count=low_count,
                     low_threshold=low_threshold,
                 )
+
+            # Recover tool calls some local models emit as TEXT instead of via
+            # the structured tool_calls field (e.g. qwen via Ollama printing a
+            # fenced ``{"name": …, "arguments": …}`` block). Only when there are
+            # no structured calls AND the reply leads with JSON / a code fence,
+            # so we never execute a tool-call example buried in normal prose.
+            if not tool_buf and text_buf:
+                _stripped = "".join(text_buf).strip()
+                if _stripped[:1] in ("`", "{", "["):
+                    _recovered = recover_text_tool_calls(_stripped, set(self.tools))
+                    if _recovered:
+                        for _idx, _rc in enumerate(_recovered):
+                            tool_buf[_idx] = {
+                                "id": f"call_text_{_idx}",
+                                "name": _rc["name"],
+                                "arguments": _rc["arguments"],
+                            }
+                        text_buf = []  # don't store the JSON as visible content
+                        dlog("llm.text_tool_call_recovered", {"n": len(_recovered)})
 
             assistant_msg: dict[str, Any] = {"role": "assistant"}
             if text_buf:

@@ -89,8 +89,58 @@ def write_file(path: str, content: str) -> str:
     except Exception:  # noqa: BLE001
         pass
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
+    # newline="" so we write the content's own line endings verbatim (avoid
+    # Windows turning \n into \r\n and flipping a whole file to CRLF).
+    p.write_text(content, encoding="utf-8", newline="")
+    _READ_CACHE.pop(str(p.resolve()), None)
     return f"wrote {len(content)} chars to {p}"
+
+
+@tool(
+    description=(
+        "Make a surgical edit to a text file: replace the exact substring "
+        "old_string with new_string. old_string must match the file exactly "
+        "(including whitespace) and appear exactly once, unless replace_all is "
+        "true. Prefer this over write_file for small changes — it's safer and "
+        "far cheaper than rewriting the whole file."
+    ),
+    category="fs",
+)
+def edit_file(
+    path: str, old_string: str, new_string: str, replace_all: bool = False
+) -> str:
+    p = Path(path).expanduser()
+    if not p.is_file():
+        return f"ERROR: not a file: {p}"
+    if old_string == new_string:
+        return "ERROR: old_string and new_string are identical"
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR: cannot read {p}: {exc}"
+    count = text.count(old_string)
+    if count == 0:
+        return f"ERROR: old_string not found in {p}"
+    if count > 1 and not replace_all:
+        return (
+            f"ERROR: old_string appears {count} times in {p}; pass "
+            "replace_all=true or include more surrounding context to make it unique"
+        )
+    new_text = (
+        text.replace(old_string, new_string)
+        if replace_all
+        else text.replace(old_string, new_string, 1)
+    )
+    # Snapshot for `evi rewind` (best-effort; never block the edit).
+    try:
+        from evi.checkpoints import record_before_write
+
+        record_before_write(p)
+    except Exception:  # noqa: BLE001
+        pass
+    p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
+    _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
+    return f"edited {p}: {count if replace_all else 1} replacement(s)"
 
 
 @tool(

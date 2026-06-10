@@ -15,6 +15,7 @@ the module from `evi/apps/cli/main.py` + `evi/apps/web/server.py` — see
 |---------------|-------------------------------------------------------------|
 | `read_file`   | Read a UTF-8 text file. 256 KB cap. Errors string-returned. |
 | `write_file`  | Overwrite or create a file with UTF-8 text. Creates parents. |
+| `edit_file`   | Surgical edit: replace an exact `old_string` with `new_string` (once, or `replace_all`). Preferred over `write_file` for small changes — cheaper and safer than a full rewrite. |
 | `list_dir`    | List entries in a directory, marked `D`/`F` per kind.        |
 
 Safety: 256 KB read cap prevents loading huge blobs into context. There's
