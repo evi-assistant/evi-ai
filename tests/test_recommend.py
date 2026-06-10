@@ -91,6 +91,19 @@ def test_recommend_5070ti_picks_14b_chat() -> None:
     assert "14b" in rec.chat.id.lower()
 
 
+def test_recommend_modern_gpu_not_flagged_pre_pascal() -> None:
+    # Regression: the compute-capability check used a STRING comparison, so a
+    # modern GPU ("12.0") was wrongly flagged pre-Pascal because "12.0" < "6.0".
+    rec = recommend(_hw(vram=16380, name="RTX 5070 Ti", cc="12.0"))
+    assert not any("pre-Pascal" in n for n in rec.notes)
+
+
+def test_recommend_old_gpu_still_flagged_pre_pascal() -> None:
+    # cc 5.0 (Maxwell) is genuinely pre-Pascal and should still warn.
+    rec = recommend(_hw(vram=8192, name="GTX 980", cc="5.2"))
+    assert any("pre-Pascal" in n for n in rec.notes)
+
+
 def test_recommend_940mx_falls_back_to_cpu() -> None:
     rec = recommend(_hw(vram=2048, name="GeForce GT 940MX", cc="5.0", ram_gb=16))
     assert rec.mode == "cpu"  # GPU is below useful threshold
