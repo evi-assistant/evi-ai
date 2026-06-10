@@ -257,7 +257,7 @@ def recommend(hw: HardwareInfo) -> Recommendation:
             return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes)
         return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
 
-    if primary.compute_capability and primary.compute_capability < "6.0":
+    if primary.compute_capability and float(primary.compute_capability) < 6.0:
         notes.append(
             "GPU compute capability is pre-Pascal — modern features (FP16, "
             "flash attention) won't work. Stick to GGUF Q4/Q5 quants."
