@@ -3107,6 +3107,66 @@ def plugin_index_add(
     console.print(f"[green]indexed[/green] {name} [dim]-> {source}[/dim]")
 
 
+skill_app = typer.Typer(help="Skills — markdown instruction packets the model loads on demand.")
+app.add_typer(skill_app, name="skill")
+
+
+@skill_app.command("list")
+def skill_list() -> None:
+    """List installed skills (your ~/.evi/skills/ plus plugin-supplied skills)."""
+    from evi.skills import SkillStore
+
+    entries = SkillStore().list()
+    if not entries:
+        console.print(
+            "[dim]no skills.[/dim] add one at [cyan]~/.evi/skills/<name>/SKILL.md[/cyan] "
+            "or import one with [cyan]evi skill import <dir>[/cyan]"
+        )
+        return
+    for e in entries:
+        console.print(f"  [cyan]{e.name}[/cyan] — [dim]{e.description}[/dim]")
+
+
+@skill_app.command("import")
+def skill_import(
+    source: str = typer.Argument(
+        ..., help="A skill directory (containing SKILL.md) or a SKILL.md file."
+    ),
+    name: str = typer.Option("", "--name", help="Override the installed skill name."),
+    rewrite_paths: bool = typer.Option(
+        False, "--rewrite-paths",
+        help="Rewrite relative file refs in SKILL.md to absolute installed paths.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing skill of the same name."
+    ),
+) -> None:
+    """Import a skill (e.g. a Claude Agent Skill) into ~/.evi/skills/.
+
+    Copies the skill folder in; the model then loads it on demand via
+    `invoke_skill`. Any bundled files are surfaced to the model (with their
+    absolute paths) when the skill is invoked.
+    """
+    from evi import skills
+
+    try:
+        installed = skills.import_skill(
+            source, name=name or None, rewrite_paths=rewrite_paths, overwrite=force
+        )
+    except skills.SkillError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    try:
+        _, _dir, resources = skills.SkillStore().load(installed)
+    except KeyError:
+        resources = []
+    extra = f" [dim](+{len(resources)} bundled file(s))[/dim]" if resources else ""
+    console.print(
+        f"[green]imported[/green] {installed}{extra} "
+        f"[dim](see `evi skill list`)[/dim]"
+    )
+
+
 @app.command()
 def rewind(
     seq: int = typer.Argument(

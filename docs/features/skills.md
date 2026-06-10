@@ -105,14 +105,24 @@ cp -r examples/skills/* ~/.evi/skills/
 
 ## Usage
 
-Skills are model-driven — there is **no `evi skill` CLI command** and nothing to
-type. Once installed:
+Skills are model-driven — you don't *type* a skill (that's a
+[slash command](slash-commands.md)). There is a small CLI for managing them:
+
+```bash
+evi skill list                       # installed skills (yours + plugin skills)
+evi skill import <dir-or-SKILL.md>   # copy a skill into ~/.evi/skills/
+evi skill import <dir> --name foo --rewrite-paths --force
+```
+
+Once installed:
 
 1. Start a chat (`evi chat`, or the web/desktop app).
 2. The agent's system prompt now lists your skills.
 3. When a turn matches a skill, the model calls `invoke_skill(<name>)` and then
    follows the loaded instructions. You'll see the `invoke_skill` tool call in the
-   transcript / tool activity.
+   transcript / tool activity. If the skill bundles companion files, their
+   absolute paths are appended to the loaded text so the model can read them with
+   its file tools.
 
 To nudge it explicitly, just ask: *"review this diff"* with a `code-review` skill
 installed, or *"use the summarize-paper skill on this PDF"*. To confirm what's
@@ -181,10 +191,45 @@ A plugin that ships `skills/threat-model/SKILL.md` exposes it as
 `plugin-name:threat-model` in the index once installed
 (`evi plugin add <dir-or-git-url>`). See [plugins.md](plugins.md).
 
+## Loading Claude skills
+
+eVi's `SKILL.md` shape is the same one **Claude Agent Skills** use, so a Claude
+skill folder is essentially drop-in:
+
+```bash
+evi skill import path/to/claude-skill          # copies it into ~/.evi/skills/
+evi skill import path/to/claude-skill --rewrite-paths   # also fix relative refs
+```
+
+What carries over and what doesn't:
+
+- ✅ **`name` + `description` frontmatter** → eVi's skill index. Extra Claude keys
+  (`license`, `allowed-tools`, `metadata`, …) are read but **ignored** — they
+  don't break anything.
+- ✅ **The instruction body** is used verbatim as the `invoke_skill` payload.
+- ✅ **Bundled files** (a `reference.md`, a `scripts/` dir, assets) are copied in,
+  and when the model invokes the skill their **absolute paths are appended** to
+  the loaded text — so the model can `read_file` / run them on its own (it needs
+  the relevant tools enabled).
+- ⚠️ **`allowed-tools` is not enforced.** eVi gates tools through its own
+  permissions/modes, not the skill's frontmatter.
+- ⚠️ **Frontmatter is single-line `key: value`** (not full YAML). A multi-line
+  folded/literal `description:` would be truncated — keep it on one line.
+- `--rewrite-paths` rewrites standalone relative references in `SKILL.md` (e.g.
+  `reference.md`, `scripts/fill.py`) to their absolute installed paths, so the
+  model finds them regardless of its working directory.
+
+Self-contained Claude skills (all instructions in `SKILL.md`) work with a plain
+`evi skill import`; skills that lean on companion files work best with
+`--rewrite-paths` (and the auto-appended file list as a backstop).
+
 ## Notes / limits
 
-- **Only `SKILL.md` is read.** Other files in the skill folder are for your own
-  helper assets; eVi won't load them automatically.
+- **`SKILL.md` is the entry point.** Its body is what `invoke_skill` returns;
+  other files in the folder aren't loaded into the prompt, but their paths are
+  surfaced to the model (see above) so it can read them on demand.
+- **Names** must match `[A-Za-z0-9_-]+`; skills that fail validation are skipped
+  silently rather than erroring the whole list.
 - **Names** must match `[A-Za-z0-9_-]+`; skills that fail validation are skipped
   silently rather than erroring the whole list.
 - **No arguments / no triggers.** A skill is static instructions. For
