@@ -153,11 +153,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 timeout = 30   # hard ceiling so the permission tests don't hang forever
 timeout_method = "thread"
-# e2e (browser) tests are opt-in: excluded from the default run, selected with
-# `pytest tests/e2e -m e2e` (which overrides this -m). See TESTING.md.
+# e2e tests are opt-in: excluded from the default run, selected with
+# `pytest tests/e2e -m e2e` (browser UI) or `pytest tests/cli_e2e -m e2e`
+# (CLI subprocess, no browser). The -m here is overridden by those. See TESTING.md.
 addopts = "-m 'not e2e'"
 markers = [
-    "e2e: browser-driven UI end-to-end tests (needs the e2e extra + a browser)",
+    "e2e: end-to-end tests, opt-in — browser UI (tests/e2e/, needs the e2e extra) or CLI subprocess (tests/cli_e2e/, no browser)",
 ]
 
 [tool.ruff]

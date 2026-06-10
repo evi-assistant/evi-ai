@@ -10,12 +10,13 @@ UI**. The Python tests asserted the server *emits* SSE events; nothing checked
 that the browser *renders* them. The fix is a real end-to-end (e2e) layer plus
 a standing rule: **every UI-affecting change ships with an e2e test.**
 
-## The three layers
+## The four layers
 
 | Layer | Tool | Speed | Covers | Runs |
 |---|---|---|---|---|
-| **Unit** | `pytest` (`tests/*.py`) | fast (~30 s, 631 tests) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push (CI `ci.yml`) + locally |
-| **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~10 s + browser install) | the real web UI in a real browser against the real server | PRs + weekly + dispatch (CI `e2e.yml`) |
+| **Unit** | `pytest` (`tests/*.py`) | fast (~50 s, 967 tests) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push (CI `ci.yml`) + locally |
+| **E2E (CLI)** | subprocess (`tests/cli_e2e/`) | medium (~100 s, no browser) | the real `evi` CLI per subsystem — arg parsing, config wiring, file I/O, output (the offline commands) | opt-in (`-m e2e`) |
+| **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs + weekly + dispatch (CI `e2e.yml`) |
 | **Manual** | a human + the desktop app | slow | things no harness reaches: the Tauri window itself, the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
 
 The web UI **is** the desktop UI (the Tauri shell wraps the same server +
@@ -29,15 +30,19 @@ HTML/JS. Only the native shell (window, updater, sidecar spawn) needs manual.
 .venv/Scripts/python -m pytest -q
 .venv/Scripts/python -m ruff check evi tests scripts
 
-# E2E (needs the extra + a browser, once)
+# E2E (CLI) — drives the real `evi` CLI as a subprocess; no browser needed
+.venv/Scripts/python -m pytest tests/cli_e2e -m e2e --timeout=120
+
+# E2E (UI) — needs the extra + a browser, once
 pip install -e ".[e2e]"
 python -m playwright install chromium
 .venv/Scripts/python -m pytest tests/e2e -m e2e --timeout=120
 ```
 
-E2E is opt-in: it's marked `e2e` and excluded from the default run via
-`addopts = -m "not e2e"`, and `tests/conftest.py` skips the whole `tests/e2e/`
-dir when Playwright isn't installed (so the default CI job never trips on it).
+E2E is opt-in: both suites are marked `e2e` and excluded from the default run via
+`addopts = -m "not e2e"`. `tests/e2e/conftest.py` (UI) skips its dir when
+Playwright isn't installed; `tests/cli_e2e/` (CLI) has no browser dependency, so
+it runs anywhere Python + the package are installed.
 
 ### How the e2e harness works (`tests/e2e/conftest.py`)
 
@@ -49,6 +54,22 @@ dir when Playwright isn't installed (so the default CI job never trips on it).
 
 This exercises the full path — agent → `sse-starlette` → browser fetch/parse →
 DOM render — which is exactly where the 0.24.2 bug lived.
+
+### How the CLI e2e harness works (`tests/cli_e2e/conftest.py`)
+
+- The `evi_cli` fixture runs `python -m evi <args>` as a **subprocess** against
+  an isolated `EVI_HOME` (so tests never touch your real `~/.evi`).
+- It returns a `CliResult` (`code`, `stdout`, `stderr`, `.out`, `.json()`) and
+  exposes `.home` (the temp `EVI_HOME`) and `.workdir` (scratch space for
+  building source plugins/skills to import).
+- Tests cover the **offline** commands per subsystem (config, doctor, skill,
+  plugin, guardrails, route, recipe, workflow, eval, schedule, sessions, style,
+  peer, web-config token, mcp, stats, backup, finetune, routine, agents, tools).
+  Model-driven commands (`chat`, `run`, `eval run`, `recipe run`, `batch`) need a
+  backend and are covered by the UI e2e (fake backend) + unit suites instead.
+
+This catches CLI-wiring regressions — a renamed option, a broken `add_typer`
+mount, a config path that doesn't resolve — that function-level unit tests miss.
 
 ## The rule for new phases
 
