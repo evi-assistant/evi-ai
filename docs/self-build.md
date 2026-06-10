@@ -78,6 +78,26 @@ config. Installers land in
    human-only fix). Until that clears, keep changes local on `main`; don't tag or
    trigger the release workflows.
 
+## Local-model notes (from dogfooding)
+
+Running eVi against its own repo with a local coder model surfaced two things now
+fixed, which matter for any local-model use:
+
+- **Surgical edits.** eVi has an `edit_file` tool (exact `old_string` →
+  `new_string`). A small local model can't reliably regenerate a 300-line file
+  with `write_file`, but it *can* produce a one-spot edit — so prefer `edit_file`
+  for changes (it's also far cheaper in tokens).
+- **Text-emitted tool calls.** Some local models (e.g. qwen2.5 via Ollama) print
+  a tool call as JSON *content* instead of using the structured `tool_calls`
+  field — sometimes as a Python/JSON hybrid (single-quoted strings, lowercase
+  `false`). eVi now recovers these (`recover_text_tool_calls` in
+  `evi/llm/agent.py`), so the call still runs. Frontier models over real APIs are
+  unaffected (they always return structured calls).
+
+Worked dogfood: with the recommended `qwen2.5-coder:14b` set as the model, eVi
+fixed a real bug in its own `evi/recommend.py` (a string-vs-numeric
+compute-capability comparison) via a single `edit_file` call.
+
 ## Why this works (and its limits)
 
 eVi's agent is model-driven: how well it can self-develop scales with the local
