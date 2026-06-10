@@ -1,0 +1,17 @@
+[
+  {
+    "name": "filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/me/projects"]
+  },
+  {
+    "name": "git",
+    "command": "uvx",
+    "args": ["mcp-server-git", "--repository", "."]
+  },
+  {
+    "name": "sqlite",
+    "command": "uvx",
+    "args": ["mcp-server-sqlite", "--db-path", "/home/me/notes.db"]
+  }
+]

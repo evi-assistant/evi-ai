@@ -1,0 +1,7 @@
+[
+  {
+    "name": "gpu",
+    "url": "http://gpu-box:8473",
+    "token": "PASTE_THE_GPU_BOX_WEB_TOKEN_HERE"
+  }
+]

@@ -74,10 +74,12 @@ handoff` → resume on another machine after `evi sync` (or open `/?session=<id>
 
 ## Skills, commands, styles
 
-**Slash commands** — `~/.evi/commands/<name>.md` → `/name`. **Skills** —
-`~/.evi/skills/<name>/SKILL.md`, auto-loaded when relevant. **Output styles** —
-`evi style` / `[llm] output_style` layer a persona onto the system prompt.
-**Keybindings** — `~/.evi/keybindings.toml` maps a key to a REPL slash command.
+**Slash commands** — built-in `/cmd` controls plus `~/.evi/commands/<name>.md` →
+`/name` templates ([guide](features/slash-commands.md)). **Skills** —
+`~/.evi/skills/<name>/SKILL.md` instruction packets the model loads on demand via
+`invoke_skill` ([guide](features/skills.md)). **Output styles** — `evi style` /
+`[llm] output_style` layer a persona onto the system prompt. **Keybindings** —
+`~/.evi/keybindings.toml` maps a key to a REPL slash command.
 
 ## Hooks
 
