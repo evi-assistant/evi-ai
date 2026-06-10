@@ -3167,6 +3167,42 @@ def skill_import(
     )
 
 
+@skill_app.command("show")
+def skill_show(name: str) -> None:
+    """Print a skill's description, instructions, and any bundled files."""
+    from evi.skills import SkillStore
+
+    store = SkillStore()
+    entry = next((e for e in store.list() if e.name == name), None)
+    if entry is None:
+        console.print(f"[red]no such skill:[/red] {name} [dim](try `evi skill list`)[/dim]")
+        raise typer.Exit(1)
+    body, skill_dir, resources = store.load(name)
+    console.print(f"[bold cyan]{entry.name}[/bold cyan] — [dim]{entry.description}[/dim]")
+    console.print(f"[dim]{skill_dir}[/dim]\n")
+    console.print(body, markup=False, highlight=False)
+    if resources:
+        console.print("\n[bold]Bundled files:[/bold]")
+        for p in resources:
+            console.print(f"  [dim]{p}[/dim]")
+
+
+@skill_app.command("remove")
+def skill_remove(name: str) -> None:
+    """Remove a user skill (~/.evi/skills/<name>/)."""
+    from evi import skills
+
+    try:
+        removed = skills.remove(name)
+    except skills.SkillError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    if not removed:
+        console.print(f"[red]no such skill:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
 @app.command()
 def rewind(
     seq: int = typer.Argument(

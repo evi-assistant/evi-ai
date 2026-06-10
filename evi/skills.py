@@ -258,3 +258,22 @@ def import_skill(
     if rewrite_paths:
         _rewrite_refs(dest)
     return slug
+
+
+def remove(name: str, root: Path | None = None) -> bool:
+    """Delete a user skill directory (``~/.evi/skills/<name>/``).
+
+    Returns True if it was removed, False if no such user skill exists.
+    Plugin skills (``<plugin>:<skill>``) are owned by their plugin and can't be
+    removed here — that raises ``SkillError``.
+    """
+    if ":" in name:
+        raise SkillError(
+            f"{name!r} is a plugin skill — remove its plugin with `evi plugin remove`"
+        )
+    dest_root = root if root is not None else SKILL_DIR
+    dest = dest_root / _slug(name)
+    if not dest.is_dir():
+        return False
+    shutil.rmtree(dest, ignore_errors=True)
+    return True

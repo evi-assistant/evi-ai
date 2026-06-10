@@ -110,9 +110,14 @@ Skills are model-driven — you don't *type* a skill (that's a
 
 ```bash
 evi skill list                       # installed skills (yours + plugin skills)
+evi skill show <name>                # print a skill's description, body, bundled files
 evi skill import <dir-or-SKILL.md>   # copy a skill into ~/.evi/skills/
 evi skill import <dir> --name foo --rewrite-paths --force
+evi skill remove <name>              # delete a user skill (~/.evi/skills/<name>/)
 ```
+
+`remove` only touches your own skills; a plugin skill (`<plugin>:<skill>`) is
+owned by its plugin — remove it with `evi plugin remove <plugin>`.
 
 Once installed:
 
