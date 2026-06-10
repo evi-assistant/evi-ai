@@ -178,7 +178,9 @@ pytest -q              # 183 tests, ~12 s
 ruff check evi apps    # style + bug-pattern lint
 ```
 
-See [docs/development.md](docs/development.md) for architecture notes.
+See [docs/development.md](docs/development.md) for architecture notes, and
+[docs/self-build.md](docs/self-build.md) for developing/building eVi **with eVi**
+(the `EVI.md` project context + the one-command `scripts/build-desktop` build).
 
 ## Safety posture
 

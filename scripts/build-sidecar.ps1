@@ -56,3 +56,4 @@ New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
 Copy-Item $src $dst -Recurse -Force
 Write-Host ">> staged onedir: $dst"
 Write-Host ">> now build the app:  cd desktop; npm run tauri build -- --config src-tauri\tauri.standalone.conf.json"
+Write-Host ">> (or just run scripts\build-desktop.ps1 to do both steps)"
