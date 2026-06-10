@@ -1,0 +1,41 @@
+# eVi content guardrails — copy to ~/.evi/guardrails.toml
+#
+# Three layers, checked in order (first block wins):
+#   [[rule]]       — fast regex block/redact
+#   [[judge]]      — LLM-as-judge against a policy (needs a model; fails OPEN)
+#   [[classifier]] — offline ML moderation (needs the [moderation] extra; fails OPEN)
+#
+# `applies_to` = "input" | "output" | "both" (default "both").
+# See docs/features/guardrails.md.
+
+enabled = true
+
+# --- regex rules ----------------------------------------------------------
+
+[[rule]]
+name = "api-keys"
+pattern = "(api[_-]?key|secret[_-]?key|bearer )\\S+"
+action = "block"            # block | redact
+applies_to = "input"
+
+[[rule]]
+name = "emails"
+pattern = "[\\w.+-]+@[\\w-]+\\.[\\w.-]+"
+action = "redact"          # replaced with [REDACTED] in both directions
+applies_to = "both"
+
+# --- LLM-as-judge (semantic) — only runs if a judge model is wired in -----
+
+[[judge]]
+name = "no-self-harm"
+policy = "The text must not contain self-harm instructions or encouragement."
+applies_to = "both"
+
+# --- offline classifier (optional; needs `pip install evi-assistant[moderation]`) -
+
+[[classifier]]
+name = "toxicity"
+model = "unitary/toxic-bert"
+labels = ["toxic", "threat", "insult"]
+threshold = 0.8
+applies_to = "output"

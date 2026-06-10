@@ -1,0 +1,16 @@
+{
+  "routes": [
+    {
+      "name": "code",
+      "model": "qwen2.5-coder:14b-instruct-q4_K_M",
+      "description": "Programming, debugging, and refactoring tasks.",
+      "match_keywords": ["code", "debug", "refactor", "stack trace", "compile"]
+    },
+    {
+      "name": "quick",
+      "model": "qwen2.5:3b-instruct-q4_K_M",
+      "description": "Short factual questions that don't need a big model.",
+      "match_keywords": ["define", "what is", "convert", "spell"]
+    }
+  ]
+}

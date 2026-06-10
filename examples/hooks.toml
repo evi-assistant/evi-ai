@@ -1,0 +1,44 @@
+# eVi hooks — copy to ~/.evi/hooks.toml
+#
+# Each entry is a command (argv, spawned) OR a url (HTTP POST). A before-hook
+# with `veto_on_nonzero = true` that exits non-zero (or returns 4xx/5xx) blocks
+# the action. Tool events glob over the tool name via `match`; lifecycle events
+# use `match = "*"`. eVi sets EVI_HOOK_TOOL / EVI_HOOK_ARGS_JSON in the env.
+# See docs/features/hooks.md (and the module docstring in evi/hooks.py).
+
+# --- tool events ----------------------------------------------------------
+
+# Audit every tool call to a log file.
+[[before_tool_call]]
+name = "audit"
+match = "*"
+command = ["bash", "-c", "echo $(date -u +%FT%TZ) $EVI_HOOK_TOOL $EVI_HOOK_ARGS_JSON >> ~/.evi/logs/tools.log"]
+timeout = 5
+
+# Block writes outside the home directory (veto).
+[[before_tool_call]]
+name = "no-system-writes"
+match = "write_file"
+command = ["python3", "-c", "import os,sys,json; a=json.loads(os.environ['EVI_HOOK_ARGS_JSON']); p=os.path.realpath(a.get('path','')); sys.exit(0 if p.startswith(os.path.expanduser('~')) else 1)"]
+veto_on_nonzero = true
+
+# Desktop notification after an image is generated.
+[[after_tool_call]]
+name = "image-done"
+match = "generate_image"
+command = ["notify-send", "eVi", "Image generated"]
+
+# --- lifecycle events -----------------------------------------------------
+
+# Screen each user prompt before the turn runs (veto blocks the prompt).
+[[user_prompt_submit]]
+name = "prompt-policy"
+match = "*"
+command = ["python3", "/path/to/check_prompt.py"]
+veto_on_nonzero = true
+
+# Notify an external service when a turn finishes (veto ignored on `stop`).
+[[stop]]
+name = "turn-done-webhook"
+match = "*"
+url = "https://example.com/evi-hook"
