@@ -165,4 +165,6 @@ JSONL training set.
 PyPI (`v*` tag, Trusted Publishing + **sigstore** signing), **Docker** image
 (`docker.yml` → GHCR), desktop installers (`desktop-v*`, 3-OS), a reusable
 **`evi-run` GitHub Action**, and **CodeQL + gitleaks** security scanning. See
-[releasing.md](releasing.md).
+[releasing.md](releasing.md). To build locally in one command (sidecar + Tauri),
+run `scripts/build-desktop.{ps1,sh}` — see [self-build.md](self-build.md) for
+developing/building eVi with eVi (the `EVI.md` bootstrap).
