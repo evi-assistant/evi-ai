@@ -24,6 +24,7 @@ context window cheap and the model's behavior debuggable.
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,19 @@ from evi.config import SKILL_DIR
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+class SkillError(Exception):
+    """A skill can't be imported (missing SKILL.md, bad name, already exists)."""
+
+
+def _slug(name: str) -> str:
+    """Filesystem-safe skill folder name. Takes the last path component, drops a
+    trailing .md, and collapses anything outside [A-Za-z0-9_-] to a hyphen."""
+    base = Path(str(name)).name
+    if base.endswith(".md"):
+        base = base[:-3]
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", base).strip("-")
 
 
 @dataclass(frozen=True)
@@ -96,6 +110,25 @@ class SkillStore:
         _, body = _split_frontmatter(entry.path.read_text(encoding="utf-8"))
         return body.strip()
 
+    def load(self, name: str) -> tuple[str, Path, list[Path]]:
+        """Return ``(body, skill_dir, companion_files)`` for a skill.
+
+        ``companion_files`` are the absolute paths of every file bundled
+        alongside ``SKILL.md`` (recursively), excluding ``SKILL.md`` itself —
+        so a caller can tell the model what bundled references/scripts it may
+        read. Raises ``KeyError`` if the skill doesn't exist.
+        """
+        entry = self._find(name)
+        if entry is None:
+            raise KeyError(name)
+        _, body = _split_frontmatter(entry.path.read_text(encoding="utf-8"))
+        skill_dir = entry.path.parent
+        resources = sorted(
+            p for p in skill_dir.rglob("*")
+            if p.is_file() and p.name != "SKILL.md"
+        )
+        return body.strip(), skill_dir, resources
+
     def format_for_prompt(self) -> str:
         """Render the skill index as a markdown block for the system prompt.
 
@@ -151,3 +184,77 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
         i += 1
     # Unterminated frontmatter — treat the whole thing as body.
     return {}, text
+
+
+# --- importing external skills (e.g. Claude Agent Skills) -----------------
+
+
+def _rewrite_refs(skill_dir: Path) -> int:
+    """Rewrite relative references to bundled files in SKILL.md to absolute
+    installed paths, so the model can read them regardless of its cwd. Only
+    standalone tokens that exactly match an existing companion file are touched.
+    Returns the number of replacements made."""
+    skill_md = skill_dir / "SKILL.md"
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    companions = sorted(
+        (p.relative_to(skill_dir).as_posix()
+         for p in skill_dir.rglob("*")
+         if p.is_file() and p.name != "SKILL.md"),
+        key=len, reverse=True,  # longest paths first so nested refs win
+    )
+    total = 0
+    for rel in companions:
+        absp = (skill_dir / rel).as_posix()
+        # Match `rel` only when it isn't already part of a longer path/word.
+        pattern = re.compile(r"(?<![\w./-])" + re.escape(rel) + r"(?![\w/-])")
+        text, n = pattern.subn(absp, text)
+        total += n
+    if total:
+        skill_md.write_text(text, encoding="utf-8")
+    return total
+
+
+def import_skill(
+    source: str,
+    *,
+    name: str | None = None,
+    rewrite_paths: bool = False,
+    overwrite: bool = False,
+    root: Path | None = None,
+) -> str:
+    """Import a skill directory (e.g. a Claude Agent Skill) into the skills dir.
+
+    ``source`` may be a skill directory containing ``SKILL.md`` or the
+    ``SKILL.md`` file itself. The installed name comes from ``name``, else the
+    SKILL.md frontmatter ``name``, else the source folder name (slugified).
+    With ``rewrite_paths`` the SKILL.md's relative references to bundled files
+    are rewritten to absolute installed paths. Returns the installed name.
+    """
+    src = Path(source).expanduser()
+    if src.is_file() and src.name == "SKILL.md":
+        src = src.parent
+    if not src.is_dir():
+        raise SkillError(f"not a skill directory: {source}")
+    skill_md = src / "SKILL.md"
+    if not skill_md.is_file():
+        raise SkillError(f"no SKILL.md in {src}")
+
+    meta, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+    slug = _slug(name or meta.get("name") or src.name)
+    if not slug or not _NAME_RE.match(slug):
+        raise SkillError(f"invalid skill name {slug!r} (use --name)")
+
+    dest_root = root if root is not None else SKILL_DIR
+    dest = dest_root / slug
+    if dest.exists():
+        if not overwrite:
+            raise SkillError(f"skill exists: {slug} (pass overwrite=True / --force)")
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git"))
+    if rewrite_paths:
+        _rewrite_refs(dest)
+    return slug
