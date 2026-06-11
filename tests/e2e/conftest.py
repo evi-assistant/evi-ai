@@ -125,8 +125,17 @@ def evi_base_url(tmp_path_factory):
         f'base_url = "http://127.0.0.1:{fake_port}/v1"\n'
         'api_key = "test"\n'
         'model = "fake"\n'
+        "router_enabled = true\n"
         "[web]\n"
         'auth_token = ""\n',
+        encoding="utf-8",
+    )
+    # A routing rule so the RouteInfo indicator has something to show: a turn
+    # containing "debug" routes to the (fake) coder model. Other turns fall
+    # through to the default model.
+    (home / "routes.json").write_text(
+        '{"routes": [{"name": "code", "model": "fake-coder", '
+        '"match_keywords": ["debug", "refactor"]}]}',
         encoding="utf-8",
     )
     # A tiny eval suite so the Evals panel has something to list + run. The fake

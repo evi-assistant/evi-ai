@@ -180,6 +180,25 @@ def test_evals_panel(page: Page, evi_base_url: str):
     expect(card.locator('.eval-case[data-case="missing"] .eval-mark')).to_have_text("✗")
 
 
+def test_route_indicator(page: Page, evi_base_url: str):
+    """A turn whose text matches a route shows the routed model + route on the
+    model chip; a plain turn shows just the default model. (Routing is keyword-
+    based, so this is deterministic against the fake backend.)"""
+    page.goto(evi_base_url)
+    label = page.locator("#model-btn-label")
+    # routing keyword -> code route -> chip shows "fake-coder (code)"
+    page.fill("#input", "please debug this stack trace")
+    page.click("#send")
+    expect(page.locator(".msg.assistant").last).to_be_visible(timeout=20000)
+    expect(label).to_contain_text("(code)", timeout=20000)
+    expect(label).to_contain_text("fake-coder")
+    # a plain turn -> default model, no route tag
+    page.fill("#input", "hello there")
+    page.click("#send")
+    expect(page.locator(".msg.assistant").last).to_be_visible(timeout=20000)
+    expect(label).not_to_contain_text("(code)", timeout=20000)
+
+
 def test_automation_routes_crud(page: Page, evi_base_url: str):
     """Settings → Routes & Recipes: add a route via the form, see it listed,
     then remove it."""
