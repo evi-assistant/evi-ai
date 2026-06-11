@@ -200,8 +200,17 @@ def test_style_list(evi_cli):
 # --- federation / peers ----------------------------------------------------
 
 
-def test_peer_empty(evi_cli):
+def test_peer_lifecycle(evi_cli):
     assert evi_cli("peer", "list").code == 0
+    # add an (unreachable) peer; status note shouldn't fail the command
+    out = evi_cli("peer", "add", "gpu", "http://127.0.0.1:1").out
+    assert "added" in out and "gpu" in out
+    assert "gpu" in evi_cli("peer", "list").out
+    # duplicate rejected without --overwrite
+    assert evi_cli("peer", "add", "gpu", "http://x:8473", check=False).code == 1
+    assert evi_cli("peer", "add", "gpu", "http://x:8473", "--overwrite").code == 0
+    assert "removed" in evi_cli("peer", "remove", "gpu").out
+    assert evi_cli("peer", "remove", "gpu", check=False).code == 1
 
 
 # --- web auth token --------------------------------------------------------

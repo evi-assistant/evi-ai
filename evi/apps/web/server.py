@@ -1491,6 +1491,75 @@ def create_app() -> FastAPI:
         results = recipes.run_recipe_headless(agent, recipe)
         return {"ok": True, "name": recipe.name, "steps": results}
 
+    @app.get("/api/peers")
+    def peers_list() -> dict[str, Any]:
+        """Configured peers (~/.evi/peers.json) with live reachability, plus
+        whether this instance serves federation requests itself."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from evi import federation
+
+        peers = federation.load_peers()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            statuses = list(pool.map(
+                lambda p: federation.check_peer(p, timeout=2.0), peers
+            ))
+        return {
+            "peers": [
+                {"name": p.name, "url": p.url, "has_token": bool(p.token), **st}
+                for p, st in zip(peers, statuses)
+            ],
+            "serving": Config.load().federation.serve,
+        }
+
+    @app.post("/api/peers")
+    def peers_add(req: dict[str, Any]) -> dict[str, Any]:
+        """Add or replace a peer ({name, url, token?})."""
+        from evi import federation
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()
+        url = str(req.get("url") or "").strip().rstrip("/")
+        if not name or not url:
+            raise HTTPException(400, "name and url are required")
+        peer = federation.Peer(name=name, url=url,
+                               token=str(req.get("token") or "").strip())
+        federation.add_peer(peer, overwrite=bool(req.get("overwrite", True)))
+        return {"ok": True, "name": name}
+
+    @app.post("/api/peers/remove")
+    def peers_remove(req: dict[str, Any]) -> dict[str, Any]:
+        """Remove a peer by name."""
+        from evi import federation
+
+        name = str((req or {}).get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        if not federation.remove_peer(name):
+            raise HTTPException(404, f"no such peer: {name}")
+        return {"ok": True}
+
+    @app.post("/api/peers/scan")
+    def peers_scan(req: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Sweep the local /24 (or explicit {hosts}) for eVi instances on
+        {port} (default 8473). Marks hits that are already configured peers."""
+        from evi import federation
+
+        body = req if isinstance(req, dict) else {}
+        port = int(body.get("port") or federation.DEFAULT_PEER_PORT)
+        hosts = body.get("hosts")
+        if hosts is not None and not (
+            isinstance(hosts, list) and all(isinstance(h, str) for h in hosts)
+        ):
+            raise HTTPException(400, "hosts must be a list of strings")
+        found = federation.scan_network(port, hosts=hosts)
+        configured = {p.url.rstrip("/") for p in federation.load_peers()}
+        for f in found:
+            f["configured"] = f["url"].rstrip("/") in configured
+        return {"found": found, "port": port,
+                "scanned": len(hosts) if hosts is not None else 254}
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""

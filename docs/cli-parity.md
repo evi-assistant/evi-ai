@@ -17,7 +17,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `eval` | prompt→assertion suites | ✅ settings → Evals | ✅ | browse suites/cases + run with per-case PASS/FAIL |
 | `agents` | list subagent profiles | ◐ used by `delegate` | ◐ | a "profiles" list could live in Dispatch |
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
-| `peer` | federation peers | ⌨️ | ⌨️ | `~/.evi/peers.json`; `/api/federate` serves |
+| `peer` | federation peers (list/add/remove/scan/run) | ✅ settings → Peers | ✅ | live status + LAN scan; `/api/federate` serves |
 | `link` | make `evi://` deep links | n/a | ✅ scheme handler | desktop opens the links |
 | `stats` | local usage analytics | ✅ settings → Usage | ✅ | sessions/messages/tokens, roles, top tools, busy days |
 | `sessions` | list/resume/fork/handoff | ✅ tabs/history; handoff API | ✅ | resume via `/?session=` |
