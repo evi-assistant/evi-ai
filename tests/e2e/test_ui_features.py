@@ -230,6 +230,45 @@ def test_automation_recipe_run(page: Page, evi_base_url: str):
     expect(card.locator(".recipe-out")).to_contain_text("Hello", timeout=30000)
 
 
+def test_peers_panel(page: Page, evi_base_url: str):
+    """Settings → Peers: add the running e2e server as a peer of itself — the
+    status probe must come back reachable (a real /api/health round-trip) —
+    then remove it. Also exercises the scan endpoint deterministically by
+    sweeping only 127.0.0.1 on the server's own port."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('peers')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#peers-box")).to_be_visible(timeout=10000)
+    expect(page.locator("#pr-scan")).to_be_visible()
+
+    # add the e2e server itself as a peer -> reachable, version shown
+    page.fill("#pr-name", "self")
+    page.fill("#pr-url", evi_base_url)
+    page.click("#pr-add")
+    row = page.locator(".peer-row", has_text="self")
+    expect(row).to_be_visible(timeout=10000)
+    expect(row).to_contain_text("eVi ", timeout=10000)  # reachable fingerprint
+
+    # deterministic scan: only 127.0.0.1 on our own port (no LAN sweep in CI)
+    port = int(evi_base_url.rsplit(":", 1)[1])
+    found = page.evaluate(
+        """async (port) => {
+            const r = await fetch('/api/peers/scan', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({hosts: ['127.0.0.1'], port}),
+            });
+            return (await r.json()).found;
+        }""",
+        port,
+    )
+    assert len(found) == 1 and found[0]["host"] == "127.0.0.1"
+
+    page.locator('.peer-row button[data-peer-remove="self"]').click()
+    expect(page.locator('.peer-row button[data-peer-remove="self"]')).to_have_count(
+        0, timeout=10000
+    )
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -246,6 +285,7 @@ def test_automation_recipe_run(page: Page, evi_base_url: str):
         ("stats", "Usage"),
         ("evals", "Evals"),
         ("automation", "Routes & Recipes"),
+        ("peers", "Peers"),
         ("about", "About"),
     ],
 )

@@ -202,12 +202,35 @@ output.
 ### CLI — federation / peers
 
 ```text
-evi peer list                      # show configured peers from ~/.evi/peers.json
+evi peer list                      # configured peers, with live reachability + version
+evi peer add <name> <url> [--token …] [--overwrite]
+evi peer remove <name>
+evi peer scan [--port N]           # sweep the local /24 for running eVi instances
 evi peer run <name> "<task>"       # delegate a task to a peer and print its answer
 ```
 
 The `delegate_peer(peer, task)` tool does the same from inside a chat when the
 `federation` tool toggle is on.
+
+### Web / Desktop — the Peers panel
+
+**Settings → Peers** manages federation without the CLI:
+
+- lists configured peers with a live status dot (green = reachable, with the
+  peer's eVi version + active model from its `/api/health`; red = unreachable —
+  machine off or `evi web` not running);
+- shows whether **this** instance is serving federation requests
+  (`[federation] serve`);
+- an add-peer form (name / URL / optional token) and per-peer **Remove**;
+- **Scan local network** — probes your /24 for eVi instances on port 8473
+  (raw-socket connect, then an `/api/health` fingerprint so a random web server
+  isn't mistaken for a peer; ~2 s). Hits show host, version, and model, with a
+  one-click **Add**; already-configured peers are marked.
+
+Backed by `GET /api/peers`, `POST /api/peers[/remove]`, and
+`POST /api/peers/scan` (`{port?, hosts?}`). Note: discovery requires the peer
+to listen beyond loopback — start it with `evi web --host 0.0.0.0` and allow
+the port through its firewall.
 
 ### Web / desktop — Dispatch view
 

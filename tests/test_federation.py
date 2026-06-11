@@ -138,3 +138,103 @@ def test_federate_runs_when_enabled(monkeypatch, tmp_path):
     r = client.post("/api/federate", json={"task": "do it"})
     assert r.status_code == 200 and r.json()["text"] == "delegated answer"
     assert client.post("/api/federate", json={"task": "  "}).status_code == 400
+
+
+# ---- managing peers.json ---------------------------------------------------
+
+
+def test_save_add_remove_roundtrip(tmp_path):
+    p = tmp_path / "peers.json"
+    assert federation.add_peer(Peer(name="gpu", url="http://h:8473", token="t"), p)
+    assert federation.add_peer(Peer(name="cpu", url="http://h2:8473"), p)
+    names = [x.name for x in federation.load_peers(p)]
+    assert names == ["gpu", "cpu"]
+    # duplicate name: rejected without overwrite, replaced with it
+    assert not federation.add_peer(Peer(name="gpu", url="http://new:8473"), p)
+    assert federation.add_peer(Peer(name="gpu", url="http://new:8473"), p, overwrite=True)
+    assert federation.get_peer("gpu", federation.load_peers(p)).url == "http://new:8473"
+    assert federation.remove_peer("cpu", p)
+    assert not federation.remove_peer("ghost", p)
+    assert [x.name for x in federation.load_peers(p)] == ["gpu"]
+
+
+# ---- discovery (probe / check / scan) --------------------------------------
+
+
+def _serve_health(payload: dict):
+    """A persistent local HTTP server answering GET /api/health with payload.
+    Returns (server, port); call .shutdown() + .server_close() when done."""
+    body = json.dumps(payload).encode()
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path == "/api/health":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, srv.server_address[1]
+
+
+def test_probe_evi_fingerprint():
+    srv, port = _serve_health({"ok": True, "version": "0.31.0", "model": "qwen2.5:14b"})
+    try:
+        info = federation.probe_evi("127.0.0.1", port, timeout=5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert info == {
+        "host": "127.0.0.1",
+        "url": f"http://127.0.0.1:{port}",
+        "version": "0.31.0",
+        "model": "qwen2.5:14b",
+    }
+
+
+def test_probe_evi_rejects_non_evi_server():
+    # answers HTTP but without the eVi health shape
+    srv, port = _serve_health({"status": "up"})
+    try:
+        assert federation.probe_evi("127.0.0.1", port, timeout=5) is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_probe_evi_closed_port_is_none():
+    assert federation.probe_evi("127.0.0.1", 1, timeout=0.5) is None
+
+
+def test_check_peer_reachable_and_not():
+    srv, port = _serve_health({"ok": True, "version": "1.0", "model": "m"})
+    try:
+        up = federation.check_peer(Peer(name="a", url=f"http://127.0.0.1:{port}"), timeout=5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert up == {"reachable": True, "version": "1.0", "model": "m"}
+    down = federation.check_peer(Peer(name="b", url="http://127.0.0.1:1"), timeout=0.5)
+    assert down["reachable"] is False
+
+
+def test_scan_network_finds_instance_on_host_list():
+    srv, port = _serve_health({"ok": True, "version": "1.0", "model": "m"})
+    try:
+        found = federation.scan_network(port, hosts=["127.0.0.1"], timeout=5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert len(found) == 1 and found[0]["host"] == "127.0.0.1"
+
+
+def test_scan_network_empty_hosts():
+    assert federation.scan_network(8473, hosts=[]) == []

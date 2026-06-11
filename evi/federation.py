@@ -19,12 +19,17 @@ Transport is plain HTTP with the peer's web bearer token — no new trust model.
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from evi.config import PEERS_PATH
+
+# eVi's default web port — what `evi web` binds and what peers usually run on.
+DEFAULT_PEER_PORT = 8473
 
 
 class FederationError(Exception):
@@ -89,3 +94,145 @@ def delegate(peer: Peer, task: str, *, mode: str = "", timeout: float = 180.0) -
     if data.get("error"):
         return f"ERROR: peer {peer.name}: {data['error']}"
     return str(data.get("text", ""))
+
+
+# --- managing peers.json ---------------------------------------------------
+
+
+def save_peers(peers: list[Peer], path: Path | None = None) -> None:
+    """Write the peer list to ~/.evi/peers.json (pretty, stable order)."""
+    p = path or PEERS_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps([asdict(peer) for peer in peers], indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def add_peer(peer: Peer, path: Path | None = None, *, overwrite: bool = False) -> bool:
+    """Add (or with `overwrite` replace) a peer by name. False if it exists
+    and overwrite is off."""
+    peers = load_peers(path)
+    for i, existing in enumerate(peers):
+        if existing.name.lower() == peer.name.lower():
+            if not overwrite:
+                return False
+            peers[i] = peer
+            save_peers(peers, path)
+            return True
+    peers.append(peer)
+    save_peers(peers, path)
+    return True
+
+
+def remove_peer(name: str, path: Path | None = None) -> bool:
+    """Remove a peer by name. False if no such peer."""
+    peers = load_peers(path)
+    kept = [p for p in peers if p.name.lower() != name.strip().lower()]
+    if len(kept) == len(peers):
+        return False
+    save_peers(kept, path)
+    return True
+
+
+# --- discovery -------------------------------------------------------------
+
+
+def probe_evi(host: str, port: int = DEFAULT_PEER_PORT, timeout: float = 2.0) -> dict | None:
+    """Return an eVi health fingerprint for host:port, or None.
+
+    Two stages: a raw-socket connect (fails in milliseconds on closed ports,
+    where an HTTP client would stall out), then GET /api/health — which is
+    auth-exempt — and require the eVi shape (`ok` + `version`) so a random web
+    server on the port isn't mistaken for a peer.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except OSError:
+        return None
+    url = f"http://{host}:{port}"
+    req = urllib.request.Request(
+        url + "/api/health", headers={"User-Agent": "evi-peer-scan"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+    if not (isinstance(data, dict) and data.get("ok") and data.get("version")):
+        return None
+    return {
+        "host": host,
+        "url": url,
+        "version": str(data.get("version", "")),
+        "model": str(data.get("model", "")),
+    }
+
+
+def check_peer(peer: Peer, timeout: float = 3.0) -> dict:
+    """Reachability + fingerprint for a configured peer: {reachable, version,
+    model}. Never raises — UI/CLI status rows must render regardless."""
+    try:
+        host, port = _host_port(peer.url)
+    except ValueError:
+        return {"reachable": False, "version": "", "model": ""}
+    info = probe_evi(host, port, timeout=timeout)
+    if info is None:
+        return {"reachable": False, "version": "", "model": ""}
+    return {"reachable": True, "version": info["version"], "model": info["model"]}
+
+
+def _host_port(url: str) -> tuple[str, int]:
+    import urllib.parse
+
+    u = urllib.parse.urlparse(url if "://" in url else "http://" + url)
+    if not u.hostname:
+        raise ValueError(f"bad peer url: {url}")
+    return u.hostname, u.port or (443 if u.scheme == "https" else 80)
+
+
+def _local_subnet_hosts() -> list[str]:
+    """The /24 around this machine's primary LAN address (254 hosts).
+
+    The UDP connect trick learns the outbound interface without sending any
+    packets; offline boxes fall back to hostname resolution. Loopback or
+    failure → [] (nothing sensible to sweep).
+    """
+    ip = ""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1; no packet is sent
+            ip = s.getsockname()[0]
+    except OSError:
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return []
+    if not ip or ip.startswith("127."):
+        return []
+    base = ip.rsplit(".", 1)[0]
+    return [f"{base}.{i}" for i in range(1, 255)]
+
+
+def scan_network(
+    port: int = DEFAULT_PEER_PORT,
+    *,
+    hosts: list[str] | None = None,
+    timeout: float = 0.3,
+    max_workers: int = 64,
+) -> list[dict]:
+    """Sweep `hosts` (default: this machine's /24) for eVi instances on `port`.
+
+    Returns [{host, url, version, model}, …] sorted by host. With 64 workers
+    and a 0.3 s connect timeout a full /24 finishes in ~1-2 s.
+    """
+    targets = hosts if hosts is not None else _local_subnet_hosts()
+    if not targets:
+        return []
+    found: list[dict] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for info in pool.map(lambda h: probe_evi(h, port, timeout=timeout), targets):
+            if info is not None:
+                found.append(info)
+    return sorted(found, key=lambda d: d["host"])

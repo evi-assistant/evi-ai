@@ -2529,13 +2529,21 @@ def peer_list() -> None:
     peers = federation.load_peers()
     if not peers:
         console.print(
-            "[dim]no peers.[/dim] add one to ~/.evi/peers.json: "
-            '[cyan][{"name":"gpu","url":"http://host:8473","token":"…"}][/cyan]'
+            "[dim]no peers.[/dim] add one with "
+            "[cyan]evi peer add <name> <url>[/cyan] or discover with "
+            "[cyan]evi peer scan[/cyan]"
         )
         return
     for p in peers:
-        tok = " [dim](token set)[/dim]" if p.token else " [dim](no token)[/dim]"
-        console.print(f"  [bold]{p.name}[/bold] [dim]{p.url}[/dim]{tok}")
+        st = federation.check_peer(p, timeout=2.0)
+        if st["reachable"]:
+            dot = "[green]o[/green]"
+            meta = f"eVi {st['version']}" + (f" - {st['model']}" if st["model"] else "")
+        else:
+            dot = "[red]o[/red]"
+            meta = "unreachable"
+        tok = " [dim](token set)[/dim]" if p.token else ""
+        console.print(f"  {dot} [bold]{p.name}[/bold] [dim]{p.url}[/dim]{tok} [dim]{meta}[/dim]")
 
 
 @peer_app.command("run")
@@ -2557,6 +2565,64 @@ def peer_run(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
     console.print(answer)
+
+
+@peer_app.command("add")
+def peer_add(
+    name: str = typer.Argument(..., help="A short name for the peer (e.g. gpu)."),
+    url: str = typer.Argument(..., help="The peer's web URL, e.g. http://gpu-box:8473."),
+    token: str = typer.Option("", "--token", help="The peer's web bearer token (if it requires auth)."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing peer by this name."),
+) -> None:
+    """Add a peer to ~/.evi/peers.json."""
+    from evi import federation
+
+    peer = federation.Peer(name=name, url=url.rstrip("/"), token=token)
+    if not federation.add_peer(peer, overwrite=overwrite):
+        console.print(f"[red]peer exists:[/red] {name}. Pass --overwrite to replace.")
+        raise typer.Exit(1)
+    st = federation.check_peer(peer, timeout=2.0)
+    note = (
+        f"[green]reachable[/green] [dim](eVi {st['version']})[/dim]"
+        if st["reachable"]
+        else "[yellow]not reachable right now[/yellow] [dim](is `evi web` running there?)[/dim]"
+    )
+    console.print(f"[green]added[/green] {name} -> {peer.url} · {note}")
+
+
+@peer_app.command("remove")
+def peer_remove(name: str) -> None:
+    """Remove a peer by name."""
+    from evi import federation
+
+    if not federation.remove_peer(name):
+        console.print(f"[red]no such peer:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
+@peer_app.command("scan")
+def peer_scan(
+    port: int = typer.Option(0, "--port", help="Port to probe (default: 8473)."),
+) -> None:
+    """Sweep the local network (/24) for running eVi instances."""
+    from evi import federation
+
+    p = port or federation.DEFAULT_PEER_PORT
+    with console.status(f"scanning the local /24 for eVi on port {p}…", spinner="dots"):
+        found = federation.scan_network(p)
+    if not found:
+        console.print(
+            "[dim]no eVi instances found.[/dim] The peer must be running "
+            "[cyan]evi web --host 0.0.0.0[/cyan] (and allow the port through its firewall)."
+        )
+        return
+    configured = {pe.url.rstrip("/") for pe in federation.load_peers()}
+    for f in found:
+        mark = " [dim](configured)[/dim]" if f["url"].rstrip("/") in configured else ""
+        model = f" - {f['model']}" if f["model"] else ""
+        console.print(f"  [bold]{f['host']}[/bold] [dim]{f['url']}[/dim] eVi {f['version']}{model}{mark}")
+    console.print("\n[dim]add one:[/dim] [cyan]evi peer add <name> <url>[/cyan]")
 
 
 @app.command("agents")

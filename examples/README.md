@@ -129,9 +129,15 @@ Run its web server: `evi web --host 0.0.0.0 --port 8473`.
 
 ```bash
 cp examples/peers.json ~/.evi/peers.json   # then edit url + token
-evi peer list                              # gpu  http://gpu-box:8473 (token set)
+# …or skip the file entirely:
+evi peer scan                              # discover eVi instances on your LAN
+evi peer add gpu http://gpu-box:8473 --token "some-long-secret"
+evi peer list                              # o gpu  http://gpu-box:8473 (token set) eVi 0.31.0
 evi peer run gpu "summarise this repo"     # delegate one task
 ```
+
+The web/desktop app manages the same thing under **Settings → Peers** (live
+status per peer + a one-click LAN scan).
 
 Enable the in-chat tool with `tools.federation = true` to let the model call
 `delegate_peer` itself. Per-peer tokens live in `peers.json` (not `config.toml`)

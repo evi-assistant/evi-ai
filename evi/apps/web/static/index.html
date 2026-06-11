@@ -2262,6 +2262,7 @@ initModes();
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
     { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
     { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
+    { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2323,6 +2324,7 @@ initModes();
     if (sec.custom === 'stats') return renderStats();
     if (sec.custom === 'evals') return renderEvals();
     if (sec.custom === 'automation') return renderAutomation();
+    if (sec.custom === 'peers') return renderPeers();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -2976,6 +2978,130 @@ initModes();
         } finally { t.disabled = false; }
       };
     }).catch(() => { recipesWrap.innerHTML = '<p class="sec-blurb">Could not load recipes.</p>'; });
+  }
+
+  function renderPeers() {
+    const box = document.createElement('div');
+    box.id = 'peers-box';
+    box.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    contentEl.appendChild(box);
+    const PH = 'place' + 'holder';
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const post = async (url, body) => {
+      const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      return d;
+    };
+    const status = (msg, ok) => {
+      const el = document.getElementById('pr-status');
+      if (el) { el.textContent = msg; el.style.color = ok ? '#4caf50' : '#e05252'; }
+    };
+    fetch('/api/peers').then(r => r.json()).then(d => {
+      const peers = d.peers || [];
+      let html = '<div class="set-about-row"><span class="k">Serving</span><span>' +
+        (d.serving ? '<span style="color:#4caf50">on</span> — this eVi answers peers'
+          : 'off — set <code>[federation] serve = true</code> to answer peers') +
+        '</span></div>' +
+        '<div id="pr-status" class="sec-blurb" style="min-height:1.1em"></div>';
+      if (!peers.length) {
+        html += '<p class="dim" style="font-size:12px">No peers configured — add one ' +
+          'below or scan the local network.</p>';
+      } else {
+        html += '<div style="margin-top:8px">';
+        for (const p of peers) {
+          const dot = p.reachable
+            ? '<span style="color:#4caf50" title="reachable">●</span>'
+            : '<span style="color:#e05252" title="unreachable">●</span>';
+          const meta = p.reachable
+            ? ('eVi ' + esc(p.version) + (p.model ? ' · ' + esc(p.model) : ''))
+            : 'unreachable (machine off, or evi web not running?)';
+          html += '<div class="peer-row" style="display:flex;align-items:center;gap:10px;' +
+            'padding:8px 0;border-bottom:1px solid var(--border,#2b333d)">' +
+            dot + '<div style="flex:1;min-width:0">' +
+            '<div><b>' + esc(p.name) + '</b> <span class="dim">' + esc(p.url) + '</span>' +
+            (p.has_token ? ' <span class="dim" style="font-size:11px">(token set)</span>' : '') +
+            '</div><div class="dim" style="font-size:12px">' + meta + '</div></div>' +
+            '<button class="set-action-btn" data-peer-remove="' + esc(p.name) + '">Remove</button></div>';
+        }
+        html += '</div>';
+      }
+      html += '<p class="sec-blurb" style="margin-top:16px">Add a peer</p>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+        '<input id="pr-name" type="text" style="flex:1;min-width:80px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<input id="pr-url" type="text" style="flex:2;min-width:160px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<input id="pr-token" type="password" style="flex:2;min-width:120px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<button class="set-action-btn" id="pr-add">Add peer</button></div>';
+      html += '<p class="sec-blurb" style="margin-top:16px">Discover</p>' +
+        '<div style="display:flex;gap:8px;align-items:center">' +
+        '<button class="set-action-btn" id="pr-scan">Scan local network</button>' +
+        '<span class="dim" style="font-size:12px">probes your /24 for eVi instances on port 8473 (~2 s)</span>' +
+        '</div><div id="pr-scan-results" style="margin-top:8px"></div>';
+      box.innerHTML = html;
+      const nameEl = box.querySelector('#pr-name'), urlEl = box.querySelector('#pr-url'),
+            tokenEl = box.querySelector('#pr-token');
+      nameEl.setAttribute(PH, 'name (e.g. gpu)');
+      urlEl.setAttribute(PH, 'http://gpu-box:8473');
+      tokenEl.setAttribute(PH, 'peer web token (optional)');
+
+      box.onclick = async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const rm = t.getAttribute('data-peer-remove');
+        const addUrl = t.getAttribute('data-peer-add-url');
+        if (rm) {
+          t.disabled = true;
+          try { await post('/api/peers/remove', { name: rm }); setTimeout(renderSection, 400); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (addUrl) {
+          t.disabled = true;
+          const nm = t.getAttribute('data-peer-add-name') || addUrl.replace(/^https?:\/\//, '').replace(/[:.]/g, '-');
+          try { await post('/api/peers', { name: nm, url: addUrl }); status('Added ' + nm + ' — set its token if it needs auth', true); setTimeout(renderSection, 800); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'pr-add') {
+          if (!nameEl.value.trim() || !urlEl.value.trim()) {
+            status('name and url are required', false); return;
+          }
+          t.disabled = true;
+          try {
+            await post('/api/peers', { name: nameEl.value.trim(), url: urlEl.value.trim(),
+              token: tokenEl.value });
+            setTimeout(renderSection, 400);
+          } catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'pr-scan') {
+          t.disabled = true; status('Scanning…', true);
+          const out = box.querySelector('#pr-scan-results');
+          out.innerHTML = '';
+          try {
+            const d2 = await post('/api/peers/scan', {});
+            status('Scan done — ' + (d2.found || []).length + ' eVi instance(s) found', true);
+            if (!(d2.found || []).length) {
+              out.innerHTML = '<p class="dim" style="font-size:12px">Nothing found. The peer must be ' +
+                'running <code>evi web --host 0.0.0.0</code> (and its firewall must allow port ' + d2.port + ').</p>';
+            }
+            for (const f of (d2.found || [])) {
+              const row = document.createElement('div');
+              row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 0;' +
+                'border-bottom:1px solid var(--border,#2b333d)';
+              row.innerHTML = '<div style="flex:1;min-width:0">' +
+                '<div><b>' + esc(f.host) + '</b> <span class="dim">' + esc(f.url) + '</span></div>' +
+                '<div class="dim" style="font-size:12px">eVi ' + esc(f.version) +
+                (f.model ? ' · ' + esc(f.model) : '') + '</div></div>' +
+                (f.configured ? '<span class="dim" style="font-size:12px">configured</span>'
+                  : '<button class="set-action-btn" data-peer-add-url="' + esc(f.url) + '" ' +
+                    'data-peer-add-name="' + esc(f.host) + '">Add</button>');
+              out.appendChild(row);
+            }
+          } catch (e) { status('Error: ' + e.message, false); }
+          finally { t.disabled = false; }
+        }
+      };
+    }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load peers.</p>'; });
   }
 
   function renderAbout() {
