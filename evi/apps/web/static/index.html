@@ -1549,6 +1549,9 @@ async function handleEvent(ev, assistant) {
   } else if (ev.kind === 'PermissionRequest') {
     const approved = await askPermission(ev);
     await postDecision(ev.decision_id, approved);
+  } else if (ev.kind === 'RouteInfo') {
+    const lbl = document.getElementById('model-btn-label');
+    if (lbl) lbl.textContent = (ev.route && ev.route !== 'default') ? (ev.model + ' (' + ev.route + ')') : ev.model;
   } else if (ev.kind === 'UsageStats') {
     // Real numbers from the backend — overwrite the approximate chip.
     const ceiling = pickerState && pickerState.active ? null : null; // keep ceiling untouched

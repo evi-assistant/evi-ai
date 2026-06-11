@@ -110,6 +110,21 @@ The web and desktop apps expose recipes and multi-model routes together under
 Authoring still happens in TOML for recipes (`evi recipe new`), but everyday
 browsing and running no longer needs the CLI.
 
+**Route indicator.** When routing is on (`[llm] router_enabled = true`), each turn
+emits a `RouteInfo` event and the **model chip** (footer) shows the model that
+actually handled it — e.g. `qwen2.5-coder:14b-instruct-q4_K_M (code)` for a turn
+that matched the `code` route, or just the default model for an unmatched turn.
+The session **mode** (Chat / Cowork / Code) is shown separately by the mode
+switch. A common "best of both" setup: keep a chat model as the default and add a
+`code` route to a coder model —
+
+```bash
+evi models use qwen2.5:14b-instruct-q4_K_M           # chat default
+evi route add code --model qwen2.5-coder:14b-instruct-q4_K_M \
+  --keywords "code,debug,refactor,traceback,pytest,regex,function"
+evi route enable                                     # router_enabled = true
+```
+
 ### Routines — `evi routine`
 
 ```text

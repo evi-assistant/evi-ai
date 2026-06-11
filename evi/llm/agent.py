@@ -362,9 +362,18 @@ class Error:
     message: str
 
 
+@dataclass
+class RouteInfo:
+    """Which model/route this turn resolved to (multi-model routing). `route`
+    is the route name, or "default"/"fast" when no route matched."""
+
+    model: str
+    route: str
+
+
 Event = (
     TextDelta | ThinkingDelta | ToolCall | ToolResult | ToolProgress | UsageStats
-    | LogProbs | Guardrail | Done | Error
+    | LogProbs | Guardrail | RouteInfo | Done | Error
 )
 
 # Seconds between ToolProgress heartbeats while tools are still running.
@@ -863,6 +872,7 @@ class Agent:
         model_for_turn, route_name = self._pick_model_for_turn(composed)
         self._last_route_model = model_for_turn
         self._last_route_name = route_name
+        yield RouteInfo(model=model_for_turn, route=route_name)
         yield from self._run_inference_loop(
             max_turns=max_turns,
             plan_only=plan_only,
