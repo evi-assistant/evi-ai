@@ -1052,6 +1052,90 @@ def hooks_test(
         console.print(f"  [cyan]{h.name}[/cyan] [dim]{kind}[/dim]{veto}")
 
 
+keybindings_app = typer.Typer(help="REPL keybindings (~/.evi/keybindings.toml).")
+app.add_typer(keybindings_app, name="keybindings")
+
+
+@keybindings_app.command("path")
+def keybindings_path() -> None:
+    """Print the keybindings config file path."""
+    from evi.config import KEYBINDINGS_PATH
+
+    console.print(str(KEYBINDINGS_PATH))
+
+
+@keybindings_app.command("list")
+def keybindings_list() -> None:
+    """Show the effective REPL keybindings (key -> slash command)."""
+    from evi.keybindings import load_keybindings
+
+    bindings = load_keybindings()
+    if not bindings:
+        console.print(
+            "[dim]no keybindings.[/dim] add some to "
+            "[cyan]~/.evi/keybindings.toml[/cyan]:\n"
+            '  [dim][keybindings][/dim]\n  [dim]"c-t" = "/tools"[/dim]'
+        )
+        return
+    for key, cmd in sorted(bindings.items()):
+        console.print(f"  [cyan]{key:<12}[/cyan] -> [bold]{cmd}[/bold]")
+
+
+command_app = typer.Typer(help="User slash commands (~/.evi/commands/*.md).")
+app.add_typer(command_app, name="command")
+
+
+@command_app.command("list")
+def command_list() -> None:
+    """List user + plugin slash commands (what /help shows in chat)."""
+    from evi.commands import CommandStore
+
+    entries = CommandStore().list()
+    if not entries:
+        console.print(
+            "[dim]no commands.[/dim] scaffold one with "
+            "[cyan]evi command new <name>[/cyan]"
+        )
+        return
+    for e in entries:
+        hint = f" [yellow]{e.argument_hint}[/yellow]" if e.argument_hint else ""
+        console.print(f"  [cyan]/{e.name}[/cyan]{hint} — [dim]{e.summary}[/dim]")
+
+
+@command_app.command("new")
+def command_new(
+    name: str = typer.Argument(..., help="Command name; `ns:name` becomes a subdirectory."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing command."),
+) -> None:
+    """Scaffold a slash command at ~/.evi/commands/<name>.md."""
+    import re as _re
+
+    from evi.config import COMMANDS_DIR
+
+    parts = name.split(":")
+    if not all(_re.match(r"^[A-Za-z0-9_\-]+$", part) for part in parts):
+        console.print(f"[red]invalid name:[/red] {name} [dim](use letters/digits/-/_, `:` for namespacing)[/dim]")
+        raise typer.Exit(1)
+    path = COMMANDS_DIR.joinpath(*parts).with_suffix(".md")
+    if path.exists() and not overwrite:
+        console.print(f"[red]command exists:[/red] /{name}. Pass --overwrite to replace.")
+        raise typer.Exit(1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "description: What this command does\n"
+        "argument-hint: [args]\n"
+        "---\n\n"
+        "Replace this body with the prompt to send.\n"
+        "Arguments: $ARGUMENTS (or $1..$9). Inline a file with @path/to/file.\n",
+        encoding="utf-8",
+    )
+    console.print(
+        f"[green]created[/green] {path}\n"
+        f"[dim]edit it, then type[/dim] [cyan]/{name}[/cyan] [dim]in any chat[/dim]"
+    )
+
+
 guardrails_app = typer.Typer(help="Inspect and test content guardrails.")
 app.add_typer(guardrails_app, name="guardrails")
 
