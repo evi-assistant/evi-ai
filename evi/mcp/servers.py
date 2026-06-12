@@ -112,3 +112,55 @@ def save_servers(servers: list[MCPServer], path: Path | None = None) -> None:
         for s in servers
     ]
     p.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+# --- managing the USER file (~/.evi/mcp.json) -------------------------------
+#
+# These operate on the user's own mcp.json only — never on plugin-supplied
+# servers (namespaced "<plugin>:<name>"), which are owned by their plugin and
+# removed with `evi plugin remove`.
+
+
+def user_servers(path: Path | None = None) -> list[MCPServer]:
+    """Just the user's own servers (no plugin merge), for editing."""
+    return _parse_server_file(path or MCP_CONFIG_PATH)
+
+
+def add_server(
+    server: MCPServer, path: Path | None = None, *, overwrite: bool = False
+) -> bool:
+    """Add (or with `overwrite` replace) a user server by name. False if it
+    exists and overwrite is off."""
+    servers = user_servers(path)
+    for i, existing in enumerate(servers):
+        if existing.name.lower() == server.name.lower():
+            if not overwrite:
+                return False
+            servers[i] = server
+            save_servers(servers, path)
+            return True
+    servers.append(server)
+    save_servers(servers, path)
+    return True
+
+
+def remove_server(name: str, path: Path | None = None) -> bool:
+    """Remove a user server by name. False if no such server in the user file
+    (plugin servers never match — they live in the plugin's own mcp.json)."""
+    servers = user_servers(path)
+    kept = [s for s in servers if s.name.lower() != name.strip().lower()]
+    if len(kept) == len(servers):
+        return False
+    save_servers(kept, path)
+    return True
+
+
+def set_enabled(name: str, enabled: bool, path: Path | None = None) -> bool:
+    """Flip a user server's `enabled` flag. False if no such user server."""
+    servers = user_servers(path)
+    for s in servers:
+        if s.name.lower() == name.strip().lower():
+            s.enabled = enabled
+            save_servers(servers, path)
+            return True
+    return False

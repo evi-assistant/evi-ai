@@ -92,7 +92,16 @@ No config keys are required — `evi mcp serve` works out of the box once the `m
 |---------|--------------|
 | `evi mcp path` | Print the path to your `mcp.json` |
 | `evi mcp list-servers` | List configured servers from `mcp.json` with on/off state |
+| `evi mcp add <name> <command> [args…]` | Add a server. Use `--` before args that start with a dash; `--env KEY=VALUE` (repeatable) for secrets; `--disabled`; `--overwrite` |
+| `evi mcp remove <name>` | Remove a user server (plugin-supplied `plugin:name` servers go with `evi plugin remove`) |
+| `evi mcp enable <name>` / `disable <name>` | Flip a server's `enabled` flag without deleting it |
 | `evi mcp list-tools` | Start the servers and enumerate every tool they expose |
+
+```bash
+# example: the filesystem server, scoped to your projects dir
+evi mcp add filesystem npx -- -y @modelcontextprotocol/server-filesystem ~/projects
+evi mcp list-tools          # verify it connects + see what it exposes
+```
 
 Once `tools.mcp = true` and servers are configured, MCP tools are available automatically in normal `evi` usage (CLI chat, the REPL, and the web UI) — they appear in the registry as `<server>.<tool>` and the agent calls them like any other tool. `evi mcp list-tools` warns if `tools.mcp` is still `false`.
 
@@ -104,9 +113,24 @@ Once `tools.mcp = true` and servers are configured, MCP tools are available auto
 | `evi mcp serve --http --token <secret>` | Run as a streamable-HTTP server, bearer-token gated |
 | `evi mcp serve-config` | Print a ready-to-paste client config snippet (`mcpServers` block) |
 
-### Web UI
+### Web / Desktop — the MCP panel
 
-The MCP server allowlist is editable from the web settings panel as **"MCP server allowlist"** (a lines field bound to `[tools] mcp_allow`). When `tools.mcp` is enabled and servers are configured, the web server starts the same `MCPManager` on launch, so MCP tools are available in browser chat too.
+**Settings → MCP** manages servers without touching the file:
+
+- shows whether the `mcp` tool toggle is on, plus the active allowlist (servers
+  outside it are marked *blocked by allowlist*);
+- one row per server — enabled dot, command + args, env **key names** (values
+  are never shown: they may hold API keys), plugin-supplied servers marked and
+  read-only;
+- per-server **Enable/Disable** and **Remove**, and an add form (name, command,
+  args as one shell-style string). Env vars aren't set in the UI — use
+  `evi mcp add --env KEY=VALUE` or edit `mcp.json` for those.
+
+Backed by `GET /api/mcp` and `POST /api/mcp[/remove|/toggle]`. The allowlist
+itself stays editable as **"MCP server allowlist"** under Tools (bound to
+`[tools] mcp_allow`). When `tools.mcp` is enabled and servers are configured,
+the web server starts the same `MCPManager` on launch, so MCP tools are
+available in browser chat too.
 
 ## Examples
 

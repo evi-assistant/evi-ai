@@ -231,6 +231,17 @@ def test_token(evi_cli):
 def test_mcp(evi_cli):
     assert evi_cli("mcp", "path").code == 0
     assert evi_cli("mcp", "list-servers").code == 0
+    # add / list / disable / enable / remove lifecycle (file ops only)
+    out = evi_cli("mcp", "add", "fs", "npx", "--",
+                  "-y", "@modelcontextprotocol/server-filesystem", "C:/tmp").out
+    assert "added" in out and "fs" in out
+    assert "fs" in evi_cli("mcp", "list-servers").out
+    assert evi_cli("mcp", "add", "fs", "other", check=False).code == 1  # duplicate
+    assert evi_cli("mcp", "disable", "fs").code == 0
+    assert "off" in evi_cli("mcp", "list-servers").out
+    assert evi_cli("mcp", "enable", "fs").code == 0
+    assert "removed" in evi_cli("mcp", "remove", "fs").out
+    assert evi_cli("mcp", "remove", "fs", check=False).code == 1
 
 
 # --- usage stats -----------------------------------------------------------

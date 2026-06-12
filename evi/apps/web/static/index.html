@@ -2263,6 +2263,7 @@ initModes();
     { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
     { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
     { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
+    { id:'mcp', title:'MCP', blurb:'External MCP servers — extra tools loaded from ~/.evi/mcp.json.', custom:'mcp' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2325,6 +2326,7 @@ initModes();
     if (sec.custom === 'evals') return renderEvals();
     if (sec.custom === 'automation') return renderAutomation();
     if (sec.custom === 'peers') return renderPeers();
+    if (sec.custom === 'mcp') return renderMcp();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -3102,6 +3104,112 @@ initModes();
         }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load peers.</p>'; });
+  }
+
+  function renderMcp() {
+    const box = document.createElement('div');
+    box.id = 'mcp-box';
+    box.innerHTML = '<p class="sec-blurb" style="margin-top:0">Loading…</p>';
+    contentEl.appendChild(box);
+    const PH = 'place' + 'holder';
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const post = async (url, body) => {
+      const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || ('HTTP ' + r.status));
+      return d;
+    };
+    const status = (msg, ok) => {
+      const el = document.getElementById('mcp-status');
+      if (el) { el.textContent = msg; el.style.color = ok ? '#4caf50' : '#e05252'; }
+    };
+    fetch('/api/mcp').then(r => r.json()).then(d => {
+      const servers = d.servers || [];
+      let html = '<div class="set-about-row"><span class="k">MCP tools</span><span>' +
+        (d.enabled ? '<span style="color:#4caf50">on</span>'
+          : 'off — enable the <i>mcp</i> toggle under Tools to load these') +
+        '</span></div>';
+      if ((d.allowlist || []).length) {
+        html += '<div class="set-about-row"><span class="k">Allowlist</span><span>' +
+          d.allowlist.map(esc).join(', ') + ' <span class="dim">(others stay loaded-but-blocked)</span></span></div>';
+      }
+      html += '<div id="mcp-status" class="sec-blurb" style="min-height:1.1em"></div>';
+      if (!servers.length) {
+        html += '<p class="dim" style="font-size:12px">No servers configured — add one below ' +
+          '(see the <i>MCP</i> docs for ready-made servers like filesystem/git/sqlite).</p>';
+      } else {
+        html += '<div style="margin-top:8px">';
+        for (const s of servers) {
+          const dot = s.on
+            ? '<span style="color:#4caf50" title="enabled">●</span>'
+            : '<span style="color:var(--dim)" title="disabled">●</span>';
+          const bits = [];
+          if (s.env_keys && s.env_keys.length) bits.push('env: ' + s.env_keys.join(', '));
+          if (!s.allowed) bits.push('blocked by allowlist');
+          html += '<div class="mcp-row" style="display:flex;align-items:center;gap:10px;' +
+            'padding:8px 0;border-bottom:1px solid var(--border,#2b333d)">' +
+            dot + '<div style="flex:1;min-width:0">' +
+            '<div><b>' + esc(s.name) + '</b>' +
+            (s.plugin ? ' <span class="dim" style="font-size:11px">(plugin)</span>' : '') + '</div>' +
+            '<div class="dim" style="font-size:12px">' + esc(s.command + ' ' + (s.args || []).join(' ')) +
+            (bits.length ? ' · ' + bits.map(esc).join(' · ') : '') + '</div></div>' +
+            (s.plugin ? '' :
+              '<button class="set-action-btn" data-mcp-toggle="' + esc(s.name) + '" data-mcp-on="' +
+              (s.on ? '0' : '1') + '">' + (s.on ? 'Disable' : 'Enable') + '</button>' +
+              '<button class="set-action-btn" data-mcp-remove="' + esc(s.name) + '">Remove</button>') +
+            '</div>';
+        }
+        html += '</div>';
+      }
+      html += '<p class="sec-blurb" style="margin-top:16px">Add a server</p>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+        '<input id="mcp-name" type="text" style="flex:1;min-width:90px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<input id="mcp-command" type="text" style="flex:1;min-width:80px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<input id="mcp-args" type="text" style="flex:3;min-width:200px;padding:7px;border-radius:7px;' +
+        'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+        '<button class="set-action-btn" id="mcp-add">Add server</button></div>' +
+        '<p class="dim" style="font-size:11px;margin-top:6px">Env vars (API keys etc.) aren\'t set ' +
+        'here — use <code>evi mcp add --env KEY=VALUE</code> or edit <code>~/.evi/mcp.json</code>. ' +
+        'Verify a server with <code>evi mcp list-tools</code>.</p>';
+      box.innerHTML = html;
+      const nameEl = box.querySelector('#mcp-name'), cmdEl = box.querySelector('#mcp-command'),
+            argsEl = box.querySelector('#mcp-args');
+      nameEl.setAttribute(PH, 'name (e.g. filesystem)');
+      cmdEl.setAttribute(PH, 'command (npx, uvx, …)');
+      argsEl.setAttribute(PH, 'args, e.g. -y @modelcontextprotocol/server-filesystem C:/Users');
+
+      box.onclick = async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const rm = t.getAttribute('data-mcp-remove');
+        const tog = t.getAttribute('data-mcp-toggle');
+        if (rm) {
+          t.disabled = true;
+          try { await post('/api/mcp/remove', { name: rm }); setTimeout(renderSection, 400); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (tog) {
+          t.disabled = true;
+          try {
+            await post('/api/mcp/toggle', { name: tog, on: t.getAttribute('data-mcp-on') === '1' });
+            setTimeout(renderSection, 400);
+          } catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'mcp-add') {
+          if (!nameEl.value.trim() || !cmdEl.value.trim()) {
+            status('name and command are required', false); return;
+          }
+          t.disabled = true;
+          try {
+            await post('/api/mcp', { name: nameEl.value.trim(), command: cmdEl.value.trim(),
+              args: argsEl.value });
+            setTimeout(renderSection, 400);
+          } catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        }
+      };
+    }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load MCP servers.</p>'; });
   }
 
   function renderAbout() {

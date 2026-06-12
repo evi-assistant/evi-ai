@@ -28,7 +28,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `guardrails` | content filter rules | ✅ settings → Guardrails | ✅ | validated `guardrails.toml` editor + rule summary |
 | `plugin` | add/list/remove/search/install | ✅ settings → Plugins | ✅ | list installed, search marketplace, install/remove |
 | `skill` | list/show/import/remove (incl. Claude skills) | ◐ used in chat via `invoke_skill` | ◐ | skills load on demand; no manager UI (file/CLI managed) |
-| `mcp` | MCP servers/serve | ◐ settings (mcp toggle + allowlist) | ◐ | |
+| `mcp` | servers add/remove/enable/list + serve | ✅ settings → MCP | ✅ | manage servers in-app; env vars via CLI/file |
 | `models` | list/use/info/pull | ✅ Model picker + settings | ✅ | recommended-pull flow |
 | `config` | show/path | ✅ full settings screen | ✅ | the settings UI *is* config |
 | `route` | multi-model routing | ✅ settings → Routes & Recipes | ✅ | add/list/remove routing rules |
