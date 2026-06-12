@@ -192,6 +192,53 @@ def _parse_entry(event: str, entry: dict) -> Hook:
     )
 
 
+# --- editor helpers (raw read / validate / write) ---------------------------
+#
+# The runtime loader above deliberately *skips* malformed entries (one bad row
+# can't take chat down). The editor is the opposite: it must REJECT bad input
+# loudly, before it's saved — including typo'd event names, which the loader
+# would silently never fire.
+
+
+def read_raw(path: Path | None = None) -> str:
+    p = path or HOOKS_CONFIG_PATH
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else ""
+    except OSError:
+        return ""
+
+
+def validate(text: str) -> str | None:
+    """Return an error string for bad hooks TOML, or None when it's saveable."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return f"not valid TOML: {exc}"
+    for key in data:
+        if key not in ALL_EVENTS:
+            return (
+                f"unknown event {key!r} — valid events: {', '.join(ALL_EVENTS)}"
+            )
+    for event in ALL_EVENTS:
+        entries = data.get(event, []) or []
+        if not isinstance(entries, list):
+            return f"{event} must be an array of tables ([[{event}]])"
+        for i, entry in enumerate(entries, 1):
+            if not isinstance(entry, dict):
+                return f"{event} entry {i} is not a table"
+            try:
+                _parse_entry(event, entry)
+            except (KeyError, ValueError, TypeError) as exc:
+                return f"{event} entry {i} ({entry.get('name', 'unnamed')}): {exc}"
+    return None
+
+
+def write_raw(text: str, path: Path | None = None) -> None:
+    p = path or HOOKS_CONFIG_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
 # --- registry + runner ---------------------------------------------------
 
 

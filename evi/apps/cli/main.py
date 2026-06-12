@@ -985,6 +985,73 @@ def doctor(
         raise typer.Exit(1)
 
 
+hooks_app = typer.Typer(help="Inspect and dry-run tool/lifecycle hooks (~/.evi/hooks.toml).")
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("path")
+def hooks_path() -> None:
+    """Print the hooks config file path."""
+    from evi.config import HOOKS_CONFIG_PATH
+
+    console.print(str(HOOKS_CONFIG_PATH))
+
+
+@hooks_app.command("list")
+def hooks_list() -> None:
+    """List every loaded hook (yours + plugin-supplied), grouped by event."""
+    from evi import hooks as hooks_mod
+
+    registry = hooks_mod.load_hooks()
+    if not registry.hooks:
+        console.print(
+            "[dim]no hooks loaded.[/dim] add some to [cyan]~/.evi/hooks.toml[/cyan] "
+            "(see `evi hooks path` / examples/hooks.toml)"
+        )
+        return
+    for event in hooks_mod.ALL_EVENTS:
+        rows = [h for h in registry.hooks if h.event == event]
+        if not rows:
+            continue
+        console.print(f"[bold]{event}[/bold]")
+        for h in rows:
+            kind = f"url {h.url}" if h.url else " ".join(h.command)
+            veto = " [red](veto)[/red]" if h.veto_on_nonzero else ""
+            console.print(
+                f"  [cyan]{h.name}[/cyan] match=[yellow]{h.match}[/yellow]{veto} "
+                f"[dim]{kind} · timeout={h.timeout:g}s[/dim]"
+            )
+
+
+@hooks_app.command("test")
+def hooks_test(
+    tool: str = typer.Argument(..., help="A tool name to resolve, e.g. write_file."),
+    event: str = typer.Option(
+        "before_tool_call", "--event", "-e",
+        help="Event to resolve against (before_tool_call | after_tool_call).",
+    ),
+) -> None:
+    """Show which hooks WOULD fire for a tool name (match resolution only —
+    nothing is executed)."""
+    from evi import hooks as hooks_mod
+
+    if event not in hooks_mod.TOOL_EVENTS:
+        console.print(
+            f"[red]unknown tool event:[/red] {event} "
+            f"[dim](one of: {', '.join(hooks_mod.TOOL_EVENTS)})[/dim]"
+        )
+        raise typer.Exit(1)
+    registry = hooks_mod.load_hooks()
+    matched = registry.for_event(event, tool)  # type: ignore[arg-type]
+    if not matched:
+        console.print(f"[dim]no {event} hooks match[/dim] [bold]{tool}[/bold]")
+        return
+    for h in matched:
+        kind = f"url {h.url}" if h.url else " ".join(h.command)
+        veto = " [red]can VETO the call[/red]" if h.veto_on_nonzero else ""
+        console.print(f"  [cyan]{h.name}[/cyan] [dim]{kind}[/dim]{veto}")
+
+
 guardrails_app = typer.Typer(help="Inspect and test content guardrails.")
 app.add_typer(guardrails_app, name="guardrails")
 

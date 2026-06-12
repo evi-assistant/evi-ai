@@ -118,6 +118,24 @@ def test_plugin_lifecycle(evi_cli):
 # --- guardrails ------------------------------------------------------------
 
 
+def test_hooks(evi_cli):
+    assert "hooks.toml" in evi_cli("hooks", "path").out
+    assert evi_cli("hooks", "list").code == 0  # empty is fine
+    (evi_cli.home / "hooks.toml").write_text(
+        '[[before_tool_call]]\nname = "no-writes"\nmatch = "write_file"\n'
+        'command = ["python", "-c", "import sys; sys.exit(1)"]\n'
+        "veto_on_nonzero = true\n",
+        encoding="utf-8",
+    )
+    listing = evi_cli("hooks", "list").out
+    assert "no-writes" in listing and "before_tool_call" in listing
+    # match resolution: fires for write_file, not for read_file
+    assert "no-writes" in evi_cli("hooks", "test", "write_file").out
+    assert "no-writes" not in evi_cli("hooks", "test", "read_file").out
+    # unknown event errors
+    assert evi_cli("hooks", "test", "x", "--event", "bogus", check=False).code == 1
+
+
 def test_guardrails(evi_cli):
     (evi_cli.home / "guardrails.toml").write_text(
         'enabled = true\n[[rule]]\nname = "secret"\npattern = "api_key"\naction = "block"\n',
