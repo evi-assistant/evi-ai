@@ -68,6 +68,14 @@ Drop a markdown file at `~/.evi/commands/<name>.md`; typing `/<name>` in the REP
 **or** the web chat sends its expanded content as the next user message. This is
 modelled on Claude Code's custom commands (`evi/commands.py`).
 
+```text
+evi command list           # your + plugin commands (what /help shows in chat)
+evi command new <name>     # scaffold ~/.evi/commands/<name>.md (ns:name → subdir)
+```
+
+(REPL keybindings have the same treatment: `evi keybindings list` shows the
+effective bindings from `~/.evi/keybindings.toml`.)
+
 ### File format
 
 ```markdown

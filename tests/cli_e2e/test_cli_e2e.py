@@ -118,6 +118,29 @@ def test_plugin_lifecycle(evi_cli):
 # --- guardrails ------------------------------------------------------------
 
 
+def test_keybindings(evi_cli):
+    assert "keybindings.toml" in evi_cli("keybindings", "path").out
+    assert evi_cli("keybindings", "list").code == 0  # empty shows a hint
+    (evi_cli.home / "keybindings.toml").write_text(
+        '[keybindings]\n"c-t" = "/tools"\n"c-c" = "/reset"\n', encoding="utf-8"
+    )
+    out = evi_cli("keybindings", "list").out
+    assert "c-t" in out and "/tools" in out
+    assert "/reset" not in out  # c-c is reserved and must be dropped
+
+
+def test_command_scaffold(evi_cli):
+    assert evi_cli("command", "list").code == 0
+    out = evi_cli("command", "new", "git:commit").out
+    assert "created" in out and "git:commit" in out
+    assert (evi_cli.home / "commands" / "git" / "commit.md").is_file()
+    assert "/git:commit" in evi_cli("command", "list").out
+    # duplicate rejected without --overwrite; bad names rejected
+    assert evi_cli("command", "new", "git:commit", check=False).code == 1
+    assert evi_cli("command", "new", "git:commit", "--overwrite").code == 0
+    assert evi_cli("command", "new", "bad..name", check=False).code == 1
+
+
 def test_hooks(evi_cli):
     assert "hooks.toml" in evi_cli("hooks", "path").out
     assert evi_cli("hooks", "list").code == 0  # empty is fine
