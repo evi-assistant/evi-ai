@@ -224,6 +224,56 @@ def test_manager_tolerates_failed_connect(monkeypatch: pytest.MonkeyPatch) -> No
     manager.stop()
 
 
+# ---- managing the user mcp.json (add/remove/enable) -----------------------
+
+
+def test_add_remove_server_roundtrip(tmp_path: Path) -> None:
+    from evi.mcp.servers import add_server, remove_server, user_servers
+
+    p = tmp_path / "mcp.json"
+    assert add_server(MCPServer(name="fs", command="npx", args=["-y", "pkg"]), p)
+    assert add_server(MCPServer(name="git", command="uvx", args=["mcp-server-git"]), p)
+    assert [s.name for s in user_servers(p)] == ["fs", "git"]
+    # duplicate name: rejected without overwrite, replaced with it
+    assert not add_server(MCPServer(name="fs", command="other"), p)
+    assert add_server(MCPServer(name="fs", command="other"), p, overwrite=True)
+    assert user_servers(p)[0].command == "other"
+    assert remove_server("git", p)
+    assert not remove_server("ghost", p)
+    assert [s.name for s in user_servers(p)] == ["fs"]
+
+
+def test_set_enabled_flips_flag(tmp_path: Path) -> None:
+    from evi.mcp.servers import add_server, set_enabled, user_servers
+
+    p = tmp_path / "mcp.json"
+    add_server(MCPServer(name="fs", command="npx"), p)
+    assert set_enabled("fs", False, p)
+    assert user_servers(p)[0].enabled is False
+    assert set_enabled("fs", True, p)
+    assert user_servers(p)[0].enabled is True
+    assert not set_enabled("ghost", True, p)
+
+
+def test_user_servers_excludes_plugin_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # user_servers must read ONLY the user file — plugin servers are owned by
+    # their plugin and must never be rewritten into ~/.evi/mcp.json.
+    from evi.mcp import servers as srv_mod
+    from evi.mcp.servers import add_server, user_servers
+
+    p = tmp_path / "mcp.json"
+    add_server(MCPServer(name="mine", command="npx"), p)
+    pd = tmp_path / "someplugin"
+    pd.mkdir()
+    (pd / "mcp.json").write_text('[{"name": "tool", "command": "uvx"}]', encoding="utf-8")
+    monkeypatch.setattr("evi.plugins.plugin_dirs", lambda root=None: [pd])
+    merged = srv_mod.load_servers(p)
+    assert {s.name for s in merged} == {"mine", "someplugin:tool"}
+    assert [s.name for s in user_servers(p)] == ["mine"]
+
+
 def test_manager_unregisters_tools_on_stop() -> None:
     """After stop(), the MCP tool names must be gone from REGISTRY."""
     bridge = MCPBridge()

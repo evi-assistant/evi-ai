@@ -269,6 +269,34 @@ def test_peers_panel(page: Page, evi_base_url: str):
     )
 
 
+def test_mcp_panel(page: Page, evi_base_url: str):
+    """Settings → MCP: add a server via the form, toggle it off/on, remove it.
+    Pure mcp.json file ops — no MCP server is actually launched."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('mcp')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#mcp-box")).to_be_visible(timeout=10000)
+
+    page.fill("#mcp-name", "e2e-fs")
+    page.fill("#mcp-command", "npx")
+    page.fill("#mcp-args", "-y @modelcontextprotocol/server-filesystem C:/tmp")
+    page.click("#mcp-add")
+    row = page.locator(".mcp-row", has_text="e2e-fs")
+    expect(row).to_be_visible(timeout=10000)
+    expect(row).to_contain_text("server-filesystem")
+
+    # toggle off → button flips to Enable
+    row.locator('button[data-mcp-toggle="e2e-fs"]').click()
+    expect(
+        page.locator('.mcp-row', has_text="e2e-fs").locator("button", has_text="Enable")
+    ).to_be_visible(timeout=10000)
+
+    page.locator('.mcp-row button[data-mcp-remove="e2e-fs"]').click()
+    expect(page.locator('.mcp-row button[data-mcp-remove="e2e-fs"]')).to_have_count(
+        0, timeout=10000
+    )
+
+
 @pytest.mark.parametrize(
     "section,title",
     [
@@ -286,6 +314,7 @@ def test_peers_panel(page: Page, evi_base_url: str):
         ("evals", "Evals"),
         ("automation", "Routes & Recipes"),
         ("peers", "Peers"),
+        ("mcp", "MCP"),
         ("about", "About"),
     ],
 )

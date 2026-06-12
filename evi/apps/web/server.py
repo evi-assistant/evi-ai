@@ -1560,6 +1560,92 @@ def create_app() -> FastAPI:
         return {"found": found, "port": port,
                 "scanned": len(hosts) if hosts is not None else 254}
 
+    @app.get("/api/mcp")
+    def mcp_list() -> dict[str, Any]:
+        """Configured MCP servers (user + plugin-namespaced). Env VALUES are
+        never echoed (they may hold API keys) — only the key names."""
+        from evi.mcp.servers import load_servers
+
+        cfg = Config.load()
+        allow = set(cfg.tools.mcp_allow or ())
+        return {
+            "enabled": cfg.tools.mcp,
+            "allowlist": sorted(allow),
+            "servers": [
+                {
+                    "name": s.name,
+                    "command": s.command,
+                    "args": s.args,
+                    "env_keys": sorted(s.env),
+                    "on": s.enabled,
+                    "plugin": ":" in s.name,
+                    "allowed": (not allow) or s.name in allow,
+                }
+                for s in load_servers()
+            ],
+        }
+
+    @app.post("/api/mcp")
+    def mcp_add_ep(req: dict[str, Any]) -> dict[str, Any]:
+        """Add or replace a user MCP server. `args` may be a list or a single
+        shell-style string (split with shlex)."""
+        import shlex
+
+        from evi.mcp.servers import MCPServer, add_server
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()
+        command = str(req.get("command") or "").strip()
+        if not name or not command:
+            raise HTTPException(400, "name and command are required")
+        if ":" in name:
+            raise HTTPException(400, "':' is reserved for plugin-supplied servers")
+        raw_args = req.get("args") or []
+        if isinstance(raw_args, str):
+            try:
+                args = shlex.split(raw_args)
+            except ValueError as exc:
+                raise HTTPException(400, f"could not parse args: {exc}")
+        elif isinstance(raw_args, list):
+            args = [str(a) for a in raw_args]
+        else:
+            raise HTTPException(400, "args must be a string or a list")
+        env = req.get("env") or {}
+        if not isinstance(env, dict):
+            raise HTTPException(400, "env must be an object")
+        server = MCPServer(name=name, command=command, args=args,
+                           env={str(k): str(v) for k, v in env.items()},
+                           enabled=bool(req.get("enabled", True)))
+        add_server(server, overwrite=bool(req.get("overwrite", True)))
+        return {"ok": True, "name": name}
+
+    @app.post("/api/mcp/remove")
+    def mcp_remove_ep(req: dict[str, Any]) -> dict[str, Any]:
+        """Remove a user MCP server (plugin servers are plugin-owned)."""
+        from evi.mcp.servers import remove_server
+
+        name = str((req or {}).get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name}")
+        if ":" in name:
+            raise HTTPException(400, f"{name} is plugin-supplied — remove its plugin instead")
+        if not remove_server(name):
+            raise HTTPException(404, f"no such server: {name}")
+        return {"ok": True}
+
+    @app.post("/api/mcp/toggle")
+    def mcp_toggle_ep(req: dict[str, Any]) -> dict[str, Any]:
+        """Switch a user MCP server on/off."""
+        from evi.mcp.servers import set_enabled
+
+        name = str((req or {}).get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "expected {name, on}")
+        if not set_enabled(name, bool(req.get("on", True))):
+            raise HTTPException(404, f"no such server: {name}")
+        return {"ok": True}
+
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:
         """List bundled documentation pages for the in-app docs viewer."""

@@ -4648,6 +4648,83 @@ def mcp_list_servers() -> None:
         console.print(f"{flag} [bold]{s.name}[/bold] — [dim]{s.command} {argstr}[/dim]")
 
 
+@mcp_app.command("add")
+def mcp_add(
+    name: str = typer.Argument(..., help="A short name for the server (e.g. filesystem)."),
+    command: str = typer.Argument(..., help="The launch command (e.g. npx, uvx)."),
+    args: list[str] = typer.Argument(None, help="Arguments for the command."),
+    env: list[str] = typer.Option(
+        None, "--env", "-e", help="KEY=VALUE environment entries (repeatable)."
+    ),
+    disabled: bool = typer.Option(False, "--disabled", help="Add the server switched off."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing server by this name."),
+) -> None:
+    """Add an MCP server to ~/.evi/mcp.json.
+
+    Example: evi mcp add filesystem npx -- -y @modelcontextprotocol/server-filesystem C:/Users
+    (use `--` before args that start with a dash).
+    """
+    from evi.mcp.servers import MCPServer, add_server
+
+    env_map: dict[str, str] = {}
+    for pair in env or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            console.print(f"[red]bad --env entry:[/red] {pair!r} (expected KEY=VALUE)")
+            raise typer.Exit(1)
+        env_map[key.strip()] = value
+    server = MCPServer(name=name, command=command, args=list(args or []),
+                       env=env_map, enabled=not disabled)
+    if not add_server(server, overwrite=overwrite):
+        console.print(f"[red]server exists:[/red] {name}. Pass --overwrite to replace.")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]added[/green] {name} — {command} {' '.join(server.args)} "
+        f"[dim](check it with `evi mcp list-tools`)[/dim]"
+    )
+    if not Config.load().tools.mcp:
+        console.print("[yellow]note:[/yellow] tools.mcp is off — enable it in config/settings to use MCP")
+
+
+@mcp_app.command("remove")
+def mcp_remove(name: str) -> None:
+    """Remove a user MCP server by name."""
+    from evi.mcp.servers import remove_server
+
+    if ":" in name:
+        console.print(
+            f"[red]{name} is plugin-supplied[/red] — remove its plugin with "
+            "[cyan]evi plugin remove <plugin>[/cyan]"
+        )
+        raise typer.Exit(1)
+    if not remove_server(name):
+        console.print(f"[red]no such server:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
+@mcp_app.command("enable")
+def mcp_enable(name: str) -> None:
+    """Switch a user MCP server on."""
+    from evi.mcp.servers import set_enabled
+
+    if not set_enabled(name, True):
+        console.print(f"[red]no such server:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[green]enabled[/green] {name}")
+
+
+@mcp_app.command("disable")
+def mcp_disable(name: str) -> None:
+    """Switch a user MCP server off (kept in mcp.json)."""
+    from evi.mcp.servers import set_enabled
+
+    if not set_enabled(name, False):
+        console.print(f"[red]no such server:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]disabled[/yellow] {name}")
+
+
 @mcp_app.command("list-tools")
 def mcp_list_tools() -> None:
     """Start MCP servers and list every tool they expose."""
