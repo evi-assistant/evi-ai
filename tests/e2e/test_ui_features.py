@@ -269,6 +269,29 @@ def test_peers_panel(page: Page, evi_base_url: str):
     )
 
 
+def test_hooks_editor(page: Page, evi_base_url: str):
+    """Settings → Hooks loads the editor, saves valid TOML, and rejects a
+    typo'd event name (which the runtime loader would silently skip)."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('hooks')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    editor = page.locator("#hk-editor")
+    expect(editor).to_be_visible(timeout=10000)
+    editor.fill('[[before_tool_call]]\nname = "audit"\nmatch = "*"\ncommand = ["echo", "hi"]\n')
+    page.click("#hk-save")
+    expect(page.locator("#hk-status")).to_have_text("Saved", timeout=10000)
+    # the summary chip for the saved hook appears after re-render
+    expect(page.locator("#hooks-box")).to_contain_text("audit", timeout=10000)
+    # a typo'd event errors instead of saving
+    page.locator("#hk-editor").fill('[[before_toolcall]]\nname = "x"\ncommand = ["echo"]\n')
+    page.click("#hk-save")
+    expect(page.locator("#hk-status")).to_contain_text("Error", timeout=10000)
+    # restore an empty file so other tests see a clean slate
+    page.locator("#hk-editor").fill("# none\n")
+    page.click("#hk-save")
+    expect(page.locator("#hk-status")).to_have_text("Saved", timeout=10000)
+
+
 def test_mcp_panel(page: Page, evi_base_url: str):
     """Settings → MCP: add a server via the form, toggle it off/on, remove it.
     Pure mcp.json file ops — no MCP server is actually launched."""
@@ -315,6 +338,7 @@ def test_mcp_panel(page: Page, evi_base_url: str):
         ("automation", "Routes & Recipes"),
         ("peers", "Peers"),
         ("mcp", "MCP"),
+        ("hooks", "Hooks"),
         ("about", "About"),
     ],
 )

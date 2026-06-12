@@ -279,3 +279,43 @@ def test_run_hook_timeout() -> None:
     res = _run_hook(slow, "x", "{}", result_output=None)
     assert res.timed_out is True
     assert res.exit_code == 124
+
+
+# ---- editor helpers (read_raw / validate / write_raw) ----------------------
+
+
+def test_editor_helpers_roundtrip(tmp_path) -> None:
+    from evi import hooks as hooks_mod
+
+    p = tmp_path / "hooks.toml"
+    assert hooks_mod.read_raw(p) == ""  # absent -> empty
+    text = (
+        '[[before_tool_call]]\nname = "audit"\nmatch = "*"\n'
+        'command = ["echo", "hi"]\n'
+    )
+    assert hooks_mod.validate(text) is None
+    hooks_mod.write_raw(text, p)
+    assert hooks_mod.read_raw(p) == text
+    loaded = [h.name for h in hooks_mod._parse_hook_file(p)]
+    assert loaded == ["audit"]
+
+
+def test_validate_rejects_bad_toml() -> None:
+    from evi import hooks as hooks_mod
+
+    assert hooks_mod.validate("this = = bad") is not None
+
+
+def test_validate_rejects_unknown_event() -> None:
+    from evi import hooks as hooks_mod
+
+    # an event-name typo: the runtime loader would silently never fire this
+    err = hooks_mod.validate('[[before_toolcall]]\nname = "x"\ncommand = ["echo"]\n')
+    assert err is not None and "before_toolcall" in err
+
+
+def test_validate_rejects_entry_without_command_or_url() -> None:
+    from evi import hooks as hooks_mod
+
+    err = hooks_mod.validate('[[stop]]\nname = "x"\n')
+    assert err is not None and "stop" in err

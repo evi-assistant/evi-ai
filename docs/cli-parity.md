@@ -26,6 +26,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `style` | output styles | ✅ settings (llm.output_style) | ✅ | |
 | `voice` | TTS engine/speak/listen | ✅ settings → Voice; speak toggle | ✅ | |
 | `guardrails` | content filter rules | ✅ settings → Guardrails | ✅ | validated `guardrails.toml` editor + rule summary |
+| `hooks` | path/list/test (match resolution) | ✅ settings → Hooks | ✅ | validated `hooks.toml` editor; catches event typos |
 | `plugin` | add/list/remove/search/install | ✅ settings → Plugins | ✅ | list installed, search marketplace, install/remove |
 | `skill` | list/show/import/remove (incl. Claude skills) | ◐ used in chat via `invoke_skill` | ◐ | skills load on demand; no manager UI (file/CLI managed) |
 | `mcp` | servers add/remove/enable/list + serve | ✅ settings → MCP | ✅ | manage servers in-app; env vars via CLI/file |

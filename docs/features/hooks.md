@@ -125,9 +125,30 @@ Hooks are merged from your `hooks.toml` plus any `hooks.toml` shipped by install
 
 Hooks aren't invoked by hand — they run automatically once configured. The workflow is:
 
-1. Edit `~/.evi/hooks.toml` (see Setup).
+1. Edit `~/.evi/hooks.toml` (see Setup), or use **Settings → Hooks** / the CLI below.
 2. Start or restart eVi (`evi chat`, `evi web`, the desktop app, or any agent run). Hooks are loaded at process start, so restart after editing to pick up changes.
 3. Drive eVi normally — hooks fire as tools run and turns progress.
+
+### CLI — `evi hooks`
+
+```text
+evi hooks path                       # print the config file path
+evi hooks list                       # every loaded hook (yours + plugin), grouped by event
+evi hooks test <tool> [--event …]    # which hooks WOULD fire for a tool name (nothing runs)
+```
+
+`hooks test` is match-resolution only — it shows the hooks whose `match` glob
+hits the tool name and flags the ones that can veto, without executing anything.
+
+### Web / Desktop — the Hooks editor
+
+**Settings → Hooks** shows every loaded hook as a chip (event, name, veto flag)
+above a raw `hooks.toml` editor. **Save** validates the whole file first — bad
+TOML, a malformed entry, and crucially **typo'd event names** (e.g.
+`[[before_toolcall]]`), which the runtime loader would otherwise skip
+silently — and reports the error inline instead of writing a broken file.
+Plugin-supplied hooks appear in the chips but aren't editable here (they live
+in the plugin). Backed by `GET`/`POST /api/hooks`.
 
 This applies across every front end (CLI REPL, FastAPI/SSE web UI, Tauri desktop) and to headless / workflow runs, since they all load the same `HookRegistry`.
 

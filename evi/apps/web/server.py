@@ -1279,6 +1279,41 @@ def create_app() -> FastAPI:
                 "summary": {"regex": len(g.rules), "judge": len(g.judge_rules),
                             "classifier": len(g.classifier_rules)}}
 
+    @app.get("/api/hooks")
+    def hooks_get() -> dict[str, Any]:
+        """The hooks config: raw hooks.toml + a summary of every loaded hook
+        (including plugin-supplied ones, which are read-only here)."""
+        from evi import hooks as hooks_mod
+
+        registry = hooks_mod.load_hooks()
+        return {
+            "raw": hooks_mod.read_raw(),
+            "events": list(hooks_mod.ALL_EVENTS),
+            "hooks": [
+                {"name": h.name, "event": h.event, "match": h.match,
+                 "kind": "url" if h.url else "command",
+                 "veto": h.veto_on_nonzero}
+                for h in registry.hooks
+            ],
+        }
+
+    @app.post("/api/hooks")
+    def hooks_set(req: dict[str, Any]) -> dict[str, Any]:
+        """Validate + save hooks.toml from the editor. 400 on bad TOML, a
+        typo'd event name, or a malformed entry (loudly — unlike the runtime
+        loader, which skips bad rows)."""
+        from evi import hooks as hooks_mod
+
+        if not isinstance(req, dict) or "raw" not in req:
+            raise HTTPException(400, "expected {raw: <toml>}")
+        raw = str(req["raw"])
+        err = hooks_mod.validate(raw)
+        if err:
+            raise HTTPException(400, err)
+        hooks_mod.write_raw(raw)
+        registry = hooks_mod.load_hooks()
+        return {"ok": True, "count": len(registry.hooks)}
+
     @app.get("/api/plugins")
     def plugins_list() -> dict[str, Any]:
         """Installed plugins + the marketplace index (with an `installed` flag)."""
