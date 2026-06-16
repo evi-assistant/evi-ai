@@ -10,7 +10,7 @@ when you need to change something; nothing else holds machine-wide state.
 [llm]
 backend         = "lmstudio"                  # lmstudio | ollama | llamacpp | openai_compat
 base_url        = "http://localhost:1234/v1"  # default per-backend; auto-bumped by `evi models backend`
-api_key         = "lm-studio"                 # ignored by local servers; OpenAI SDK requires a value
+api_key         = "lm-studio"                 # local servers ignore it; `env:VARNAME` reads the env var
 model           = "qwen2.5-7b-instruct"       # current active model
 temperature     = 0.7                         # lower (0.3) is friendlier to tool calling
 max_tokens      = 4096
@@ -55,6 +55,24 @@ auto_approve = ["fs", "code", "memory", "skills", "image"]
 
 ### `evi config show` prints the resolved config (with profile overlay).
 ### `evi config path` prints the file path.
+
+### Online providers — `evi models preset`
+
+eVi is local-first, but any OpenAI-compatible cloud gateway works via
+`backend = "openai_compat"`. Named presets make the common ones one command:
+
+```bash
+evi models preset                         # list providers + whether each key env var is set
+evi models preset openrouter -m anthropic/claude-3.5-sonnet
+evi models preset openai                  # uses $OPENAI_API_KEY (api=chat; set api=responses for the Responses API)
+```
+
+Presets (`openrouter`, `openai`, `xai`, `anthropic`, `groq`, `together`) all set
+`backend=openai_compat` + the provider `base_url` and, by default, an
+`api_key = "env:<PROVIDER>_API_KEY"` reference so your key stays in the
+environment, not in `config.toml`. (Pass `--api-key` to store it inline instead.)
+The **anthropic** preset targets Anthropic's OpenAI-compatible endpoint, not the
+native Messages API.
 
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
