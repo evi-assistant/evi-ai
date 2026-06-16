@@ -1627,6 +1627,18 @@ def create_app() -> FastAPI:
             "serving": Config.load().federation.serve,
         }
 
+    @app.post("/api/peers/serve")
+    def peers_set_serve(req: dict[str, Any]) -> dict[str, Any]:
+        """Toggle whether THIS eVi answers federation requests ([federation]
+        serve) — so the Settings UI flips it instead of hand-editing config.toml.
+        /api/federate reads the flag per request, so it takes effect immediately."""
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        cfg = Config.load()
+        cfg.federation.serve = bool(req.get("enabled"))
+        cfg.save()
+        return {"ok": True, "serving": cfg.federation.serve}
+
     @app.post("/api/peers")
     def peers_add(req: dict[str, Any]) -> dict[str, Any]:
         """Add or replace a peer ({name, url, token?})."""

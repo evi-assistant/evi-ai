@@ -168,6 +168,64 @@ def evi_base_url(tmp_path_factory):
         fake.should_exit = True
 
 
+# --- a real 2-node eVi federation network -----------------------------------
+
+
+class _FedNet:
+    def __init__(self, a: str, b: str, b_home: Path) -> None:
+        self.a = a          # node A base url (has B as a peer; serve=off)
+        self.b = b          # node B base url (serve=on — answers federation)
+        self.b_home = b_home
+
+
+@pytest.fixture(scope="session")
+def federation_net(tmp_path_factory):
+    """Spin up a REAL eVi federation: node B serves federation, node A has B as
+    a configured peer — both pointed at one fake LLM backend. Exercises the
+    cross-instance protocol (probe / check_peer / delegate / serve-gating /
+    distributed team runner) that a single-instance harness can't reach."""
+    import json as _json
+
+    import uvicorn
+
+    fake_port = _free_port()
+
+    def _cfg(serve: bool) -> str:
+        return (
+            "[llm]\n"
+            'backend = "openai_compat"\n'
+            f'base_url = "http://127.0.0.1:{fake_port}/v1"\n'
+            'api_key = "test"\n'
+            'model = "fake"\n'
+            "[web]\n"
+            'auth_token = ""\n'
+            "[federation]\n"
+            f"serve = {'true' if serve else 'false'}\n"
+        )
+
+    fake = uvicorn.Server(uvicorn.Config(_make_fake_llm_app(), host="127.0.0.1",
+                                         port=fake_port, log_level="error"))
+    threading.Thread(target=fake.run, daemon=True).start()
+
+    home_b = tmp_path_factory.mktemp("evi-fed-b")
+    (home_b / "config.toml").write_text(_cfg(serve=True), encoding="utf-8")
+    base_b, term_b = _spawn_evi(home_b)
+
+    home_a = tmp_path_factory.mktemp("evi-fed-a")
+    (home_a / "config.toml").write_text(_cfg(serve=False), encoding="utf-8")
+    (home_a / "peers.json").write_text(
+        _json.dumps([{"name": "boxB", "url": base_b, "token": ""}]), encoding="utf-8"
+    )
+    base_a, term_a = _spawn_evi(home_a)
+
+    try:
+        yield _FedNet(base_a, base_b, home_b)
+    finally:
+        term_a()
+        term_b()
+        fake.should_exit = True
+
+
 # --- real Ollama (opt-in; skips cleanly when Ollama isn't running) ---------
 
 OLLAMA_BASE = os.environ.get("EVI_TEST_OLLAMA", "http://127.0.0.1:11434")
