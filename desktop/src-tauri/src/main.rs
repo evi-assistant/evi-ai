@@ -50,15 +50,36 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Directory for the spawned server's log, under the eVi home dir. Created
-/// on demand; None if it can't be set up.
-fn server_log_dir() -> Option<PathBuf> {
-    let base = std::env::var("EVI_HOME").ok().map(PathBuf::from).or_else(|| {
+/// The eVi home dir: `EVI_HOME`, else `~/.evi`.
+fn evi_home() -> Option<PathBuf> {
+    std::env::var("EVI_HOME").ok().map(PathBuf::from).or_else(|| {
         std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
             .ok()
             .map(|h| PathBuf::from(h).join(".evi"))
-    })?;
-    let dir = base.join("logs");
+    })
+}
+
+/// Host to bind the spawned server to. Loopback by default; `[federation]
+/// bind_lan = true` in config.toml exposes it on the LAN so this instance can
+/// act as a federation peer. The webview still connects via 127.0.0.1.
+fn server_bind_host() -> String {
+    let lan = evi_home()
+        .map(|h| h.join("config.toml"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| t.parse::<toml::Value>().ok())
+        .and_then(|v| {
+            v.get("federation")
+                .and_then(|f| f.get("bind_lan"))
+                .and_then(|b| b.as_bool())
+        })
+        .unwrap_or(false);
+    if lan { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() }
+}
+
+/// Directory for the spawned server's log, under the eVi home dir. Created
+/// on demand; None if it can't be set up.
+fn server_log_dir() -> Option<PathBuf> {
+    let dir = evi_home()?.join("logs");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -96,13 +117,14 @@ fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
         ("python3", &["-m"])
     };
 
+    let host = server_bind_host();
     let mut cmd = Command::new(program);
     cmd.args(prefix_args)
         .args([
             "uvicorn",
             "evi.apps.web.server:app",
             "--host",
-            "127.0.0.1",
+            &host,
             "--port",
             &port.to_string(),
         ])
@@ -116,7 +138,7 @@ fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
             "uvicorn",
             "evi.apps.web.server:app",
             "--host",
-            "127.0.0.1",
+            &host,
             "--port",
             &port.to_string(),
         ])
@@ -156,8 +178,9 @@ fn sidecar_path(app: &tauri::App) -> Option<PathBuf> {
 /// binary was bundled next to it (practical-tier OCR), point the server at
 /// it via env so `ocr.py` uses the bundled copy instead of a system one.
 fn spawn_sidecar(path: &Path, port: u16) -> std::io::Result<Child> {
+    let host = server_bind_host();
     let mut cmd = Command::new(path);
-    cmd.args(["--host", "127.0.0.1", "--port", &port.to_string()]);
+    cmd.args(["--host", &host, "--port", &port.to_string()]);
 
     if let Some(dir) = path.parent() {
         let tess = dir.join(if cfg!(windows) { "tesseract.exe" } else { "tesseract" });
