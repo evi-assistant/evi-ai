@@ -40,6 +40,8 @@ the default):
 
     [[before_compact]]       # before history compaction; veto keeps it intact
     [[stop]]                 # after a turn completes (notification; veto ignored)
+    [[session_start]]        # when an interactive session begins (setup)
+    [[session_end]]          # when an interactive session ends (teardown)
 
 When a hook fires we set these env vars in the child process:
 
@@ -84,11 +86,16 @@ HookEvent = Literal[
     "user_prompt_submit",   # fires before a turn; veto blocks the prompt
     "before_compact",       # fires before history compaction; veto skips it
     "stop",                 # fires after a turn completes (notification)
+    "session_start",        # fires when an interactive session begins
+    "session_end",          # fires when an interactive session ends
 ]
 
 # Tool-scoped events match against a tool name; lifecycle events don't.
 TOOL_EVENTS = ("before_tool_call", "after_tool_call")
-LIFECYCLE_EVENTS = ("user_prompt_submit", "before_compact", "stop")
+LIFECYCLE_EVENTS = (
+    "user_prompt_submit", "before_compact", "stop",
+    "session_start", "session_end",
+)
 ALL_EVENTS = TOOL_EVENTS + LIFECYCLE_EVENTS
 
 

@@ -1019,6 +1019,17 @@ _BUILTINS: dict[str, callable] = {
 }
 
 
+def _fire_session_hook(agent: Agent, event: str) -> None:
+    """Fire a session lifecycle hook (session_start / session_end). Best-effort
+    — a broken hook must never crash the REPL."""
+    if getattr(agent, "hooks", None) is None:
+        return
+    try:
+        agent.hooks.run_lifecycle(event)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_bang_command(agent: Agent, command: str) -> None:
     """Run `command` in the shell, print its output, and append it to history
     as context for the next turn. The `!cmd` REPL escape (Claude Code parity)."""
@@ -1095,6 +1106,11 @@ def _run_repl(agent: Agent) -> None:
         "[dim]/help for commands · !cmd to run a shell command · /exit to quit · "
         "Tab to complete commands[/dim]\n"
     )
+
+    # session_start now; session_end on process exit (the REPL has several exit
+    # paths, so atexit is the reliable teardown point).
+    _fire_session_hook(agent, "session_start")
+    atexit.register(_fire_session_hook, agent, "session_end")
 
     while True:
         # Optional customizable status line (off by default).
