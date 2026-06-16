@@ -85,8 +85,9 @@ planned (philosophy mismatch / separate big track).
 | Code review (multi-agent) | `evi review --multi` (Ph 70) | ✅ |
 | Run agents in parallel | `parallel_research` (Ph 61) | ✅ |
 | Worktrees (isolate parallel sessions) | git worktrees | ✅ |
-| Dynamic workflows (script many subagents) | recipes + parallel research | ⚠️ no orchestration DSL |
-| Agent teams / agent view (dispatch dashboard) | tabs + subagents | ❌ no multi-session dashboard |
+| Dynamic workflows (script many subagents) | recipes + workflows + ultracode | ✅ TOML DAG + fixed pipeline |
+| Agent teams (shared task list) | `evi team` — lead decomposes, teammates claim+drain (`evi/teams.py`) | ✅ |
+| Agent view (live dispatch dashboard) | Dispatch panel + `GET /api/dispatch/stream` (SSE, busy dots) | ✅ |
 | Ultraplan / Ultrareview (cloud) | local `review --multi` / plan mode | 🚫 cloud |
 
 ## Automation & triggers
@@ -127,7 +128,7 @@ planned (philosophy mismatch / separate big track).
 | Public Agent SDK (library) | `evi.sdk` — curated re-export + `build_agent()` + examples ([sdk.md](sdk.md)) | ✅ |
 | Session storage (S3/Redis) | local JSONL transcripts | 🚫 local-first |
 | OpenTelemetry / monitoring | opt-in crash reporting (Sentry-compatible) | ⚠️ no metrics/traces |
-| Tool search (1000s of tools) | category-filtered tools | 🚫 not needed at scale |
+| Tool search (1000s of tools) | `[tools] tool_search` defers the long tail behind a `search_tools` meta-tool | ✅ opt-in |
 
 ## Org / enterprise / compliance
 

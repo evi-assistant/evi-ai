@@ -318,6 +318,16 @@ def test_models_preset(evi_cli):
     assert evi_cli("models", "preset", "nope", check=False).code != 0
 
 
+def test_team_lifecycle(evi_cli):
+    # add / list / clear (new + run need a live backend, so exercise file ops)
+    assert "added" in evi_cli("team", "add", "design the schema").out
+    assert "added" in evi_cli("team", "add", "implement it", "--blocked-by", "t1").out
+    listed = evi_cli("team", "list").out
+    assert "design the schema" in listed and "after t1" in listed
+    assert "cleared" in evi_cli("team", "clear").out
+    assert "no team tasks" in evi_cli("team", "list").out
+
+
 def test_mcp_add_http(evi_cli):
     out = evi_cli(
         "mcp", "add-http", "linear", "https://mcp.linear.app/mcp",

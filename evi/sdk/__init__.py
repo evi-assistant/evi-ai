@@ -120,6 +120,9 @@ from evi.ultracode import (
 )
 from evi.workflows import Workflow, fan_out, run_workflow
 
+# --- agent teams (shared claimable task list) ---------------------------
+from evi.teams import TeamStore, TeamTask, drain_team, ready_tasks
+
 # --- telemetry -----------------------------------------------------------
 from evi import otel
 
@@ -199,6 +202,10 @@ __all__ = [
     "run_workflow",
     "Workflow",
     "fan_out",
+    "TeamStore",
+    "TeamTask",
+    "drain_team",
+    "ready_tasks",
     # telemetry
     "otel",
 ]
