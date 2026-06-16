@@ -374,7 +374,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/tools", "list active tools"),
         ("/model [id]", "show or switch the active model"),
         ("/goal [text|clear]", "set / clear / show the ongoing goal"),
-        ("/plan", "next turn runs in plan-only mode (no tools)"),
+        ("/plan [on|off]", "plan-only next turn; /plan on|off toggles persistent read-only plan mode"),
         ("/auto [on|off]", "auto-approve every tool call for this session"),
         ("/compact", "summarise older history into one note to free context"),
         ("/context, /ctx", "show where the context window is being spent"),
@@ -461,6 +461,16 @@ def _handle_goal(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
 
 
 def _handle_plan(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    arg = args.strip().lower()
+    # Persistent plan/build toggle (opencode parity): /plan on stays read-only
+    # (no tools) every turn until /plan off; /plan build is an alias for off.
+    if arg in ("on", "build", "off"):
+        agent.plan_mode = (arg == "on")
+        if agent.plan_mode:
+            console.print("[magenta]plan mode ON[/magenta] [dim]— read-only every turn until `/plan off`.[/dim]")
+        else:
+            console.print("[green]plan mode OFF[/green] [dim]— tools enabled (build mode).[/dim]")
+        return "continue"
     agent.enable_plan_mode()
     console.print(
         "[dim]plan-only mode enabled for the next turn. "
@@ -1171,7 +1181,9 @@ def _run_repl(agent: Agent) -> None:
         if agent.goal:
             shortened = agent.goal if len(agent.goal) <= 40 else agent.goal[:37] + "…"
             bits.append(f" [yellow](goal: {shortened})[/yellow]")
-        if agent.plan_mode_once:
+        if agent.plan_mode:
+            bits.append(" [magenta][plan-mode][/magenta]")
+        elif agent.plan_mode_once:
             bits.append(" [magenta][plan][/magenta]")
         if agent.config.auto.ultracode:
             bits.append(" [magenta][ultracode][/magenta]")

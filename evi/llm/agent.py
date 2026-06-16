@@ -436,6 +436,7 @@ class Agent:
         self.auto_all: bool = False  # set via /auto on for the session
         self.goal: str | None = None
         self.plan_mode_once: bool = False
+        self.plan_mode: bool = False  # persistent plan/read-only mode (/plan on)
         self._base_system_prompt = system_prompt
         self.history: list[dict[str, Any]] = [
             {"role": "system", "content": self._compose_system_prompt()}
@@ -825,7 +826,7 @@ class Agent:
                 "Stay focused on the goal. Say 'goal complete' when you "
                 "believe it is satisfied."
             )
-        plan_only = self.plan_mode_once
+        plan_only = self.plan_mode_once or self.plan_mode
         if plan_only:
             composed = (
                 f"{composed}\n\n"

@@ -250,6 +250,30 @@ def test_plan_mode_one_shot_disables_tools(tmp_path) -> None:
     assert agent.plan_mode_once is False
 
 
+def test_persistent_plan_mode_holds_across_turns(tmp_path) -> None:
+    """agent.plan_mode (persistent) keeps tools=None every turn until cleared."""
+    captured: dict = {}
+
+    class _CapturingCompletions:
+        def create(self, **kwargs):
+            captured.setdefault("tools_seen", []).append(kwargs.get("tools"))
+            return iter([_text_chunk("plan", finish="stop")])
+
+    client = type("C", (), {"chat": type("X", (), {"completions": _CapturingCompletions()})()})()
+    real_tool = Tool(
+        name="x", description="d",
+        parameters={"type": "object", "properties": {}}, func=lambda: "ok",
+    )
+    agent = Agent(client=client, config=Config(), tools=[real_tool])
+    agent.plan_mode = True
+    list(agent.chat("a"))
+    list(agent.chat("b"))
+    assert captured["tools_seen"] == [None, None]  # both turns read-only
+    agent.plan_mode = False
+    list(agent.chat("c"))
+    assert captured["tools_seen"][2] is not None  # tools back after toggle off
+
+
 def test_permission_callback_denies_tool() -> None:
     """When the callback returns False the tool result becomes a PERMISSION DENIED string."""
     # Turn 1: model emits a tool call. Turn 2: model emits final text.
