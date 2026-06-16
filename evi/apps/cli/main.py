@@ -1547,6 +1547,11 @@ def review(
         help="Fan out parallel reviewers (correctness · security · performance · tests) "
              "and combine, instead of one pass.",
     ),
+    fix: bool = typer.Option(
+        False, "--fix",
+        help="After reviewing, apply the concrete fixes to the working tree "
+             "(a second pass with write tools).",
+    ),
 ) -> None:
     """Git-aware code review. Streams a focused critique to your terminal.
 
@@ -1582,7 +1587,10 @@ def review(
             "[dim]running parallel reviewers "
             "(correctness · security · performance · tests)…[/dim]"
         )
-        console.print(Markdown(multi_review(diff, tool_categories=cats)))
+        review_text = multi_review(diff, tool_categories=cats)
+        console.print(Markdown(review_text))
+        if fix and review_text.strip():
+            _apply_review_fixes(diff, review_text)
         return
 
     # Build a scoped agent: same model + memory + skills, but with a
@@ -1676,6 +1684,33 @@ def review(
             else:
                 console.print()
             break
+
+    if fix and text_acc:
+        _apply_review_fixes(diff, "".join(text_acc))
+
+
+def _apply_review_fixes(diff: str, review_text: str) -> None:
+    """Second pass for `review --fix`: apply the review's concrete fixes to the
+    working tree with write tools (the review pass itself is read-only)."""
+    from evi.headless import run_headless
+
+    console.print("\n[cyan]applying review fixes…[/cyan]")
+    agent = _build_agent(
+        system_prompt=(
+            "You are applying fixes from a code review to the working tree. Make "
+            "ONLY the concrete changes the review calls for, using edit_file / "
+            "write_file. Do not refactor broadly or touch unrelated code. When "
+            "done, briefly list the files you changed and why."
+        ),
+        register=False,
+    )
+    agent.enable_auto_all()  # --fix is an explicit opt-in to write edits
+    prompt = (
+        f"Apply the safe, concrete fixes from this review to the working tree.\n\n"
+        f"REVIEW:\n{review_text}\n\nDIFF THAT WAS REVIEWED:\n{diff[:20000]}"
+    )
+    res = run_headless(agent, prompt, max_turns=12)
+    console.print(Markdown(res.text or "(no changes made)"))
 
 
 config_app = typer.Typer(help="Config commands.")
