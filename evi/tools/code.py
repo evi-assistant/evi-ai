@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from evi import workdir
 from evi.tools.base import tool
 
 
@@ -58,3 +59,24 @@ def run_python(code: str) -> str:
         if len(out) > _MAX_OUTPUT:
             out = out[:_MAX_OUTPUT] + f"\n... [truncated, {len(out)} bytes total]"
         return note + (out or f"(no output, exit={res.returncode})")
+
+
+@tool(
+    description=(
+        "Run the locally-installed linter for a file's language (ruff/eslint/"
+        "go vet/clippy, by extension) and return its diagnostics. Use after "
+        "editing a file to catch errors. No-op message when no linter is "
+        "installed for that type."
+    ),
+    category="code",
+)
+def check_file(path: str) -> str:
+    p = workdir.resolve(path)
+    if not p.is_file():
+        return f"ERROR: not a file: {p}"
+    from evi import codeintel
+
+    out = codeintel.diagnose(p)
+    if len(out) > _MAX_OUTPUT:
+        out = out[:_MAX_OUTPUT] + f"\n... [truncated, {len(out)} bytes total]"
+    return out

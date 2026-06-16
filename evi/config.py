@@ -347,6 +347,10 @@ class ToolToggles:
     # Transcript retention: delete stored sessions older than this many days
     # on startup. 0 = keep forever. Mirrors Claude Code's `cleanupPeriodDays`.
     cleanup_period_days: int = 0
+    # When True, auto-run a locally-installed formatter (ruff/black/prettier/
+    # gofmt/rustfmt, by extension) after write_file/edit_file/apply_patch.
+    # No-op when the formatter isn't installed. Mirrors opencode's format-on-edit.
+    format_on_edit: bool = False
 
 
 @dataclass
