@@ -176,6 +176,24 @@ command = ["true"]
     assert [h.name for h in reg.hooks] == ["ok"]
 
 
+def test_command_hook_sees_effort(monkeypatch, tmp_path: Path) -> None:
+    # A command hook gets the active reasoning effort as $EVI_EFFORT.
+    monkeypatch.setattr("evi.config.HOME", tmp_path)
+    monkeypatch.setattr("evi.config.CONFIG_PATH", tmp_path / "config.toml")
+    from evi.config import Config
+
+    cfg = Config()
+    cfg.llm.reasoning_effort = "high"
+    cfg.save()
+    hook = Hook(
+        name="e", event="before_tool_call", match="*",
+        command=[sys.executable, "-c", "import os; print(os.environ.get('EVI_EFFORT', ''))"],
+        timeout=10,
+    )
+    res = _run_hook(hook, "read_file", "{}", result_output=None)
+    assert res.stdout.strip() == "high"
+
+
 # ---- matching -----------------------------------------------------------
 
 

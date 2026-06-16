@@ -212,6 +212,28 @@ def test_manager_connects_http_transport(monkeypatch) -> None:
     assert "remote.ping" not in REGISTRY  # cleaned up on stop
 
 
+def test_manager_stdio_injects_session_env(monkeypatch) -> None:
+    import mcp
+    import mcp.client.stdio as stdio_mod
+
+    captured: dict = {}
+
+    def fake_stdio(params):
+        captured["env"] = dict(params.env or {})
+        return _FakeStreams(2)
+
+    monkeypatch.setattr(stdio_mod, "stdio_client", fake_stdio)
+    monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
+
+    mgr = MCPManager([MCPServer(name="local", command="noop", args=[])], session_id="sess-123")
+    try:
+        mgr.start()
+        assert captured["env"].get("EVI") == "1"  # marker like CLAUDECODE=1
+        assert captured["env"].get("EVI_SESSION_ID") == "sess-123"
+    finally:
+        mgr.stop()
+
+
 def test_manager_connects_sse_transport(monkeypatch) -> None:
     import mcp
     import mcp.client.sse as sse
