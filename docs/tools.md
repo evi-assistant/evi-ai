@@ -28,6 +28,7 @@ no implicit traversal check — combine with a hook for that.
 | Tool         | What it does                                                |
 |--------------|-------------------------------------------------------------|
 | `run_python` | Run a Python 3 snippet in a subprocess with a 10s timeout. Combined stdout+stderr, capped at 16 KB. Fresh temp cwd. |
+| `monitor`    | Watch for a bounded window (≤300s): `kind=file` tails NEW lines of a log; `kind=command` runs a shell command and collects output. Returns early when an `until` regex matches — for babysitting a build/CI run or tailing a log. |
 
 **Not a sandbox.** Acceptable for trusted local use. For untrusted code,
 wrap with a Docker hook or disable the category.
