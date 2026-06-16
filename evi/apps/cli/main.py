@@ -3425,11 +3425,18 @@ def plugin_add(
 
 
 @plugin_app.command("list")
-def plugin_list() -> None:
-    """List installed plugins."""
+def plugin_list(
+    enabled: bool = typer.Option(False, "--enabled", help="Only enabled plugins."),
+    disabled: bool = typer.Option(False, "--disabled", help="Only disabled plugins."),
+) -> None:
+    """List installed plugins (with enabled state; filter with --enabled/--disabled)."""
     from evi import plugins
 
     items = plugins.list_plugins()
+    if enabled:
+        items = [p for p in items if p.enabled]
+    if disabled:
+        items = [p for p in items if not p.enabled]
     if not items:
         console.print(
             "[dim]no plugins. Add one with:[/dim] [cyan]evi plugin add <dir|git-url>[/cyan]"
@@ -3438,6 +3445,7 @@ def plugin_list() -> None:
     for p in items:
         ver = f" [dim]v{p.version}[/dim]" if p.version else ""
         desc = f" — {p.description}" if p.description else ""
+        state = "[green]on [/green]" if p.enabled else "[red]off[/red]"
         parts = [f"{p.commands} cmds"]
         if p.skills:
             parts.append(f"{p.skills} skills")
@@ -3448,7 +3456,29 @@ def plugin_list() -> None:
         if p.agents:
             parts.append(f"{p.agents} agents")
         counts = ", ".join(parts)
-        console.print(f"  [bold]{p.name}[/bold]{ver} [dim]({counts})[/dim]{desc}")
+        console.print(f"  {state} [bold]{p.name}[/bold]{ver} [dim]({counts})[/dim]{desc}")
+
+
+@plugin_app.command("enable")
+def plugin_enable(name: str) -> None:
+    """Enable a plugin (its commands/skills/hooks/MCP/agents load again)."""
+    from evi import plugins
+
+    if not plugins.set_enabled(name, True):
+        console.print(f"[red]no such plugin:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[green]enabled[/green] {name}")
+
+
+@plugin_app.command("disable")
+def plugin_disable(name: str) -> None:
+    """Disable a plugin without removing it (its content stops loading)."""
+    from evi import plugins
+
+    if not plugins.set_enabled(name, False):
+        console.print(f"[red]no such plugin:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]disabled[/yellow] {name}")
 
 
 @plugin_app.command("remove")
