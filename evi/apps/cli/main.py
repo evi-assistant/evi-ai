@@ -1333,6 +1333,68 @@ def chat(
     _run_repl(agent)
 
 
+_AGENTS_TEMPLATE = """\
+# {name} — project context for AI agents
+
+> eVi auto-loads this file (and merges it with any in parent directories) as
+> durable project context. It's the same convention Claude Code, opencode, and
+> Cursor use, so one file serves every tool. Fill in the sections below.
+
+## What this project is
+
+<one-paragraph description: what it does, who it's for>
+
+## Layout
+
+- `src/` — <…>
+- `tests/` — <…>
+
+## Conventions
+
+- <language/style, naming, patterns to follow>
+- <things to avoid>
+
+## Commands
+
+- Build: `<…>`
+- Test: `<…>`
+- Lint/format: `<…>`
+
+## Notes for the agent
+
+- <gotchas, domain terms, anything non-obvious that isn't in the code>
+"""
+
+
+@app.command()
+def init(
+    name: str = typer.Option(
+        "AGENTS.md", "--name",
+        help="Filename to create — AGENTS.md (cross-tool standard) or EVI.md.",
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite if it exists."),
+) -> None:
+    """Scaffold a project-context file (AGENTS.md / EVI.md) in the current dir.
+
+    eVi auto-loads it as durable project context (merged up the directory tree),
+    the same convention Claude Code / opencode / Cursor use.
+    """
+    from pathlib import Path as _Path
+
+    dest = _Path.cwd() / name
+    if dest.exists() and not force:
+        console.print(
+            f"[yellow]{name} already exists[/yellow] — pass --force to overwrite"
+        )
+        raise typer.Exit(1)
+    dest.write_text(_AGENTS_TEMPLATE.format(name=name), encoding="utf-8")
+    console.print(
+        f"[green]created[/green] {dest}\n"
+        "[dim]eVi loads it as project context from this folder down. "
+        "Fill in the sections.[/dim]"
+    )
+
+
 @app.command()
 def doctor(
     strict: bool = typer.Option(
