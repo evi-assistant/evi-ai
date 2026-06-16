@@ -111,3 +111,36 @@ def test_most_recent_session_by_timestamp(tmp_path: Path) -> None:
 
 def test_most_recent_session_empty(tmp_path: Path) -> None:
     assert most_recent_session_id(root=tmp_path) is None
+
+
+def test_search_sessions_finds_and_snippets(tmp_path: Path) -> None:
+    from evi.sessions import search_sessions
+
+    now = time.time()
+    _write_session(tmp_path, "2026-05-20", "abc", [
+        {"role": "user", "content": "how do I configure the widget frobnicator?", "ts": now - 100},
+        {"role": "assistant", "content": "set widget.mode = fast", "ts": now - 99},
+    ])
+    _write_session(tmp_path, "2026-05-21", "def", [
+        {"role": "user", "content": "totally unrelated", "ts": now - 10},
+    ])
+
+    matches = search_sessions("frobnicator", root=tmp_path)
+    assert len(matches) == 1
+    assert matches[0].session.session_id == "abc"
+    assert matches[0].role == "user"
+    assert "frobnicator" in matches[0].snippet.lower()
+
+    assert search_sessions("nothingmatches", root=tmp_path) == []
+    assert search_sessions("", root=tmp_path) == []
+
+
+def test_search_sessions_caps_per_session(tmp_path: Path) -> None:
+    from evi.sessions import search_sessions
+
+    now = time.time()
+    _write_session(tmp_path, "2026-05-20", "abc", [
+        {"role": "user", "content": f"hit number {i}", "ts": now - i} for i in range(10)
+    ])
+    matches = search_sessions("hit", root=tmp_path, max_per_session=3)
+    assert len(matches) == 3

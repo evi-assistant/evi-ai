@@ -5116,6 +5116,28 @@ def sessions_list(
         )
 
 
+@sessions_app.command("search")
+def sessions_search(
+    query: str = typer.Argument(..., help="Text to search for across transcripts."),
+    days: int = typer.Option(0, help="Limit to the last N days (0 = all)."),
+    limit: int = typer.Option(20, help="Max matches to show."),
+) -> None:
+    """Full-text search past sessions; resume a hit with `evi sessions resume <id>`."""
+    from evi.sessions import fmt_when, search_sessions
+
+    matches = search_sessions(query, days=days or None, limit=limit)
+    if not matches:
+        console.print(f"[dim]no transcript matches for[/dim] {query!r}")
+        return
+    for m in matches:
+        when = fmt_when(m.session.ended_at or m.session.started_at)
+        console.print(
+            f"  [cyan]{m.session.session_id[:8]}[/cyan] [dim]{when} · "
+            f"{m.role}[/dim] {m.snippet}"
+        )
+    console.print("[dim]resume: [/dim][cyan]evi sessions resume <id>[/cyan]")
+
+
 @sessions_app.command("purge")
 def sessions_purge(
     older_than: int = typer.Option(

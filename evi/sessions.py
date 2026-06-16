@@ -133,6 +133,51 @@ def list_sessions(
     return out
 
 
+@dataclass(frozen=True)
+class SessionMatch:
+    """A transcript search hit: the session it's in plus a context snippet."""
+
+    session: SessionInfo
+    role: str
+    snippet: str
+
+
+def search_sessions(
+    query: str,
+    *,
+    root: Path | None = None,
+    days: int | None = None,
+    limit: int = 50,
+    max_per_session: int = 3,
+) -> list[SessionMatch]:
+    """Full-text search across stored transcripts (case-insensitive substring).
+
+    Returns matches newest-session first, each with a trimmed snippet centred
+    on the hit. Caps hits per session so one chatty session can't crowd out
+    the rest. Mirrors Claude Code's transcript search (Ctrl+R / `--resume`)."""
+    q = query.strip().lower()
+    if not q:
+        return []
+    out: list[SessionMatch] = []
+    for info in list_sessions(root=root, days=days, limit=100_000):
+        hits = 0
+        for e in _read_entries(info.path):
+            content = str(e.get("content", ""))
+            idx = content.lower().find(q)
+            if idx < 0:
+                continue
+            start = max(0, idx - 40)
+            end = min(len(content), idx + len(q) + 40)
+            snippet = ("…" if start else "") + content[start:end].replace("\n", " ").strip() + ("…" if end < len(content) else "")
+            out.append(SessionMatch(session=info, role=str(e.get("role", "")), snippet=snippet))
+            hits += 1
+            if hits >= max_per_session:
+                break
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
 def handoff_info(
     session_id: str, *, base_url: str = "", root: Path | None = None
 ) -> dict[str, Any] | None:
