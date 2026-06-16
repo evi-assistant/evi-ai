@@ -1,7 +1,7 @@
 # eVi vs Claude Code — feature comparison
 
 How eVi's capabilities line up against the full [Claude Code docs](https://code.claude.com/docs/en/overview)
-surface (reviewed 2026-06-08). eVi is **local-first, single-user, privacy-first**,
+surface (reviewed 2026-06-16, eVi 0.33.0). eVi is **local-first, single-user, privacy-first**,
 so a number of Claude Code's cloud/enterprise features are intentionally out of
 scope rather than "missing".
 
@@ -49,20 +49,26 @@ planned (philosophy mismatch / separate big track).
 | Skills | `SkillStore` | ✅ |
 | Subagents | `delegate_*` + `parallel_research` (Ph 61) | ✅ |
 | Output styles | `[llm] output_style` (Ph 69) | ✅ |
-| Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop) | ✅ |
+| Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop/**session_start**/**session_end**; **conditional `arg_match`**) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
-| Keybindings | — | ❌ buildable |
+| Keybindings | `keybindings.toml` + `evi keybindings` (Ph 82) | ✅ |
+| Skills tool-scoping (allowed/disallowed-tools) | — | ❌ buildable (needs an "active-skill" mode in the loop) |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
+| Nested skills (subfolders) | recursive `SKILL.md` scan | ✅ |
+| `/add-dir` (extra working dirs) | `/add-dir` → session trusted_dirs | ✅ |
+| `!cmd` shell passthrough | `!cmd` in the REPL (output folded into context) | ✅ |
+| AskUserQuestion (clarifying Qs) | `ask_user` tool (interactive-only; graceful no-op in web/headless) | ✅ |
 
 ## Plugins & MCP
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
-| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/list/remove` (Ph 68, 75, 80) | ⚠️ commands + skills + hooks + MCP (subagent profiles pending) |
-| Plugin marketplaces / discovery | install from dir or git URL | ❌ no curated index |
+| Plugins (bundle commands/skills/agents/hooks) | `evi plugin add/init/list/remove`; bundles commands+skills+hooks+MCP+**subagent profiles**; installs from dir / git / **.zip** / URL; **`bin/` on PATH** | ✅ |
+| Plugin scaffolding | `evi plugin init <name>` (starter command + skill) | ✅ |
+| Plugin marketplaces / discovery | `evi plugin search/install` + `[plugins] index_urls` (curated index) | ✅ |
 | MCP client (connect to servers) | `MCPManager`, `mcp.json` | ✅ |
 | MCP server (publish eVi's tools) | `evi mcp serve` (stdio + HTTP) | ✅ |
-| Managed MCP (allowlists) | per-tool allow on publish + `tools.mcp_allow` (Ph 78) | ✅ |
+| Managed MCP (allowlists + output cap) | per-tool allow on publish + `tools.mcp_allow` (Ph 78) + `tools.mcp_max_output_chars` | ✅ |
 
 ## Platforms
 
@@ -84,11 +90,12 @@ planned (philosophy mismatch / separate big track).
 |---|---|---|
 | Code review (multi-agent) | `evi review --multi` (Ph 70) | ✅ |
 | Run agents in parallel | `parallel_research` (Ph 61) | ✅ |
-| Worktrees (isolate parallel sessions) | git worktrees | ✅ |
+| Worktrees (isolate parallel sessions) | git worktrees + `[worktree] base_ref` default | ✅ |
 | Dynamic workflows (script many subagents) | recipes + workflows + ultracode | ✅ TOML DAG + fixed pipeline |
 | Agent teams (shared task list) | `evi team` — lead decomposes, teammates claim+drain (`evi/teams.py`) | ✅ |
 | Agent view (live dispatch dashboard) | Dispatch panel + `GET /api/dispatch/stream` (SSE, busy dots) | ✅ |
-| Ultraplan / Ultrareview (cloud) | local `review --multi` / plan mode | 🚫 cloud |
+| Ultrareview (CI gate) | `evi review --multi --exit-code` / `--json` + `/ultrareview` | ✅ local |
+| Ultraplan (cloud) | local plan mode | 🚫 cloud |
 
 ## Automation & triggers
 
@@ -105,6 +112,9 @@ planned (philosophy mismatch / separate big track).
 | Settings (global + project) | config + profiles + `.evi.toml` (Ph 74) + settings UI | ✅ |
 | Env vars / `.claude` dir | `EVI_*` env + `~/.evi` | ✅ |
 | Model config / aliases / fast mode | model picker, routing, `fast_mode` | ✅ |
+| Fallback model | `[llm] fallback_models` (retry the turn down the chain) | ✅ |
+| Extended thinking on/off | `reasoning_effort` off/low/medium/high/max (`/effort`) | ✅ |
+| Transcript retention (cleanupPeriodDays) | `tools.cleanup_period_days` + `evi sessions purge` | ✅ |
 | Prompt caching | `cache_prompt` | ✅ |
 | Context window display | usage chip + status line | ⚠️ no interactive sim |
 | Cloud backends (Bedrock/Vertex/Foundry) | `openai_compat` (covers gateways/proxies) | 🚫 by design |
@@ -120,7 +130,8 @@ planned (philosophy mismatch / separate big track).
 | Structured outputs | `/json` + JSON-Schema (`/schema`, `evi run --schema`) | ✅ |
 | Batch API | `evi batch <file>` → JSONL (parallel) | ✅ |
 | Evals | `evi eval` (assertions + LLM-as-judge; `--eval` on a schedule) | ✅ |
-| Usage analytics | `evi stats` (local, from transcripts) | ✅ local-only |
+| Usage analytics | `evi stats` (local; sessions/tools/**by-category**/busy days) | ✅ local-only |
+| Transcript search (Ctrl+R / resume) | `evi sessions search <query>` (snippets) | ✅ |
 | Responses API built-in tools | `[llm] responses_tools` (web_search/code_interpreter/…) | ✅ opt-in |
 | Multi-user / teams | `[web] multi_user` + `users.json` (per-user tokens + isolated sessions/transcripts/memory) | ✅ opt-in |
 | Federation (agent↔agent across machines) | `evi peer` / `delegate_peer` / `/api/federate` | ✅ eVi-unique |
@@ -138,27 +149,37 @@ planned (philosophy mismatch / separate big track).
 | Authentication (accounts/SSO) | web auth token; local backends need none | 🚫 local |
 | ZDR / legal / data-usage | private by design (everything local) | 🚫 N/A |
 
-## Summary — buildable gaps
+## Summary — S/M parity batch (0.33.0)
 
-✅ **Shipped in 0.31.0:**
-- **Phase 75** — plugin **skills** (commands + skills now bundle; hooks/MCP/subagents still pending).
-- **Phase 76** — nested project context (merge `EVI.md`/`AGENTS.md` up the tree).
-- **Phase 77** — auto-mode trusted directories + domains.
-- **Phase 78** — consume-side MCP server allowlist (`tools.mcp_allow`).
+✅ **Closed in 0.33.0** (the "close every buildable small/medium gap" pass):
 
-✅ **Also shipped (local, since 0.31.0 — pending the Actions billing block):**
-the full Phase 79–94 batch — 79 in-app update progress, **80** plugin hooks +
-MCP, **81** HTTP hooks, **82** keybindings, **83** channels (push-into-session),
-**84** packaged CI action, **87** cross-device handoff, **88** context-window
-breakdown, **89** OpenTelemetry, **90** fine-tune export, **91** voice engines
-(coqui/f5/piper), **92** CodeQL + gitleaks, **93** Docker→GHCR, **94** sigstore
-signing.
+- **Model fallback chain** — `[llm] fallback_models` retries the turn down the chain on a setup failure.
+- **Extended thinking off** — `reasoning_effort = "off"` (plus `/effort off`); centralized in `reasoning.py`.
+- **Transcript retention** — `tools.cleanup_period_days` (auto-prune on startup) + `evi sessions purge`.
+- **Transcript search** — `evi sessions search <query>` with snippets.
+- **MCP output cap** — `tools.mcp_max_output_chars` truncates chatty tool results.
+- **Conditional hooks** — `arg_match` gates a hook on tool arguments, not just the tool name.
+- **Session lifecycle hooks** — `session_start` / `session_end`.
+- **CI-gating review** — `evi review --multi --exit-code` / `--json` + `/ultrareview`.
+- **Plugins** — `evi plugin init` scaffold; install from **.zip**/URL; `bin/` on PATH; recursive (nested) skill discovery; `/reload-skills`.
+- **`/add-dir`** — trust an extra directory for the session.
+- **`!cmd`** — REPL shell passthrough (output folded into context).
+- **`ask_user` tool** — AskUserQuestion parity (interactive-only, graceful no-op elsewhere).
+- **`worktree.base_ref`** — default fork point for `evi worktree create`.
+- **Usage by category** — `evi stats` attributes tool calls per category.
 
-The whole roadmap 79–94 batch is shipped (local), and the last lighter/later
-items too: **subagent profiles in plugins** (`agents.toml` + the `delegate`
-tool / `evi agents`), **`evi://` deep links** (`evi/deeplinks.py` + Tauri scheme
-+ `evi link`), a **plugin marketplace index** (`evi/marketplace.py` + `evi
-plugin search/install/index`), and the **public Agent SDK** (`evi.sdk` —
-curated re-export + `build_agent()` convenience constructor + `examples/python/`;
-see [sdk.md](sdk.md)). Explicitly **not** planned: cloud/enterprise backends, IDE
-extensions, mobile, agentic browser, cost/analytics dashboards.
+✅ **Already shipped (0.31.0 → 0.32.0):** the full Phase 75–94 roadmap (plugin
+skills/hooks/MCP/subagent-profiles, nested project context, trusted dirs/domains,
+MCP allowlist, keybindings, channels, packaged CI action, cross-device handoff,
+context-window breakdown, OpenTelemetry, fine-tune export, voice engines, CodeQL +
+gitleaks, Docker→GHCR, sigstore signing), plus `evi://` deep links, the plugin
+marketplace index, and the public **Agent SDK** (`evi.sdk`; see [sdk.md](sdk.md)).
+
+⚠️ **Deferred (need an architectural addition or are low-value), not philosophy gaps:**
+- **Skill tool-scoping** (`allowed-tools`/`disallowed-tools` in skill frontmatter) — needs a persistent "active-skill" mode in the agent loop (skills are currently one-shot instruction packets).
+- **Nested subagent spawning** (subagents that spawn subagents) — deliberately gated as a runaway-cost guard.
+- **Custom REPL themes** — terminal colour themes (output styles already cover response persona).
+
+🚫 **Not planned (by design):** cloud/enterprise backends (Bedrock/Vertex/Foundry),
+IDE extensions, mobile, agentic browser, hosted session storage, cost/analytics
+dashboards, accounts/SSO/admin — eVi is local-first and single-user.
