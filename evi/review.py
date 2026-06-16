@@ -20,6 +20,7 @@ permission prompts etc. all work the same.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -110,6 +111,38 @@ REVIEW_SYSTEM_PROMPT = (
     "diff looks good, say so — don't invent issues. End with a one-line "
     "verdict: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION."
 )
+
+
+# Verdict keywords the single-pass review prompt is told to end with.
+_VERDICTS = ("REQUEST_CHANGES", "NEEDS_DISCUSSION", "APPROVE")
+_FILE_LINE_RE = re.compile(r"[\w./\\-]+:\d+")
+
+
+def parse_verdict(text: str) -> str:
+    """Extract the review's final verdict keyword, or "" if none is present.
+
+    The rightmost match wins (the verdict line is at the end of the report)."""
+    up = text.upper()
+    best, best_at = "", -1
+    for v in _VERDICTS:
+        at = up.rfind(v)
+        if at > best_at:
+            best, best_at = v, at
+    return best
+
+
+def review_exit_code(text: str) -> int:
+    """Map a review report to a process exit code for CI gating (`--exit-code`).
+
+    APPROVE → 0; REQUEST_CHANGES / NEEDS_DISCUSSION → 1. When there's no
+    explicit verdict (e.g. a multi-lens report), gate on whether any concrete
+    `file:line` issue was reported. Mirrors `/ultrareview` used as a gate."""
+    v = parse_verdict(text)
+    if v == "APPROVE":
+        return 0
+    if v in ("REQUEST_CHANGES", "NEEDS_DISCUSSION"):
+        return 1
+    return 1 if _FILE_LINE_RE.search(text) else 0
 
 
 def review_prompt(diff: str, *, label: str = "diff") -> str:

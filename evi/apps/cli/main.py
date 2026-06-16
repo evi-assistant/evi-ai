@@ -374,6 +374,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/image <path>", "attach an image to the next turn (VLM models)"),
         ("/effort [off|low|medium|high|max|ultracode]", "set reasoning effort (off = no thinking; ultracode = max + auto-pipeline)"),
         ("/ultra [task]", "run one task through the ultracode pipeline (no arg toggles auto mode)"),
+        ("/ultrareview [range]", "multi-lens review of the current diff (CI gate: evi review --multi --exit-code)"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
         ("/json <prompt>", "force JSON-object output for the next turn"),
         ("/schema <file> [prompt]", "constrain the next turn to a JSON Schema"),
@@ -884,8 +885,46 @@ def _handle_recent(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRes
     return "continue"
 
 
+def _handle_review(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/ultrareview [range]` — multi-lens review of the current diff.
+
+    No arg reviews the working tree vs HEAD; an arg is a diff range or
+    `--branch <name>`. Runs parallel correctness/security/perf/tests reviewers
+    (doesn't touch this chat's history) and prints the report + verdict. For a
+    CI gate, use `evi review --multi --exit-code` from the shell."""
+    from evi.review import (
+        ReviewError, get_diff, multi_review, parse_verdict, review_exit_code,
+    )
+
+    a = args.strip()
+    try:
+        if a.startswith("--branch"):
+            diff = get_diff(branch=a.split(None, 1)[1].strip() if " " in a else None)
+        elif a:
+            diff = get_diff(range=a)
+        else:
+            diff = get_diff()
+    except ReviewError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return "continue"
+    if not diff.strip():
+        console.print("[dim](no changes to review)[/dim]")
+        return "continue"
+    console.print(
+        "[dim]running parallel reviewers "
+        "(correctness · security · performance · tests)…[/dim]"
+    )
+    report = multi_review(diff)
+    console.print(Markdown(report))
+    verdict = parse_verdict(report) or ("FAIL" if review_exit_code(report) else "PASS")
+    console.print(f"[bold]verdict:[/bold] {verdict}")
+    return "continue"
+
+
 _BUILTINS: dict[str, callable] = {
     "help": _handle_help,
+    "review": _handle_review,
+    "ultrareview": _handle_review,
     "context": _handle_context,
     "ctx": _handle_context,
     "recent": _handle_recent,
@@ -1575,6 +1614,15 @@ def review(
         help="After reviewing, apply the concrete fixes to the working tree "
              "(a second pass with write tools).",
     ),
+    json_out: bool = typer.Option(
+        False, "--json",
+        help="Emit {verdict, exit_code, review} as JSON instead of streaming.",
+    ),
+    exit_code: bool = typer.Option(
+        False, "--exit-code",
+        help="Exit non-zero when the review is not a clean APPROVE (CI gate; "
+             "the '/ultrareview' use case).",
+    ),
 ) -> None:
     """Git-aware code review. Streams a focused critique to your terminal.
 
@@ -1603,17 +1651,28 @@ def review(
         return
 
     if multi:
-        from evi.review import multi_review
+        from evi.review import multi_review, parse_verdict, review_exit_code
 
         cats = () if no_tools else ("fs", "git", "index")
-        console.print(
-            "[dim]running parallel reviewers "
-            "(correctness · security · performance · tests)…[/dim]"
-        )
+        if not json_out:
+            console.print(
+                "[dim]running parallel reviewers "
+                "(correctness · security · performance · tests)…[/dim]"
+            )
         review_text = multi_review(diff, tool_categories=cats)
-        console.print(Markdown(review_text))
+        if json_out:
+            import json as _json
+            console.print_json(_json.dumps({
+                "verdict": parse_verdict(review_text),
+                "exit_code": review_exit_code(review_text),
+                "review": review_text,
+            }))
+        else:
+            console.print(Markdown(review_text))
         if fix and review_text.strip():
             _apply_review_fixes(diff, review_text)
+        if exit_code:
+            raise typer.Exit(review_exit_code(review_text))
         return
 
     # Build a scoped agent: same model + memory + skills, but with a
@@ -1651,65 +1710,85 @@ def review(
     )
     _AUTO_STATE["agent"] = agent
 
-    console.print(
-        Panel.fit(
-            Text.assemble(
-                ("eVi review ", "bold cyan"),
-                (f"· {len(tools)} tools ", "dim"),
-                (f"· {len(diff)} byte diff", "dim"),
-            ),
-            border_style="cyan",
+    if not json_out:
+        console.print(
+            Panel.fit(
+                Text.assemble(
+                    ("eVi review ", "bold cyan"),
+                    (f"· {len(tools)} tools ", "dim"),
+                    (f"· {len(diff)} byte diff", "dim"),
+                ),
+                border_style="cyan",
+            )
         )
-    )
 
     prompt = review_prompt(diff)
     text_acc: list[str] = []
     in_thinking = False
     for event in agent.chat(prompt):
         if isinstance(event, ThinkingDelta):
-            if not in_thinking:
-                console.print("[dim italic]", end="")
-                in_thinking = True
-            console.print(
-                event.text, end="", soft_wrap=True,
-                highlight=False, style="dim italic",
-            )
+            if not json_out:
+                if not in_thinking:
+                    console.print("[dim italic]", end="")
+                    in_thinking = True
+                console.print(
+                    event.text, end="", soft_wrap=True,
+                    highlight=False, style="dim italic",
+                )
             continue
-        if in_thinking:
+        if in_thinking and not json_out:
             console.print("[/dim italic]", end="")
             in_thinking = False
         if isinstance(event, TextDelta):
             text_acc.append(event.text)
-            console.print(event.text, end="", soft_wrap=True, highlight=False)
+            if not json_out:
+                console.print(event.text, end="", soft_wrap=True, highlight=False)
         elif isinstance(event, ToolCall):
-            console.print()
-            console.print(
-                f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}"
-            )
+            if not json_out:
+                console.print()
+                console.print(
+                    f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}"
+                )
         elif isinstance(event, ToolResult):
-            preview = (
-                event.output if len(event.output) < 400
-                else event.output[:400] + "…"
-            )
-            console.print(f"[yellow]← result[/yellow] {preview}")
+            if not json_out:
+                preview = (
+                    event.output if len(event.output) < 400
+                    else event.output[:400] + "…"
+                )
+                console.print(f"[yellow]← result[/yellow] {preview}")
         elif isinstance(event, UsageStats):
-            console.print(
-                f"\n[dim]tokens: prompt={event.prompt_tokens} · "
-                f"completion={event.completion_tokens} · "
-                f"total={event.total_tokens}[/dim]"
-            )
+            if not json_out:
+                console.print(
+                    f"\n[dim]tokens: prompt={event.prompt_tokens} · "
+                    f"completion={event.completion_tokens} · "
+                    f"total={event.total_tokens}[/dim]"
+                )
         elif isinstance(event, Error):
-            console.print(f"\n[red]error:[/red] {event.message}")
+            if not json_out:
+                console.print(f"\n[red]error:[/red] {event.message}")
         elif isinstance(event, Done):
-            if text_acc:
+            if not json_out:
                 console.print()
-                console.print(Markdown("".join(text_acc)))
-            else:
-                console.print()
+                if text_acc:
+                    console.print(Markdown("".join(text_acc)))
             break
 
+    review_text = "".join(text_acc)
+    if json_out:
+        import json as _json
+        from evi.review import parse_verdict, review_exit_code
+        console.print_json(_json.dumps({
+            "verdict": parse_verdict(review_text),
+            "exit_code": review_exit_code(review_text),
+            "review": review_text,
+        }))
+
     if fix and text_acc:
-        _apply_review_fixes(diff, "".join(text_acc))
+        _apply_review_fixes(diff, review_text)
+
+    if exit_code:
+        from evi.review import review_exit_code
+        raise typer.Exit(review_exit_code(review_text))
 
 
 def _apply_review_fixes(diff: str, review_text: str) -> None:
