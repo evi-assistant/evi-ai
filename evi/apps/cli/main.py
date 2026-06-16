@@ -390,6 +390,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/reload", "re-read config.toml without restarting"),
         ("/reload-skills", "rescan skills dirs and refresh the skill index"),
         ("/add-dir <path>", "trust an extra directory this session (auto-approve fs/code there)"),
+        ("/cd [path]", "set the session working folder (relative file ops resolve here)"),
         ("/audio <path>", "transcribe an audio file and send as the next turn"),
         ("/audioraw <path> [prompt]", "attach raw audio (omni models) / auto-transcribe otherwise"),
         ("/speak [on|off]", "auto-speak assistant replies sentence-by-sentence"),
@@ -826,6 +827,35 @@ def _handle_add_dir(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     return "continue"
 
 
+def _handle_cd(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/cd <path>` — set the session working folder. Relative paths in file
+    tools resolve against it, and EVI.md project context re-discovers from it.
+    No arg prints the current folder."""
+    from pathlib import Path as _Path
+
+    from evi import workdir
+
+    if not args.strip():
+        console.print(f"[bold]cwd:[/bold] {agent.cwd or workdir.get_cwd()}")
+        return "continue"
+    p = _Path(args.strip()).expanduser()
+    if not p.is_dir():
+        console.print(f"[red]not a directory:[/red] {p}")
+        return "continue"
+    agent.cwd = str(p.resolve())
+    workdir.set_cwd(agent.cwd)
+    try:  # re-discover EVI.md / project context from the new folder
+        from evi.project import load_project_context
+
+        agent.project = load_project_context(start=p.resolve())
+        if agent.history:
+            agent.history[0] = {"role": "system", "content": agent._compose_system_prompt()}
+    except Exception:  # noqa: BLE001
+        pass
+    console.print(f"[green]cwd → {agent.cwd}[/green]")
+    return "continue"
+
+
 def _handle_reload_skills(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
     """`/reload-skills` — rescan the skills dirs and re-compose the prompt.
 
@@ -1018,6 +1048,7 @@ _BUILTINS: dict[str, callable] = {
     "reloadskills": _handle_reload_skills,
     "add-dir": _handle_add_dir,
     "adddir": _handle_add_dir,
+    "cd": _handle_cd,
     "audio": _handle_audio,
     "audioraw": _handle_audioraw,
     "speak": _handle_speak,
@@ -1277,9 +1308,28 @@ def _run_repl(agent: Agent) -> None:
 
 
 @app.command()
-def chat() -> None:
+def chat(
+    cwd: str = typer.Option(
+        "", "--cwd", "-C",
+        help="Working folder for this session (relative file ops resolve here; "
+             "EVI.md is discovered from it). Default: the current directory.",
+    ),
+) -> None:
     """Start an interactive chat session with the local model."""
-    _run_repl(_build_agent())
+    agent = _build_agent()
+    if cwd.strip():
+        from pathlib import Path as _Path
+
+        p = _Path(cwd).expanduser()
+        if not p.is_dir():
+            console.print(f"[red]not a directory:[/red] {p}")
+            raise typer.Exit(1)
+        agent.cwd = str(p.resolve())
+        # Re-discover project context from the chosen folder.
+        from evi.project import load_project_context
+
+        agent.project = load_project_context(start=p.resolve())
+    _run_repl(agent)
 
 
 @app.command()
