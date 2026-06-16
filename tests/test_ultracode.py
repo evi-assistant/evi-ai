@@ -169,6 +169,67 @@ def test_load_ultra_config_roundtrip(tmp_path, monkeypatch):
     assert loaded.breadth == 4 and loaded.angles == ["direct", "alt"]
 
 
+def test_looks_small_matches_on_number_boundaries():
+    # genuinely small → True
+    for m in ("qwen2.5:1.5b", "llama3.2:1b", "qwen2.5:3b-instruct-q4_K_M",
+              "qwen2.5:0.5b", "phi-3.5-mini", "tiny-small-model"):
+        assert uc._looks_small(m), m
+    # digit-adjacent sizes that are NOT small (the old substring bug) → False
+    for m in ("qwen2.5:14b", "qwen2.5:21b", "command-r:31b", "llama3.1:11b",
+              "qwen2:72b", "deepseek-coder:33b", "phi-4", "qwen2.5:13b"):
+        assert not uc._looks_small(m), m
+
+
+def test_default_tuning_keeps_large_models_with_size_in_name():
+    base = UltraConfig(breadth=3, rounds=2)
+    for m in ("qwen2.5:21b", "command-r:31b", "llama3.1:11b"):
+        kept = uc.default_tuning(m, 32768, base)
+        assert kept.breadth == 3 and kept.rounds == 2, m
+
+
+def test_make_runner_stage_exception_becomes_error(monkeypatch):
+    class FakeAgent:
+        def __init__(self, sp):
+            self.tools = {}
+
+        def enable_auto_all(self):
+            pass
+
+    def boom(agent, task):
+        raise RuntimeError("mid-stream drop")
+
+    monkeypatch.setattr("evi.headless.run_headless", boom)
+    monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
+    run_one = uc.make_runner(lambda sp: FakeAgent(sp))
+    out = run_one("sys", "task", "code")
+    assert out.startswith("ERROR:") and "mid-stream drop" in out  # never raises
+
+
+def test_pipeline_survives_a_raising_stage_via_make_runner(monkeypatch):
+    from evi.headless import HeadlessResult
+
+    class FakeAgent:
+        def __init__(self, sp):
+            self.tools = {}
+
+        def enable_auto_all(self):
+            pass
+
+    def rh(agent, task):
+        # the first_principles solver ("Ignore convention…") blows up mid-stream
+        if "Ignore convention" in task:
+            raise RuntimeError("solver exploded")
+        return HeadlessResult(text="ok")
+
+    monkeypatch.setattr("evi.headless.run_headless", rh)
+    monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
+    res = uc.run_ultracode("t", run_one=uc.make_runner(lambda sp: FakeAgent(sp)),
+                           cfg=UltraConfig(breadth=2, rounds=0))
+    assert res.answer  # the run completed instead of crashing
+    solves = [s.output for s in res.stages if s.name == "solve"]
+    assert any(o.startswith("ERROR:") for o in solves)
+
+
 def test_default_tuning_downshifts_small_models():
     base = UltraConfig(breadth=3, rounds=2)
     assert uc.default_tuning("phi-3-mini", 8000, base).rounds == 0

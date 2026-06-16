@@ -22,6 +22,7 @@ unit-testable without a backend.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -237,14 +238,20 @@ def make_runner(agent_factory: Callable[[str | None], Any]) -> Callable[[str, st
     from evi.modes import mode_tools
 
     def run_one(system_prompt: str, task: str, mode: str) -> str:
-        agent = agent_factory(system_prompt)
-        if mode == NO_TOOLS:
-            agent.tools = {}
-        elif mode:
-            agent.tools = {t.name: t for t in mode_tools(mode)}
-        agent.enable_auto_all()
-        res = run_headless(agent, task)
-        return res.text or (f"ERROR: {res.error}" if res.error else "")
+        # Never raise: a flaky stage (e.g. a mid-stream backend drop) must
+        # degrade to an ignorable ERROR candidate, not tear down the whole
+        # fan-out via a re-raised future. synthesis is told to ignore these.
+        try:
+            agent = agent_factory(system_prompt)
+            if mode == NO_TOOLS:
+                agent.tools = {}
+            elif mode:
+                agent.tools = {t.name: t for t in mode_tools(mode)}
+            agent.enable_auto_all()
+            res = run_headless(agent, task)
+            return res.text or (f"ERROR: {res.error}" if res.error else "")
+        except Exception as exc:  # noqa: BLE001 — a stage failure can't crash the run
+            return f"ERROR: {type(exc).__name__}: {exc}"
 
     return run_one
 
@@ -263,9 +270,15 @@ def load_ultra_config(cfg=None) -> UltraConfig:
     )
 
 
+# Match a SMALL parameter-size token (0.5b/1b/1.5b/3b) on number boundaries, so
+# "14b"/"21b"/"31b"/"71b"/"13b"/"33b" are NOT misread as small. `mini`/`small`
+# name tokens cover phi-3.5-mini etc. ("phi" alone is excluded — phi-4 is ~14B).
+_SMALL_SIZE_RE = re.compile(r"(?<![\d.])(?:0\.5|1\.5|1|3)b(?![\d])")
+
+
 def _looks_small(model: str) -> bool:
     m = (model or "").lower()
-    return any(t in m for t in ("0.5b", "1.5b", "1b", "3b", "mini", "phi", "small"))
+    return bool(_SMALL_SIZE_RE.search(m)) or "mini" in m or "small" in m
 
 
 def default_tuning(model: str, context_size: int, base: UltraConfig) -> UltraConfig:
