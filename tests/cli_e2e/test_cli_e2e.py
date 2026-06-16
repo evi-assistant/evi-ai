@@ -304,6 +304,20 @@ def test_mcp(evi_cli):
     assert evi_cli("mcp", "remove", "fs", check=False).code == 1
 
 
+def test_models_preset(evi_cli):
+    # list presets
+    listed = evi_cli("models", "preset")
+    assert listed.code == 0 and "openrouter" in listed.out
+    # set one; config should flip to openai_compat + env:-style key
+    out = evi_cli("models", "preset", "openrouter", "-m", "anthropic/claude-3.5-sonnet").out
+    assert "openai_compat" in out
+    cfg = evi_cli("config", "show").out
+    assert "openrouter.ai" in cfg
+    assert "env:OPENROUTER_API_KEY" in cfg  # key is an env ref, not plaintext
+    # unknown preset errors
+    assert evi_cli("models", "preset", "nope", check=False).code != 0
+
+
 def test_mcp_add_http(evi_cli):
     out = evi_cli(
         "mcp", "add-http", "linear", "https://mcp.linear.app/mcp",

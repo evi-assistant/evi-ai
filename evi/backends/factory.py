@@ -36,10 +36,14 @@ def get_backend(settings) -> Backend:
     in config.toml doesn't crash eVi at startup — just produces something
     that still works for chat against the configured URL.
     """
+    from evi.backends.presets import resolve_api_key
+
     kind = (getattr(settings, "backend", None) or "lmstudio").strip().lower()
     cls = KNOWN_BACKENDS.get(kind, OpenAICompatBackend)
     return cls(
         base_url=settings.base_url,
-        api_key=settings.api_key,
+        # An `env:VARNAME` api_key is read from the environment here, so online
+        # provider secrets can stay out of config.toml.
+        api_key=resolve_api_key(settings.api_key),
         request_timeout=settings.request_timeout,
     )

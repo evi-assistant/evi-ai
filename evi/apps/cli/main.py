@@ -4392,6 +4392,73 @@ def models_backend(kind: str | None = typer.Argument(None)) -> None:
     )
 
 
+@models_app.command("preset")
+def models_preset(
+    name: str | None = typer.Argument(None, help="Provider preset (omit to list)."),
+    model: str = typer.Option("", "--model", "-m", help="Model id to use (overrides the preset default)."),
+    api_key: str = typer.Option(
+        "", "--api-key", help="Store the key in config.toml (plaintext). Default: read from the preset's env var."
+    ),
+) -> None:
+    """Point eVi at an online OpenAI-compatible provider by name.
+
+    With no name, lists the presets. Otherwise sets [llm] backend=openai_compat
+    + the provider base_url/model and, by default, an `env:VARNAME` api_key so
+    your key stays in the environment, not in config.toml.
+
+    Examples:
+      evi models preset                 # list providers
+      evi models preset openrouter -m anthropic/claude-3.5-sonnet
+      evi models preset openai          # uses $OPENAI_API_KEY
+    """
+    from evi.backends.presets import ONLINE_PRESETS, get_preset
+
+    if not name:
+        console.print("[bold]online model presets[/bold] [dim](all openai_compat)[/dim]")
+        for p in ONLINE_PRESETS.values():
+            env_state = "set" if os.environ.get(p.api_key_env) else "[red]unset[/red]"
+            console.print(
+                f"  [bold]{p.name}[/bold] [dim]{p.base_url}[/dim] "
+                f"[dim](key: ${p.api_key_env} {env_state})[/dim]"
+            )
+            if p.note:
+                console.print(f"    [dim]{p.note}[/dim]")
+        console.print("\n[dim]use:[/dim] [cyan]evi models preset <name> -m <model>[/cyan]")
+        return
+
+    preset = get_preset(name)
+    if preset is None:
+        console.print(
+            f"[red]unknown preset[/red] — pick one of: {', '.join(ONLINE_PRESETS)}"
+        )
+        raise typer.Exit(1)
+
+    cfg = Config.load()
+    cfg.llm.backend = "openai_compat"
+    cfg.llm.base_url = preset.base_url
+    cfg.llm.api = preset.api
+    chosen = model.strip() or preset.default_model
+    if chosen:
+        cfg.llm.model = chosen
+    cfg.llm.api_key = api_key.strip() if api_key.strip() else f"env:{preset.api_key_env}"
+    cfg.save()
+
+    console.print(f"[green]backend -> openai_compat[/green] · {preset.name} @ {preset.base_url}")
+    if chosen:
+        console.print(f"  model: [bold]{chosen}[/bold]")
+    else:
+        console.print("  [yellow]no model set[/yellow] — add one with `evi models use <id>`")
+    if api_key.strip():
+        console.print("  [yellow]api_key stored in config.toml (plaintext)[/yellow]")
+    elif not os.environ.get(preset.api_key_env):
+        console.print(
+            f"  [yellow]set your key:[/yellow] export {preset.api_key_env}=... "
+            f"[dim](eVi reads it via api_key=env:{preset.api_key_env})[/dim]"
+        )
+    if preset.note:
+        console.print(f"  [dim]{preset.note}[/dim]")
+
+
 obsidian_app = typer.Typer(help="Sync eVi memory with an Obsidian vault.")
 app.add_typer(obsidian_app, name="obsidian")
 
