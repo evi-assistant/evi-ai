@@ -30,19 +30,19 @@ echo "==> eVi install"
 echo "    repo:    $repo_root"
 echo "    extras:  $extras"
 
-# Pick a python — prefer 3.12, then 3.11, then `python3`.
+# Pick a python — prefer 3.13, then 3.14, then `python3`.
 python=""
-for candidate in python3.12 python3.11 python3; do
+for candidate in python3.13 python3.14 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
         v=$("$candidate" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
         major=${v%%.*}; minor=${v##*.}
-        if [[ "$major" -gt 3 || ( "$major" == "3" && "$minor" -ge 11 ) ]]; then
+        if [[ "$major" -gt 3 || ( "$major" == "3" && "$minor" -ge 13 ) ]]; then
             python="$candidate"; break
         fi
     fi
 done
 if [[ -z "$python" ]]; then
-    echo "error: Python 3.11+ required" >&2
+    echo "error: Python 3.13+ required" >&2
     exit 1
 fi
 echo "    python:  $python ($("$python" --version))"

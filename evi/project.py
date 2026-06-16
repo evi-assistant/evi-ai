@@ -15,14 +15,10 @@ goal is "always-on context", not "stuff every README into every turn".
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 
 # EVI.md is eVi's own; AGENTS.md is the emerging cross-tool standard. EVI.md

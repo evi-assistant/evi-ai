@@ -94,14 +94,14 @@ Confirm what *did* register: `evi mcp list-tools`.
 
 The bundled Python server didn't come up in 20 seconds. Common reasons:
 
-- `py -3.11` not on PATH. Override with `EVI_PYTHON=python3.12`.
+- `py -3.13` not on PATH. Override with `EVI_PYTHON=python3.13`.
 - `EVI_REPO_ROOT` couldn't be detected (binary not next to the repo).
   Set it explicitly.
 - The web extras aren't installed: `pip install -e '.[web]'`.
 - For thin-client mode, set `EVI_REMOTE_URL=http://server:8000` to skip
   the spawn entirely.
 
-Tail the Tauri stderr to see what `py -3.11 -m uvicorn …` actually did.
+Tail the Tauri stderr to see what `py -3.13 -m uvicorn …` actually did.
 
 ## Scheduler / cron tasks aren't firing
 

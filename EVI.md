@@ -32,7 +32,7 @@ SSE), **Desktop** (Tauri 2 wrapping the web UI). Talks to local LLM backends
 
 ## Environments — two venvs, never conflate
 
-- **`.venv`** (`py -3.11`, ALL extras) — run the app + tests. Use
+- **`.venv`** (`py -3.13`, ALL extras) — run the app + tests. Use
   `.venv\Scripts\python.exe` (Windows) / `.venv/bin/python` (POSIX).
 - **`.venv-build`** — *only* for freezing the desktop sidecar. NEVER add
   torch/stt/computer/rerank here (PyInstaller `--collect-submodules evi` would

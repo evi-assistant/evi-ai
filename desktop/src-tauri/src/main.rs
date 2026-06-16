@@ -109,10 +109,10 @@ fn configure_child(cmd: &mut Command) {
 }
 
 /// Spawn `python -m uvicorn evi.apps.web.server:app` from the repo root.
-/// On Windows we prefer the `py -3.11` launcher; elsewhere fall back to `python3`.
+/// On Windows we prefer the `py -3.13` launcher; elsewhere fall back to `python3`.
 fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
     let (program, prefix_args): (&str, &[&str]) = if cfg!(windows) {
-        ("py", &["-3.11", "-m"])
+        ("py", &["-3.13", "-m"])
     } else {
         ("python3", &["-m"])
     };

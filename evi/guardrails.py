@@ -59,16 +59,12 @@ can phrase around regexes. It's meant for shared/kiosk installs and
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from evi.config import HOME
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 
 GUARDRAILS_PATH = HOME / "guardrails.toml"

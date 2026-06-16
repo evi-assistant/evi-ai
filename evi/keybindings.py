@@ -24,13 +24,9 @@ scalars + string lists — same reason hooks.toml and mcp.json live on their own
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 from evi.config import KEYBINDINGS_PATH
 

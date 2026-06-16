@@ -25,7 +25,7 @@ native desktop window.
 
 | Component       | Why                              | Notes                  |
 |-----------------|----------------------------------|------------------------|
-| **Python 3.11+** | Core runtime                     | 3.12 tested            |
+| **Python 3.13+** | Core runtime                     | 3.13 tested            |
 | **Git 2.17+**   | Optional — `evi worktree`        | 2.28+ for `init -b`    |
 | **An LLM backend** | One of LM Studio / Ollama / llama-server / any OpenAI-compatible endpoint | LM Studio default |
 | **NVIDIA GPU**  | Optional — speeds up local LLMs and ComfyUI image gen | CPU fallback works |

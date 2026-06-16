@@ -6,15 +6,11 @@ Config lives at %USERPROFILE%/.evi/config.toml. First run writes defaults.
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 
 def _home_dir() -> Path:

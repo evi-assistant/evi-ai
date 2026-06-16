@@ -24,7 +24,7 @@ Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`
 `desktop/src-tauri/src/main.rs` is the native shell. On launch it:
 
 1. Picks a **stable preferred port `8473`** (falling back to a random free port if taken). A stable origin means the webview's `localStorage` — your open tabs and session ids — survives a restart.
-2. **Spawns the server.** In a packaged build it runs the bundled PyInstaller sidecar `evi-server`; in a source checkout it spawns `py -3.11 -m uvicorn evi.apps.web.server:app` (or `python3 -m uvicorn …` off-Windows) from the repo root.
+2. **Spawns the server.** In a packaged build it runs the bundled PyInstaller sidecar `evi-server`; in a source checkout it spawns `py -3.13 -m uvicorn evi.apps.web.server:app` (or `python3 -m uvicorn …` off-Windows) from the repo root.
 3. Loads a **loading shim** that polls the port and redirects once `/api/health` is up, so you never see a connection-refused page during the sidecar's cold start.
 4. Builds the **File / Edit / View / Help** menu bar and a **system tray**. Closing the window calls `prevent_close()` and *hides* it — the assistant and its warm sidecar keep running. Quit from the tray ("Quit eVi") or **File → Exit**.
 5. Starts a background **update check** (unless in remote mode or opted out).
@@ -93,7 +93,7 @@ pip install 'evi-assistant[web]'
 |-----|---------|
 | `EVI_HOME` | Override the `~/.evi/` location entirely |
 | `EVI_REMOTE_URL` | Thin-client mode: skip the local spawn and navigate to this URL |
-| `EVI_PYTHON` | Interpreter to spawn in a source checkout (default `py -3.11`) |
+| `EVI_PYTHON` | Interpreter to spawn in a source checkout (default `py -3.13`) |
 | `EVI_REPO_ROOT` | Pin the repo root instead of auto-detecting it |
 | `EVI_AUTO_UPDATE` | Set to `0` / `false` to disable the background self-update |
 | `EVI_TESSERACT_CMD` | Set automatically when a bundled `tesseract` ships next to the sidecar |

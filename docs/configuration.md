@@ -450,6 +450,6 @@ evi scheduler          # foreground daemon, or just run `evi web`
 |--------------------|----------------------------------------------------------------|
 | `EVI_HOME`         | Override `~/.evi/` location entirely                           |
 | `EVI_PROFILE`      | Active profile name (same as `--profile`)                      |
-| `EVI_PYTHON`       | Tauri desktop: Python interpreter to spawn (default `py -3.11`) |
+| `EVI_PYTHON`       | Tauri desktop: Python interpreter to spawn (default `py -3.13`) |
 | `EVI_REPO_ROOT`    | Tauri desktop: pin the repo root rather than auto-detecting    |
 | `EVI_REMOTE_URL`   | Tauri desktop: thin-client mode — skip spawn, navigate to URL  |
