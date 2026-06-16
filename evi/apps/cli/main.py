@@ -90,7 +90,7 @@ def _ensure_mcp(config: Config) -> MCPManager | None:
     if not servers:
         return None
     try:
-        manager = MCPManager(servers)
+        manager = MCPManager(servers, max_output_chars=config.tools.mcp_max_output_chars)
         manager.start()
     except ImportError:
         console.print(

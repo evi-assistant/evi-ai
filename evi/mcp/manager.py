@@ -56,6 +56,7 @@ class MCPManager:
         bridge: MCPBridge | None = None,
         call_timeout: float = 120.0,
         session_id: str = "",
+        max_output_chars: int = 0,
     ) -> None:
         self.servers = servers
         self.bridge = bridge or MCPBridge()
@@ -63,6 +64,10 @@ class MCPManager:
         self._live: list[_LiveServer] = []
         self._call_timeout = call_timeout
         self.session_id = session_id
+        # Cap on a single tool result's length (0 = unlimited); keeps a chatty
+        # server from blowing the context window. Mirrors Claude Code's
+        # --max-mcp-output-tokens (we measure characters).
+        self._max_output_chars = max_output_chars
         self.started = False
 
     # --- lifecycle -------------------------------------------------------
@@ -183,6 +188,7 @@ class MCPManager:
     def _wrap_tool(self, server_name: str, session: Any, mcp_tool: Any) -> Tool:
         bridge = self.bridge
         timeout = self._call_timeout
+        cap = self._max_output_chars
         tname = mcp_tool.name
         full_name = f"{server_name}.{tname}"
 
@@ -191,7 +197,7 @@ class MCPManager:
                 return await session.call_tool(tname, kwargs)
 
             result = bridge.run(_call(), timeout=timeout)
-            return _flatten_content(result)
+            return _truncate(_flatten_content(result), cap)
 
         parameters = (
             getattr(mcp_tool, "inputSchema", None)
@@ -205,6 +211,15 @@ class MCPManager:
             func=call,
             category="mcp",
         )
+
+
+def _truncate(text: str, cap: int) -> str:
+    """Clip an MCP result to `cap` characters (0 = unlimited), with a marker
+    so the model knows the output was elided rather than ending naturally."""
+    if cap <= 0 or len(text) <= cap:
+        return text
+    elided = len(text) - cap
+    return text[:cap] + f"\n…[{elided} chars truncated — MCP output cap]"
 
 
 def _flatten_content(result: Any) -> str:
