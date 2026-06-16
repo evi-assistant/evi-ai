@@ -44,6 +44,35 @@ def test_rule_first_match_wins():
     assert decide("ask", [], rules, "run_shell", "shell", '{"command": "ls"}') == "allow"
 
 
+def test_hard_deny_beats_everything():
+    # hard_deny is evaluated before yolo AND before allow rules — unoverridable.
+    assert decide("yolo", ["fs"], ["allow run_shell *"], "run_shell", "shell",
+                  '{"command": "rm -rf /"}', hard_deny=["run_shell rm*"]) == "deny"
+    # a leading "deny" in the entry is accepted too
+    assert decide("ask", [], [], "write_file", "fs", '{"path": "/x/secrets"}',
+                  hard_deny=["deny write_file *secrets*"]) == "deny"
+    # non-matching hard_deny doesn't block
+    assert decide("yolo", [], [], "read_file", "fs", "{}", hard_deny=["run_shell *"]) == "allow"
+
+
+def test_protected_paths_force_ask():
+    pp = [".env", "*.pem", ".gitconfig"]
+    # accept_edits would allow a write, but a protected path forces a prompt
+    assert decide("accept_edits", [], [], "write_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "ask"
+    assert decide("accept_edits", [], [], "write_file", "fs",
+                  '{"path": "/proj/key.pem"}', protected_paths=pp) == "ask"
+    # an auto-approved category is overridden too
+    assert decide("ask", ["fs"], [], "write_file", "fs",
+                  '{"path": "/home/u/.gitconfig"}', protected_paths=pp) == "ask"
+    # a normal file under accept_edits is still allowed
+    assert decide("accept_edits", [], [], "write_file", "fs",
+                  '{"path": "/proj/main.py"}', protected_paths=pp) == "allow"
+    # an EXPLICIT allow rule still wins (honour user intent over protection)
+    assert decide("ask", ["fs"], ["allow write_file *.env"], "write_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "allow"
+
+
 def test_tool_glob():
     assert decide("ask", [], ["deny delegate_*"], "delegate_explore", "subagent", "{}") == "deny"
 

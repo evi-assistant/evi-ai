@@ -97,6 +97,19 @@ def _rule_action(rule: str, tool_name: str, values: list[str]) -> str | None:
     return action
 
 
+def _is_protected(values: list[str], protected_paths: Iterable[str]) -> bool:
+    """True if any path arg matches a protected pattern (full path or basename)."""
+    pats = [p for p in (protected_paths or ()) if p]
+    if not pats:
+        return False
+    for v in values:
+        base = Path(v).name
+        for pat in pats:
+            if fnmatch.fnmatch(v, pat) or fnmatch.fnmatch(base, pat):
+                return True
+    return False
+
+
 def decide(
     mode: str,
     auto_approve: Iterable[str],
@@ -106,18 +119,36 @@ def decide(
     tool_args: str | dict,
     trusted_dirs: Iterable[str] = (),
     trusted_domains: Iterable[str] = (),
+    hard_deny: Iterable[str] = (),
+    protected_paths: Iterable[str] = (),
 ) -> str:
     """Return 'allow', 'deny', or 'ask' for one tool call."""
+    values = _arg_values(tool_args)
+
+    # 0. Hard-deny: unconditional, evaluated before EVERYTHING (even yolo) so an
+    #    allow rule or yolo can't override it.
+    for rule in hard_deny or ():
+        # hard_deny entries are deny-only — accept "<tool-glob> [arg-glob]" with
+        # or without a leading "deny".
+        norm = rule if rule.split(None, 1)[:1] == ["deny"] else f"deny {rule}"
+        if _rule_action(norm, tool_name, values) == "deny":
+            return "deny"
+
     if mode == "yolo":
         return "allow"
     if mode == "plan":
         return "deny"
 
-    values = _arg_values(tool_args)
     for rule in rules or ():
         action = _rule_action(rule, tool_name, values)
         if action:  # first match wins (deny or allow); explicit deny beats trust
             return action
+
+    # Protected paths: a fs/code write to a sensitive file must never be silently
+    # auto-approved by accept_edits / auto-approve / trusted-dir — force a prompt.
+    # (An explicit allow rule above already returned, honouring user intent.)
+    if tool_category in _EDIT_CATEGORIES and _is_protected(values, protected_paths):
+        return "ask"
 
     if mode == "accept_edits" and tool_category in _EDIT_CATEGORIES:
         return "allow"
