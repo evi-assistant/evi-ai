@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import os
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -137,12 +138,21 @@ def _global_options(
         envvar="EVI_DEBUG",
         help="Print LLM requests + tool calls to stderr.",
     ),
+    safe_mode: bool = typer.Option(
+        False,
+        "--safe-mode",
+        envvar="EVI_SAFE_MODE",
+        help="Disable ALL customizations (project EVI.md, skills, plugins, hooks, "
+             "MCP, memory, guardrails, user commands) for troubleshooting.",
+    ),
 ) -> None:
     """Top-level options consumed before any subcommand runs."""
     if profile:
         # Push into env so downstream Config.load() / subprocess children
         # pick it up uniformly.
         os.environ[PROFILE_ENV_VAR] = profile
+    if safe_mode:
+        os.environ["EVI_SAFE_MODE"] = "1"  # uniform across Config.load + children
     if debug:
         from evi.debug import set_enabled
         set_enabled(True)
@@ -213,6 +223,12 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
 _AUTO_STATE: dict[str, Agent] = {}
 
 
+def _safe_mode() -> bool:
+    """True when `--safe-mode` (or EVI_SAFE_MODE) is active — disable every
+    customization so a broken config/skill/plugin/hook can be isolated."""
+    return os.environ.get("EVI_SAFE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _build_agent(
     system_prompt: str | None = None, model: str | None = None, *, register: bool = True
 ) -> Agent:
@@ -224,7 +240,9 @@ def _build_agent(
     from evi.sdk.builder import build_agent
 
     config = Config.load()
-    _ensure_mcp(config)  # registers MCP tools before build_agent reads REGISTRY
+    safe = _safe_mode()
+    if not safe:
+        _ensure_mcp(config)  # registers MCP tools before build_agent reads REGISTRY
     toggles = asdict(config.tools)
     agent = build_agent(
         config=config,
@@ -232,7 +250,14 @@ def _build_agent(
         model=model,
         permission_callback=_cli_permission_prompt,
         permission_batch_callback=_cli_permission_prompt_batch,
-        transcripts=TranscriptStore() if toggles.get("transcripts") else None,
+        transcripts=None if safe else (TranscriptStore() if toggles.get("transcripts") else None),
+        # Safe mode: skip every customization (project context, memory, skills,
+        # hooks, guardrails, MCP) so a broken one can be isolated.
+        enable_project=not safe,
+        enable_hooks=not safe,
+        enable_memory=False if safe else None,
+        enable_skills=False if safe else None,
+        enable_guardrails=not safe,
     )
     if register:
         _AUTO_STATE["agent"] = agent
@@ -892,7 +917,10 @@ def _dispatch_slash(
 def _run_repl(agent: Agent) -> None:
     """Drive the chat REPL against an existing Agent. Shared by `chat` and
     `sessions resume` so resumed sessions get the same UX."""
-    cmd_store = CommandStore()
+    safe = _safe_mode()
+    # In safe mode, user/plugin slash commands are a customization too — point the
+    # store at a fresh empty temp dir (its parent has no plugins/ either).
+    cmd_store = CommandStore(root=tempfile.mkdtemp(prefix="evi-safe-")) if safe else CommandStore()
     from evi.repl_input import ReplInput
 
     repl_in = ReplInput(agent)
@@ -902,6 +930,8 @@ def _run_repl(agent: Agent) -> None:
         (f"· model={agent.config.llm.model} ", "dim"),
         (f"· {len(agent.tools)} tools ", "dim"),
     ]
+    if safe:
+        header_bits.append(("· SAFE MODE (customizations off) ", "yellow"))
     if agent.project is not None:
         header_bits.append((f"· project={agent.project.path.name} ", "green"))
     console.print(Panel.fit(Text.assemble(*header_bits), border_style="cyan"))
