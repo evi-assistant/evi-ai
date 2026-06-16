@@ -23,6 +23,7 @@ jobs:
           python-version: "3.12"
 
       - name: Sanity-check version matches tag
+        if: github.event_name == 'push'  # workflow_dispatch has no tag — publish pyproject version as-is
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           pyver=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
