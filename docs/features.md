@@ -155,6 +155,15 @@ traces/metrics` + `otlp_endpoint`, `[otel]` extra). **Local stats** — `evi
 stats` aggregates sessions/tools/tokens from transcripts. **Crash reporting** —
 opt-in Sentry (`[telemetry] crash_reports` + `dsn`, `[telemetry]` extra).
 
+## SDK (programmatic)
+
+**Agent SDK** — `evi.sdk` is the curated public library surface: `build_agent()`
+(the convenience constructor the CLI itself delegates to), the streaming `Agent`
++ all event types, `@tool`, subagents, structured output, `run_headless`,
+sessions/checkpoints, MCP, ultracode/workflows, and telemetry — all under one
+stable namespace (`py.typed`). Guide: [sdk.md](sdk.md); runnable scripts:
+[examples/python/](../examples/python/).
+
 ## Machine ops
 
 **Sync** — `evi sync push|pull` git-syncs portable `~/.evi` state. **Backup** —

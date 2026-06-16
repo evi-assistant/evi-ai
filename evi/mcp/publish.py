@@ -22,8 +22,6 @@ Run it with `evi mcp serve` (see also `evi mcp serve-config`).
 
 from __future__ import annotations
 
-import importlib
-
 from evi.tools.base import REGISTRY, Tool
 
 # Curated default surface — high-value, relatively-safe tools to hand an
@@ -33,20 +31,12 @@ DEFAULT_CATEGORIES: tuple[str, ...] = ("memory", "index", "calendar", "git")
 
 MEMORY_URI_PREFIX = "evi://memory/"
 
-# Tool modules to import so REGISTRY is populated (importing the package alone
-# doesn't pull these in). Optional-dep failures are tolerated.
-_TOOL_MODULES = (
-    "memory", "index", "calendar", "git", "fs", "code",
-    "websearch", "pdf", "sqlite", "skills",
-)
-
-
 def _populate_registry() -> None:
-    for mod in _TOOL_MODULES:
-        try:
-            importlib.import_module(f"evi.tools.{mod}")
-        except Exception:  # noqa: BLE001 — a missing optional dep just omits its tools
-            pass
+    """Populate REGISTRY with every built-in tool. Delegates to the canonical
+    registrar so the import set lives in exactly one place (evi.tools)."""
+    from evi.tools import register_builtin_tools
+
+    register_builtin_tools()
 
 
 # --- tools ---------------------------------------------------------------

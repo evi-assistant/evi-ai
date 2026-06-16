@@ -214,33 +214,21 @@ _AUTO_STATE: dict[str, Agent] = {}
 
 
 def _build_agent(system_prompt: str | None = None, *, register: bool = True) -> Agent:
-    ensure_dirs()
-    config = Config.load()
-    _ensure_mcp(config)  # registers MCP tools before we read REGISTRY
-    client = make_client(config.llm)
-    toggles = asdict(config.tools)
-    tools = get_enabled_tools(toggles)
-    memory = MemoryStore() if toggles.get("memory") else None
-    skills = SkillStore() if toggles.get("skills") else None
-    project = load_project_context()
-    hooks = load_hooks()
-    transcripts = TranscriptStore() if toggles.get("transcripts") else None
-    from evi.guardrails import Guardrails
+    # Delegates the generic Agent assembly to the SDK's build_agent (single
+    # source of truth); the CLI adds only its runtime concerns: spawning MCP
+    # servers (so their tools are in REGISTRY before selection), the interactive
+    # permission prompts, and stashing the agent for /auto callbacks.
+    from evi.sdk.builder import build_agent
 
-    guardrails = Guardrails.load()
-    agent = Agent(
-        client=client,
+    config = Config.load()
+    _ensure_mcp(config)  # registers MCP tools before build_agent reads REGISTRY
+    toggles = asdict(config.tools)
+    agent = build_agent(
         config=config,
-        tools=tools,
-        memory=memory,
-        skills=skills,
-        project=project,
-        hooks=hooks,
+        system_prompt=system_prompt,
         permission_callback=_cli_permission_prompt,
         permission_batch_callback=_cli_permission_prompt_batch,
-        transcripts=transcripts,
-        guardrails=guardrails if guardrails.enabled else None,
-        **({"system_prompt": system_prompt} if system_prompt is not None else {}),
+        transcripts=TranscriptStore() if toggles.get("transcripts") else None,
     )
     if register:
         _AUTO_STATE["agent"] = agent

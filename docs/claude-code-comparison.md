@@ -124,7 +124,7 @@ planned (philosophy mismatch / separate big track).
 | Multi-user / teams | `[web] multi_user` + `users.json` (per-user tokens + isolated sessions/transcripts/memory) | ✅ opt-in |
 | Federation (agent↔agent across machines) | `evi peer` / `delegate_peer` / `/api/federate` | ✅ eVi-unique |
 | Permissions SDK | permission policy (Ph 66) | ✅ |
-| Public Agent SDK (library) | headless covers automation | 🚫 deferred (no stable lib surface) |
+| Public Agent SDK (library) | `evi.sdk` — curated re-export + `build_agent()` + examples ([sdk.md](sdk.md)) | ✅ |
 | Session storage (S3/Redis) | local JSONL transcripts | 🚫 local-first |
 | OpenTelemetry / monitoring | opt-in crash reporting (Sentry-compatible) | ⚠️ no metrics/traces |
 | Tool search (1000s of tools) | category-filtered tools | 🚫 not needed at scale |
@@ -156,7 +156,8 @@ signing.
 The whole roadmap 79–94 batch is shipped (local), and the last lighter/later
 items too: **subagent profiles in plugins** (`agents.toml` + the `delegate`
 tool / `evi agents`), **`evi://` deep links** (`evi/deeplinks.py` + Tauri scheme
-+ `evi link`), and a **plugin marketplace index** (`evi/marketplace.py` + `evi
-plugin search/install/index`). Explicitly **not** planned: cloud/enterprise
-backends, IDE extensions, mobile, agentic browser, cost/analytics dashboards,
-public Agent SDK.
++ `evi link`), a **plugin marketplace index** (`evi/marketplace.py` + `evi
+plugin search/install/index`), and the **public Agent SDK** (`evi.sdk` —
+curated re-export + `build_agent()` convenience constructor + `examples/python/`;
+see [sdk.md](sdk.md)). Explicitly **not** planned: cloud/enterprise backends, IDE
+extensions, mobile, agentic browser, cost/analytics dashboards.
