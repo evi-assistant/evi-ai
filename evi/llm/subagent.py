@@ -183,9 +183,95 @@ def load_plugin_profiles(root: Path | None = None) -> dict[str, dict[str, object
     return out
 
 
+def _user_profiles_path():
+    from evi.config import AGENTS_CONFIG_PATH
+
+    return AGENTS_CONFIG_PATH
+
+
+def load_user_profiles(path: Path | None = None) -> dict[str, dict[str, object]]:
+    """User-defined subagent profiles from ``~/.evi/agents.toml`` (same
+    ``[[agent]]`` schema as a plugin's agents.toml, but referenced by bare name).
+    Missing file = {}; malformed file/entries are skipped."""
+    f = path or _user_profiles_path()
+    out: dict[str, dict[str, object]] = {}
+    try:
+        if not f.is_file():
+            return out
+        data = tomllib.loads(f.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return out
+    for entry in data.get("agent", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        sp = str(entry.get("system_prompt") or "").strip()
+        if not name or not sp:
+            continue
+        raw = entry.get("tools", entry.get("tool_categories", [])) or []
+        cats = tuple(str(c) for c in raw) if isinstance(raw, list) else ()
+        out[name] = {"system_prompt": sp, "tool_categories": cats}
+    return out
+
+
+def add_user_profile(
+    name: str,
+    system_prompt: str,
+    tool_categories: tuple[str, ...] = (),
+    *,
+    path: Path | None = None,
+    overwrite: bool = False,
+) -> Path:
+    """Append (or overwrite) a profile in ``~/.evi/agents.toml`` and return the
+    file path. Raises ValueError on a bad name or an existing name without
+    ``overwrite``. Used by ``evi agents new``."""
+    slug = name.strip()
+    if not slug or ":" in slug or any(c.isspace() for c in slug):
+        raise ValueError("agent name must be non-empty with no spaces or ':'")
+    if slug in SUBAGENT_PROFILES:
+        raise ValueError(f"'{slug}' is a built-in profile; pick another name")
+    f = path or _user_profiles_path()
+    existing = load_user_profiles(f)
+    if slug in existing and not overwrite:
+        raise ValueError(f"profile '{slug}' already exists (use --force to overwrite)")
+    existing[slug] = {
+        "system_prompt": system_prompt.strip(),
+        "tool_categories": tuple(tool_categories),
+    }
+    lines: list[str] = [
+        "# eVi user subagent profiles. Reference one with the `delegate` tool",
+        "# (delegate(profile=\"<name>\", task=...)) or `evi agents`.",
+        "",
+    ]
+    for nm, prof in existing.items():
+        cats = list(prof.get("tool_categories") or ())
+        sp = str(prof.get("system_prompt") or "")
+        lines.append("[[agent]]")
+        lines.append(f"name = {_toml_str(nm)}")
+        lines.append(f"system_prompt = {_toml_str(sp)}")
+        lines.append(f"tools = {_toml_str_list(cats)}")
+        lines.append("")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("\n".join(lines), encoding="utf-8")
+    return f
+
+
+def _toml_str(s: str) -> str:
+    """A TOML basic string with the few characters that need escaping handled."""
+    esc = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t")
+    return f'"{esc}"'
+
+
+def _toml_str_list(items: list[str]) -> str:
+    return "[" + ", ".join(_toml_str(i) for i in items) + "]"
+
+
 def all_profiles(root: Path | None = None) -> dict[str, dict[str, object]]:
-    """Built-in profiles plus every plugin-supplied one (built-ins win)."""
+    """Built-in profiles + user-defined (~/.evi/agents.toml) + plugin-supplied.
+    Built-ins always win; user profiles win over plugin ones."""
     merged: dict[str, dict[str, object]] = dict(SUBAGENT_PROFILES)
+    for k, v in load_user_profiles().items():
+        merged.setdefault(k, v)
     for k, v in load_plugin_profiles(root).items():
         merged.setdefault(k, v)
     return merged

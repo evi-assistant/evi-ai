@@ -60,12 +60,27 @@ These are exposed as tools (category `subagent`):
 > but a single local backend serialises the actual model inference (one model,
 > one GPU). The big wins are on tool-heavy work or a remote / multi-GPU backend.
 
+### Custom profiles
+
+Define your own subagent profiles without editing JSON by hand:
+
+```bash
+evi agents new security --prompt "You are a security reviewer." --tools fs,code
+evi agents                # lists built-in + user + plugin profiles
+```
+
+This writes `~/.evi/agents.toml` (same `[[agent]]` schema as below) and the
+profile is then usable by bare name via `delegate(profile="security", task=…)`.
+Re-run with `--force` to overwrite; built-in names (`explore`, `plan`) are
+reserved.
+
 ### Plugin profiles
 
 Installed plugins can add subagent profiles via a `<plugin>/agents.toml`. Each
-profile is namespaced `<plugin>:<name>` so it can never shadow a built-in.
-Malformed files or entries are silently skipped (plugin scanning never breaks
-core subagents):
+profile is namespaced `<plugin>:<name>` so it can never shadow a built-in. The
+same file format works for the user-level `~/.evi/agents.toml` (referenced by
+bare name). Malformed files or entries are silently skipped (plugin scanning
+never breaks core subagents):
 
 ```toml
 [[agent]]

@@ -2887,20 +2887,74 @@ def ultracode(
         console.print(res.answer, markup=False, highlight=False)
 
 
-@app.command("agents")
-def agents_cmd() -> None:
-    """List subagent profiles (built-in + plugin) usable via the `delegate` tool."""
-    from evi.llm.subagent import SUBAGENT_PROFILES, all_profiles
+agents_app = typer.Typer(
+    help="Subagent profiles usable via the `delegate` tool (list / new).",
+)
+app.add_typer(agents_app, name="agents")
 
+
+def _agents_list() -> None:
+    from evi.llm.subagent import SUBAGENT_PROFILES, all_profiles, load_user_profiles
+
+    user = set(load_user_profiles())
     for name, p in all_profiles().items():
         cats = ", ".join(p.get("tool_categories") or ()) or "no tools"  # type: ignore[arg-type]
-        origin = "built-in" if name in SUBAGENT_PROFILES else "plugin"
+        origin = (
+            "built-in" if name in SUBAGENT_PROFILES
+            else "user" if name in user else "plugin"
+        )
         sp = str(p.get("system_prompt", ""))[:72]
         console.print(f"  [bold]{name}[/bold] [dim]({cats} · {origin})[/dim]")
         console.print(f"    [dim]{sp}…[/dim]")
     console.print(
-        "\n[dim]use via the [/dim][cyan]delegate(profile, task)[/cyan][dim] tool, or add your "
-        "own in a plugin's [/dim]agents.toml[dim].[/dim]"
+        "\n[dim]use via the [/dim][cyan]delegate(profile, task)[/cyan][dim] tool. add your "
+        "own with [/dim][cyan]evi agents new <name>[/cyan][dim] (-> ~/.evi/agents.toml).[/dim]"
+    )
+
+
+@agents_app.callback(invoke_without_command=True)
+def agents_main(ctx: typer.Context) -> None:
+    """List subagent profiles when run with no subcommand."""
+    if ctx.invoked_subcommand is None:
+        _agents_list()
+
+
+@agents_app.command("list")
+def agents_list_cmd() -> None:
+    """List subagent profiles (built-in + user + plugin)."""
+    _agents_list()
+
+
+@agents_app.command("new")
+def agents_new(
+    name: str = typer.Argument(..., help="Profile name (no spaces or ':')."),
+    prompt: str = typer.Option(
+        "", "--prompt", "-p", help="The subagent's system prompt."
+    ),
+    tools: str = typer.Option(
+        "", "--tools", help="Comma-separated tool categories the subagent may use (e.g. fs,code)."
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing profile."),
+) -> None:
+    """Scaffold a custom subagent profile in ~/.evi/agents.toml."""
+    from evi.llm.subagent import add_user_profile
+
+    sp = prompt.strip() or (
+        f"You are the '{name}' subagent. Do the requested task within your scope "
+        "and report a concise result. Edit the system_prompt in ~/.evi/agents.toml "
+        "to specialise this agent."
+    )
+    cats = tuple(c.strip() for c in tools.split(",") if c.strip())
+    try:
+        path = add_user_profile(name, sp, cats, overwrite=force)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    cat_note = ", ".join(cats) if cats else "no tools"
+    console.print(f"[green]created agent '{name}'[/green] ([dim]{cat_note}[/dim]) -> {path}")
+    console.print(
+        f'  use it via [cyan]delegate(profile="{name}", task=…)[/cyan] '
+        "or edit the prompt in the file."
     )
 
 
