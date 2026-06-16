@@ -4551,6 +4551,10 @@ def _team_print(tasks) -> None:
 @team_app.command("run")
 def team_run(
     workers: int = typer.Option(3, "--workers", "-w", help="Max concurrent teammates."),
+    peers: bool = typer.Option(
+        False, "--peers", "--distribute",
+        help="Distribute tasks across reachable federation peers + local (cross-machine parallelism).",
+    ),
 ) -> None:
     """Spawn teammates to drain the shared list in dependency order."""
     from evi import teams
@@ -4568,6 +4572,21 @@ def team_run(
             tool_categories=("fs", "code"),
             max_turns=8,
         )
+
+    if peers:
+        from evi import federation
+
+        healthy = [p for p in federation.load_peers() if federation.check_peer(p).get("reachable")]
+        if not healthy:
+            console.print(
+                "[yellow]no reachable peers[/yellow] — running locally. Add peers with "
+                "[cyan]evi peer add[/cyan] (they must run [cyan]evi web --host 0.0.0.0[/cyan])."
+            )
+        else:
+            names = ", ".join(p.name for p in healthy)
+            console.print(f"[dim]distributing across local + {len(healthy)} peer(s): {names}[/dim]")
+            run_one = teams.make_distributed_runner(run_one, healthy)
+            workers = max(workers, 1 + len(healthy))  # let peers run concurrently
 
     console.print(f"[dim]draining team with up to {workers} teammates…[/dim]")
     final = teams.drain_team(store, run_one, max_workers=workers)
