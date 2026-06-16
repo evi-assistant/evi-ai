@@ -979,6 +979,34 @@ _BUILTINS: dict[str, callable] = {
 }
 
 
+def _run_bang_command(agent: Agent, command: str) -> None:
+    """Run `command` in the shell, print its output, and append it to history
+    as context for the next turn. The `!cmd` REPL escape (Claude Code parity)."""
+    if not command:
+        console.print("[yellow]usage:[/yellow] !<shell command>")
+        return
+    import subprocess as _sp
+
+    try:
+        proc = _sp.run(
+            command, shell=True, capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, _sp.SubprocessError) as exc:
+        console.print(f"[red]command failed:[/red] {exc}")
+        return
+    out = (proc.stdout or "") + (proc.stderr or "")
+    out = out.rstrip()
+    if out:
+        console.print(out, markup=False, highlight=False)
+    console.print(f"[dim](exit {proc.returncode})[/dim]")
+    # Fold into history so the model can reference it next turn.
+    capped = out if len(out) <= 4000 else out[:4000] + "\n…(truncated)"
+    agent.history.append({
+        "role": "user",
+        "content": f"[ran shell command: `{command}` → exit {proc.returncode}]\n{capped}",
+    })
+
+
 def _dispatch_slash(
     raw: str, agent: Agent, cmd_store: CommandStore
 ) -> SlashResult:
@@ -1021,7 +1049,8 @@ def _run_repl(agent: Agent) -> None:
         header_bits.append((f"· project={agent.project.path.name} ", "green"))
     console.print(Panel.fit(Text.assemble(*header_bits), border_style="cyan"))
     console.print(
-        "[dim]/help for commands · /exit to quit · Tab to complete commands[/dim]\n"
+        "[dim]/help for commands · !cmd to run a shell command · /exit to quit · "
+        "Tab to complete commands[/dim]\n"
     )
 
     while True:
@@ -1066,6 +1095,13 @@ def _run_repl(agent: Agent) -> None:
             continue
         if user_msg.strip().lower() in {"exit", "quit"}:
             return
+
+        # `!cmd` — run a shell command directly (no LLM) and fold its output
+        # into the conversation so the next turn can reason about it. Mirrors
+        # Claude Code's `!` bash prefix.
+        if user_msg.lstrip().startswith("!"):
+            _run_bang_command(agent, user_msg.lstrip()[1:].strip())
+            continue
 
         if user_msg.strip().startswith("/"):
             result = _dispatch_slash(user_msg.strip(), agent, cmd_store)
