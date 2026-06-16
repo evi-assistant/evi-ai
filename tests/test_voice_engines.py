@@ -14,7 +14,7 @@ from evi.config import Config, VoiceSettings
 
 
 def test_engines_registry():
-    assert voice.ENGINES == ("system", "coqui", "f5", "piper")
+    assert voice.ENGINES == ("system", "coqui", "f5", "piper", "kokoro")
 
 
 def test_available_engines_shape():
@@ -28,13 +28,50 @@ def test_unknown_engine_raises(tmp_path):
         voice.synthesize("hi", tmp_path / "x.wav", engine="nope")
 
 
-@pytest.mark.parametrize("engine", ["coqui", "f5", "piper"])
+@pytest.mark.parametrize("engine", ["coqui", "f5", "piper", "kokoro"])
 def test_missing_deps_raise_voiceerror(tmp_path, engine, monkeypatch):
     # Ensure the engine looks unavailable regardless of the test host.
     monkeypatch.setattr(voice.shutil, "which", lambda _name: None)
     monkeypatch.setattr(voice.importlib.util, "find_spec", lambda _name: None)
     with pytest.raises(voice.VoiceError):
         voice.synthesize("hello", tmp_path / "out.wav", engine=engine)
+
+
+def test_kokoro_in_available_engines():
+    assert "kokoro" in voice.available_engines()
+
+
+def test_write_wav_int16_roundtrip(tmp_path):
+    import wave
+
+    import numpy as np
+
+    out = tmp_path / "t.wav"
+    sig = np.array([0.0, 0.5, -0.5, 1.0, -1.0], dtype="float32")
+    voice._write_wav_int16(out, sig, 24000)
+    with wave.open(str(out), "rb") as w:
+        assert w.getframerate() == 24000 and w.getnchannels() == 1
+        assert w.getsampwidth() == 2 and w.getnframes() == 5
+
+
+def test_default_stt_model_reads_config(tmp_path, monkeypatch):
+    import evi.config as config_mod
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[models]\nstt = \"large-v3-turbo\"\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    assert voice._default_stt_model() == "large-v3-turbo"
+
+
+def test_default_stt_model_falls_back(tmp_path, monkeypatch):
+    import evi.config as config_mod
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[models]\nstt = \"\"\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    assert voice._default_stt_model() == "tiny.en"
 
 
 def test_speak_routes_to_engine(monkeypatch):

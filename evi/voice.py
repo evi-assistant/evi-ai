@@ -26,8 +26,11 @@ class VoiceError(RuntimeError):
 
 
 # TTS engines selectable via [voice] engine. "system" is the zero-dep platform
-# voice; the rest are optional neural engines (lazy-imported, with cloning).
-ENGINES = ("system", "coqui", "f5", "piper")
+# voice; the rest are optional neural engines (lazy-imported). "kokoro" is a
+# tiny (82M) Apache-2.0 model that runs real-time on CPU via ONNX — the
+# high-quality, dependency-light option (no GPU, unlike coqui/f5); coqui/f5
+# additionally do voice cloning.
+ENGINES = ("system", "coqui", "f5", "piper", "kokoro")
 
 
 def detect_backend() -> str:
@@ -138,6 +141,12 @@ def engine_available(engine: str) -> bool:
             shutil.which("piper") is not None
             or importlib.util.find_spec("piper") is not None
         )
+    if engine == "kokoro":
+        # The `kokoro` pip package (PyTorch) or the ONNX runtime path.
+        return (
+            importlib.util.find_spec("kokoro") is not None
+            or importlib.util.find_spec("kokoro_onnx") is not None
+        )
     return False
 
 
@@ -218,7 +227,73 @@ def _synth_piper(text, out, *, model, clone_sample, language) -> Path:
     return out
 
 
-_SYNTHESIZERS = {"coqui": _synth_coqui, "f5": _synth_f5, "piper": _synth_piper}
+def _write_wav_int16(out: Path, samples, sample_rate: int) -> Path:
+    """Write a float32 mono signal in [-1, 1] to a 16-bit PCM WAV (stdlib only)."""
+    import wave
+
+    import numpy as np
+
+    pcm = (np.clip(np.asarray(samples, dtype="float32"), -1.0, 1.0) * 32767).astype("<i2")
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(pcm.tobytes())
+    return out
+
+
+def _synth_kokoro(text, out, *, model, clone_sample, language) -> Path:
+    """Kokoro-82M TTS (Apache-2.0) — tiny, CPU-real-time, high quality, no
+    cloning. `model` selects the voice (default af_heart); `language` maps to
+    Kokoro's lang_code (a=US, b=UK, e=es, f=fr, h=hi, i=it, j=ja, p=pt, z=zh)."""
+    voice = model or "af_heart"
+    code = (language or "en")[:1].lower()
+    lang_code = code if code in "abefhijpz" else "a"
+
+    # Preferred: the `kokoro` PyTorch package.
+    try:
+        from kokoro import KPipeline  # type: ignore[import-not-found]
+    except ImportError:
+        return _synth_kokoro_onnx(text, out, voice=voice)
+    import numpy as np
+
+    pipe = KPipeline(lang_code=lang_code)
+    chunks = []
+    for _g, _p, audio in pipe(text, voice=voice):
+        arr = audio.detach().cpu().numpy() if hasattr(audio, "detach") else np.asarray(audio)
+        chunks.append(arr.astype("float32"))
+    if not chunks:
+        raise VoiceError("Kokoro produced no audio")
+    return _write_wav_int16(out, np.concatenate(chunks), 24000)
+
+
+def _synth_kokoro_onnx(text, out, *, voice: str) -> Path:
+    """ONNX fallback for Kokoro (CPU, no torch). Needs the model + voices files,
+    pointed at by $EVI_KOKORO_ONNX and $EVI_KOKORO_VOICES."""
+    try:
+        from kokoro_onnx import Kokoro  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise VoiceError(
+            "Kokoro not installed — `pip install kokoro` (PyTorch) or "
+            "`pip install kokoro-onnx` + set $EVI_KOKORO_ONNX / $EVI_KOKORO_VOICES "
+            "to the kokoro-v1.0.onnx and voices-v1.0.bin files"
+        ) from exc
+    model_path = os.environ.get("EVI_KOKORO_ONNX", "").strip()
+    voices_path = os.environ.get("EVI_KOKORO_VOICES", "").strip()
+    if not (model_path and voices_path):
+        raise VoiceError(
+            "kokoro-onnx needs $EVI_KOKORO_ONNX and $EVI_KOKORO_VOICES set to the "
+            "model and voices files"
+        )
+    k = Kokoro(model_path, voices_path)
+    samples, sr = k.create(text, voice=voice or "af_sarah", speed=1.0, lang="en-us")
+    return _write_wav_int16(out, samples, int(sr))
+
+
+_SYNTHESIZERS = {
+    "coqui": _synth_coqui, "f5": _synth_f5, "piper": _synth_piper,
+    "kokoro": _synth_kokoro,
+}
 
 
 def synthesize(
@@ -298,11 +373,23 @@ def _load_whisper(model_name: str, device: str, compute_type: str):
     return _WHISPER_MODEL
 
 
+def _default_stt_model() -> str:
+    """The configured STT model ([models] stt), else the tiny.en default.
+    Set [models] stt = "large-v3-turbo" for far better accuracy at ~2-8x the
+    speed of large-v3 (the recommended upgrade)."""
+    try:
+        from evi.config import Config
+
+        return (Config.load().models.stt or "").strip() or "tiny.en"
+    except Exception:  # noqa: BLE001
+        return "tiny.en"
+
+
 def listen(
     *,
     duration: float = 5.0,
     sample_rate: int = 16000,
-    model: str = "tiny.en",
+    model: str = "",
     device: str = "cpu",
     compute_type: str = "int8",
     language: str | None = None,
@@ -321,6 +408,7 @@ def listen(
             "float16" (CUDA full precision).
         language: ISO 639-1 hint ("en", "es", …) or None to auto-detect.
     """
+    model = model or _default_stt_model()
     try:
         import sounddevice as sd  # type: ignore[import-not-found]
         import numpy as np  # type: ignore[import-not-found]
@@ -344,12 +432,13 @@ def listen(
 def transcribe_wav(
     path: Path | str,
     *,
-    model: str = "tiny.en",
+    model: str = "",
     device: str = "cpu",
     compute_type: str = "int8",
     language: str | None = None,
 ) -> str:
     """Transcribe an existing audio file (any format faster-whisper accepts)."""
+    model = model or _default_stt_model()
     whisper = _load_whisper(model, device, compute_type)
     segments, _ = whisper.transcribe(str(path), language=language, beam_size=1)
     return " ".join(seg.text.strip() for seg in segments).strip()
