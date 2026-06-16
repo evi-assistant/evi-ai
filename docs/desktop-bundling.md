@@ -29,7 +29,7 @@ npm install
 npm run build       # → installer under src-tauri/target/release/bundle/
 ```
 
-This installer still needs Python 3.11+ and `pip install evi-assistant[web]` on
+This installer still needs Python 3.13+ and `pip install evi-assistant[web]` on
 the target machine (local mode falls back to system Python). Good for your
 own machines.
 
@@ -43,7 +43,7 @@ macOS, etc.):
 
 ```
 # Build from an ISOLATED venv — see the warning below.
-python -m venv .venv-build         # py -3.11 -m venv .venv-build on Windows
+python -m venv .venv-build         # py -3.13 -m venv .venv-build on Windows
 .venv-build/bin/pip install -e '.[web,pdf,index,build-desktop]'
 scripts/build-sidecar.sh          # or scripts\build-sidecar.ps1 on Windows
 ```

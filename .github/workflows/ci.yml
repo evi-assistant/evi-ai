@@ -22,7 +22,7 @@ jobs:
       # (PRs + weekly) at a fraction of the cost.
       matrix:
         os: ${{ (github.event_name == 'push') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
-        python: ${{ (github.event_name == 'push') && fromJSON('["3.12"]') || fromJSON('["3.11", "3.12"]') }}
+        python: ${{ (github.event_name == 'push') && fromJSON('["3.13"]') || fromJSON('["3.13"]') }}
 
     steps:
       - uses: actions/checkout@v4

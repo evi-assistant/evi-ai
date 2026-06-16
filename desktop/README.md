@@ -9,7 +9,7 @@ close the child server is killed.
 
 - Rust toolchain (`rustup`, stable, 1.77+)
 - Node 18+ (only used to invoke the Tauri CLI)
-- Python 3.11+ with the eVi package installed in editable mode:
+- Python 3.13+ with the eVi package installed in editable mode:
   `pip install -e '.[web]'` from the repo root
 - Platform deps for Tauri 2: see <https://tauri.app/start/prerequisites/>
 
@@ -18,7 +18,7 @@ close the child server is killed.
 | Env var | Purpose |
 |---|---|
 | `EVI_REMOTE_URL` | **Remote mode.** Skip the local Python spawn and point the webview at this URL (e.g. `http://ai-server:8000`). Use when this machine is a thin client of your AI server. |
-| `EVI_PYTHON` | Local mode only. Override the Python interpreter (default: `py -3.11` on Windows, `python3` elsewhere). |
+| `EVI_PYTHON` | Local mode only. Override the Python interpreter (default: `py -3.13` on Windows, `python3` elsewhere). |
 | `EVI_REPO_ROOT` | Local mode only. Override repo-root discovery (default: walks up from the binary looking for `pyproject.toml`). |
 
 ## Dev
@@ -42,7 +42,7 @@ npm run build
 Produces a platform-native installer under `src-tauri/target/release/bundle/`.
 
 By default this bundle does **not** ship Python — the target machine needs
-Python 3.11+ with `pip install evi-assistant[web]` (local mode falls back to system
+Python 3.13+ with `pip install evi-assistant[web]` (local mode falls back to system
 Python). For a **standalone** installer that embeds a frozen server (no
 Python prerequisite), freeze the sidecar first and build with the standalone
 config — see [docs/desktop-bundling.md](../docs/desktop-bundling.md):

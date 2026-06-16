@@ -6,7 +6,7 @@
 #   .\scripts\install.ps1 -Extras "web,mcp,scheduler"
 #
 # Prereqs:
-#   - Python 3.11+ (check with `py --list`)
+#   - Python 3.13+ (check with `py --list`)
 #   - Git 2.17+ for `evi worktree`
 #
 # What it does:
@@ -31,16 +31,16 @@ Write-Host "==> eVi install" -ForegroundColor Cyan
 Write-Host "    repo:    $repoRoot"
 Write-Host "    extras:  $Extras"
 
-# Pick a Python — prefer 3.12, fall back to 3.11.
+# Pick a Python — prefer 3.13, fall back to 3.14.
 $python = $null
-foreach ($v in @("3.12", "3.11")) {
+foreach ($v in @("3.13", "3.14")) {
     try {
         & py -$v --version | Out-Null
         if ($LASTEXITCODE -eq 0) { $python = "py -$v"; break }
     } catch {}
 }
 if (-not $python) {
-    Write-Error "No suitable Python found. Install 3.11+ from python.org or the Microsoft Store."
+    Write-Error "No suitable Python found. Install 3.13+ from python.org or the Microsoft Store."
     exit 1
 }
 Write-Host "    python:  $python"

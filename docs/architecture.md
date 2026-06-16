@@ -169,7 +169,7 @@ also starts in the lifespan so `evi web` covers chat + scheduled jobs in
 one process.
 
 **Tauri desktop** — Two modes:
-- Local (default): spawns `py -3.11 -m uvicorn evi.apps.web.server:app` as a
+- Local (default): spawns `py -3.13 -m uvicorn evi.apps.web.server:app` as a
   child, polls `/api/health`, opens webview at the local port.
 - Remote (`EVI_REMOTE_URL` set): skips the spawn, just navigates.
 

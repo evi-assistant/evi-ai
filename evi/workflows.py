@@ -41,7 +41,6 @@ literal braces in a prompt.
 
 from __future__ import annotations
 
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,10 +48,7 @@ from typing import Any, Callable
 
 import evi.config as config
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 
 class WorkflowError(Exception):

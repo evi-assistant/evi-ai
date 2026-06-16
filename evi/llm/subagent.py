@@ -9,14 +9,10 @@ assistant text. Used by `evi.tools.subagent` to back `delegate_explore`,
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Iterable
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 from evi.config import Config
 from evi.llm.agent import Agent, Done, Error, TextDelta, ToolResult

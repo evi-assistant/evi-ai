@@ -63,15 +63,11 @@ import fnmatch
 import json
 import logging
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 from evi.config import HOOKS_CONFIG_PATH
 

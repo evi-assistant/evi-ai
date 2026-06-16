@@ -13,7 +13,7 @@ $root = (Resolve-Path "$here\..").Path
 # the stt/computer/rerank extras installed would drag torch + faster-whisper +
 # sounddevice + av into the "practical tier" sidecar (--collect-submodules evi
 # pulls every evi.tools.* module), ballooning it from ~75 MB to >1 GB. Create
-# the isolated venv once with: py -3.11 -m venv .venv-build
+# the isolated venv once with: py -3.13 -m venv .venv-build
 $py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 
 # Practical tier: bundle web + pdf + index. STT + computer-use stay opt-in

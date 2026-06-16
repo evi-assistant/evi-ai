@@ -30,17 +30,13 @@ The engine takes a `run_one` callable, so it's fully testable without a model.
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 import evi.config as config
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover
-    import tomli as tomllib
+import tomllib
 
 
 class EvalError(Exception):

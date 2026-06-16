@@ -14,7 +14,7 @@
 #     -v evi-state:/root/.evi \
 #     evi:latest
 
-ARG PYTHON_VERSION=3.12-slim
+ARG PYTHON_VERSION=3.13-slim
 FROM python:${PYTHON_VERSION} AS builder
 
 WORKDIR /build
@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Bring in the site-packages + entry-point scripts from the builder.
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin/evi /usr/local/bin/evi
 
 # Default HOME for Evi state. Mount a volume here in production.
