@@ -114,6 +114,124 @@ def test_save_then_load_roundtrip(tmp_path: Path) -> None:
     assert len(loaded) == 1
     assert loaded[0].name == "git"
     assert loaded[0].command == "mcp-server-git"
+    assert loaded[0].transport == "stdio"
+
+
+# ---- HTTP / SSE transports ------------------------------------------------
+
+
+def test_load_servers_http_transport(tmp_path: Path) -> None:
+    p = tmp_path / "mcp.json"
+    p.write_text(
+        json.dumps([
+            {"name": "remote", "url": "https://mcp.example.com/mcp"},  # url => http inferred
+            {"name": "legacy", "transport": "sse", "url": "https://x/sse",
+             "headers": {"Authorization": "Bearer t"}},
+            {"name": "bad-http", "transport": "http"},  # no url => skipped
+        ]),
+        encoding="utf-8",
+    )
+    servers = {s.name: s for s in load_servers(p)}
+    assert set(servers) == {"remote", "legacy"}  # bad-http dropped
+    assert servers["remote"].transport == "http"
+    assert servers["remote"].url == "https://mcp.example.com/mcp"
+    assert servers["legacy"].transport == "sse"
+    assert servers["legacy"].headers == {"Authorization": "Bearer t"}
+
+
+def test_save_load_roundtrip_http(tmp_path: Path) -> None:
+    p = tmp_path / "mcp.json"
+    save_servers([
+        MCPServer(name="git", command="mcp-server-git"),  # stdio
+        MCPServer(name="remote", transport="http", url="https://x/mcp",
+                  headers={"Authorization": "Bearer t"}),
+    ], path=p)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    # stdio entry keeps its original shape (no transport/url keys)
+    assert raw[0] == {"name": "git", "command": "mcp-server-git", "args": [], "env": {}, "enabled": True}
+    assert raw[1]["transport"] == "http" and raw[1]["url"] == "https://x/mcp"
+    loaded = {s.name: s for s in load_servers(p)}
+    assert loaded["remote"].headers == {"Authorization": "Bearer t"}
+
+
+class _FakeStreams:
+    def __init__(self, n: int):
+        self._n = n  # 3 for http (read, write, get_session_id), 2 for sse
+
+    async def __aenter__(self):
+        return ("r", "w", "sid")[: self._n]
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakeTransportSession:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def initialize(self):
+        pass
+
+    async def list_tools(self):
+        tool = type("T", (), {"name": "ping", "description": "ping",
+                              "inputSchema": {"type": "object", "properties": {}}})()
+        return type("R", (), {"tools": [tool]})()
+
+
+def test_manager_connects_http_transport(monkeypatch) -> None:
+    import mcp
+    import mcp.client.streamable_http as sh
+
+    captured: dict = {}
+
+    def fake_http(url, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeStreams(3)
+
+    monkeypatch.setattr(sh, "streamablehttp_client", fake_http)
+    monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
+
+    mgr = MCPManager([MCPServer(
+        name="remote", transport="http", url="https://x/mcp",
+        headers={"Authorization": "Bearer t"},
+    )])
+    try:
+        mgr.start()
+        assert "remote.ping" in mgr.registered_tool_names()
+        assert captured["url"] == "https://x/mcp"
+        assert captured["headers"] == {"Authorization": "Bearer t"}
+    finally:
+        mgr.stop()
+    assert "remote.ping" not in REGISTRY  # cleaned up on stop
+
+
+def test_manager_connects_sse_transport(monkeypatch) -> None:
+    import mcp
+    import mcp.client.sse as sse
+
+    captured: dict = {}
+
+    def fake_sse(url, headers=None):
+        captured["url"] = url
+        return _FakeStreams(2)
+
+    monkeypatch.setattr(sse, "sse_client", fake_sse)
+    monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
+
+    mgr = MCPManager([MCPServer(name="ev", transport="sse", url="https://x/sse")])
+    try:
+        mgr.start()
+        assert "ev.ping" in mgr.registered_tool_names()
+        assert captured["url"] == "https://x/sse"
+    finally:
+        mgr.stop()
 
 
 # ---- _flatten_content ---------------------------------------------------

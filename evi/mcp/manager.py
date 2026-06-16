@@ -2,7 +2,9 @@
 
 For each enabled server in `~/.evi/mcp.json`:
 
-1. Spawn it over stdio (via the `mcp` Python SDK)
+1. Connect it over its transport (via the `mcp` Python SDK): spawn over **stdio**
+   (`command`/`args`), or connect to a remote **http** (streamable-http) / **sse**
+   endpoint by `url` (+ optional auth `headers`).
 2. Call `initialize` and `list_tools`
 3. Wrap each MCP tool as an `evi.tools.base.Tool` named `<server>.<tool>`
    and register it in `REGISTRY`. The wrapped `func` submits the actual call
@@ -110,24 +112,46 @@ class MCPManager:
 
     def _connect(self, server: MCPServer) -> None:
         # Lazy import so the rest of eVi runs without the mcp extra installed.
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
+        from mcp import ClientSession
 
-        params = StdioServerParameters(
-            command=server.command,
-            args=server.args,
-            env=server.env or None,
-        )
+        transport = (server.transport or "stdio").lower()
+
+        async def _open_streams(stack: AsyncExitStack):
+            """Open the right client transport and return (read, write)."""
+            if transport == "http":
+                from mcp.client.streamable_http import streamablehttp_client
+
+                ctx = await stack.enter_async_context(
+                    streamablehttp_client(server.url, headers=server.headers or None)
+                )
+                return ctx[0], ctx[1]  # (read, write, [get_session_id]) — SDK-version-safe
+            if transport == "sse":
+                from mcp.client.sse import sse_client
+
+                read, write = await stack.enter_async_context(
+                    sse_client(server.url, headers=server.headers or None)
+                )
+                return read, write
+            from mcp import StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            params = StdioServerParameters(
+                command=server.command, args=server.args, env=server.env or None
+            )
+            read, write = await stack.enter_async_context(stdio_client(params))
+            return read, write
 
         async def setup() -> tuple[AsyncExitStack, Any, list[Any]]:
             stack = AsyncExitStack()
-            read, write = await stack.enter_async_context(stdio_client(params))
+            read, write = await _open_streams(stack)
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             tools_resp = await session.list_tools()
             return stack, session, list(tools_resp.tools)
 
-        stack, session, tools = self.bridge.run(setup(), timeout=30)
+        # Remote transports may be slower to hand-shake than a local spawn.
+        connect_timeout = 30 if transport == "stdio" else 45
+        stack, session, tools = self.bridge.run(setup(), timeout=connect_timeout)
         live = _LiveServer(name=server.name, session=session, stack=stack)
         for mcp_tool in tools:
             evi_tool = self._wrap_tool(server.name, session, mcp_tool)

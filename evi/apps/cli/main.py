@@ -5020,8 +5020,12 @@ def mcp_list_servers() -> None:
         return
     for s in servers:
         flag = "[green]on [/green]" if s.enabled else "[red]off[/red]"
-        argstr = " ".join(s.args)
-        console.print(f"{flag} [bold]{s.name}[/bold] — [dim]{s.command} {argstr}[/dim]")
+        if s.transport in ("http", "sse"):
+            auth = " [dim](auth)[/dim]" if s.headers else ""  # never echo the secret
+            detail = f"{s.transport} {s.url}{auth}"
+        else:
+            detail = f"{s.command} {' '.join(s.args)}".strip()
+        console.print(f"{flag} [bold]{s.name}[/bold] — [dim]{detail}[/dim]")
 
 
 @mcp_app.command("add")
@@ -5056,6 +5060,45 @@ def mcp_add(
         raise typer.Exit(1)
     console.print(
         f"[green]added[/green] {name} — {command} {' '.join(server.args)} "
+        f"[dim](check it with `evi mcp list-tools`)[/dim]"
+    )
+    if not Config.load().tools.mcp:
+        console.print("[yellow]note:[/yellow] tools.mcp is off — enable it in config/settings to use MCP")
+
+
+@mcp_app.command("add-http")
+def mcp_add_http(
+    name: str = typer.Argument(..., help="A short name for the server."),
+    url: str = typer.Argument(..., help="The server's endpoint URL (https://…/mcp)."),
+    header: list[str] = typer.Option(
+        None, "--header", "-H", help="KEY=VALUE request header, e.g. Authorization=Bearer xyz (repeatable)."
+    ),
+    sse: bool = typer.Option(False, "--sse", help="Use the legacy SSE transport instead of streamable-http."),
+    disabled: bool = typer.Option(False, "--disabled", help="Add the server switched off."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing server by this name."),
+) -> None:
+    """Add a REMOTE (HTTP) MCP server to ~/.evi/mcp.json.
+
+    Example: evi mcp add-http linear https://mcp.linear.app/mcp -H "Authorization=Bearer <token>"
+    """
+    from evi.mcp.servers import MCPServer, add_server
+
+    headers: dict[str, str] = {}
+    for pair in header or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            console.print(f"[red]bad --header entry:[/red] {pair!r} (expected KEY=VALUE)")
+            raise typer.Exit(1)
+        headers[key.strip()] = value.strip()
+    server = MCPServer(
+        name=name, transport="sse" if sse else "http", url=url,
+        headers=headers, enabled=not disabled,
+    )
+    if not add_server(server, overwrite=overwrite):
+        console.print(f"[red]server exists:[/red] {name}. Pass --overwrite to replace.")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]added[/green] {name} — {server.transport} {url} "
         f"[dim](check it with `evi mcp list-tools`)[/dim]"
     )
     if not Config.load().tools.mcp:

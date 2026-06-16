@@ -27,13 +27,21 @@ from evi.config import MCP_CONFIG_PATH
 
 @dataclass
 class MCPServer:
-    """Launch config for a single MCP server (stdio transport only for now)."""
+    """Connection config for a single MCP server.
+
+    ``transport`` is ``stdio`` (spawn ``command``/``args``) or a remote HTTP
+    transport — ``http`` (streamable-http) / ``sse`` — driven by ``url`` (+
+    optional ``headers`` for auth). ``command`` is unused for HTTP transports.
+    """
 
     name: str
-    command: str
+    command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    transport: str = "stdio"  # stdio | http | sse
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 def filter_allowed(servers: list[MCPServer], allow) -> list[MCPServer]:
@@ -63,16 +71,28 @@ def _parse_server_file(p: Path, name_prefix: str = "") -> list[MCPServer]:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name")
-        command = entry.get("command")
-        if not name or not command:
+        if not name:
             continue
+        command = entry.get("command")
+        url = str(entry.get("url") or "")
+        # Default transport: http when a url is present, else stdio. An explicit
+        # "transport" wins (so sse can be requested even with a url).
+        transport = str(entry.get("transport") or ("http" if url else "stdio")).lower()
+        if transport in ("http", "sse"):
+            if not url:
+                continue  # remote transport needs a url
+        elif not command:
+            continue  # stdio needs a command
         servers.append(
             MCPServer(
                 name=f"{name_prefix}{name}",
-                command=str(command),
+                command=str(command or ""),
                 args=[str(a) for a in entry.get("args", []) or []],
                 env={str(k): str(v) for k, v in (entry.get("env") or {}).items()},
                 enabled=bool(entry.get("enabled", True)),
+                transport=transport,
+                url=url,
+                headers={str(k): str(v) for k, v in (entry.get("headers") or {}).items()},
             )
         )
     return servers
@@ -101,16 +121,17 @@ def save_servers(servers: list[MCPServer], path: Path | None = None) -> None:
     """Write the server list back to disk. Convenience for the CLI."""
     p = path or MCP_CONFIG_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
-    payload = [
-        {
-            "name": s.name,
-            "command": s.command,
-            "args": s.args,
-            "env": s.env,
-            "enabled": s.enabled,
-        }
-        for s in servers
-    ]
+    payload = []
+    for s in servers:
+        if s.transport in ("http", "sse"):
+            entry: dict = {"name": s.name, "transport": s.transport, "url": s.url}
+            if s.headers:
+                entry["headers"] = s.headers
+        else:
+            # stdio: keep the original shape so existing files don't churn.
+            entry = {"name": s.name, "command": s.command, "args": s.args, "env": s.env}
+        entry["enabled"] = s.enabled
+        payload.append(entry)
     p.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
