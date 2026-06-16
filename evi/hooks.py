@@ -58,6 +58,7 @@ stderr becomes the tool result the LLM sees. After-hooks and `stop` never block.
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import subprocess
 import sys
@@ -115,9 +116,32 @@ class Hook:
     url: str = ""        # if set, POST the event JSON here instead of spawning
     timeout: float = 30.0
     veto_on_nonzero: bool = False  # only meaningful for before_*
+    # Optional per-argument conditions: ((arg_name, glob), …). The hook fires
+    # only when the tool name matches AND every listed argument (stringified)
+    # matches its glob — e.g. arg_match = { path = "*.env" } so a write-guard
+    # only triggers on dotenv files. Mirrors Claude Code's conditional hooks.
+    arg_match: tuple[tuple[str, str], ...] = ()
 
     def applies_to(self, tool_name: str) -> bool:
         return fnmatch.fnmatch(tool_name, self.match)
+
+    def matches(self, tool_name: str, args_json: str | None = None) -> bool:
+        """Whether this hook fires for `tool_name` (and, when `args_json` is
+        given, its argument conditions). `args_json=None` skips arg matching —
+        used for lifecycle events, which carry no tool args."""
+        if not self.applies_to(tool_name):
+            return False
+        if not self.arg_match or args_json is None:
+            return True
+        try:
+            args = json.loads(args_json) if args_json else {}
+        except (ValueError, TypeError):
+            args = {}
+        if not isinstance(args, dict):
+            return False
+        return all(
+            fnmatch.fnmatch(str(args.get(k, "")), pat) for k, pat in self.arg_match
+        )
 
 
 @dataclass
@@ -194,6 +218,10 @@ def _parse_entry(event: str, entry: dict) -> Hook:
         raise ValueError("hook needs a non-empty command or a url")
     timeout = float(entry.get("timeout", 30.0))
     veto = bool(entry.get("veto_on_nonzero", False))
+    am_raw = entry.get("arg_match") or {}
+    if am_raw and not isinstance(am_raw, dict):
+        raise ValueError("hook.arg_match must be a table of arg = glob")
+    arg_match = tuple((str(k), str(v)) for k, v in am_raw.items())
     return Hook(
         name=name,
         event=event,  # type: ignore[arg-type]
@@ -202,6 +230,7 @@ def _parse_entry(event: str, entry: dict) -> Hook:
         url=url,
         timeout=timeout,
         veto_on_nonzero=veto,
+        arg_match=arg_match,
     )
 
 
@@ -259,8 +288,13 @@ def write_raw(text: str, path: Path | None = None) -> None:
 class HookRegistry:
     hooks: list[Hook] = field(default_factory=list)
 
-    def for_event(self, event: HookEvent, tool_name: str) -> list[Hook]:
-        return [h for h in self.hooks if h.event == event and h.applies_to(tool_name)]
+    def for_event(
+        self, event: HookEvent, tool_name: str, args_json: str | None = None
+    ) -> list[Hook]:
+        return [
+            h for h in self.hooks
+            if h.event == event and h.matches(tool_name, args_json)
+        ]
 
     def run_before(
         self, tool_name: str, args_json: str
@@ -268,7 +302,7 @@ class HookRegistry:
         """Run all before-hooks for `tool_name`. Returns (results, veto)
         where `veto` is the first hook that vetoed (if any), else None."""
         results: list[HookResult] = []
-        for hook in self.for_event("before_tool_call", tool_name):
+        for hook in self.for_event("before_tool_call", tool_name, args_json):
             res = _run_hook(hook, tool_name, args_json, result_output=None)
             results.append(res)
             if hook.veto_on_nonzero and res.vetoed:
@@ -279,7 +313,7 @@ class HookRegistry:
         self, tool_name: str, args_json: str, tool_output: str
     ) -> list[HookResult]:
         results: list[HookResult] = []
-        for hook in self.for_event("after_tool_call", tool_name):
+        for hook in self.for_event("after_tool_call", tool_name, args_json):
             res = _run_hook(hook, tool_name, args_json, result_output=tool_output)
             results.append(res)
             if res.vetoed:
@@ -314,7 +348,6 @@ def _run_http_hook(
     """POST the event as JSON to `hook.url`. A 2xx response is success (exit 0);
     any other status becomes the exit code, so `veto_on_nonzero` still works
     (a before-hook URL that returns 4xx/5xx blocks the call)."""
-    import json
     import urllib.error
     import urllib.request
 

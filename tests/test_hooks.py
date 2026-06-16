@@ -214,6 +214,42 @@ def test_for_event_filters() -> None:
     assert [h.name for h in reg.for_event("after_tool_call", "x")] == ["b"]
 
 
+def test_arg_match_conditional() -> None:
+    h = Hook(
+        name="dotenv-guard",
+        event="before_tool_call",
+        match="write_file",
+        command=["true"],
+        arg_match=(("path", "*.env"),),
+    )
+    # tool name matches AND the path arg matches the glob -> fires
+    assert h.matches("write_file", '{"path": "secrets/prod.env"}') is True
+    # path arg doesn't match -> skipped
+    assert h.matches("write_file", '{"path": "main.py"}') is False
+    # different tool -> skipped regardless of args
+    assert h.matches("read_file", '{"path": "x.env"}') is False
+    # no args context (lifecycle) -> arg conditions ignored
+    assert h.matches("write_file", None) is True
+    # malformed args json -> treated as no match for the condition
+    assert h.matches("write_file", "{not json") is False
+
+
+def test_arg_match_parsed_from_toml(tmp_path: Path) -> None:
+    (tmp_path / "hooks.toml").write_text(
+        "[[before_tool_call]]\n"
+        'name = "guard"\n'
+        'match = "write_file"\n'
+        'command = ["true"]\n'
+        'arg_match = { path = "*.env" }\n',
+        encoding="utf-8",
+    )
+    reg = load_hooks(path=tmp_path / "hooks.toml")
+    assert reg.hooks[0].arg_match == (("path", "*.env"),)
+    # for_event applies the arg condition when args are supplied
+    assert reg.for_event("before_tool_call", "write_file", '{"path": "a.env"}')
+    assert not reg.for_event("before_tool_call", "write_file", '{"path": "a.py"}')
+
+
 # ---- runner -------------------------------------------------------------
 
 
