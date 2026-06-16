@@ -372,7 +372,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/context, /ctx", "show where the context window is being spent"),
         ("/recent [n]", "list recent sessions (resume via `evi sessions resume`)"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
-        ("/effort [low|medium|high|max|ultracode]", "set reasoning effort (ultracode = max + auto-pipeline)"),
+        ("/effort [off|low|medium|high|max|ultracode]", "set reasoning effort (off = no thinking; ultracode = max + auto-pipeline)"),
         ("/ultra [task]", "run one task through the ultracode pipeline (no arg toggles auto mode)"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
         ("/json <prompt>", "force JSON-object output for the next turn"),
@@ -469,7 +469,7 @@ def _handle_compact(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     return "continue"
 
 
-_EFFORT_LEVELS = ("low", "medium", "high", "max")
+_EFFORT_LEVELS = ("off", "low", "medium", "high", "max")
 # `ultracode` is a pseudo-level (Claude Code parity): max reasoning + auto-run
 # substantive REPL turns through the ultracode pipeline.
 _EFFORT_CHOICES = (*_EFFORT_LEVELS, "ultracode")

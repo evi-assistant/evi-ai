@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from evi.reasoning import model_supports_reasoning
+from evi.reasoning import model_supports_reasoning, reasoning_extra_body
 
 
 @pytest.mark.parametrize("model", [
@@ -47,6 +47,26 @@ def test_oseries_boundary_not_false_matching():
     # a stray "o1"/"o3" inside an unrelated name shouldn't trip the o-series rule
     assert model_supports_reasoning("histo1gram-model") is False
     assert model_supports_reasoning("two3things") is False
+
+
+def test_reasoning_extra_body_non_reasoning_model_is_empty():
+    # Never send any thinking knob to a model that 400s on it — even "off".
+    assert reasoning_extra_body("high", "qwen2.5:3b") == {}
+    assert reasoning_extra_body("off", "qwen2.5:3b") == {}
+
+
+def test_reasoning_extra_body_levels():
+    assert reasoning_extra_body("high", "deepseek-r1:14b") == {"reasoning_effort": "high"}
+    assert reasoning_extra_body("low", "o3-mini") == {"reasoning_effort": "low"}
+    # medium = model default -> nothing sent
+    assert reasoning_extra_body("medium", "deepseek-r1:14b") == {}
+    assert reasoning_extra_body("", "deepseek-r1:14b") == {}
+
+
+@pytest.mark.parametrize("off", ["off", "none", "false", "0", "disabled", "OFF"])
+def test_reasoning_extra_body_off_disables_thinking(off):
+    # "off" on a thinking-by-default model -> explicitly disable thinking.
+    assert reasoning_extra_body(off, "qwen3:8b") == {"think": False}
 
 
 def test_gate_only_sends_effort_for_reasoning_models(monkeypatch, tmp_path):
