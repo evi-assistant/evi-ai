@@ -149,6 +149,27 @@ planned (philosophy mismatch / separate big track).
 | Authentication (accounts/SSO) | web auth token; local backends need none | 🚫 local |
 | ZDR / legal / data-usage | private by design (everything local) | 🚫 N/A |
 
+## Summary — specialty SLMs + opencode/Cursor gleanings (0.34.0)
+
+Beyond Claude Code, eVi pulled in the genuinely-local wins from **opencode** and
+**Cursor** and added small **specialty models**:
+
+- **Specialty SLMs** — `[models]` ocr/vision/stt/tts registry; `describe_image`
+  + OCR-VLM routing (Moondream2 / Qwen2.5-VL / GLM-OCR), Kokoro TTS, faster-whisper
+  turbo. A small model per task, no main-model swap.
+- **Working folder** — per-session cwd (`/cd`, `--cwd`, web `📁` chip).
+- **opencode core** — real **shell tool**, `apply_patch` (multi-hunk),
+  format-on-edit + `check_file` diagnostics (LSP-lite), persistent `/plan` toggle,
+  `evi init` (AGENTS.md, already discovered up-tree).
+- **Cursor gleanings (local-first only)** — local **FIM completion** engine
+  (`evi complete` / `/api/complete`) so eVi is a local Tab/Copilot backend;
+  Bugbot-style review (`.evi/BUGBOT.md` + `evi review-remember` + severity).
+  (`evi edit` already existed.) Cursor's cloud bits (Cloud Agents, remote PR
+  Bugbot, Design Mode, Slack, enterprise) remain out by the local-first rule.
+- **Deferred (need a separate client / deeper work):** a VS Code/LSP extension
+  to render the FIM completions as ghost-text; a full language-server
+  integration (eVi ships the lighter check_file/format-on-edit instead).
+
 ## Summary — S/M parity batch (0.33.0)
 
 ✅ **Closed in 0.33.0** (the "close every buildable small/medium gap" pass):

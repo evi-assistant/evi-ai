@@ -3,6 +3,38 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.0] — 2026-06-16
+
+### Added — specialty SLMs, working folder, opencode + Cursor gleanings
+
+- **Specialty-model framework** — `[models]` registry (ocr/vision/stt/tts) +
+  `SpecialtyRegistry` so a small dedicated model handles a task without
+  swapping the main model. `describe_image` tool + OCR-VLM routing in
+  `ocr_image` (falls back to tesseract); `evi models specialty list/set/clear`.
+- **Voice models** — Kokoro-82M TTS engine (CPU real-time, Apache); STT default
+  reads `[models] stt` (e.g. `large-v3-turbo`).
+- **Working folder** — per-session cwd (`evi.workdir`): `/cd`, `evi chat --cwd`,
+  web `📁` chip + `/api/session/cwd`. File tools resolve relative paths against it.
+- **Shell tool** — `run_command` (opt-in `[tools] shell`, permission-gated),
+  wiring the previously-dangling `shell` category.
+- **Editing** — `apply_patch` (multi-hunk SEARCH/REPLACE in one call);
+  `[tools] format_on_edit` (ruff/black/prettier/gofmt/rustfmt); `check_file`
+  diagnostics (ruff/eslint/go vet/clippy) — LSP-lite, no server.
+- **Local FIM completion** — `evi/complete.py` + `evi complete` + `/api/complete`:
+  eVi as a fully-local Tab/Copilot backend for an editor extension.
+- **Plan/build toggle** — `/plan on|off` (persistent read-only mode).
+- **`evi init`** — scaffold AGENTS.md/EVI.md (discovery already merges up the tree).
+- **Bugbot-style review** — `evi review` loads `.evi/BUGBOT.md` + learned rules
+  (`evi review-remember`), tags findings by severity; composes with --json/--exit-code.
+- **Federation guard** — `evi doctor` / `evi peer scan` warn when serving but
+  loopback-bound (the desktop-0.2.14 trap).
+
+### Notes
+
+- Desktop **0.2.16** shipped separately (bundles the 0.33.0 batch). A 0.2.17
+  with this batch follows. SLM models are user-pulled (e.g. `ollama pull
+  moondream` / `glm-ocr`); eVi wires the integration, config, and tools.
+
 ## [0.33.0] — 2026-06-16
 
 ### Added — Claude Code parity, S/M batch
