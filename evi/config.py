@@ -232,6 +232,11 @@ class FederationSettings:
     `~/.evi/peers.json` (so per-peer tokens stay out of synced config)."""
 
     serve: bool = False
+    # When true, the DESKTOP app binds its bundled server to 0.0.0.0 (LAN) so
+    # this machine can be reached as a federation peer — otherwise it's loopback
+    # only and unreachable from other boxes. Read by the Tauri shell at launch.
+    # SECURITY: exposes the server to the local network — set [web] auth_token.
+    bind_lan: bool = False
 
 
 @dataclass

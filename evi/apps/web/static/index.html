@@ -2956,8 +2956,14 @@ resetBtn.addEventListener('click', async () => {
         '<label style="cursor:pointer"><input type="checkbox" id="pr-serve"' +
         (d.serving ? ' checked' : '') + '> answer federation requests from peers</label>' +
         '<span class="dim" style="font-size:12px;display:block">' +
-        'On = this eVi runs tasks delegated by trusted peers (POST /api/federate). ' +
-        'It must also be reachable (run <code>evi web --host 0.0.0.0</code>).</span>' +
+        'On = this eVi runs tasks delegated by trusted peers (POST /api/federate).</span>' +
+        '</span></div>' +
+        '<div class="set-about-row"><span class="k">LAN access</span><span>' +
+        '<label style="cursor:pointer"><input type="checkbox" id="pr-lan"' +
+        (d.bind_lan ? ' checked' : '') + '> serve on the network so other machines can reach this peer</label>' +
+        '<span class="dim" style="font-size:12px;display:block">' +
+        'Desktop only; binds 0.0.0.0 on next launch (else loopback-only). ' +
+        '⚠ exposes the server to your LAN — set a web auth token.</span>' +
         '</span></div>' +
         '<div id="pr-status" class="sec-blurb" style="min-height:1.1em"></div>';
       if (!peers.length) {
@@ -3011,6 +3017,15 @@ resetBtn.addEventListener('click', async () => {
           status(d3.serving ? 'Serving ON — this eVi now answers peers' : 'Serving off', true);
         } catch (e) { serveEl.checked = !serveEl.checked; status('Error: ' + e.message, false); }
         serveEl.disabled = false;
+      };
+      const lanEl = box.querySelector('#pr-lan');
+      if (lanEl) lanEl.onchange = async () => {
+        lanEl.disabled = true;
+        try {
+          const d4 = await post('/api/peers/bind-lan', { enabled: lanEl.checked });
+          status(d4.bind_lan ? 'LAN access ON — restart the desktop app to apply' : 'LAN access off (loopback)', true);
+        } catch (e) { lanEl.checked = !lanEl.checked; status('Error: ' + e.message, false); }
+        lanEl.disabled = false;
       };
 
       box.onclick = async (ev) => {

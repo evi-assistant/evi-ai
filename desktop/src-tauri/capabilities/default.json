@@ -10,6 +10,10 @@
     ]
   },
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-check-for-update-cmd",
+    "allow-open-logs-cmd",
+    "allow-open-external-cmd",
+    "allow-update-status-cmd"
   ]
 }

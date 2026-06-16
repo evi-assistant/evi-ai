@@ -47,6 +47,17 @@ def test_serve_toggle_persists(client, monkeypatch, tmp_path):
     assert client.post("/api/peers/serve", json={"enabled": False}).json()["serving"] is False
 
 
+def test_bind_lan_toggle_persists(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("evi.config.HOME", tmp_path)
+    monkeypatch.setattr("evi.config.CONFIG_PATH", tmp_path / "config.toml")
+    assert client.get("/api/peers").json()["bind_lan"] is False
+    r = client.post("/api/peers/bind-lan", json={"enabled": True})
+    assert r.status_code == 200 and r.json()["bind_lan"] is True
+    from evi.config import Config
+    assert Config.load().federation.bind_lan is True
+    assert client.get("/api/peers").json()["bind_lan"] is True
+
+
 def test_add_list_remove(client, peers_path, monkeypatch):
     # avoid real network probes in status rows
     monkeypatch.setattr(

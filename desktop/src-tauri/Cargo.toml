@@ -22,6 +22,7 @@ tauri-plugin-updater = "2.0"
 tauri-plugin-deep-link = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"   # read [federation] bind_lan from config.toml at spawn
 ureq = "2"
 url = "2"
 

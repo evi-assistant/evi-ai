@@ -1625,6 +1625,7 @@ def create_app() -> FastAPI:
                 for p, st in zip(peers, statuses)
             ],
             "serving": Config.load().federation.serve,
+            "bind_lan": Config.load().federation.bind_lan,
         }
 
     @app.post("/api/peers/serve")
@@ -1638,6 +1639,18 @@ def create_app() -> FastAPI:
         cfg.federation.serve = bool(req.get("enabled"))
         cfg.save()
         return {"ok": True, "serving": cfg.federation.serve}
+
+    @app.post("/api/peers/bind-lan")
+    def peers_set_bind_lan(req: dict[str, Any]) -> dict[str, Any]:
+        """Toggle [federation] bind_lan — whether the DESKTOP app serves on
+        0.0.0.0 (LAN) so it can be a reachable peer. Takes effect on the next
+        desktop launch (the Tauri shell reads it at spawn)."""
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        cfg = Config.load()
+        cfg.federation.bind_lan = bool(req.get("enabled"))
+        cfg.save()
+        return {"ok": True, "bind_lan": cfg.federation.bind_lan}
 
     @app.post("/api/peers")
     def peers_add(req: dict[str, Any]) -> dict[str, Any]:
