@@ -573,6 +573,9 @@
     <span class="dot"></span>
     <span id="model-btn-label">model</span>
   </button>
+  <button type="button" class="model-btn" id="cwd-btn" title="Set working folder for this session">
+    <span id="cwd-btn-label">📁 …</span>
+  </button>
 </div>
 <div class="drop-overlay" id="drop-overlay">Drop file to attach</div>
 <div class="picker-overlay" id="picker-overlay">
@@ -1720,6 +1723,46 @@ const modelBtnLabel = document.getElementById('model-btn-label');
 const pickerOverlay = document.getElementById('picker-overlay');
 const pickerCard = document.getElementById('picker-card');
 
+// ---- working folder chip (per-session cwd) ------------------------------
+const cwdBtn = document.getElementById('cwd-btn');
+const cwdBtnLabel = document.getElementById('cwd-btn-label');
+
+function _shortPath(p) {
+  if (!p) return '…';
+  const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
+  return '📁 ' + (parts[parts.length - 1] || p);
+}
+
+async function loadCwd() {
+  try {
+    const r = await fetch('/api/session/cwd?session_id=' + encodeURIComponent(sessionId));
+    if (!r.ok) return;
+    const d = await r.json();
+    cwdBtnLabel.textContent = _shortPath(d.working_dir);
+    cwdBtn.title = 'Working folder: ' + d.working_dir + ' — click to change';
+  } catch {}
+}
+
+async function setCwd() {
+  let cur = '';
+  try { cur = (await (await fetch('/api/session/cwd?session_id=' + encodeURIComponent(sessionId))).json()).working_dir; } catch {}
+  const path = prompt('Working folder for this session (relative file ops resolve here):', cur || '');
+  if (path == null) return;
+  try {
+    const r = await fetch('/api/session/cwd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, path: path.trim() }),
+    });
+    if (!r.ok) { alert('Could not set folder: ' + (await r.text())); return; }
+    const d = await r.json();
+    cwdBtnLabel.textContent = _shortPath(d.working_dir);
+    cwdBtn.title = 'Working folder: ' + d.working_dir + ' — click to change';
+  } catch (e) { alert('Could not set folder: ' + e); }
+}
+
+if (cwdBtn) cwdBtn.addEventListener('click', setCwd);
+
 let pickerState = {
   active: '', fast_model: '', models: [],
   effort: 'medium', effort_levels: ['low','medium','high','max'],
@@ -1863,6 +1906,7 @@ window.addEventListener('keydown', e => {
 // Initial load: pick up the model picker state + restore the active tab's
 // history (when we have one from a previous visit).
 loadPicker();
+loadCwd();
 // Cross-device handoff (Phase 87): /?session=<id> opens (or adds) that session.
 const _wantSession = (() => {
   try { return new URLSearchParams(location.search).get('session'); }
@@ -2337,6 +2381,7 @@ resetBtn.addEventListener('click', async () => {
         body: JSON.stringify({ model }),
       });
       if (typeof loadPicker === 'function') loadPicker();
+      if (typeof loadCwd === 'function') loadCwd();
       await loadConfig();
       renderSection();
     } catch {}
@@ -2359,6 +2404,7 @@ resetBtn.addEventListener('click', async () => {
       } else if (d.kind === 'done') {
         es.close(); bar.style.width = '100%'; status.textContent = 'Installed ✓';
         if (typeof loadPicker === 'function') loadPicker();
+      if (typeof loadCwd === 'function') loadCwd();
         setTimeout(() => loadConfig().then(renderSection), 700);
       } else if (d.kind === 'error') {
         es.close(); status.textContent = 'Error: ' + (d.message || 'download failed');
@@ -3346,6 +3392,7 @@ resetBtn.addEventListener('click', async () => {
       const data = await r.json();
       cfg = data.config; pending = {};
       if (typeof loadPicker === 'function') loadPicker();
+      if (typeof loadCwd === 'function') loadCwd();
       statusEl.textContent = (data.deferred && data.deferred.length)
         ? 'Saved — tool/permission changes apply to new chats.' : 'Saved.';
       saveBtn.disabled = true;

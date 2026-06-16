@@ -167,6 +167,11 @@ class ModeRequest(BaseModel):
     mode: str  # chat | cowork | code
 
 
+class CwdRequest(BaseModel):
+    session_id: str
+    path: str
+
+
 # --- full-config read/write (settings screen) ----------------------------
 #
 # Secret fields are never sent to the browser in the clear. GET returns the
@@ -1225,6 +1230,37 @@ def create_app() -> FastAPI:
             "effort": cfg.llm.reasoning_effort,
             "fast_mode": cfg.llm.fast_mode,
         }
+
+    @app.get("/api/session/cwd")
+    def session_cwd_get(session_id: str) -> dict[str, str]:
+        """The session's working folder (empty cwd → the server process cwd)."""
+        import os as _os
+
+        sess = get_session(session_id)
+        return {"working_dir": (getattr(sess.agent, "cwd", "") or _os.getcwd())}
+
+    @app.post("/api/session/cwd")
+    def session_cwd_set(req: CwdRequest) -> dict[str, str]:
+        """Set the session's working folder. Relative file ops then resolve
+        there and EVI.md re-discovers from it (mirrors the CLI `/cd`)."""
+        from pathlib import Path as _Path
+
+        sess = get_session(req.session_id)
+        p = _Path(req.path).expanduser()
+        if not p.is_dir():
+            raise HTTPException(400, f"not a directory: {p}")
+        sess.agent.cwd = str(p.resolve())
+        try:
+            from evi.project import load_project_context
+
+            sess.agent.project = load_project_context(start=p.resolve())
+            if sess.agent.history:
+                sess.agent.history[0] = {
+                    "role": "system", "content": sess.agent._compose_system_prompt()
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        return {"working_dir": sess.agent.cwd}
 
     @app.get("/api/config")
     def config_get() -> dict[str, Any]:
