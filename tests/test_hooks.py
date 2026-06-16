@@ -127,6 +127,19 @@ def test_load_lifecycle_events(tmp_path: Path) -> None:
     assert {h.event for h in reg.hooks} == {"user_prompt_submit", "before_compact", "stop"}
 
 
+def test_load_session_lifecycle_events(tmp_path: Path) -> None:
+    p = tmp_path / "hooks.toml"
+    p.write_text(
+        '[[session_start]]\nname="start"\ncommand=["true"]\n'
+        '[[session_end]]\nname="end"\ncommand=["true"]\n',
+        encoding="utf-8",
+    )
+    reg = load_hooks(p)
+    assert {h.event for h in reg.hooks} == {"session_start", "session_end"}
+    # session_start/end are lifecycle (match "*", no tool name)
+    assert [h.name for h in reg.for_event("session_start", "")] == ["start"]
+
+
 def test_lifecycle_veto_blocks() -> None:
     hook = Hook(
         name="block", event="user_prompt_submit", match="*",
