@@ -37,6 +37,7 @@ class ModelRec:
     role: str                # "chat" | "coder" | "small"
     notes: str = ""
     context_window: int = 0  # native max context (tokens); 0 = backfilled by family
+    fast_ok: bool = False    # good as a fast/downshift companion (/fast, ultracode auto-tune)
 
 
 # The registry. Order matters: we prefer earlier entries within a tier.
@@ -130,7 +131,9 @@ REGISTRY: list[ModelRec] = [
         min_ram_mb=5000,
         tool_calling="ok",
         role="chat",
-        notes="Tool calling gets shaky here. Watch for hallucinated tool calls.",
+        fast_ok=True,
+        notes="Tool calling gets shaky here. Watch for hallucinated tool calls. "
+        "Good fast/downshift companion on bigger GPUs.",
     ),
     # --- < 4 GB VRAM / CPU-only / 2 GB laptops --------------------------
     ModelRec(
@@ -142,7 +145,20 @@ REGISTRY: list[ModelRec] = [
         min_ram_mb=4500,
         tool_calling="ok",
         role="chat",
+        fast_ok=True,
         notes="Solid small model. Tool calling works most of the time.",
+    ),
+    ModelRec(
+        id="phi3.5:3.8b-mini-instruct-q4_K_M",
+        family="phi3",
+        parameters="3.8B",
+        quantization="Q4_K_M",
+        min_vram_mb=3000,
+        min_ram_mb=5000,
+        tool_calling="ok",
+        role="small",
+        fast_ok=True,
+        notes="Microsoft Phi-3.5-mini. Strong reasoning for its size; long 128K context.",
     ),
     ModelRec(
         id="qwen2.5:1.5b-instruct-q4_K_M",
@@ -153,6 +169,7 @@ REGISTRY: list[ModelRec] = [
         min_ram_mb=2500,
         tool_calling="poor",
         role="small",
+        fast_ok=True,
         notes="Fits on 940MX / Pi-class hardware. Don't expect reliable tool calls.",
     ),
     ModelRec(
@@ -164,7 +181,20 @@ REGISTRY: list[ModelRec] = [
         min_ram_mb=1500,
         tool_calling="poor",
         role="small",
+        fast_ok=True,
         notes="Absolute floor. Acceptable for plain chat only.",
+    ),
+    ModelRec(
+        id="qwen2.5:0.5b-instruct-q4_K_M",
+        family="qwen2.5",
+        parameters="0.5B",
+        quantization="Q4_K_M",
+        min_vram_mb=700,
+        min_ram_mb=1200,
+        tool_calling="poor",
+        role="small",
+        fast_ok=True,
+        notes="Tiniest. Draft/boilerplate only; for speed, not quality.",
     ),
 ]
 
@@ -214,12 +244,27 @@ def context_window_for(model_id: str) -> int | None:
     return None
 
 
+def _pick_fast(
+    *, vram_mb: int | None = None, ram_mb: int | None = None
+) -> ModelRec | None:
+    """The best small/fast companion that fits — for `/fast` swaps and ultracode
+    downshift. Largest `fast_ok` model within budget (registry is biggest-first).
+    A fast model SWAPS in (not co-resident), so it only needs to fit alone."""
+    for m in (m for m in REGISTRY if m.fast_ok):
+        if vram_mb is not None and m.min_vram_mb <= vram_mb:
+            return m
+        if ram_mb is not None and m.min_ram_mb <= ram_mb:
+            return m
+    return None
+
+
 @dataclass
 class Recommendation:
     mode: str             # "gpu" | "cpu" | "remote-only"
     chat: ModelRec | None
     coder: ModelRec | None
     notes: list[str]
+    fast: ModelRec | None = None   # small/downshift companion (/fast, ultracode)
 
 
 def recommend(hw: HardwareInfo) -> Recommendation:
@@ -233,14 +278,16 @@ def recommend(hw: HardwareInfo) -> Recommendation:
 
     if primary is None:
         notes.append("No NVIDIA GPU detected — falling back to CPU.")
-        chat = _pick(REGISTRY, role="chat", ram_mb=hw.ram_total_bytes // (1024 * 1024))
-        coder = _pick(REGISTRY, role="coder", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        ram_mb = hw.ram_total_bytes // (1024 * 1024)
+        chat = _pick(REGISTRY, role="chat", ram_mb=ram_mb)
+        coder = _pick(REGISTRY, role="coder", ram_mb=ram_mb)
+        fast = _pick_fast(ram_mb=ram_mb)
         if chat is None:
             return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes + [
                 "Even CPU inference would be slow with the available RAM.",
                 "Point eVi at a remote backend (your AI server) instead.",
             ])
-        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
+        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes, fast=fast)
 
     vram = primary.vram_total_mb
     notes.append(f"Primary GPU: {primary.name} ({vram} MB VRAM).")
@@ -251,11 +298,13 @@ def recommend(hw: HardwareInfo) -> Recommendation:
             "Treat this as CPU-only."
         )
         # Fall through to CPU rec.
-        chat = _pick(REGISTRY, role="chat", ram_mb=hw.ram_total_bytes // (1024 * 1024))
-        coder = _pick(REGISTRY, role="coder", ram_mb=hw.ram_total_bytes // (1024 * 1024))
+        ram_mb = hw.ram_total_bytes // (1024 * 1024)
+        chat = _pick(REGISTRY, role="chat", ram_mb=ram_mb)
+        coder = _pick(REGISTRY, role="coder", ram_mb=ram_mb)
+        fast = _pick_fast(ram_mb=ram_mb)
         if chat is None:
             return Recommendation(mode="remote-only", chat=None, coder=None, notes=notes)
-        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes)
+        return Recommendation(mode="cpu", chat=chat, coder=coder, notes=notes, fast=fast)
 
     if primary.compute_capability and float(primary.compute_capability) < 6.0:
         notes.append(
@@ -265,7 +314,8 @@ def recommend(hw: HardwareInfo) -> Recommendation:
 
     chat = _pick(REGISTRY, role="chat", vram_mb=vram)
     coder = _pick(REGISTRY, role="coder", vram_mb=vram)
-    return Recommendation(mode="gpu", chat=chat, coder=coder, notes=notes)
+    fast = _pick_fast(vram_mb=vram)
+    return Recommendation(mode="gpu", chat=chat, coder=coder, notes=notes, fast=fast)
 
 
 def _pick(

@@ -58,9 +58,25 @@ max_workers = 4    # cap on concurrent stage agents
 auto_tune = true   # downshift breadth/rounds for tiny / short-context models
 ```
 
-`auto_tune` downshifts to `breadth=2, rounds=0` for tiny models (names with
-`1b/3b/mini/phi/small`) or short context (< 16k) so ultracode stays usable on
-weak backends.
+`auto_tune` downshifts to `breadth=2, rounds=0` for tiny models (size tokens
+`0.5b/1b/1.5b/3b` or `mini`/`small` in the name) or short context (< 16k) so
+ultracode stays usable on weak backends.
+
+### Running ultracode on a smaller model
+
+`evi models recommend` now also suggests a **Fast** model (the largest small/
+fast companion that fits — e.g. `qwen2.5:3b` on a 16 GB GPU). Set it as the
+downshift/fast model:
+
+```bash
+evi models use qwen2.5:3b-instruct-q4_K_M --fast   # sets [llm] fast_model
+```
+
+`fast_model` is used by `/fast` **and** composes with ultracode: turn on fast
+mode (`/fast on`) and the whole pipeline runs on the small model — handy to keep
+the big model free, or to run ultracode fast on modest hardware. The bundled
+small options span `qwen2.5:3b`, `llama3.2:3b`, `phi3.5:3.8b-mini`,
+`qwen2.5:1.5b`, `llama3.2:1b`, and `qwen2.5:0.5b`.
 
 ## Usage
 
