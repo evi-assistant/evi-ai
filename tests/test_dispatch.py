@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Iterator
 
 import pytest
@@ -41,9 +42,9 @@ def client(monkeypatch, tmp_path) -> TestClient:
     # Isolate config + the workflows dir into tmp.
     monkeypatch.setattr(config_mod, "HOME", tmp_path)
     monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.toml")
-    monkeypatch.setattr(server_mod, "Agent", _FakeAgent)
+    import evi.sdk.builder as builder_mod
+    monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: _FakeAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
     monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path)
     return TestClient(server_mod.create_app())
 
@@ -83,3 +84,18 @@ def test_dispatch_run_workflow(client, tmp_path):
 
 def test_dispatch_run_unknown_workflow(client):
     assert client.post("/api/dispatch/workflow/nope", json={}).status_code == 404
+
+
+def test_dispatch_stream_emits_snapshot(client):
+    # A session so the snapshot has content; busy is False at rest.
+    client.post("/api/chat", json={"session_id": "d2", "message": "/help"})
+    # limit=1 ends the SSE stream after a single snapshot (so the test returns).
+    r = client.get("/api/dispatch/stream?limit=1")
+    assert r.status_code == 200
+    body = r.text
+    assert "data:" in body
+    # the streamed payload is the same snapshot shape, incl. the live `busy` flag
+    payload = json.loads(body.split("data:", 1)[1].strip().splitlines()[0])
+    ids = [s["id"] for s in payload["sessions"]]
+    assert "d2" in ids
+    assert all("busy" in s for s in payload["sessions"])
