@@ -5394,6 +5394,9 @@ def worktree_create(
     """Create a worktree at <repo>/.worktrees/<branch>/ on `branch`."""
     from evi.worktree import WorktreeError, create_worktree
 
+    # Fall back to the configured worktree.base_ref when --base isn't given,
+    # so feature worktrees fork from a fixed base (e.g. main) not HEAD.
+    base = base or (Config.load().worktree.base_ref or None)
     try:
         path = create_worktree(branch, create_branch=not existing, base=base)
     except WorktreeError as exc:
