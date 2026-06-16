@@ -200,3 +200,22 @@ def test_search_files_bad_regex(tmp_path: Path) -> None:
 def test_run_python_basic() -> None:
     out = REGISTRY["run_python"].call(json.dumps({"code": "print(2+2)"}))
     assert "4" in out
+
+
+def test_python_exe_dev_is_sys_executable() -> None:
+    import sys
+
+    from evi.tools.code import _python_exe
+
+    # Not frozen in tests → sys.executable.
+    assert _python_exe() == sys.executable
+
+
+def test_run_python_errors_when_frozen_without_python(monkeypatch) -> None:
+    import evi.tools.code as code_mod
+
+    # Simulate the desktop sidecar: frozen + no python on PATH.
+    monkeypatch.setattr(code_mod.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(code_mod.shutil, "which", lambda _name: None)
+    out = code_mod.run_python("print(1)")
+    assert out.startswith("ERROR") and "no Python interpreter" in out
