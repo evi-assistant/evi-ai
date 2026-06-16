@@ -55,12 +55,14 @@ class MCPManager:
         *,
         bridge: MCPBridge | None = None,
         call_timeout: float = 120.0,
+        session_id: str = "",
     ) -> None:
         self.servers = servers
         self.bridge = bridge or MCPBridge()
         self._owns_bridge = bridge is None
         self._live: list[_LiveServer] = []
         self._call_timeout = call_timeout
+        self.session_id = session_id
         self.started = False
 
     # --- lifecycle -------------------------------------------------------
@@ -135,8 +137,22 @@ class MCPManager:
             from mcp import StdioServerParameters
             from mcp.client.stdio import stdio_client
 
+            # Inject identifiers so a stdio MCP server knows it's running under
+            # eVi (parity with Claude Code's SESSION_ID / CLAUDECODE=1). Merge
+            # onto the SDK's safe default env so the child keeps PATH etc.
+            try:
+                from mcp.client.stdio import get_default_environment
+
+                base_env = dict(get_default_environment())
+            except Exception:  # noqa: BLE001 — SDK without the helper
+                import os
+
+                base_env = dict(os.environ)
+            child_env = {**base_env, **(server.env or {}), "EVI": "1"}
+            if self.session_id:
+                child_env["EVI_SESSION_ID"] = self.session_id
             params = StdioServerParameters(
-                command=server.command, args=server.args, env=server.env or None
+                command=server.command, args=server.args, env=child_env
             )
             read, write = await stack.enter_async_context(stdio_client(params))
             return read, write

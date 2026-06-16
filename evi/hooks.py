@@ -47,6 +47,7 @@ When a hook fires we set these env vars in the child process:
   EVI_HOOK_TOOL     tool name for tool events; the event name for lifecycle ones
   EVI_HOOK_ARGS_JSON  tool call args; the prompt for user_prompt_submit
   EVI_HOOK_RESULT   only for after_tool_call: the tool's stringified output
+  EVI_EFFORT        the active reasoning effort (low/medium/high/max)
                     (truncated to 4 KB to avoid blowing the env limit)
 
 A before-hook (or user_prompt_submit / before_compact) with
@@ -91,6 +92,18 @@ ALL_EVENTS = TOOL_EVENTS + LIFECYCLE_EVENTS
 
 
 _ENV_RESULT_LIMIT = 4 * 1024  # don't blow OS arg/env limits
+
+
+def _current_effort() -> str:
+    """The active reasoning effort, surfaced to hooks (EVI_EFFORT / payload). A
+    Bash hook can `$EVI_EFFORT` and an HTTP hook reads `effort`. Defaults to
+    'medium' and never raises."""
+    try:
+        from evi.config import Config
+
+        return (Config.load().llm.reasoning_effort or "medium").strip().lower()
+    except Exception:  # noqa: BLE001
+        return "medium"
 
 
 @dataclass(frozen=True)
@@ -309,6 +322,7 @@ def _run_http_hook(
         "event": hook.event,
         "tool": tool_name,
         "args_json": args_json,
+        "effort": _current_effort(),
     }
     if result_output is not None:
         payload["result"] = result_output[:_ENV_RESULT_LIMIT]
@@ -361,6 +375,7 @@ def _run_hook(
     env["EVI_HOOK_EVENT"] = hook.event
     env["EVI_HOOK_TOOL"] = tool_name
     env["EVI_HOOK_ARGS_JSON"] = args_json
+    env["EVI_EFFORT"] = _current_effort()
     if result_output is not None:
         env["EVI_HOOK_RESULT"] = result_output[:_ENV_RESULT_LIMIT]
 
