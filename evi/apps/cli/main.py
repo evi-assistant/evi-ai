@@ -382,6 +382,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/forcetool <name> <prompt>", "force the model to call a specific tool"),
         ("/reload", "re-read config.toml without restarting"),
         ("/reload-skills", "rescan skills dirs and refresh the skill index"),
+        ("/add-dir <path>", "trust an extra directory this session (auto-approve fs/code there)"),
         ("/audio <path>", "transcribe an audio file and send as the next turn"),
         ("/audioraw <path> [prompt]", "attach raw audio (omni models) / auto-transcribe otherwise"),
         ("/speak [on|off]", "auto-speak assistant replies sentence-by-sentence"),
@@ -782,6 +783,42 @@ def _handle_reload(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRes
     return "continue"
 
 
+def _handle_add_dir(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/add-dir <path>` — trust an extra directory for this session.
+
+    Adds the directory to this session's trusted_dirs so fs/code tools acting
+    under it are auto-approved (no per-call prompt), letting the agent work
+    across directories beyond the cwd. Session-only (not persisted). Mirrors
+    Claude Code's /add-dir."""
+    from pathlib import Path as _Path
+
+    if not args.strip():
+        dirs = getattr(agent.config.auto, "trusted_dirs", []) or []
+        if dirs:
+            console.print("[bold]trusted dirs:[/bold]")
+            for d in dirs:
+                console.print(f"  [cyan]{d}[/cyan]")
+        else:
+            console.print("[dim]no extra trusted dirs[/dim] — usage: /add-dir <path>")
+        return "continue"
+    p = _Path(args.strip()).expanduser()
+    if not p.is_dir():
+        console.print(f"[red]not a directory:[/red] {p}")
+        return "continue"
+    resolved = str(p.resolve())
+    dirs = list(getattr(agent.config.auto, "trusted_dirs", []) or [])
+    if resolved in dirs:
+        console.print(f"[dim]already trusted:[/dim] {resolved}")
+        return "continue"
+    dirs.append(resolved)
+    agent.config.auto.trusted_dirs = dirs  # live: _permission_decision reads it
+    console.print(
+        f"[green]added trusted dir[/green] {resolved} "
+        f"[dim](session only; fs/code there are auto-approved)[/dim]"
+    )
+    return "continue"
+
+
 def _handle_reload_skills(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
     """`/reload-skills` — rescan the skills dirs and re-compose the prompt.
 
@@ -972,6 +1009,8 @@ _BUILTINS: dict[str, callable] = {
     "reload": _handle_reload,
     "reload-skills": _handle_reload_skills,
     "reloadskills": _handle_reload_skills,
+    "add-dir": _handle_add_dir,
+    "adddir": _handle_add_dir,
     "audio": _handle_audio,
     "audioraw": _handle_audioraw,
     "speak": _handle_speak,
