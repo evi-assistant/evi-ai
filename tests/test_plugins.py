@@ -207,6 +207,32 @@ def test_init_plugin_rejects_bad_name(tmp_path):
         plugins.init_plugin("has spaces", tmp_path)
 
 
+def test_install_from_zip(tmp_path):
+    import zipfile
+
+    # Build a plugin dir, then zip it with a wrapping top-level folder.
+    src = tmp_path / "src" / "zipme"
+    _make_plugin(src, name="zipme")
+    zip_path = tmp_path / "zipme.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for f in src.rglob("*"):
+            if f.is_file():
+                zf.write(f, f"zipme/{f.relative_to(src)}")
+
+    root = tmp_path / "home"
+    name = plugins.install(str(zip_path), root=root)
+    assert name == "zipme"
+    cs = CommandStore(root=root / "commands")
+    assert cs.get("zipme:status") is not None
+
+
+def test_install_bad_zip_errors(tmp_path):
+    bad = tmp_path / "broken.zip"
+    bad.write_text("not actually a zip", encoding="utf-8")
+    with pytest.raises(plugins.PluginError):
+        plugins.install(str(bad), root=tmp_path / "home")
+
+
 def test_plugin_mcp_loaded(tmp_path, monkeypatch):
     """A plugin's mcp.json is merged, namespaced <plugin>:<name> (Phase 80)."""
     import evi.config as config

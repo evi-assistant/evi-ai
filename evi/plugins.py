@@ -117,18 +117,68 @@ def _count_agents(p: Path) -> int:
     return len(data.get("agent", []) or [])
 
 
+def _is_url(source: str) -> bool:
+    return source.startswith(("http://", "https://"))
+
+
+def _looks_like_zip(source: str) -> bool:
+    return source.lower().endswith(".zip")
+
+
 def _looks_like_git(source: str) -> bool:
     return (
-        source.startswith(("http://", "https://", "git@", "ssh://"))
+        source.startswith(("git@", "ssh://"))
         or source.endswith(".git")
+        or (_is_url(source) and not _looks_like_zip(source))
     )
 
 
+def _find_manifest_dir(base: Path) -> Path:
+    """Locate the dir holding plugin.toml within an extracted archive — at the
+    root, or nested one level (zips usually wrap everything in a top folder)."""
+    if (base / "plugin.toml").is_file():
+        return base
+    for child in sorted(p for p in base.iterdir() if p.is_dir()):
+        if (child / "plugin.toml").is_file():
+            return child
+    raise PluginError("no plugin.toml found in archive")
+
+
+def _fetch_and_extract_zip(source: str, tmp: Path) -> Path:
+    """Download (if a URL) and unzip `source` into `tmp`; return the plugin dir."""
+    import zipfile
+
+    if _is_url(source):
+        import urllib.request
+
+        zip_path = tmp / "plugin.zip"
+        try:
+            with urllib.request.urlopen(source, timeout=60) as resp:  # noqa: S310
+                zip_path.write_bytes(resp.read())
+        except OSError as exc:
+            raise PluginError(f"download failed: {exc}") from exc
+    else:
+        zip_path = Path(source).expanduser()
+        if not zip_path.is_file():
+            raise PluginError(f"zip not found: {source}")
+    dest = tmp / "unzipped"
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(dest)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise PluginError(f"bad zip: {exc}") from exc
+    return _find_manifest_dir(dest)
+
+
 def install(source: str, name: str | None = None, root: Path | None = None) -> str:
-    """Install a plugin from a local directory or a git URL. Returns its name."""
+    """Install a plugin from a local directory, a git URL, or a `.zip`
+    (local file or http(s) URL). Returns its name."""
     tmp: Path | None = None
     try:
-        if _looks_like_git(source):
+        if _looks_like_zip(source):
+            tmp = Path(tempfile.mkdtemp(prefix="evi-plugin-"))
+            plugin_src = _fetch_and_extract_zip(source, tmp)
+        elif _looks_like_git(source):
             tmp = Path(tempfile.mkdtemp(prefix="evi-plugin-"))
             res = subprocess.run(
                 ["git", "clone", "--depth", "1", source, str(tmp)],
@@ -140,7 +190,7 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
         else:
             plugin_src = Path(source).expanduser()
             if not plugin_src.is_dir():
-                raise PluginError(f"not a directory or git URL: {source}")
+                raise PluginError(f"not a directory, git URL, or zip: {source}")
 
         manifest = _read_manifest(plugin_src)
         pname = _slug(name or str(manifest.get("name") or plugin_src.name))
