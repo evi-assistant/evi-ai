@@ -209,8 +209,25 @@ In `peers.json`, `name` and `url` are required; `token` is the peer's web bearer
 token (omit if the peer needs no auth). Missing or malformed files yield no
 peers; bad entries are skipped.
 
-To let this instance **answer** federated tasks, set `[federation] serve = true`
-and run the web server so `/api/federate` is reachable.
+To let this instance **answer** federated tasks you need **two** things:
+
+1. **Serving on.** Toggle **Settings → Peers → "answer federation requests"**
+   (writes `[federation] serve = true`; takes effect immediately, no restart —
+   no need to hand-edit `config.toml`). The CLI/`peers.json` equivalent is still
+   `[federation] serve = true`.
+2. **Reachable on the network.** The server must listen beyond loopback. Run
+   `evi web --host 0.0.0.0` (and allow the port — default **8473** — through the
+   firewall). **Desktop caveat:** the desktop app currently binds the bundled
+   server to `127.0.0.1` only, so a desktop instance isn't reachable as a peer
+   yet — run the server directly on the peer box with
+   `evi-server.exe --host 0.0.0.0 --port 8473` (or `evi web --host 0.0.0.0`).
+   A "scan finds nothing" with the firewall open almost always means the peer is
+   bound to loopback, not the firewall.
+
+The two are independent: serving-on without LAN-binding answers only localhost;
+LAN-binding without serving-on returns HTTP 403 to delegations. The full
+two-node path (probe → reachable → delegate → serve-gating → distributed team
+runner) is covered by `tests/e2e/test_federation_network.py`.
 
 ## Usage
 

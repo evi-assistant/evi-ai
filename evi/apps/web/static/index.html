@@ -3010,8 +3010,11 @@ initModes();
     fetch('/api/peers').then(r => r.json()).then(d => {
       const peers = d.peers || [];
       let html = '<div class="set-about-row"><span class="k">Serving</span><span>' +
-        (d.serving ? '<span style="color:#4caf50">on</span> — this eVi answers peers'
-          : 'off — set <code>[federation] serve = true</code> to answer peers') +
+        '<label style="cursor:pointer"><input type="checkbox" id="pr-serve"' +
+        (d.serving ? ' checked' : '') + '> answer federation requests from peers</label>' +
+        '<span class="dim" style="font-size:12px;display:block">' +
+        'On = this eVi runs tasks delegated by trusted peers (POST /api/federate). ' +
+        'It must also be reachable (run <code>evi web --host 0.0.0.0</code>).</span>' +
         '</span></div>' +
         '<div id="pr-status" class="sec-blurb" style="min-height:1.1em"></div>';
       if (!peers.length) {
@@ -3056,6 +3059,16 @@ initModes();
       nameEl.setAttribute(PH, 'name (e.g. gpu)');
       urlEl.setAttribute(PH, 'http://gpu-box:8473');
       tokenEl.setAttribute(PH, 'peer web token (optional)');
+
+      const serveEl = box.querySelector('#pr-serve');
+      if (serveEl) serveEl.onchange = async () => {
+        serveEl.disabled = true;
+        try {
+          const d3 = await post('/api/peers/serve', { enabled: serveEl.checked });
+          status(d3.serving ? 'Serving ON — this eVi now answers peers' : 'Serving off', true);
+        } catch (e) { serveEl.checked = !serveEl.checked; status('Error: ' + e.message, false); }
+        serveEl.disabled = false;
+      };
 
       box.onclick = async (ev) => {
         const t = ev.target;

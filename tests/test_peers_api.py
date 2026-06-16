@@ -32,6 +32,21 @@ def test_list_empty(client):
     assert d["peers"] == [] and isinstance(d["serving"], bool)
 
 
+def test_serve_toggle_persists(client, monkeypatch, tmp_path):
+    # Keep cfg.save() inside tmp (the endpoint does Config.load() + cfg.save()).
+    monkeypatch.setattr("evi.config.HOME", tmp_path)
+    monkeypatch.setattr("evi.config.CONFIG_PATH", tmp_path / "config.toml")
+    assert client.get("/api/peers").json()["serving"] is False
+    r = client.post("/api/peers/serve", json={"enabled": True})
+    assert r.status_code == 200 and r.json()["serving"] is True
+    # round-trips through the on-disk config (no hand-editing config.toml)
+    from evi.config import Config
+    assert Config.load().federation.serve is True
+    assert client.get("/api/peers").json()["serving"] is True
+    # and back off
+    assert client.post("/api/peers/serve", json={"enabled": False}).json()["serving"] is False
+
+
 def test_add_list_remove(client, peers_path, monkeypatch):
     # avoid real network probes in status rows
     monkeypatch.setattr(
