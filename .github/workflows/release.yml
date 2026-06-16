@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Manual re-publish (e.g. when a tag's release run failed before the publish
+  # step). Builds + publishes whatever version is in pyproject on the chosen ref.
+  workflow_dispatch: {}
 
 permissions:
   contents: write   # for the GitHub release
@@ -51,7 +54,9 @@ jobs:
       #     --cert-identity <release-workflow-url> \
       #     --cert-oidc-issuer https://token.actions.githubusercontent.com
       - name: Sign artifacts (sigstore)
-        uses: sigstore/gh-action-sigstore-python@v3
+        # Pin to a published release tag — this action does not maintain a
+        # floating `@v3` major tag, so `@v3` fails to resolve (broke 0.32.0).
+        uses: sigstore/gh-action-sigstore-python@v3.4.0
         with:
           inputs: ./dist/*.tar.gz ./dist/*.whl
 
