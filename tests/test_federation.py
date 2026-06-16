@@ -238,3 +238,68 @@ def test_scan_network_finds_instance_on_host_list():
 
 def test_scan_network_empty_hosts():
     assert federation.scan_network(8473, hosts=[]) == []
+
+
+# ---- self_serving_status (the loopback-bind guard) ----------------------
+
+
+def test_self_serving_status_loopback(monkeypatch):
+    srv, port = _serve_health({"ok": True, "version": "1.0", "model": "m"})
+    try:
+        # LAN ip points at an address with nothing serving -> lan probe fails,
+        # loopback probe succeeds -> "loopback" (the desktop-0.2.14 trap).
+        monkeypatch.setattr(federation, "local_ipv4", lambda: "192.0.2.123")
+        st = federation.self_serving_status(port, serve=True, timeout=0.5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert st["status"] == "loopback" and st["loopback"] is True and st["lan"] is False
+
+
+def test_self_serving_status_lan(monkeypatch):
+    srv, port = _serve_health({"ok": True, "version": "1.0", "model": "m"})
+    try:
+        # Pretend the LAN ip is 127.0.0.1 (the health server answers there) -> "lan".
+        monkeypatch.setattr(federation, "local_ipv4", lambda: "127.0.0.1")
+        st = federation.self_serving_status(port, serve=True, timeout=0.5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert st["status"] == "lan" and st["lan"] is True
+
+
+def test_self_serving_status_off():
+    assert federation.self_serving_status(1, serve=False, timeout=0.2)["status"] == "off"
+
+
+def test_self_serving_status_down(monkeypatch):
+    monkeypatch.setattr(federation, "local_ipv4", lambda: "192.0.2.123")
+    assert federation.self_serving_status(1, serve=True, timeout=0.2)["status"] == "down"
+
+
+def test_doctor_federation_loopback_warns(monkeypatch, tmp_path):
+    import evi.config as config_mod
+    from evi import doctor
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[federation]\nserve = true\nbind_lan = true\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    monkeypatch.setattr(
+        federation, "self_serving_status",
+        lambda *a, **k: {"status": "loopback", "lan_ip": "", "port": 8473,
+                         "loopback": True, "lan": False},
+    )
+    checks = doctor._check_federation()
+    assert any(c.name == "federation reachable" and c.status == "warn" for c in checks)
+
+
+def test_doctor_federation_silent_when_serve_off(monkeypatch, tmp_path):
+    import evi.config as config_mod
+    from evi import doctor
+
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[federation]\nserve = false\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg_path)
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    assert doctor._check_federation() == []

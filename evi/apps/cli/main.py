@@ -3166,6 +3166,21 @@ def peer_scan(
             "[dim]no eVi instances found.[/dim] The peer must be running "
             "[cyan]evi web --host 0.0.0.0[/cyan] (and allow the port through its firewall)."
         )
+        # Self-bind check: if THIS node is serving but loopback-only, peers
+        # (incl. the ones we just failed to find) can't reach us either.
+        try:
+            cfg = Config.load()
+            if getattr(cfg.federation, "serve", False):
+                st = federation.self_serving_status(p, serve=True)
+                if st["status"] == "loopback":
+                    console.print(
+                        "[yellow]heads up:[/yellow] this machine is serving but "
+                        "[bold]bound to 127.0.0.1 only[/bold] — peers can't reach it. "
+                        "Reinstall desktop 0.2.15+ or relaunch "
+                        "[cyan]evi web --host 0.0.0.0[/cyan] so [cyan]bind_lan[/cyan] takes effect."
+                    )
+        except Exception:
+            pass
         return
     configured = {pe.url.rstrip("/") for pe in federation.load_peers()}
     for f in found:

@@ -166,6 +166,47 @@ def _check_hardware() -> list[Check]:
         return [Check("hardware", "warn", f"detection failed: {type(exc).__name__}")]
 
 
+def _check_federation() -> list[Check]:
+    """When federation serving is enabled, verify this machine is actually
+    reachable BY peers — the loopback-bind trap (desktop < 0.2.15 launches the
+    sidecar with --host 127.0.0.1, so `bind_lan` never takes effect)."""
+    from evi.config import Config
+
+    try:
+        cfg = Config.load()
+    except Exception:
+        return []
+    fed = getattr(cfg, "federation", None)
+    if fed is None or not getattr(fed, "serve", False):
+        return []  # not serving — nothing to verify
+
+    from evi.federation import DEFAULT_PEER_PORT, self_serving_status
+
+    st = self_serving_status(DEFAULT_PEER_PORT, serve=True)
+    status, lan_ip = st["status"], st["lan_ip"]
+    if status == "lan":
+        return [Check("federation reachable", "ok",
+                      f"peers can reach this node at {lan_ip}:{st['port']}")]
+    if status == "loopback":
+        bl = getattr(fed, "bind_lan", False)
+        hint = (
+            "running server is bound to 127.0.0.1 only — reinstall desktop "
+            "0.2.15+ or relaunch `evi web --host 0.0.0.0` so bind_lan takes "
+            "effect"
+        ) if bl else (
+            "set [federation] bind_lan = true and relaunch on 0.0.0.0 so peers "
+            "can reach this node"
+        )
+        return [Check("federation reachable", "warn",
+                      f"serving but loopback-only — {hint} (+ open inbound TCP "
+                      f"{st['port']} in the firewall)")]
+    if status == "down":
+        return [Check("federation reachable", "warn",
+                      f"[federation] serve is on but nothing is listening on "
+                      f"{st['port']} (start `evi web`)")]
+    return []
+
+
 def run_checks() -> list[Check]:
     """Run every diagnostic and return the flat list of results."""
     checks: list[Check] = []
@@ -175,6 +216,7 @@ def run_checks() -> list[Check]:
     checks += _check_hardware()
     checks += _check_binaries()
     checks += _check_optional_deps()
+    checks += _check_federation()
     return checks
 
 

@@ -192,12 +192,11 @@ def _host_port(url: str) -> tuple[str, int]:
     return u.hostname, u.port or (443 if u.scheme == "https" else 80)
 
 
-def _local_subnet_hosts() -> list[str]:
-    """The /24 around this machine's primary LAN address (254 hosts).
+def local_ipv4() -> str:
+    """This machine's primary LAN IPv4 ('' if loopback-only / offline).
 
     The UDP connect trick learns the outbound interface without sending any
-    packets; offline boxes fall back to hostname resolution. Loopback or
-    failure → [] (nothing sensible to sweep).
+    packets; offline boxes fall back to hostname resolution.
     """
     ip = ""
     try:
@@ -208,11 +207,50 @@ def _local_subnet_hosts() -> list[str]:
         try:
             ip = socket.gethostbyname(socket.gethostname())
         except OSError:
-            return []
-    if not ip or ip.startswith("127."):
+            return ""
+    return "" if (not ip or ip.startswith("127.")) else ip
+
+
+def _local_subnet_hosts() -> list[str]:
+    """The /24 around this machine's primary LAN address (254 hosts).
+
+    Loopback or failure → [] (nothing sensible to sweep).
+    """
+    ip = local_ipv4()
+    if not ip:
         return []
     base = ip.rsplit(".", 1)[0]
     return [f"{base}.{i}" for i in range(1, 255)]
+
+
+def self_serving_status(
+    port: int = DEFAULT_PEER_PORT, *, serve: bool = True, timeout: float = 1.0
+) -> dict:
+    """Is THIS machine's eVi reachable BY peers as a federation node?
+
+    Probes the local server on both loopback and the LAN address and returns
+    ``{status, lan_ip, port, loopback, lan}`` where status is one of:
+
+      off       — ``[federation] serve`` is false (we won't answer peers)
+      lan       — reachable on the LAN address (good; peers can reach us)
+      loopback  — server is up but bound to 127.0.0.1 ONLY — the common bug:
+                  a desktop build older than 0.2.15, or launched with
+                  ``--host 127.0.0.1`` (so ``bind_lan`` never took effect)
+      down      — serve is on but nothing is listening on the port
+    """
+    lan_ip = local_ipv4()
+    loopback = probe_evi("127.0.0.1", port, timeout=timeout) is not None
+    lan = bool(lan_ip) and probe_evi(lan_ip, port, timeout=timeout) is not None
+    if not serve:
+        status = "off"
+    elif lan:
+        status = "lan"
+    elif loopback:
+        status = "loopback"
+    else:
+        status = "down"
+    return {"status": status, "lan_ip": lan_ip, "port": port,
+            "loopback": loopback, "lan": lan}
 
 
 def scan_network(
