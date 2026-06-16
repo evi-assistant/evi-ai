@@ -93,8 +93,10 @@ def test_prediction_text_lands_in_extra_body() -> None:
 
 
 def test_prediction_coexists_with_reasoning_effort() -> None:
-    """When both effort and prediction are set, both ride in extra_body."""
+    """When both effort and prediction are set, both ride in extra_body.
+    (effort only ships to reasoning-capable models — use one here.)"""
     cfg = Config()
+    cfg.llm.model = "deepseek-r1:14b"
     cfg.llm.reasoning_effort = "high"
     agent, cc = _make_agent(cfg)
     list(agent.chat("hi", prediction="hello world"))

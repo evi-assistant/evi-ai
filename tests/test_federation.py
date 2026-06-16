@@ -121,9 +121,9 @@ def _fed_client(monkeypatch, tmp_path, *, serve: bool):
             yield TextDelta("delegated answer")
             yield Done(reason="stop")
 
-    monkeypatch.setattr(server_mod, "Agent", _FakeAgent)
+    import evi.sdk.builder as builder_mod
+    monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: _FakeAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
     monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path)
     return TestClient(server_mod.create_app())
 

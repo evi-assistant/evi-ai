@@ -36,6 +36,7 @@ from evi.audio_input import (
     model_supports_audio,
     transcribe_for_fallback,
 )
+from evi.reasoning import model_supports_reasoning
 from evi.vision import build_image_content, model_supports_vision
 
 
@@ -1075,10 +1076,12 @@ class Agent:
             active_model = self.config.llm.model
         # `reasoning_effort` is OpenAI-style; for backends that ignore it
         # (most local ones, today) we drop it into `extra_body` so the SDK
-        # forwards it as a top-level field without erroring.
+        # forwards it as a top-level field without erroring. Only send it to
+        # models that actually support thinking — Ollama 400s a non-reasoning
+        # model (e.g. qwen2.5) on a thinking request, while DeepSeek-R1 accepts.
         extra_body: dict[str, Any] = {}
         effort = (self.config.llm.reasoning_effort or "").strip().lower()
-        if effort and effort != "medium":
+        if effort and effort != "medium" and model_supports_reasoning(active_model):
             extra_body["reasoning_effort"] = effort
         # KV-cache prompt reuse hint (llama.cpp honours it; others ignore).
         if self.config.llm.cache_prompt:

@@ -61,7 +61,9 @@ def test_effort_default_medium_not_passed_through() -> None:
 
 
 def test_effort_high_lands_in_extra_body() -> None:
+    # Effort is only forwarded to reasoning-capable models (see test below).
     cfg = Config()
+    cfg.llm.model = "deepseek-r1:14b"
     cfg.llm.reasoning_effort = "high"
     agent, cc = _make_agent(cfg)
     list(agent.chat("hi"))
@@ -70,10 +72,22 @@ def test_effort_high_lands_in_extra_body() -> None:
 
 def test_effort_max() -> None:
     cfg = Config()
+    cfg.llm.model = "deepseek-r1:14b"
     cfg.llm.reasoning_effort = "max"
     agent, cc = _make_agent(cfg)
     list(agent.chat("hi"))
     assert cc.calls[0]["extra_body"] == {"reasoning_effort": "max"}
+
+
+def test_effort_not_sent_to_non_reasoning_model() -> None:
+    # Regression: Ollama 400s a non-reasoning model on a thinking request, so we
+    # must NOT forward reasoning_effort to e.g. qwen2.5.
+    cfg = Config()
+    cfg.llm.model = "qwen2.5:14b-instruct-q4_K_M"
+    cfg.llm.reasoning_effort = "max"
+    agent, cc = _make_agent(cfg)
+    list(agent.chat("hi"))
+    assert "extra_body" not in cc.calls[0] or "reasoning_effort" not in cc.calls[0].get("extra_body", {})
 
 
 def test_fast_mode_swaps_model_when_set() -> None:
@@ -149,9 +163,9 @@ def client(
     # Redirect ~/.evi to tmp so config.save() doesn't touch the real one.
     monkeypatch.setattr(config_mod, "HOME", tmp_path)
     monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.toml")
-    monkeypatch.setattr(server_mod, "Agent", _FakeAgent)
+    import evi.sdk.builder as builder_mod
+    monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: _FakeAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
     monkeypatch.setattr(server_mod, "get_backend", lambda *_a, **_k: _FakeBackend())
     app = server_mod.create_app()
     return TestClient(app)
