@@ -213,11 +213,14 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
 _AUTO_STATE: dict[str, Agent] = {}
 
 
-def _build_agent(system_prompt: str | None = None, *, register: bool = True) -> Agent:
+def _build_agent(
+    system_prompt: str | None = None, model: str | None = None, *, register: bool = True
+) -> Agent:
     # Delegates the generic Agent assembly to the SDK's build_agent (single
     # source of truth); the CLI adds only its runtime concerns: spawning MCP
     # servers (so their tools are in REGISTRY before selection), the interactive
-    # permission prompts, and stashing the agent for /auto callbacks.
+    # permission prompts, and stashing the agent for /auto callbacks. `model`
+    # overrides the model id for this agent (ultracode per-stage routing).
     from evi.sdk.builder import build_agent
 
     config = Config.load()
@@ -226,6 +229,7 @@ def _build_agent(system_prompt: str | None = None, *, register: bool = True) -> 
     agent = build_agent(
         config=config,
         system_prompt=system_prompt,
+        model=model,
         permission_callback=_cli_permission_prompt,
         permission_batch_callback=_cli_permission_prompt_batch,
         transcripts=TranscriptStore() if toggles.get("transcripts") else None,
@@ -235,30 +239,52 @@ def _build_agent(system_prompt: str | None = None, *, register: bool = True) -> 
     return agent
 
 
-def _run_ultracode_cli(task: str, *, breadth: int = 0, rounds: int = -1, mode: str = ""):
+def _run_ultracode_cli(
+    task: str,
+    *,
+    breadth: int = 0,
+    rounds: int = -1,
+    mode: str = "",
+    cheap_fanout: bool = False,
+    solver_model: str = "",
+    synth_model: str = "",
+):
     """Build an ultracode runner over fresh per-stage CLI agents, apply config +
     overrides + small-model tuning, and run the pipeline with live stage prints.
     Shared by `evi ultracode` and the `/ultra` REPL builtin."""
     from evi import ultracode as uc
 
     cfg_obj = Config.load()
-    ucfg = uc.load_ultra_config(cfg_obj)
+    ucfg = uc.load_ultra_config(cfg_obj)  # resolves [ultracode] cheap_fanout already
     if breadth:
         ucfg.breadth = breadth
     if rounds >= 0:
         ucfg.rounds = rounds
     if mode:
         ucfg.mode = mode
+    # Per-stage model overrides (CLI flags win over config). --cheap-fanout maps
+    # the solve fan-out to fast_model; --solver/--synth-model are explicit.
+    if cheap_fanout and cfg_obj.llm.fast_model:
+        ucfg.stage_models.setdefault("solve", cfg_obj.llm.fast_model)
+    if solver_model:
+        ucfg.stage_models["solve"] = solver_model
+    if synth_model:
+        ucfg.stage_models["synthesize"] = synth_model
     if cfg_obj.ultracode.auto_tune:
         ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
-    run_one = uc.make_runner(lambda sp: _build_agent(system_prompt=sp, register=False))
+    run_one = uc.make_runner(
+        lambda sp, model=None: _build_agent(system_prompt=sp, model=model, register=False),
+        stage_models=ucfg.stage_models,
+    )
 
     def on_stage(st) -> None:
         console.print(f"[dim]>[/dim] [cyan]{st.name}[/cyan] [dim]{st.label}[/dim]")
 
+    routed = ", ".join(f"{k}={v}" for k, v in ucfg.stage_models.items())
+    routed_note = f" routed:[{routed}]" if routed else ""
     console.print(
         f"[dim]ultracode: breadth={ucfg.breadth} rounds={ucfg.rounds} "
-        f"mode={ucfg.mode}[/dim]"
+        f"mode={ucfg.mode}{routed_note}[/dim]"
     )
     return uc.run_ultracode(task, run_one=run_one, cfg=ucfg, on_stage=on_stage)
 
@@ -2865,15 +2891,25 @@ def ultracode(
     breadth: int = typer.Option(0, "--breadth", "-b", help="Parallel solver angles (0 = config default)."),
     rounds: int = typer.Option(-1, "--rounds", "-r", help="Verify->refine cycles (-1 = config default; 0 skips critique)."),
     mode: str = typer.Option("", "--mode", "-m", help="Tool preset for solvers: chat | cowork | code."),
+    cheap_fanout: bool = typer.Option(
+        False, "--cheap-fanout",
+        help="Run the solver fan-out on [llm] fast_model; keep critic/synth on the main model.",
+    ),
+    solver_model: str = typer.Option("", "--solver-model", help="Model id for the solve stage (overrides --cheap-fanout)."),
+    synth_model: str = typer.Option("", "--synth-model", help="Model id for the synthesize stage."),
     json_out: bool = typer.Option(False, "--json", help="Print the full result (incl. stages) as JSON."),
 ) -> None:
     """Run ONE hard task through the ultracode pipeline.
 
     decompose -> parallel solvers (diverse angles) -> adversarial critique ->
     synthesize. More thorough (and more model calls) than a single `evi run`.
-    Tune with [ultracode] in config or the flags here.
+    Tune with [ultracode] in config or the flags here. --cheap-fanout (or
+    --solver-model) routes the expensive parallel solvers to a cheaper model.
     """
-    res = _run_ultracode_cli(task, breadth=breadth, rounds=rounds, mode=mode)
+    res = _run_ultracode_cli(
+        task, breadth=breadth, rounds=rounds, mode=mode,
+        cheap_fanout=cheap_fanout, solver_model=solver_model, synth_model=synth_model,
+    )
     if json_out:
         import json as _json
 

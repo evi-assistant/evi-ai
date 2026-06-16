@@ -20,6 +20,8 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
+
     from openai import OpenAI
 
     from evi.config import Config
@@ -58,6 +60,7 @@ def build_agent(
     *,
     config: "Config | None" = None,
     system_prompt: str | None = None,
+    model: str | None = None,
     client: "OpenAI | None" = None,
     tools: "list[Tool] | None" = None,
     tool_categories: Iterable[str] | None = None,
@@ -66,6 +69,7 @@ def build_agent(
     enable_project: bool = True,
     enable_hooks: bool = True,
     enable_guardrails: bool = True,
+    memory_root: "Path | None" = None,
     permission_callback: "PermissionCallback | None" = None,
     permission_batch_callback: "BatchPermissionCallback | None" = None,
     transcripts: "TranscriptStore | None" = None,
@@ -76,6 +80,8 @@ def build_agent(
     Parameters (all keyword-only):
       config: an :class:`~evi.config.Config`; defaults to ``Config.load()``.
       system_prompt: override the agent's base system prompt (defaults to eVi's).
+      model: override the model id for this agent (same backend/endpoint, a
+        different model) — e.g. route an ultracode stage to a cheaper model.
       client: a pre-built OpenAI-compatible client; defaults to
         ``make_client(config.llm)``.
       tools: an explicit tool list (skips registry selection entirely).
@@ -85,6 +91,9 @@ def build_agent(
         ``False`` forces it on/off.
       enable_project / enable_hooks / enable_guardrails: load project context /
         hooks / guardrails from disk (default ``True``).
+      memory_root: directory for the :class:`~evi.memory.MemoryStore` when memory
+        is enabled (e.g. a per-user data dir in multi-user web mode). ``None``
+        uses the shared default location — identical to ``MemoryStore()``.
       permission_callback / permission_batch_callback: tool-permission prompts;
         ``None`` means non-interactive (the caller decides via auto-approve).
       transcripts: a :class:`~evi.transcripts.TranscriptStore` to log turns to.
@@ -93,6 +102,8 @@ def build_agent(
     Returns the constructed Agent. Does **not** register the agent anywhere or
     spawn MCP servers — those are runtime concerns for the caller.
     """
+    from dataclasses import replace as _replace
+
     from evi.config import Config, ensure_dirs
     from evi.llm.agent import Agent
     from evi.llm.client import make_client
@@ -100,6 +111,10 @@ def build_agent(
 
     ensure_dirs()
     config = config or Config.load()
+    # Optional per-build model override (same endpoint, different model id) — used
+    # e.g. by ultracode to route a stage to a cheaper/fast model.
+    if model:
+        config = _replace(config, llm=_replace(config.llm, model=model))
     client = client or make_client(config.llm)
     toggles = asdict(config.tools)
 
@@ -119,7 +134,9 @@ def build_agent(
     if want_memory:
         from evi.memory import MemoryStore
 
-        memory = MemoryStore()
+        # ``root=None`` resolves to the shared default dir (== MemoryStore()),
+        # so callers can inject a per-user root without changing single-user behaviour.
+        memory = MemoryStore(root=memory_root)
     skills = None
     if want_skills:
         from evi.skills import SkillStore

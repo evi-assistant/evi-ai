@@ -252,6 +252,10 @@ class UltracodeSettings:
     angles: list[str] = field(default_factory=list)
     max_workers: int = 4
     auto_tune: bool = True
+    # Cheaper fan-out: run the parallel SOLVER stage on [llm] fast_model while
+    # decompose / the adversarial critic / synthesize stay on the main model.
+    # No-op unless fast_model is set. Per-stage overrides are CLI-only flags.
+    cheap_fanout: bool = False
 
 
 @dataclass

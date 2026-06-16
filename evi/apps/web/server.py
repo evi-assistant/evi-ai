@@ -39,9 +39,6 @@ from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
 from evi.llm.agent import Agent, Done, Error, Event
 from evi.llm.client import make_client
 from evi.mcp import MCPManager, filter_allowed, load_servers
-from evi.memory import MemoryStore
-from evi.skills import SkillStore
-from evi.tools.base import get_enabled_tools
 
 # Import tool modules for their @tool side effects.
 import evi.tools.fs  # noqa: F401
@@ -669,30 +666,26 @@ def create_app() -> FastAPI:
         bucket = _my_sessions()
         sess = bucket.get(session_id)
         if sess is None:
-            config = Config.load()
-            client = make_client(config.llm)
-            toggles = asdict(config.tools)
-            tools = get_enabled_tools(toggles)
-            # Per-user data dirs in multi-user mode (None → shared defaults).
-            tr_root, mem_root = _user_data_roots()
-            memory = MemoryStore(root=mem_root) if toggles.get("memory") else None
-            skills = SkillStore() if toggles.get("skills") else None
-            from evi.guardrails import Guardrails
+            from evi.sdk.builder import build_agent
             from evi.transcripts import TranscriptStore
 
-            guardrails = Guardrails.load()
-            agent = Agent(
-                client=client,
+            config = Config.load()
+            toggles = asdict(config.tools)
+            # Per-user data dirs in multi-user mode (None → shared defaults).
+            tr_root, mem_root = _user_data_roots()
+            # Delegate the generic Agent assembly (client/tools/memory/skills/
+            # guardrails) to the SDK; the web dispatcher injects only its per-user
+            # concerns: the per-user memory root + transcript store and the CLIENT's
+            # session id (so the transcript file matches the tab, and a chat survives
+            # a server/app restart). project + hooks stay off here, matching the
+            # previous inline construction. permission_callback is attached per-request.
+            agent = build_agent(
                 config=config,
-                tools=tools,
-                memory=memory,
-                skills=skills,
-                guardrails=guardrails if guardrails.enabled else None,
-                # Persist per-turn so a chat survives a server/app restart, and
-                # write under the CLIENT's session id so the transcript file
-                # matches the tab. permission_callback is attached per-request.
+                memory_root=mem_root,
                 transcripts=TranscriptStore(root=tr_root) if toggles.get("transcripts") else None,
                 session_id=session_id,
+                enable_project=False,
+                enable_hooks=False,
             )
             # Revive history from disk if this session was seen before (e.g. the
             # desktop app was closed + reopened). The composed system prompt at
@@ -1083,14 +1076,15 @@ def create_app() -> FastAPI:
             variables = {str(k): str(v) for k, v in req["vars"].items()}
 
         def run_step(prompt: str, step) -> str:
-            cfg = Config.load()
-            toggles = asdict(cfg.tools)
-            agent = Agent(
-                client=make_client(cfg.llm),
-                config=cfg,
-                tools=get_enabled_tools(toggles),
-                memory=MemoryStore() if toggles.get("memory") else None,
-                skills=SkillStore() if toggles.get("skills") else None,
+            from evi.sdk.builder import build_agent
+
+            # Single-user headless runner: project/hooks/guardrails stay off to
+            # match the previous inline construction (client/tools/memory/skills only).
+            agent = build_agent(
+                config=Config.load(),
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
             )
             if step.mode:
                 agent.tools = {t.name: t for t in mode_tools(step.mode)}
@@ -1121,14 +1115,15 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "task is required")
 
         from evi.headless import run_headless
+        from evi.sdk.builder import build_agent
 
-        toggles = asdict(cfg.tools)
-        agent = Agent(
-            client=make_client(cfg.llm),
+        # Single-user headless runner; project/hooks/guardrails stay off to match
+        # the previous inline construction (client/tools/memory/skills only).
+        agent = build_agent(
             config=cfg,
-            tools=get_enabled_tools(toggles),
-            memory=MemoryStore() if toggles.get("memory") else None,
-            skills=SkillStore() if toggles.get("skills") else None,
+            enable_project=False,
+            enable_hooks=False,
+            enable_guardrails=False,
         )
         mode = str(req.get("mode") or "")
         if mode:
@@ -1429,14 +1424,15 @@ def create_app() -> FastAPI:
             raise HTTPException(404, str(exc))
 
         def agent_factory():
-            cfg = Config.load()
-            toggles = asdict(cfg.tools)
-            return Agent(
-                client=make_client(cfg.llm),
-                config=cfg,
-                tools=get_enabled_tools(toggles),
-                memory=MemoryStore() if toggles.get("memory") else None,
-                skills=SkillStore() if toggles.get("skills") else None,
+            from evi.sdk.builder import build_agent
+
+            # Single-user eval runner; project/hooks/guardrails stay off to match
+            # the previous inline construction (client/tools/memory/skills only).
+            return build_agent(
+                config=Config.load(),
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
             )
 
         run_one, judge_fn = evals.make_runners(
@@ -1513,14 +1509,15 @@ def create_app() -> FastAPI:
             recipe = recipes.load_recipe(name)
         except recipes.RecipeError as exc:
             raise HTTPException(404, str(exc))
-        cfg = Config.load()
-        toggles = asdict(cfg.tools)
-        agent = Agent(
-            client=make_client(cfg.llm),
-            config=cfg,
-            tools=get_enabled_tools(toggles),
-            memory=MemoryStore() if toggles.get("memory") else None,
-            skills=SkillStore() if toggles.get("skills") else None,
+        from evi.sdk.builder import build_agent
+
+        # Single-user headless runner; project/hooks/guardrails stay off to match
+        # the previous inline construction (client/tools/memory/skills only).
+        agent = build_agent(
+            config=Config.load(),
+            enable_project=False,
+            enable_hooks=False,
+            enable_guardrails=False,
         )
         agent.enable_auto_all()
         results = recipes.run_recipe_headless(agent, recipe)
@@ -1540,31 +1537,40 @@ def create_app() -> FastAPI:
         if not task:
             raise HTTPException(400, "expected {task}")
 
-        def agent_factory(system_prompt: str | None):
-            cfg = Config.load()
-            toggles = asdict(cfg.tools)
-            kwargs: dict[str, Any] = dict(
-                client=make_client(cfg.llm),
-                config=cfg,
-                tools=get_enabled_tools(toggles),
-                memory=MemoryStore() if toggles.get("memory") else None,
-                skills=SkillStore() if toggles.get("skills") else None,
+        def agent_factory(system_prompt: str | None, model: str | None = None):
+            from evi.sdk.builder import build_agent
+
+            # Single-user ultracode runner; project/hooks/guardrails stay off to
+            # match the previous inline construction (client/tools/memory/skills only).
+            # build_agent ignores system_prompt=None, preserving the eVi default.
+            # `model` lets a stage run on a cheaper model (cheap fan-out).
+            return build_agent(
+                config=Config.load(),
+                system_prompt=system_prompt,
+                model=model,
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
             )
-            if system_prompt is not None:
-                kwargs["system_prompt"] = system_prompt
-            return Agent(**kwargs)
 
         cfg_obj = Config.load()
-        ucfg = uc.load_ultra_config(cfg_obj)
+        ucfg = uc.load_ultra_config(cfg_obj)  # resolves [ultracode] cheap_fanout
         if req.get("breadth"):
             ucfg.breadth = int(req["breadth"])
         if req.get("rounds") is not None:
             ucfg.rounds = int(req["rounds"])
         if req.get("mode"):
             ucfg.mode = str(req["mode"])
+        # Per-request cheaper fan-out: {cheap_fanout: true} or {solver_model: id}.
+        if req.get("cheap_fanout") and cfg_obj.llm.fast_model:
+            ucfg.stage_models.setdefault("solve", cfg_obj.llm.fast_model)
+        if req.get("solver_model"):
+            ucfg.stage_models["solve"] = str(req["solver_model"])
         if cfg_obj.ultracode.auto_tune:
             ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
-        res = uc.run_ultracode(task, run_one=uc.make_runner(agent_factory), cfg=ucfg)
+        res = uc.run_ultracode(
+            task, run_one=uc.make_runner(agent_factory, stage_models=ucfg.stage_models), cfg=ucfg
+        )
         return {
             "ok": True, "answer": res.answer,
             "stages": [asdict(s) for s in res.stages],
@@ -1887,14 +1893,15 @@ def create_app() -> FastAPI:
         except recipes.RecipeError as exc:
             raise HTTPException(400, str(exc))
 
-        cfg = Config.load()
-        toggles = asdict(cfg.tools)
-        agent = Agent(
-            client=make_client(cfg.llm),
-            config=cfg,
-            tools=get_enabled_tools(toggles),
-            memory=MemoryStore() if toggles.get("memory") else None,
-            skills=SkillStore() if toggles.get("skills") else None,
+        from evi.sdk.builder import build_agent
+
+        # Single-user headless runner; project/hooks/guardrails stay off to match
+        # the previous inline construction (client/tools/memory/skills only).
+        agent = build_agent(
+            config=Config.load(),
+            enable_project=False,
+            enable_hooks=False,
+            enable_guardrails=False,
         )
         if r.yes:
             agent.enable_auto_all()
