@@ -161,6 +161,25 @@ def _interp(prompt: str, mapping: dict[str, Any], step_id: str) -> str:
         ) from exc
 
 
+def fan_out(fn: Callable[[Any], Any], items: list, max_workers: int = 8) -> list:
+    """Run ``fn(item)`` for every item concurrently; return results in INPUT
+    order (not completion order). Empty input → ``[]``.
+
+    The shared concurrency primitive behind ``run_workflow``'s parallel blocks
+    and ``evi/ultracode.py``'s solver/critic fleets — one home for the
+    ThreadPoolExecutor pattern so neither re-implements it.
+    """
+    items = list(items)
+    if not items:
+        return []
+    results: list = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as ex:
+        fut_to_i = {ex.submit(fn, item): i for i, item in enumerate(items)}
+        for fut in as_completed(fut_to_i):
+            results[fut_to_i[fut]] = fut.result()
+    return results
+
+
 def run_workflow(
     wf: Workflow,
     *,
@@ -188,13 +207,12 @@ def run_workflow(
                 block.append(steps[i])
                 i += 1
             base = {**ctx, **outputs}  # frozen snapshot for the whole block
-            prompts = {s.id: _interp(s.prompt, base, s.id) for s in block}
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(block))) as ex:
-                fut_to_id = {
-                    ex.submit(run_step, prompts[s.id], s): s.id for s in block
-                }
-                for fut in as_completed(fut_to_id):
-                    outputs[fut_to_id[fut]] = fut.result()
+            pairs = [(s, _interp(s.prompt, base, s.id)) for s in block]
+            block_out = fan_out(
+                lambda pair: run_step(pair[1], pair[0]), pairs, max_workers
+            )
+            for (s, _prompt), out in zip(pairs, block_out):
+                outputs[s.id] = out
         else:
             s = steps[i]
             i += 1

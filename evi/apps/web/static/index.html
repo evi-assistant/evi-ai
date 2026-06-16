@@ -2265,6 +2265,7 @@ initModes();
     { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
     { id:'mcp', title:'MCP', blurb:'External MCP servers — extra tools loaded from ~/.evi/mcp.json.', custom:'mcp' },
     { id:'hooks', title:'Hooks', blurb:'Run your own commands or webhooks on tool calls and lifecycle events.', custom:'hooks' },
+    { id:'ultracode', title:'Ultracode', blurb:'Run one hard task through an exhaustive multi-agent pipeline.', custom:'ultracode' },
     { id:'about', title:'About', blurb:'', custom:'about' },
   ];
 
@@ -2329,6 +2330,7 @@ initModes();
     if (sec.custom === 'peers') return renderPeers();
     if (sec.custom === 'mcp') return renderMcp();
     if (sec.custom === 'hooks') return renderHooks();
+    if (sec.custom === 'ultracode') return renderUltracode();
     sec.fields.forEach(f => contentEl.appendChild(fieldWidget(f)));
     if (sec.id === 'model') renderModelExtras();
   }
@@ -3271,6 +3273,72 @@ initModes();
         } catch (e) { status.textContent = 'Error: ' + e; status.style.color = '#e05252'; }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load hooks.</p>'; });
+  }
+
+  function renderUltracode() {
+    const box = document.createElement('div');
+    box.id = 'ultra-box';
+    contentEl.appendChild(box);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const PH = 'place' + 'holder';
+    box.innerHTML =
+      '<p class="sec-blurb" style="margin-top:0">Run one hard task through the exhaustive ' +
+      'pipeline: decompose → parallel solvers (diverse angles) → adversarial critique → ' +
+      'synthesize. More thorough (and more model calls) than a single turn.</p>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">' +
+      '<label class="dim" style="font-size:12px">breadth <input id="uc-breadth" type="number" min="1" max="6" value="3" ' +
+      'style="width:52px;padding:4px;border-radius:6px;border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)"></label>' +
+      '<label class="dim" style="font-size:12px">rounds <input id="uc-rounds" type="number" min="0" max="3" value="1" ' +
+      'style="width:52px;padding:4px;border-radius:6px;border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)"></label>' +
+      '<label class="dim" style="font-size:12px">mode ' +
+      '<select id="uc-mode" style="padding:4px;border-radius:6px;border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+      '<option value="code">code</option><option value="cowork">cowork</option><option value="chat">chat</option></select></label>' +
+      '</div>' +
+      '<textarea id="uc-task" style="width:100%;min-height:90px;font-size:13px;padding:9px;border-radius:8px;' +
+      'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)"></textarea>' +
+      '<div style="margin-top:8px"><button class="set-action-btn" id="uc-run">Run ultracode</button>' +
+      '<span id="uc-status" class="sec-blurb" style="margin-left:12px"></span></div>' +
+      '<div id="uc-stages" style="margin-top:10px"></div>' +
+      '<div id="uc-answer" style="margin-top:10px;white-space:pre-wrap;font-size:13px"></div>';
+    box.querySelector('#uc-task').setAttribute(PH,
+      'e.g. refactor the auth module to remove duplicated token parsing, with tests');
+    const status = (m, ok) => {
+      const el = box.querySelector('#uc-status');
+      el.textContent = m; el.style.color = ok ? '#4caf50' : (ok === false ? '#e05252' : 'var(--dim)');
+    };
+    box.querySelector('#uc-run').onclick = async () => {
+      const task = box.querySelector('#uc-task').value.trim();
+      if (!task) { status('Enter a task', false); return; }
+      const btn = box.querySelector('#uc-run');
+      btn.disabled = true; status('Running… (this calls the model many times)', null);
+      box.querySelector('#uc-stages').innerHTML = '';
+      box.querySelector('#uc-answer').textContent = '';
+      try {
+        const r = await fetch('/api/dispatch/ultracode', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task,
+            breadth: parseInt(box.querySelector('#uc-breadth').value, 10) || 0,
+            rounds: parseInt(box.querySelector('#uc-rounds').value, 10),
+            mode: box.querySelector('#uc-mode').value,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) { status('Error: ' + (d.detail || 'failed'), false); btn.disabled = false; return; }
+        status((d.stages || []).length + ' stages done', true);
+        box.querySelector('#uc-stages').innerHTML = (d.stages || []).map(s =>
+          '<details style="border:1px solid var(--border,#2b333d);border-radius:6px;margin:3px 0;padding:4px 8px">' +
+          '<summary style="cursor:pointer;font-size:12px"><b>' + esc(s.name) + '</b> ' +
+          '<span class="dim">' + esc(s.label) + '</span></summary>' +
+          '<div style="white-space:pre-wrap;font-size:12px;margin-top:6px">' + esc(s.output) + '</div></details>'
+        ).join('');
+        const ans = box.querySelector('#uc-answer');
+        ans.innerHTML = '<p class="sec-blurb" style="margin-bottom:4px">Answer</p>';
+        ans.appendChild(document.createTextNode(d.answer || ''));
+      } catch (e) { status('Error: ' + e, false); }
+      finally { btn.disabled = false; }
+    };
   }
 
   function renderAbout() {

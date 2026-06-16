@@ -9,6 +9,7 @@ Deep-dive docs for every feature area — overview, how it works, setup, usage
 ## Guides
 
 - [Agents & Orchestration](agents.md) — subagents, `delegate`, parallel research, workflows, dispatch, federation
+- [Ultracode](ultracode.md) — exhaustive multi-agent pipeline for one hard task (`evi ultracode` / `/ultra`)
 - [Content Guardrails](guardrails.md) — regex + LLM-judge + offline classifier rules
 - [Plugins & Marketplace](plugins.md) — bundled commands/skills/hooks/MCP/agents + `plugin search/install`
 - [Skills](skills.md) — markdown instruction packets the model loads on demand (`invoke_skill`)

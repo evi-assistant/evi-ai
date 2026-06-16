@@ -106,7 +106,10 @@ that can carry `commands/`, `skills/`, `hooks.toml`, `mcp.json`, and
 lists live sessions + runnable workflows. **Federation** — delegate a task to a
 trusted **peer eVi** (`~/.evi/peers.json`, `delegate_peer` tool, `[federation]
 serve` to answer). **Code review** — `evi review --multi` multi-agent review.
-**Multi-model routing** — `evi route` picks a model per turn.
+**Multi-model routing** — `evi route` picks a model per turn. **Ultracode** —
+`evi ultracode "<task>"` / `/ultra` / `/effort ultracode` runs one hard task
+through an exhaustive decompose → fan-out solvers → adversarial verify →
+synthesize pipeline ([guide](features/ultracode.md)).
 
 ## MCP
 

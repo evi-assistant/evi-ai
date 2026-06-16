@@ -241,6 +241,12 @@ def test_style_list(evi_cli):
 # --- federation / peers ----------------------------------------------------
 
 
+def test_ultracode_registered(evi_cli):
+    # the pipeline itself needs a model; just verify the command is wired up
+    out = evi_cli("ultracode", "--help").out
+    assert "pipeline" in out.lower() and "breadth" in out.lower()
+
+
 def test_peer_lifecycle(evi_cli):
     assert evi_cli("peer", "list").code == 0
     # add an (unreachable) peer; status note shouldn't fail the command

@@ -213,7 +213,7 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
 _AUTO_STATE: dict[str, Agent] = {}
 
 
-def _build_agent() -> Agent:
+def _build_agent(system_prompt: str | None = None, *, register: bool = True) -> Agent:
     ensure_dirs()
     config = Config.load()
     _ensure_mcp(config)  # registers MCP tools before we read REGISTRY
@@ -240,9 +240,51 @@ def _build_agent() -> Agent:
         permission_batch_callback=_cli_permission_prompt_batch,
         transcripts=transcripts,
         guardrails=guardrails if guardrails.enabled else None,
+        **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
-    _AUTO_STATE["agent"] = agent
+    if register:
+        _AUTO_STATE["agent"] = agent
     return agent
+
+
+def _run_ultracode_cli(task: str, *, breadth: int = 0, rounds: int = -1, mode: str = ""):
+    """Build an ultracode runner over fresh per-stage CLI agents, apply config +
+    overrides + small-model tuning, and run the pipeline with live stage prints.
+    Shared by `evi ultracode` and the `/ultra` REPL builtin."""
+    from evi import ultracode as uc
+
+    cfg_obj = Config.load()
+    ucfg = uc.load_ultra_config(cfg_obj)
+    if breadth:
+        ucfg.breadth = breadth
+    if rounds >= 0:
+        ucfg.rounds = rounds
+    if mode:
+        ucfg.mode = mode
+    if cfg_obj.ultracode.auto_tune:
+        ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
+    run_one = uc.make_runner(lambda sp: _build_agent(system_prompt=sp, register=False))
+
+    def on_stage(st) -> None:
+        console.print(f"[dim]>[/dim] [cyan]{st.name}[/cyan] [dim]{st.label}[/dim]")
+
+    console.print(
+        f"[dim]ultracode: breadth={ucfg.breadth} rounds={ucfg.rounds} "
+        f"mode={ucfg.mode}[/dim]"
+    )
+    return uc.run_ultracode(task, run_one=run_one, cfg=ucfg, on_stage=on_stage)
+
+
+def _is_substantive(msg: str) -> bool:
+    """Whether a turn is worth the full ultracode pipeline. Biased conservative:
+    short or greeting-like turns fall through to a normal chat turn (worst case
+    of a mis-trigger is just 'behaved like a single turn')."""
+    t = msg.strip()
+    if len(t) < 25:
+        return False
+    if t.lower() in {"thanks", "thank you", "never mind", "nvm", "ok thanks"}:
+        return False
+    return True
 
 
 # --- slash command dispatch -------------------------------------------------
@@ -268,7 +310,8 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/context, /ctx", "show where the context window is being spent"),
         ("/recent [n]", "list recent sessions (resume via `evi sessions resume`)"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
-        ("/effort [low|medium|high|max]", "set reasoning effort"),
+        ("/effort [low|medium|high|max|ultracode]", "set reasoning effort (ultracode = max + auto-pipeline)"),
+        ("/ultra [task]", "run one task through the ultracode pipeline (no arg toggles auto mode)"),
         ("/fast [on|off|<model-id>]", "toggle fast mode (swap to a smaller model)"),
         ("/json <prompt>", "force JSON-object output for the next turn"),
         ("/schema <file> [prompt]", "constrain the next turn to a JSON Schema"),
@@ -365,29 +408,68 @@ def _handle_compact(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
 
 
 _EFFORT_LEVELS = ("low", "medium", "high", "max")
+# `ultracode` is a pseudo-level (Claude Code parity): max reasoning + auto-run
+# substantive REPL turns through the ultracode pipeline.
+_EFFORT_CHOICES = (*_EFFORT_LEVELS, "ultracode")
 
 
 def _handle_effort(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
-    """Show or set reasoning effort. Persists to config.toml."""
+    """Show or set reasoning effort. Persists to config.toml. `ultracode`
+    raises effort to max and turns on auto-pipelining for the session."""
     arg = args.strip().lower()
     if not arg:
-        current = (agent.config.llm.reasoning_effort or "medium").lower()
+        current = "ultracode" if agent.config.auto.ultracode else (
+            agent.config.llm.reasoning_effort or "medium"
+        ).lower()
         console.print(
             f"[bold]effort:[/bold] {current}  "
-            f"[dim](levels: {', '.join(_EFFORT_LEVELS)})[/dim]"
+            f"[dim](levels: {', '.join(_EFFORT_CHOICES)})[/dim]"
         )
         return "continue"
-    if arg not in _EFFORT_LEVELS:
+    if arg not in _EFFORT_CHOICES:
         console.print(
             f"[red]invalid effort:[/red] {arg}  "
-            f"[dim](pick one of {', '.join(_EFFORT_LEVELS)})[/dim]"
+            f"[dim](pick one of {', '.join(_EFFORT_CHOICES)})[/dim]"
         )
         return "continue"
     cfg = Config.load()
-    cfg.llm.reasoning_effort = arg
-    cfg.save()
-    agent.config.llm.reasoning_effort = arg
-    console.print(f"[green]effort → {arg}[/green] [dim](persisted)[/dim]")
+    if arg == "ultracode":
+        cfg.llm.reasoning_effort = "max"
+        cfg.auto.ultracode = True
+        agent.config.llm.reasoning_effort = "max"
+        agent.config.auto.ultracode = True
+        cfg.save()
+        console.print(
+            "[green]effort → ultracode[/green] [dim](max reasoning + auto-pipeline "
+            "substantive turns; /effort high to clear)[/dim]"
+        )
+    else:
+        cfg.llm.reasoning_effort = arg
+        cfg.auto.ultracode = False
+        agent.config.llm.reasoning_effort = arg
+        agent.config.auto.ultracode = False
+        cfg.save()
+        console.print(f"[green]effort → {arg}[/green] [dim](persisted)[/dim]")
+    return "continue"
+
+
+def _handle_ultra(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/ultra <task>` runs THIS turn through the ultracode pipeline; `/ultra`
+    with no args toggles session-wide auto-ultracode."""
+    task = args.strip()
+    if not task:
+        agent.config.auto.ultracode = not agent.config.auto.ultracode
+        state = "ON" if agent.config.auto.ultracode else "OFF"
+        console.print(
+            f"[bold]ultracode mode:[/bold] {state} "
+            f"[dim](substantive turns auto-run the pipeline)[/dim]"
+        )
+        return "continue"
+    res = _run_ultracode_cli(task)
+    console.print()
+    console.print(res.answer, markup=False, highlight=False)
+    agent.history.append({"role": "user", "content": task})
+    agent.history.append({"role": "assistant", "content": res.answer})
     return "continue"
 
 
@@ -758,6 +840,8 @@ _BUILTINS: dict[str, callable] = {
     "image": _handle_image,
     "img": _handle_image,
     "effort": _handle_effort,
+    "ultra": _handle_ultra,
+    "uc": _handle_ultra,
     "fast": _handle_fast,
     "json": _handle_json,
     "schema": _handle_schema,
@@ -834,9 +918,12 @@ def _run_repl(agent: Agent) -> None:
             bits.append(f" [yellow](goal: {shortened})[/yellow]")
         if agent.plan_mode_once:
             bits.append(" [magenta][plan][/magenta]")
-        effort = (agent.config.llm.reasoning_effort or "medium").lower()
-        if effort != "medium":
-            bits.append(f" [cyan][{effort}][/cyan]")
+        if agent.config.auto.ultracode:
+            bits.append(" [magenta][ultracode][/magenta]")
+        else:
+            effort = (agent.config.llm.reasoning_effort or "medium").lower()
+            if effort != "medium":
+                bits.append(f" [cyan][{effort}][/cyan]")
         if agent.config.llm.fast_mode:
             bits.append(" [bright_blue][fast][/bright_blue]")
         bits.append("[/bold green] › ")
@@ -858,6 +945,14 @@ def _run_repl(agent: Agent) -> None:
             if result == "continue":
                 continue
             user_msg = result
+        elif agent.config.auto.ultracode and _is_substantive(user_msg):
+            # /effort ultracode: auto-run substantive turns through the pipeline.
+            res = _run_ultracode_cli(user_msg)
+            console.print()
+            console.print(res.answer, markup=False, highlight=False)
+            agent.history.append({"role": "user", "content": user_msg})
+            agent.history.append({"role": "assistant", "content": res.answer})
+            continue
 
         console.print("[bold magenta]evi ›[/bold magenta] ", end="")
         text_acc: list[str] = []
@@ -2774,6 +2869,34 @@ def peer_scan(
         model = f" - {f['model']}" if f["model"] else ""
         console.print(f"  [bold]{f['host']}[/bold] [dim]{f['url']}[/dim] eVi {f['version']}{model}{mark}")
     console.print("\n[dim]add one:[/dim] [cyan]evi peer add <name> <url>[/cyan]")
+
+
+@app.command()
+def ultracode(
+    task: str = typer.Argument(..., help="The task to run through the exhaustive pipeline."),
+    breadth: int = typer.Option(0, "--breadth", "-b", help="Parallel solver angles (0 = config default)."),
+    rounds: int = typer.Option(-1, "--rounds", "-r", help="Verify->refine cycles (-1 = config default; 0 skips critique)."),
+    mode: str = typer.Option("", "--mode", "-m", help="Tool preset for solvers: chat | cowork | code."),
+    json_out: bool = typer.Option(False, "--json", help="Print the full result (incl. stages) as JSON."),
+) -> None:
+    """Run ONE hard task through the ultracode pipeline.
+
+    decompose -> parallel solvers (diverse angles) -> adversarial critique ->
+    synthesize. More thorough (and more model calls) than a single `evi run`.
+    Tune with [ultracode] in config or the flags here.
+    """
+    res = _run_ultracode_cli(task, breadth=breadth, rounds=rounds, mode=mode)
+    if json_out:
+        import json as _json
+
+        print(_json.dumps(
+            {"task": res.task, "answer": res.answer,
+             "stages": [asdict(s) for s in res.stages]},
+            ensure_ascii=False, indent=2,
+        ))
+    else:
+        console.print()
+        console.print(res.answer, markup=False, highlight=False)
 
 
 @app.command("agents")

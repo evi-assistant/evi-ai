@@ -15,6 +15,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `run` | headless one-shot | ◐ `/api/chat` | ◐ | scripting; no "run once" button (not needed) |
 | `batch` | many prompts → JSONL | ⌨️ | ⌨️ | batch/scripting |
 | `eval` | prompt→assertion suites | ✅ settings → Evals | ✅ | browse suites/cases + run with per-case PASS/FAIL |
+| `ultracode` | exhaustive multi-agent pass | ✅ settings → Ultracode | ✅ | `/ultra` + `/effort ultracode` in REPL; stages shown in the panel |
 | `agents` | list subagent profiles | ◐ used by `delegate` | ◐ | a "profiles" list could live in Dispatch |
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
 | `peer` | federation peers (list/add/remove/scan/run) | ✅ settings → Peers | ✅ | live status + LAN scan; `/api/federate` serves |
