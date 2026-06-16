@@ -1,0 +1,75 @@
+{
+  "name": "evi-vscode",
+  "displayName": "eVi",
+  "description": "Fully-local AI autocomplete (Tab) + chat for VS Code, backed by your local eVi server.",
+  "version": "0.1.0",
+  "publisher": "evi",
+  "private": true,
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Machine Learning", "Programming Languages", "Chat"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "eVi",
+      "properties": {
+        "evi.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8473",
+          "description": "Base URL of your local eVi web server (evi web / the desktop app)."
+        },
+        "evi.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token if your eVi server has [web] auth_token set."
+        },
+        "evi.autocomplete.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline (ghost-text) FIM completions from eVi."
+        },
+        "evi.completionModel": {
+          "type": "string",
+          "default": "",
+          "description": "Override the completion (FIM) model. Empty = let eVi pick a coder model."
+        },
+        "evi.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "description": "Max tokens per inline completion."
+        },
+        "evi.debounceMs": {
+          "type": "number",
+          "default": 250,
+          "description": "Wait this long after typing stops before requesting a completion."
+        }
+      }
+    },
+    "commands": [
+      { "command": "evi.toggleAutocomplete", "title": "eVi: Toggle Autocomplete" },
+      { "command": "evi.openChat", "title": "eVi: Open Chat" },
+      { "command": "evi.explainSelection", "title": "eVi: Explain Selection" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "evi", "title": "eVi", "icon": "media/evi.svg" }
+      ]
+    },
+    "views": {
+      "evi": [
+        { "id": "evi.chat", "name": "Chat", "type": "webview" }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
