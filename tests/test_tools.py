@@ -106,6 +106,97 @@ def test_list_dir(tmp_path: Path) -> None:
     assert "F a.txt" in out
 
 
+# ---- read_file pagination --------------------------------------------------
+
+
+def test_read_file_offset_and_limit(tmp_path: Path) -> None:
+    p = tmp_path / "lines.txt"
+    p.write_text("".join(f"line{i}\n" for i in range(1, 11)), encoding="utf-8")
+    # lines 3,4,5 (1-based offset, limit 3)
+    out = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 3, "limit": 3}))
+    assert out == "line3\nline4\nline5\n"
+
+
+def test_read_file_offset_to_eof(tmp_path: Path) -> None:
+    p = tmp_path / "lines.txt"
+    p.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    out = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 3}))
+    assert out == "c\nd\n"
+
+
+def test_read_file_offset_past_eof_errors(tmp_path: Path) -> None:
+    p = tmp_path / "lines.txt"
+    p.write_text("a\nb\n", encoding="utf-8")
+    out = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 99}))
+    assert out.startswith("ERROR: no lines at offset 99")
+
+
+def test_read_file_slice_roundtrips_through_edit(tmp_path: Path) -> None:
+    # A slice carries no line-number prefixes, so it can be fed back to edit_file.
+    p = tmp_path / "lines.txt"
+    p.write_text("alpha\nbravo\ncharlie\n", encoding="utf-8")
+    sliced = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 2, "limit": 1}))
+    assert sliced == "bravo\n"
+
+
+# ---- find_files (glob) -----------------------------------------------------
+
+
+def test_find_files_glob(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("y")
+    (tmp_path / "c.txt").write_text("z")
+    out = REGISTRY["find_files"].call(json.dumps({"pattern": "*.py", "path": str(tmp_path)}))
+    assert "a.py" in out and "b.py" in out and "c.txt" not in out
+
+
+def test_find_files_recursive_skips_noise_dirs(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "keep.py").write_text("x")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "junk.py").write_text("y")
+    out = REGISTRY["find_files"].call(json.dumps({"pattern": "**/*.py", "path": str(tmp_path)}))
+    assert "keep.py" in out
+    assert "junk.py" not in out  # .venv is an ignored dir
+
+
+def test_find_files_no_match(tmp_path: Path) -> None:
+    out = REGISTRY["find_files"].call(json.dumps({"pattern": "*.rs", "path": str(tmp_path)}))
+    assert out.startswith("(no files match")
+
+
+# ---- search_files (regex grep) ---------------------------------------------
+
+
+def test_search_files_content_match(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("import os\nx = TODO_here\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("clean\n", encoding="utf-8")
+    out = REGISTRY["search_files"].call(json.dumps({"pattern": r"TODO_\w+", "path": str(tmp_path)}))
+    assert "a.py:2:" in out and "TODO_here" in out
+    assert "b.py" not in out
+
+
+def test_search_files_ignore_case_and_glob(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("Hello World\n", encoding="utf-8")
+    (tmp_path / "a.md").write_text("hello world\n", encoding="utf-8")
+    # case-insensitive, restricted to *.py via glob → only the .py hit
+    out = REGISTRY["search_files"].call(json.dumps({
+        "pattern": "hello", "path": str(tmp_path), "glob": "*.py", "ignore_case": True,
+    }))
+    assert "a.py:1:" in out and "a.md" not in out
+
+
+def test_search_files_no_match(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("nothing here\n", encoding="utf-8")
+    out = REGISTRY["search_files"].call(json.dumps({"pattern": "zzz", "path": str(tmp_path)}))
+    assert out.startswith("(no matches")
+
+
+def test_search_files_bad_regex(tmp_path: Path) -> None:
+    out = REGISTRY["search_files"].call(json.dumps({"pattern": "(", "path": str(tmp_path)}))
+    assert out.startswith("ERROR: bad regex")
+
+
 def test_run_python_basic() -> None:
     out = REGISTRY["run_python"].call(json.dumps({"code": "print(2+2)"}))
     assert "4" in out

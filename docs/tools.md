@@ -13,10 +13,12 @@ the module from `evi/apps/cli/main.py` + `evi/apps/web/server.py` — see
 
 | Tool          | What it does                                                |
 |---------------|-------------------------------------------------------------|
-| `read_file`   | Read a UTF-8 text file. 256 KB cap. Errors string-returned. |
+| `read_file`   | Read a UTF-8 text file. 256 KB cap for whole-file reads; pass `offset` (1-based start line) + `limit` (max lines) to stream a slice of a larger file. Errors string-returned. |
 | `write_file`  | Overwrite or create a file with UTF-8 text. Creates parents. |
 | `edit_file`   | Surgical edit: replace an exact `old_string` with `new_string` (once, or `replace_all`). Preferred over `write_file` for small changes — cheaper and safer than a full rewrite. |
 | `list_dir`    | List entries in a directory, marked `D`/`F` per kind.        |
+| `find_files`  | Glob by name (e.g. `**/*.py`). Skips noise dirs (`.git`, `node_modules`, `.venv`, …). One path per line. |
+| `search_files`| Literal **regex grep** over file contents (`path:line: text`). Narrow with `glob` (e.g. `*.py`) + `ignore_case`. For meaning-based search use `find_in_project` (the `index` category). |
 
 Safety: 256 KB read cap prevents loading huge blobs into context. There's
 no implicit traversal check — combine with a hook for that.
