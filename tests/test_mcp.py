@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from evi.mcp.bridge import MCPBridge
-from evi.mcp.manager import MCPManager, _flatten_content
+from evi.mcp.manager import MCPManager, _flatten_content, _truncate
 from evi.mcp.servers import MCPServer, load_servers, save_servers
 from evi.tools.base import REGISTRY
 
@@ -298,6 +298,18 @@ def test_flatten_error_result() -> None:
 def test_flatten_empty() -> None:
     r = _Result(content=[])
     assert _flatten_content(r) == "(no content)"
+
+
+def test_truncate_unlimited_and_under_cap() -> None:
+    assert _truncate("hello", 0) == "hello"     # 0 = unlimited
+    assert _truncate("hello", 100) == "hello"   # under cap, untouched
+
+
+def test_truncate_clips_with_marker() -> None:
+    out = _truncate("x" * 50, 10)
+    assert out.startswith("x" * 10)
+    assert "40 chars truncated" in out
+    assert "MCP output cap" in out
 
 
 # ---- manager: wrapped tool actually routes through bridge ----------------

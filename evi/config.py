@@ -337,10 +337,6 @@ class ToolToggles:
     # many MCP tools). Core categories (fs, memory) stay always-loaded.
     tool_search: bool = False
     tool_search_threshold: int = 30
-    # When True, eVi's built-in (bundled) skills are hidden from the picker and
-    # system prompt — only user/project/plugin skills load. Mirrors Claude
-    # Code's `disableBundledSkills`. User skills with the same name still work.
-    disable_bundled_skills: bool = False
     # Cap on how many characters a single MCP tool result is truncated to
     # before being handed back to the model (keeps a chatty server from
     # blowing the context window). 0 = no cap. Mirrors Claude Code's

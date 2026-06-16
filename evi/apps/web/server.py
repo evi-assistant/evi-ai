@@ -473,7 +473,9 @@ def create_app() -> FastAPI:
             servers = filter_allowed(load_servers(), cfg.tools.mcp_allow)
             if servers:
                 try:
-                    mcp_manager = MCPManager(servers)
+                    mcp_manager = MCPManager(
+                        servers, max_output_chars=cfg.tools.mcp_max_output_chars
+                    )
                     mcp_manager.start()
                 except ImportError:
                     logger.warning(
