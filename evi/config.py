@@ -388,6 +388,16 @@ class AutoSettings:
 
 
 @dataclass
+class WorktreeSettings:
+    """`evi worktree` defaults. `base_ref` is the branch/commit new worktrees
+    fork from when `--base` isn't given (e.g. "main", so feature worktrees
+    always branch off main rather than whatever HEAD happens to be). Empty =
+    HEAD. Mirrors Claude Code's worktree baseRef."""
+
+    base_ref: str = ""
+
+
+@dataclass
 class Config:
     llm: LLMSettings = field(default_factory=LLMSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
@@ -403,6 +413,7 @@ class Config:
     plugins: PluginsSettings = field(default_factory=PluginsSettings)
     federation: FederationSettings = field(default_factory=FederationSettings)
     ultracode: UltracodeSettings = field(default_factory=UltracodeSettings)
+    worktree: WorktreeSettings = field(default_factory=WorktreeSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -441,6 +452,7 @@ class Config:
             plugins=PluginsSettings(**data.get("plugins", {})),
             federation=FederationSettings(**data.get("federation", {})),
             ultracode=UltracodeSettings(**data.get("ultracode", {})),
+            worktree=WorktreeSettings(**data.get("worktree", {})),
         )
 
     def save(self) -> None:
