@@ -84,6 +84,10 @@ class UltraConfig:
     mode: str = "code"        # tool preset for the SOLVER stage (chat|cowork|code)
     angles: list[str] = field(default_factory=list)  # [] => first `breadth`
     max_workers: int = 4
+    # Optional per-stage model override {stage -> model id}, stages:
+    # decompose | solve | verify | synthesize. Empty = every stage on the main
+    # model. make_runner reads this to route a stage to a cheaper model.
+    stage_models: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -160,11 +164,13 @@ def select_angles(cfg: UltraConfig) -> list[str]:
 def run_ultracode(
     task: str,
     *,
-    run_one: Callable[[str, str, str], str],
+    run_one: Callable[[str, str, str, str], str],
     cfg: UltraConfig | None = None,
     on_stage: Callable[[UltraStage], None] | None = None,
 ) -> UltraResult:
-    """Run the fixed pipeline. ``run_one(system_prompt, task, mode) -> text``.
+    """Run the fixed pipeline. ``run_one(system_prompt, task, mode, stage) -> text``
+    where ``stage`` is one of decompose | solve | verify | synthesize (so the
+    runner can route a stage to a different model — see :func:`make_runner`).
 
     decompose → fan-out(N solvers, diverse angles) → [verify → refine] × rounds
     → synthesize. Each stage is one ``run_one`` call; a stage that fails returns
@@ -183,7 +189,7 @@ def run_ultracode(
 
     # 1. decompose (sequential, no tools)
     plan = emit("decompose", "plan",
-                run_one(DECOMPOSE_SYSTEM_PROMPT, decompose_prompt(task), NO_TOOLS))
+                run_one(DECOMPOSE_SYSTEM_PROMPT, decompose_prompt(task), NO_TOOLS, "decompose"))
 
     angles = select_angles(cfg)
 
@@ -193,6 +199,7 @@ def run_ultracode(
             SOLVER_SYSTEM_PROMPT,
             solver_prompt(task, SOLVER_ANGLES[angle], plan, critique),
             cfg.mode,
+            "solve",
         )
 
     # 2. solve (fan-out)
@@ -204,7 +211,7 @@ def run_ultracode(
     critiques: list[str] = []
     for r in range(max(0, cfg.rounds)):
         critiques = fan_out(
-            lambda cand: run_one(CRITIC_SYSTEM_PROMPT, critic_prompt(task, cand), NO_TOOLS),
+            lambda cand: run_one(CRITIC_SYSTEM_PROMPT, critic_prompt(task, cand), NO_TOOLS, "verify"),
             candidates,
             cfg.max_workers,
         )
@@ -218,31 +225,42 @@ def run_ultracode(
 
     # 4. synthesize (sequential fan-in, no tools)
     answer = emit("synthesize", "final",
-                  run_one(SYNTH_SYSTEM_PROMPT, synthesize_prompt(task, candidates, critiques), NO_TOOLS))
+                  run_one(SYNTH_SYSTEM_PROMPT, synthesize_prompt(task, candidates, critiques),
+                          NO_TOOLS, "synthesize"))
     return UltraResult(task=task, answer=answer, stages=stages, config=cfg)
 
 
 # --- the headless wiring (one home, mirrors evals.make_runners) -------------
 
 
-def make_runner(agent_factory: Callable[[str | None], Any]) -> Callable[[str, str, str], str]:
+def make_runner(
+    agent_factory: Callable[..., Any],
+    stage_models: dict[str, str] | None = None,
+) -> Callable[[str, str, str, str], str]:
     """Build the ``run_one`` :func:`run_ultracode` needs from an agent factory.
 
-    ``agent_factory(system_prompt)`` must return a FRESH Agent constructed WITH
-    that system prompt (threaded through construction — never mutated after).
-    Each stage gets its own agent, so per-stage context stays small regardless
-    of pipeline length. ``mode == NO_TOOLS`` strips tools (decompose/critic/
-    synth); a real mode name scopes the solver's toolset.
+    ``agent_factory(system_prompt, model)`` must return a FRESH Agent constructed
+    WITH that system prompt (threaded through construction — never mutated after)
+    and, when ``model`` is given, that model id. Each stage gets its own agent,
+    so per-stage context stays small regardless of pipeline length.
+    ``mode == NO_TOOLS`` strips tools (decompose/critic/synth); a real mode name
+    scopes the solver's toolset.
+
+    ``stage_models`` maps a stage name (decompose | solve | verify | synthesize)
+    to a model id; a stage not in the map runs on the factory's default model.
+    This is how "cheaper fan-out" works — pass ``{"solve": fast_model}``.
     """
     from evi.headless import run_headless
     from evi.modes import mode_tools
 
-    def run_one(system_prompt: str, task: str, mode: str) -> str:
+    sm = stage_models or {}
+
+    def run_one(system_prompt: str, task: str, mode: str, stage: str = "") -> str:
         # Never raise: a flaky stage (e.g. a mid-stream backend drop) must
         # degrade to an ignorable ERROR candidate, not tear down the whole
         # fan-out via a re-raised future. synthesis is told to ignore these.
         try:
-            agent = agent_factory(system_prompt)
+            agent = agent_factory(system_prompt, sm.get(stage))
             if mode == NO_TOOLS:
                 agent.tools = {}
             elif mode:
@@ -260,13 +278,24 @@ def make_runner(agent_factory: Callable[[str | None], Any]) -> Callable[[str, st
 
 
 def load_ultra_config(cfg=None) -> UltraConfig:
-    """Build an :class:`UltraConfig` from the ``[ultracode]`` config section."""
+    """Build an :class:`UltraConfig` from the ``[ultracode]`` config section.
+
+    Resolves ``cheap_fanout`` → ``stage_models={"solve": fast_model}`` here (it
+    needs both the ``[ultracode]`` and ``[llm]`` sections), so every caller
+    inherits the cheaper fan-out without re-implementing it. A no-op when
+    ``fast_model`` is unset.
+    """
     from evi.config import Config
 
-    u = (cfg or Config.load()).ultracode
+    full = cfg or Config.load()
+    u = full.ultracode
+    stage_models: dict[str, str] = {}
+    if getattr(u, "cheap_fanout", False) and full.llm.fast_model:
+        stage_models["solve"] = full.llm.fast_model
     return UltraConfig(
         breadth=u.breadth, rounds=u.rounds, mode=u.mode,
         angles=list(u.angles), max_workers=u.max_workers,
+        stage_models=stage_models,
     )
 
 

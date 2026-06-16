@@ -14,8 +14,8 @@ def _echo_run_one(tag_by_system=None):
     """
     calls = []
 
-    def run_one(system_prompt, task, mode):
-        calls.append({"system": system_prompt, "task": task, "mode": mode})
+    def run_one(system_prompt, task, mode, stage=""):
+        calls.append({"system": system_prompt, "task": task, "mode": mode, "stage": stage})
         first = task.splitlines()[0] if task else ""
         return f"[sys={system_prompt[:14]}|mode={mode}] {first}"
 
@@ -107,7 +107,7 @@ def test_on_stage_hook_called_per_stage():
 
 
 def test_errored_stage_does_not_crash_and_reaches_synthesis():
-    def run_one(system_prompt, task, mode):
+    def run_one(system_prompt, task, mode, stage=""):
         if system_prompt == uc.SOLVER_SYSTEM_PROMPT and "first_principles" in task.lower() \
                 or "Ignore convention" in task:
             return "ERROR: model fell over"
@@ -135,7 +135,7 @@ def test_make_runner_fresh_agent_per_stage_with_system_prompt(monkeypatch):
         def enable_auto_all(self):
             pass
 
-    def factory(system_prompt):
+    def factory(system_prompt, model=None):
         a = FakeAgent(system_prompt)
         built.append(a)
         return a
@@ -146,9 +146,9 @@ def test_make_runner_fresh_agent_per_stage_with_system_prompt(monkeypatch):
     monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
 
     run_one = uc.make_runner(factory)
-    out_default = run_one("SYSTEM-A", "task", uc.NO_TOOLS)
+    out_default = run_one("SYSTEM-A", "task", uc.NO_TOOLS, "decompose")
     assert out_default == "ran:SYSTEM" and built[-1].tools == {}  # NO_TOOLS strips tools
-    run_one("SYSTEM-B", "task", "code")
+    run_one("SYSTEM-B", "task", "code", "solve")
     assert built[-1].system_prompt == "SYSTEM-B"  # threaded through construction
     assert len(built) == 2  # a fresh agent per call
 
@@ -200,8 +200,8 @@ def test_make_runner_stage_exception_becomes_error(monkeypatch):
 
     monkeypatch.setattr("evi.headless.run_headless", boom)
     monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
-    run_one = uc.make_runner(lambda sp: FakeAgent(sp))
-    out = run_one("sys", "task", "code")
+    run_one = uc.make_runner(lambda sp, model=None: FakeAgent(sp))
+    out = run_one("sys", "task", "code", "solve")
     assert out.startswith("ERROR:") and "mid-stream drop" in out  # never raises
 
 
@@ -223,7 +223,7 @@ def test_pipeline_survives_a_raising_stage_via_make_runner(monkeypatch):
 
     monkeypatch.setattr("evi.headless.run_headless", rh)
     monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
-    res = uc.run_ultracode("t", run_one=uc.make_runner(lambda sp: FakeAgent(sp)),
+    res = uc.run_ultracode("t", run_one=uc.make_runner(lambda sp, model=None: FakeAgent(sp)),
                            cfg=UltraConfig(breadth=2, rounds=0))
     assert res.answer  # the run completed instead of crashing
     solves = [s.output for s in res.stages if s.name == "solve"]
@@ -239,3 +239,51 @@ def test_default_tuning_downshifts_small_models():
     # capable model + long context keeps the base tuning
     kept = uc.default_tuning("qwen2.5-coder:14b-instruct-q4_K_M", 32768, base)
     assert kept.breadth == 3 and kept.rounds == 2
+
+
+# ---- per-stage model routing (cheaper fan-out) -----------------------------
+
+
+def test_make_runner_routes_models_per_stage(monkeypatch):
+    from evi.headless import HeadlessResult
+
+    built: list[str | None] = []
+
+    class FakeAgent:
+        def __init__(self):
+            self.tools = {}
+
+        def enable_auto_all(self):
+            pass
+
+    def factory(system_prompt, model=None):
+        built.append(model)
+        return FakeAgent()
+
+    monkeypatch.setattr("evi.headless.run_headless", lambda a, t: HeadlessResult(text="ok"))
+    monkeypatch.setattr("evi.modes.mode_tools", lambda m: [])
+
+    run_one = uc.make_runner(factory, stage_models={"solve": "cheap", "synthesize": "mid"})
+    uc.run_ultracode("t", run_one=run_one, cfg=UltraConfig(breadth=2, rounds=0))
+    # stages: decompose, solve, solve, synthesize
+    assert built[0] is None              # decompose -> factory default model
+    assert built[-1] == "mid"            # synthesize -> routed
+    assert sorted(m for m in built[1:-1]) == ["cheap", "cheap"]  # both solvers -> cheap
+
+
+def test_load_ultra_config_cheap_fanout(tmp_path, monkeypatch):
+    monkeypatch.setattr("evi.config.HOME", tmp_path)
+    monkeypatch.setattr("evi.config.CONFIG_PATH", tmp_path / "config.toml")
+    from evi.config import Config
+
+    cfg = Config.load()
+    cfg.ultracode.cheap_fanout = True
+    cfg.llm.fast_model = "qwen2.5:3b"
+    cfg.save()
+    assert uc.load_ultra_config(Config.load()).stage_models == {"solve": "qwen2.5:3b"}
+
+    # cheap_fanout with no fast_model => no routing (no-op)
+    cfg2 = Config.load()
+    cfg2.llm.fast_model = ""
+    cfg2.save()
+    assert uc.load_ultra_config(Config.load()).stage_models == {}

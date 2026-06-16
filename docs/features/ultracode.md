@@ -50,12 +50,13 @@ Defaults live under `[ultracode]` in `~/.evi/config.toml`:
 
 ```toml
 [ultracode]
-breadth = 3        # parallel solver angles (1 disables fan-out)
-rounds = 1         # verify->refine cycles (0 skips critique — weakest-model escape hatch)
-mode = "code"      # tool preset for solvers: chat | cowork | code
-angles = []        # optional explicit angle names (empty = first `breadth`)
-max_workers = 4    # cap on concurrent stage agents
-auto_tune = true   # downshift breadth/rounds for tiny / short-context models
+breadth = 3          # parallel solver angles (1 disables fan-out)
+rounds = 1           # verify->refine cycles (0 skips critique — weakest-model escape hatch)
+mode = "code"        # tool preset for solvers: chat | cowork | code
+angles = []          # optional explicit angle names (empty = first `breadth`)
+max_workers = 4      # cap on concurrent stage agents
+auto_tune = true     # downshift breadth/rounds for tiny / short-context models
+cheap_fanout = false # run the solver fan-out on [llm] fast_model (keep critic/synth on the main model)
 ```
 
 `auto_tune` downshifts to `breadth=2, rounds=0` for tiny models (size tokens
@@ -77,6 +78,32 @@ mode (`/fast on`) and the whole pipeline runs on the small model — handy to ke
 the big model free, or to run ultracode fast on modest hardware. The bundled
 small options span `qwen2.5:3b`, `llama3.2:3b`, `phi3.5:3.8b-mini`,
 `qwen2.5:1.5b`, `llama3.2:1b`, and `qwen2.5:0.5b`.
+
+### Cheaper fan-out (per-stage model routing)
+
+The N parallel **solvers** are the expensive part of a run; the single
+adversarial **critic** and **synthesizer** are where quality is won. So you can
+route just the fan-out to a cheaper model and keep the critic/synth sharp:
+
+```bash
+evi ultracode "<task>" --cheap-fanout                 # solvers -> [llm] fast_model
+evi ultracode "<task>" --solver-model qwen2.5:3b      # solvers -> an explicit model
+evi ultracode "<task>" --solver-model qwen2.5:3b --synth-model qwen2.5-coder:14b
+```
+
+Or make it the default in config:
+
+```toml
+[ultracode]
+cheap_fanout = true   # needs [llm] fast_model set; no-op otherwise
+```
+
+Under the hood each stage is `decompose | solve | verify | synthesize`, and
+`UltraConfig.stage_models` maps a stage to a model id (empty = the main model) —
+the same per-stage routing the web `POST /api/dispatch/ultracode` honours via
+`{cheap_fanout: true}` or `{solver_model: "<id>"}`. With a single local backend
+this is a **cost/VRAM** lever (smaller model for the bulk of the calls) more than
+a speedup, since inference still serialises.
 
 ## Usage
 
