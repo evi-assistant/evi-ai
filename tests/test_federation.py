@@ -140,6 +140,17 @@ def test_federate_runs_when_enabled(monkeypatch, tmp_path):
     assert client.post("/api/federate", json={"task": "  "}).status_code == 400
 
 
+def test_federate_records_activity_for_indicator(monkeypatch, tmp_path):
+    client = _fed_client(monkeypatch, tmp_path, serve=True)
+    client.post("/api/federate", json={"task": "hello peer", "source": "gpu-box"})
+    snap = client.get("/api/dispatch").json()
+    fed = snap["federation"]
+    assert fed["active"] == 0  # request finished
+    assert fed["recent"] and fed["recent"][0]["source"] == "gpu-box"
+    assert fed["recent"][0]["status"] == "ok"
+    assert "hello peer" in fed["recent"][0]["task"]
+
+
 # ---- managing peers.json ---------------------------------------------------
 
 

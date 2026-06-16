@@ -576,6 +576,8 @@
   <button type="button" class="model-btn" id="cwd-btn" title="Set working folder for this session">
     <span id="cwd-btn-label">📁 …</span>
   </button>
+  <span id="fed-indicator" title="Serving a request from a federation peer"
+        style="display:none; margin-left:10px; color:#6cf; font-weight:600;">⇄ <span id="fed-indicator-text"></span></span>
 </div>
 <div class="drop-overlay" id="drop-overlay">Drop file to attach</div>
 <div class="picker-overlay" id="picker-overlay">
@@ -1762,6 +1764,35 @@ async function setCwd() {
 }
 
 if (cwdBtn) cwdBtn.addEventListener('click', setCwd);
+
+// ---- federation activity (inbound peer requests) indicator --------------
+const fedIndicator = document.getElementById('fed-indicator');
+const fedIndicatorText = document.getElementById('fed-indicator-text');
+let _fedLastSeen = 0;
+
+async function pollFederation() {
+  if (!fedIndicator) return;
+  try {
+    const r = await fetch('/api/dispatch');
+    if (!r.ok) return;
+    const d = await r.json();
+    const fed = d.federation || { active: 0, recent: [] };
+    if (fed.active > 0) {
+      const who = (fed.recent[0] && fed.recent[0].source) || 'peer';
+      fedIndicatorText.textContent = `serving ${fed.active} peer request${fed.active > 1 ? 's' : ''} (${who})`;
+      fedIndicator.style.display = '';
+      _fedLastSeen = Date.now();
+    } else if (Date.now() - _fedLastSeen < 4000 && fed.recent.length) {
+      const last = fed.recent[0];
+      fedIndicatorText.textContent = `peer request ${last.status} (${last.source})`;
+      fedIndicator.style.display = '';
+    } else {
+      fedIndicator.style.display = 'none';
+    }
+  } catch {}
+}
+setInterval(pollFederation, 3000);
+pollFederation();
 
 let pickerState = {
   active: '', fast_model: '', models: [],
