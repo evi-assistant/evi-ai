@@ -1,6 +1,16 @@
 # Examples
 
-Drop-in samples you can copy into `~/.evi/`.
+Drop-in samples you can copy into `~/.evi/`, plus runnable Python SDK scripts.
+
+## `python/` — Agent SDK scripts
+
+Runnable programs using `evi.sdk` (`build_agent`, custom tools, subagents,
+structured output, headless/CI). See [python/README.md](python/README.md) and
+the full guide [../docs/sdk.md](../docs/sdk.md).
+
+```bash
+python examples/python/quickstart.py
+```
 
 ## `EVI.md`
 

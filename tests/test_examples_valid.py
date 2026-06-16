@@ -6,6 +6,7 @@ loudly instead of silently shipping a broken sample.
 
 from __future__ import annotations
 
+import ast
 import json
 import tomllib
 from pathlib import Path
@@ -73,3 +74,37 @@ def test_style_example_nonempty():
 ])
 def test_example_file_present(name):
     assert (EX / name).is_file()
+
+
+# ---- Python SDK examples ----------------------------------------------------
+
+PY_EXAMPLES = sorted((EX / "python").glob("*.py"))
+
+
+def test_python_examples_present():
+    names = {p.name for p in PY_EXAMPLES}
+    assert {
+        "quickstart.py", "streaming.py", "custom_tool.py",
+        "subagents.py", "structured_output.py", "headless_ci.py",
+    } <= names
+
+
+@pytest.mark.parametrize("path", PY_EXAMPLES, ids=lambda p: p.name)
+def test_python_example_compiles(path):
+    # Parse + compile (no execution — they need a live model backend) so a typo
+    # or stale import in a shipped sample fails CI loudly.
+    src = path.read_text(encoding="utf-8")
+    ast.parse(src)
+    compile(src, str(path), "exec")
+
+
+@pytest.mark.parametrize("path", PY_EXAMPLES, ids=lambda p: p.name)
+def test_python_example_imports_from_sdk(path):
+    # Every name an example imports from evi.sdk must be a real export.
+    import evi.sdk as sdk
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "evi.sdk":
+            for alias in node.names:
+                assert hasattr(sdk, alias.name), f"{path.name}: evi.sdk.{alias.name}"
