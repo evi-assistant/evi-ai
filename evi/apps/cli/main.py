@@ -55,6 +55,7 @@ from evi.transcripts import TranscriptStore
 from evi.tools import REGISTRY  # noqa: F401
 import evi.tools.fs  # noqa: F401
 import evi.tools.code  # noqa: F401
+import evi.tools.shell  # noqa: F401
 import evi.tools.image_comfy  # noqa: F401
 import evi.tools.memory  # noqa: F401
 import evi.tools.skills  # noqa: F401
