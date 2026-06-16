@@ -420,6 +420,9 @@ class Agent:
         self.memory = memory
         self.skills = skills
         self.project = project
+        # Session working folder ("" = process cwd). File tools resolve relative
+        # paths against this via evi.workdir; set by /cd, --cwd, or the web UI.
+        self.cwd: str = ""
         self.hooks = hooks
         self.permission_callback = permission_callback
         self.permission_batch_callback = permission_batch_callback
@@ -779,6 +782,11 @@ class Agent:
         once any tool runs, the prediction is stale and we let the model
         write freely.
         """
+        # Scope file tools to this session's working folder for the turn.
+        if getattr(self, "cwd", ""):
+            from evi import workdir
+
+            workdir.set_cwd(self.cwd)
         # Input guardrails run on the raw user text, before any composition.
         if self.guardrails is not None:
             _jf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from evi import workdir
 from evi.citations import Citation, ToolOutput, trim_excerpt
 from evi.tools.base import tool
 
@@ -46,7 +47,7 @@ def clear_read_cache() -> None:
     category="fs",
 )
 def read_file(path: str, offset: int = 0, limit: int = 0) -> ToolOutput | str:
-    p = Path(path).expanduser()
+    p = workdir.resolve(path)
     if not p.is_file():
         return f"ERROR: not a file: {p}"
     # Slice mode: any non-default offset/limit. Streams lines so it can read a
@@ -143,7 +144,7 @@ def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
     category="fs",
 )
 def write_file(path: str, content: str) -> str:
-    p = Path(path).expanduser()
+    p = workdir.resolve(path)
     # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
     # Best-effort — a checkpoint failure must never block the write itself.
     try:
@@ -173,7 +174,7 @@ def write_file(path: str, content: str) -> str:
 def edit_file(
     path: str, old_string: str, new_string: str, replace_all: bool = False
 ) -> str:
-    p = Path(path).expanduser()
+    p = workdir.resolve(path)
     if not p.is_file():
         return f"ERROR: not a file: {p}"
     if old_string == new_string:
@@ -212,7 +213,7 @@ def edit_file(
     category="fs",
 )
 def list_dir(path: str = ".") -> str:
-    p = Path(path).expanduser()
+    p = workdir.resolve(path)
     if not p.is_dir():
         return f"ERROR: not a directory: {p}"
     entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
@@ -237,7 +238,7 @@ def _is_ignored(p: Path, base: Path) -> bool:
     category="fs",
 )
 def find_files(pattern: str, path: str = ".") -> str:
-    base = Path(path).expanduser()
+    base = workdir.resolve(path)
     if not base.is_dir():
         return f"ERROR: not a directory: {base}"
     try:
@@ -271,7 +272,7 @@ def search_files(
         rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
     except re.error as exc:
         return f"ERROR: bad regex {pattern!r}: {exc}"
-    base = Path(path).expanduser()
+    base = workdir.resolve(path)
     if base.is_file():
         files: list[Path] = [base]
         base_dir = base.parent
