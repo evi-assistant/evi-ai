@@ -13,7 +13,9 @@ from evi.review import (
     ReviewError,
     _MAX_DIFF_BYTES,
     get_diff,
+    load_review_context,
     parse_verdict,
+    remember_review_rule,
     review_exit_code,
     review_prompt,
     truncate_diff,
@@ -60,6 +62,33 @@ def test_review_exit_code_falls_back_to_file_line_issues() -> None:
     assert review_exit_code("## Correctness\n- foo.py:42 off-by-one") == 1
     # No verdict and no concrete issues -> pass.
     assert review_exit_code("Everything looks clean, no issues.") == 0
+
+
+# ----- repo-scoped review context + learned rules (Bugbot-style) -------------
+
+
+def test_review_context_empty_when_absent(tmp_path):
+    assert load_review_context(tmp_path) == ""
+
+
+def test_remember_and_load_review_rule(tmp_path):
+    remember_review_rule("always check for SQL injection", tmp_path)
+    ctx = load_review_context(tmp_path)
+    assert "SQL injection" in ctx and "Learned review rules" in ctx
+    assert (tmp_path / ".evi" / "review-rules.md").is_file()
+
+
+def test_review_context_includes_bugbot_md(tmp_path):
+    d = tmp_path / ".evi"
+    d.mkdir()
+    (d / "BUGBOT.md").write_text("This repo uses tabs, not spaces.", encoding="utf-8")
+    ctx = load_review_context(tmp_path)
+    assert "tabs, not spaces" in ctx
+
+
+def test_review_prompt_prepends_context():
+    p = review_prompt("--- a/x\n+++ b/x", context="follow PEP 8")
+    assert "follow PEP 8" in p and "review guidance" in p.lower()
 
 
 # ----- truncate_diff ---------------------------------------------------------

@@ -1915,7 +1915,9 @@ def review(
         evi review --diff-file change.patch # saved patch
     """
     from dataclasses import asdict
-    from evi.review import ReviewError, REVIEW_SYSTEM_PROMPT, get_diff, review_prompt
+    from evi.review import (
+        ReviewError, REVIEW_SYSTEM_PROMPT, get_diff, load_review_context, review_prompt,
+    )
 
     try:
         diff = get_diff(
@@ -1929,6 +1931,9 @@ def review(
         console.print("[dim](no changes to review)[/dim]")
         return
 
+    # Repo-scoped review context (.evi/BUGBOT.md + learned rules) — Bugbot-style.
+    review_context = load_review_context()
+
     if multi:
         from evi.review import multi_review, parse_verdict, review_exit_code
 
@@ -1938,7 +1943,7 @@ def review(
                 "[dim]running parallel reviewers "
                 "(correctness · security · performance · tests)…[/dim]"
             )
-        review_text = multi_review(diff, tool_categories=cats)
+        review_text = multi_review(diff, tool_categories=cats, context=review_context)
         if json_out:
             import json as _json
             console.print_json(_json.dumps({
@@ -2001,7 +2006,7 @@ def review(
             )
         )
 
-    prompt = review_prompt(diff)
+    prompt = review_prompt(diff, context=review_context)
     text_acc: list[str] = []
     in_thinking = False
     for event in agent.chat(prompt):
@@ -2068,6 +2073,21 @@ def review(
     if exit_code:
         from evi.review import review_exit_code
         raise typer.Exit(review_exit_code(review_text))
+
+
+@app.command("review-remember")
+def review_remember(
+    rule: str = typer.Argument(..., help="A review rule/preference to remember for this repo."),
+) -> None:
+    """Teach `evi review` a repo-specific rule (Bugbot-style learned rules).
+
+    Appended to `.evi/review-rules.md` and fed into every future review here,
+    alongside an optional `.evi/BUGBOT.md` you write by hand. Fully local.
+    """
+    from evi.review import remember_review_rule
+
+    path = remember_review_rule(rule)
+    console.print(f"[green]remembered[/green] — added to {path}")
 
 
 def _apply_review_fixes(diff: str, review_text: str) -> None:

@@ -92,6 +92,7 @@ REVIEW_SYSTEM_PROMPT = (
     "You are a senior engineer reviewing a code diff. Be specific and concise.\n"
     "\n"
     "For each issue you find, output:\n"
+    "  - a severity tag: [error] (must fix), [warn] (should fix), or [info] (nit)\n"
     "  - the file + line range (e.g. `foo.py:42-50`)\n"
     "  - a one-line summary of the problem\n"
     "  - a brief fix suggestion (one or two sentences)\n"
@@ -145,13 +146,65 @@ def review_exit_code(text: str) -> int:
     return 1 if _FILE_LINE_RE.search(text) else 0
 
 
-def review_prompt(diff: str, *, label: str = "diff") -> str:
-    """Compose the user message wrapping the diff in fences."""
+# Per-repo review context + learned rules — eVi's local take on Bugbot's
+# BUGBOT.md + "@cursor remember". All under the repo's .evi/ dir, fully local.
+_REVIEW_CONTEXT_FILES = ("BUGBOT.md", "REVIEW.md")
+_REVIEW_RULES_FILE = "review-rules.md"
+
+
+def _review_dir(start: Path | None = None) -> Path:
+    return (start or Path.cwd()) / ".evi"
+
+
+def load_review_context(start: Path | None = None) -> str:
+    """Repo-scoped review context: `.evi/BUGBOT.md` (or REVIEW.md) plus learned
+    rules in `.evi/review-rules.md`. Returns "" when none exist."""
+    d = _review_dir(start)
+    parts: list[str] = []
+    for name in _REVIEW_CONTEXT_FILES:
+        f = d / name
+        if f.is_file():
+            try:
+                parts.append(f.read_text(encoding="utf-8").strip())
+            except OSError:
+                pass
+            break  # first one wins
+    rules = d / _REVIEW_RULES_FILE
+    if rules.is_file():
+        try:
+            txt = rules.read_text(encoding="utf-8").strip()
+            if txt:
+                parts.append("Learned review rules:\n" + txt)
+        except OSError:
+            pass
+    return "\n\n".join(p for p in parts if p)
+
+
+def remember_review_rule(text: str, start: Path | None = None) -> Path:
+    """Append a learned review rule to `.evi/review-rules.md`. Returns the path."""
+    d = _review_dir(start)
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / _REVIEW_RULES_FILE
+    line = "- " + text.strip() + "\n"
+    with f.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+    return f
+
+
+def review_prompt(diff: str, *, label: str = "diff", context: str = "") -> str:
+    """Compose the user message wrapping the diff in fences, with optional
+    repo-scoped review context (BUGBOT.md + learned rules) prepended."""
     body, truncated = truncate_diff(diff)
     note = "" if not truncated else (
         f"\n(NOTE: diff was truncated at {_MAX_DIFF_BYTES // 1024} KB)"
     )
-    return f"Please review the following {label}:{note}\n\n```diff\n{body}\n```"
+    head = ""
+    if context.strip():
+        head = (
+            "Project-specific review guidance (follow it):\n"
+            f"{context.strip()}\n\n"
+        )
+    return f"{head}Please review the following {label}:{note}\n\n```diff\n{body}\n```"
 
 
 # --- multi-agent review (Phase 70) --------------------------------------
@@ -193,15 +246,18 @@ def multi_review(
     diff: str,
     lenses: list[str] | None = None,
     tool_categories: tuple[str, ...] = ("fs", "git", "index"),
+    context: str = "",
 ) -> str:
-    """Run one reviewer per lens in parallel and combine into one report."""
+    """Run one reviewer per lens in parallel and combine into one report.
+    `context` is optional repo-scoped review guidance (BUGBOT.md + rules)."""
     from evi.llm.subagent import run_subagents_parallel
 
     chosen = lenses or list(REVIEW_LENSES)
     body, truncated = truncate_diff(diff)
     note = "" if not truncated else f"\n(NOTE: diff truncated at {_MAX_DIFF_BYTES // 1024} KB)"
+    ctx = f"Project review guidance (follow it):\n{context.strip()}\n\n" if context.strip() else ""
     tasks = [
-        f"{REVIEW_LENSES[lens]}{note}\n\nReview this diff:\n```diff\n{body}\n```"
+        f"{ctx}{REVIEW_LENSES[lens]}{note}\n\nReview this diff:\n```diff\n{body}\n```"
         for lens in chosen
         if lens in REVIEW_LENSES
     ]
