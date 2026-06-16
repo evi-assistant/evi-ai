@@ -71,6 +71,7 @@ import evi.tools.monitor  # noqa: F401
 import evi.tools.ocr  # noqa: F401
 import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
+import evi.tools.ask  # noqa: F401
 from evi.memory import MemoryStore
 from evi.skills import SkillStore
 from evi.tools.base import get_enabled_tools
@@ -1069,6 +1070,9 @@ def _dispatch_slash(
 def _run_repl(agent: Agent) -> None:
     """Drive the chat REPL against an existing Agent. Shared by `chat` and
     `sessions resume` so resumed sessions get the same UX."""
+    # Mark the session interactive so the ask_user tool may prompt (it stays a
+    # no-op in web / headless / print mode, which never set this).
+    os.environ["EVI_INTERACTIVE"] = "1"
     safe = _safe_mode()
     # In safe mode, user/plugin slash commands are a customization too — point the
     # store at a fresh empty temp dir (its parent has no plugins/ either).
