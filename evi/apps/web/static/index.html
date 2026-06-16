@@ -355,6 +355,8 @@
   .dispatch-row button { white-space: nowrap; }
   .dispatch-empty { color: var(--dim); font-size: 13px; padding: 6px 2px; }
   .dispatch-close { float: right; }
+  .d-busy { color: #22c55e; animation: dpulse 1.1s ease-in-out infinite; }
+  @keyframes dpulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 
   /* Responsive / mobile */
   @media (max-width: 640px) {
@@ -3416,12 +3418,13 @@ initModes();
     } catch { return; }
     const ov = document.createElement('div');
     ov.className = 'dispatch-overlay';
-    const sessRows = (data.sessions || []).map(s => {
+    const sessionsHtml = (sessions) => (sessions || []).map(s => {
       const ctx = s.ceiling ? ` · ${_k(s.used)}/${_k(s.ceiling)} ctx` : '';
       const pend = s.pending ? ` · ${s.pending} pending` : '';
       const chan = s.channels ? ` · ${s.channels} channel` : '';
+      const busy = s.busy ? '<span class="d-busy" title="working">●</span> ' : '';
       const label = (tabs.find(t => t.id === s.id) || {}).label || s.id.slice(0, 8);
-      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${escapeHtml(label)}</div>`
+      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${busy}${escapeHtml(label)}</div>`
         + `<div class="d-sub">${escapeHtml(s.mode)} · ${s.messages} msgs${ctx}${pend}${chan}</div></div>`
         + `<button data-open="${escapeHtml(s.id)}">Open</button></div>`;
     }).join('') || '<div class="dispatch-empty">No active sessions.</div>';
@@ -3433,15 +3436,31 @@ initModes();
         + `<button data-run="${escapeHtml(w.name)}">Run</button></div>`;
     }).join('') || '<div class="dispatch-empty">No workflows — create one with <code>evi workflow new</code>.</div>';
     ov.innerHTML = `<div class="dispatch-panel"><button class="dispatch-close" data-close>✕</button>`
-      + `<h2>Dispatch</h2><div class="d-sub">Active sessions and runnable workflows.</div>`
-      + `<h3>Sessions (${(data.sessions || []).length})</h3>${sessRows}`
+      + `<h2>Dispatch</h2><div class="d-sub">Active sessions and runnable workflows — live.</div>`
+      + `<h3>Sessions (<span id="dispatch-sess-count">${(data.sessions || []).length}</span>)</h3>`
+      + `<div id="dispatch-sessions">${sessionsHtml(data.sessions)}</div>`
       + `<h3>Workflows</h3>${wfRows}`
       + `<div id="dispatch-result"></div></div>`;
     document.body.appendChild(ov);
+    // Live agent-watch: re-render the session list as turns start/finish.
+    let dispatchES = null;
+    try {
+      dispatchES = new EventSource('/api/dispatch/stream');
+      dispatchES.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          const cont = document.getElementById('dispatch-sessions');
+          const cnt = document.getElementById('dispatch-sess-count');
+          if (cont) cont.innerHTML = sessionsHtml(d.sessions);
+          if (cnt) cnt.textContent = (d.sessions || []).length;
+        } catch {}
+      };
+    } catch {}
+    const closeDispatch = () => { if (dispatchES) { dispatchES.close(); dispatchES = null; } ov.remove(); };
     ov.addEventListener('click', async (e) => {
-      if (e.target === ov || e.target.hasAttribute('data-close')) { ov.remove(); return; }
+      if (e.target === ov || e.target.hasAttribute('data-close')) { closeDispatch(); return; }
       const openId = e.target.getAttribute('data-open');
-      if (openId) { ov.remove(); openSessionById(openId); return; }
+      if (openId) { closeDispatch(); openSessionById(openId); return; }
       const runName = e.target.getAttribute('data-run');
       if (runName) {
         e.target.disabled = true; e.target.textContent = 'Running…';

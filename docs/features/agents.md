@@ -255,6 +255,14 @@ the workflows you can launch. You can run a workflow headless server-side via
 `POST /api/dispatch/workflow/{name}` (body `{ "vars": { ... } }`), where each
 step runs as its own auto-approved agent and the response is `{step_id: output}`.
 
+**Live agent-watch.** While the Dispatch panel is open it subscribes to
+`GET /api/dispatch/stream` (Server-Sent Events) and re-renders the session list
+in real time — a pulsing green dot marks any session whose turn is mid-flight, so
+you can watch agents work across tabs (eVi's analogue of the Claude Code Agent
+view). The stream emits a snapshot every `interval` seconds (default 1.5,
+clamped 0.25–10); pass `limit=N` to end it after N snapshots (one-off polls /
+tests).
+
 The web server also exposes the receiving end of federation,
 `POST /api/federate` (body `{ "task": "...", "mode": "" }`), which only responds
 when `[federation] serve = true`.

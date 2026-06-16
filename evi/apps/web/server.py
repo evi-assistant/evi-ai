@@ -302,6 +302,7 @@ class WebSession:
     pending: dict[str, PendingDecision] = field(default_factory=dict)
     mode: str = "chat"  # Chat / Cowork / Code — gates the agent's tool set
     channel_log: list[dict[str, str]] = field(default_factory=list)  # pushed-in alerts (Ph 83)
+    busy: bool = False  # a turn is mid-flight — surfaced by the dispatch live-watch
 
 
 # ---- event serialization -------------------------------------------------
@@ -1023,11 +1024,9 @@ def create_app() -> FastAPI:
             )
         return {"ok": True, **info}
 
-    @app.get("/api/dispatch")
-    def dispatch_snapshot() -> dict[str, Any]:
-        """Dashboard data (Phase 85): every live session + its state, plus the
-        workflows you can launch. Powers the dispatch view for managing many
-        concurrent sessions at once."""
+    def _dispatch_snapshot_data() -> dict[str, Any]:
+        """Build the dispatch dashboard snapshot. Shared by the one-shot GET and
+        the live SSE stream so both report identical shape."""
         from evi import workflows as _wf
 
         sess_list = []
@@ -1045,6 +1044,8 @@ def create_app() -> FastAPI:
                     "ceiling": ceiling,
                     "pending": len(s.pending),
                     "channels": len(s.channel_log),
+                    # "busy" while a turn is mid-flight (live agent indicator)
+                    "busy": bool(getattr(s, "busy", False)),
                 }
             )
         wfs = [
@@ -1057,6 +1058,34 @@ def create_app() -> FastAPI:
             for w in _wf.list_workflows()
         ]
         return {"sessions": sess_list, "workflows": wfs}
+
+    @app.get("/api/dispatch")
+    def dispatch_snapshot() -> dict[str, Any]:
+        """Dashboard data (Phase 85): every live session + its state, plus the
+        workflows you can launch. Powers the dispatch view for managing many
+        concurrent sessions at once."""
+        return _dispatch_snapshot_data()
+
+    @app.get("/api/dispatch/stream")
+    async def dispatch_stream(
+        interval: float = 1.5, limit: int = 0
+    ) -> EventSourceResponse:
+        """Live agent-watch: stream the dispatch snapshot every `interval`
+        seconds so the UI shows in-flight sessions/agents update in real time
+        (eVi's analogue of the Claude Code Agent view). `limit` > 0 ends the
+        stream after that many snapshots (used by tests / one-off polls)."""
+        interval = min(max(interval, 0.25), 10.0)  # clamp to a sane range
+
+        async def stream() -> AsyncIterator[dict[str, str]]:
+            sent = 0
+            while True:
+                yield {"event": "message", "data": json.dumps(_dispatch_snapshot_data())}
+                sent += 1
+                if limit and sent >= limit:
+                    return
+                await asyncio.sleep(interval)
+
+        return EventSourceResponse(stream())
 
     @app.post("/api/dispatch/workflow/{name}")
     def dispatch_run_workflow(name: str, req: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2114,6 +2143,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(400, f"bad schema: {exc}")
 
         def worker() -> None:
+            sess.busy = True  # surfaced live by /api/dispatch/stream
             try:
                 for event in sess.agent.chat(
                     message,
@@ -2133,6 +2163,7 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 enqueue({"kind": "Error", "message": f"{type(exc).__name__}: {exc}"})
             finally:
+                sess.busy = False
                 enqueue(None)  # sentinel
 
         threading.Thread(target=worker, daemon=True).start()
