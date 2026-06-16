@@ -63,6 +63,7 @@ class Plugin:
     hooks: int = 0
     mcp: int = 0
     agents: int = 0
+    enabled: bool = True
 
 
 def _plugins_dir(root: Path | None = None) -> Path:
@@ -157,13 +158,70 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _state_path(root: Path | None = None) -> Path:
+    return _plugins_dir(root) / ".state.json"
+
+
+def _load_state(root: Path | None = None) -> dict[str, bool]:
+    """User enable/disable overrides ({name: bool}). Missing/bad file = {}."""
+    import json
+
+    try:
+        data = json.loads(_state_path(root).read_text(encoding="utf-8"))
+        return {str(k): bool(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def is_enabled(name: str, root: Path | None = None) -> bool:
+    """Whether a plugin is active: a user override wins, else the manifest's
+    ``default_enabled`` (default True). Disabled plugins contribute no
+    commands/skills/hooks/MCP/agents."""
+    state = _load_state(root)
+    if name in state:
+        return state[name]
+    try:
+        return bool(_read_manifest(_plugins_dir(root) / _slug(name)).get("default_enabled", True))
+    except PluginError:
+        return True
+
+
+def set_enabled(name: str, enabled: bool, root: Path | None = None) -> bool:
+    """Persist an enable/disable override. False if no such installed plugin."""
+    import json
+
+    pd = _plugins_dir(root) / _slug(name)
+    if not (pd / "plugin.toml").is_file():
+        return False
+    state = _load_state(root)
+    state[_slug(name)] = enabled
+    p = _state_path(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
 def plugin_dirs(root: Path | None = None) -> list[Path]:
-    """Installed plugin directories (each has a plugin.toml). Used by the hook
-    and MCP loaders to pick up `<plugin>/hooks.toml` and `<plugin>/mcp.json`."""
+    """ENABLED installed plugin directories (each has a plugin.toml). Used by the
+    hook/MCP/command/skill/agent loaders — a disabled plugin is skipped so none
+    of its content loads."""
     d = _plugins_dir(root)
     if not d.is_dir():
         return []
-    return [p for p in sorted(d.iterdir()) if p.is_dir() and (p / "plugin.toml").is_file()]
+    state = _load_state(root)
+
+    def _on(pd: Path) -> bool:
+        if pd.name in state:
+            return state[pd.name]
+        try:
+            return bool(_read_manifest(pd).get("default_enabled", True))
+        except PluginError:
+            return True
+
+    return [
+        p for p in sorted(d.iterdir())
+        if p.is_dir() and (p / "plugin.toml").is_file() and _on(p)
+    ]
 
 
 def list_plugins(root: Path | None = None) -> list[Plugin]:
@@ -190,6 +248,7 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
                     hooks=_count_hooks(pd / "hooks.toml"),
                     mcp=_count_mcp(pd / "mcp.json"),
                     agents=_count_agents(pd / "agents.toml"),
+                    enabled=is_enabled(pd.name, root),
                 )
             )
     return out

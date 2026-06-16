@@ -39,6 +39,45 @@ def test_install_lists_and_exposes_commands(tmp_path):
     assert cs.expand("gitx:status", "now") == "Show git status for now"
 
 
+def test_enable_disable_state(tmp_path):
+    src = tmp_path / "src"
+    _make_plugin(src)
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+
+    assert plugins.is_enabled("gitx", root=root) is True  # default on
+    assert any(p.name == "gitx" for p in plugins.plugin_dirs(root=root))
+
+    # disable -> excluded from plugin_dirs (so its content stops loading)
+    assert plugins.set_enabled("gitx", False, root=root) is True
+    assert plugins.is_enabled("gitx", root=root) is False
+    assert plugins.plugin_dirs(root=root) == []
+    assert plugins.list_plugins(root=root)[0].enabled is False
+
+    # re-enable
+    plugins.set_enabled("gitx", True, root=root)
+    assert any(p.name == "gitx" for p in plugins.plugin_dirs(root=root))
+    # unknown plugin
+    assert plugins.set_enabled("nope", False, root=root) is False
+
+
+def test_default_enabled_false_in_manifest(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir(parents=True)
+    (src / "plugin.toml").write_text(
+        'name = "off"\ndescription = "ships disabled"\nversion = "0.1.0"\n'
+        "default_enabled = false\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+    # installed but off until explicitly enabled
+    assert plugins.is_enabled("off", root=root) is False
+    assert plugins.plugin_dirs(root=root) == []
+    plugins.set_enabled("off", True, root=root)
+    assert plugins.is_enabled("off", root=root) is True
+
+
 def test_remove(tmp_path):
     src = tmp_path / "src"
     _make_plugin(src)
