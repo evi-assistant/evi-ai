@@ -3,6 +3,28 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.1] — 2026-06-16
+
+### Fixed
+- **run_python in the desktop app** — in the frozen sidecar `sys.executable` is
+  `evi-server.exe`, so `run_python` ran the server binary
+  (`evi-server: error: unrecognized arguments: …snippet.py`) instead of Python.
+  It now finds a real interpreter on PATH when frozen, with a clear error if
+  none. (run_python is for quick scripts, not GUI/long-running apps — write the
+  file or use the shell tool for those.)
+
+### Added
+- **Model capability indicators** — the web model-picker shows capability chips
+  (👁 vision · 🧠 thinking · ⌨ infill · 🎤 audio · ☁ Responses-API) on the footer
+  chip and per model in the popover; new `evi/capabilities.py` + `capabilities`
+  in `/api/model-picker`.
+- **Federation receiver indicator** — `/api/federate` records inbound peer
+  activity; the footer shows a ⇄ "serving a peer request (host)" pill; the
+  dispatch snapshot exposes `federation: {active, recent}`; `delegate()` sends
+  the sender's hostname.
+- **eVi for VS Code** (`editors/vscode/`) — a local Tab (inline FIM) + chat
+  extension over `/api/complete` and `/api/chat`. Run with F5 or package to VSIX.
+
 ## [0.34.0] — 2026-06-16
 
 ### Added — specialty SLMs, working folder, opencode + Cursor gleanings
