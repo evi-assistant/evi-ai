@@ -177,7 +177,7 @@ def test_picker_get_returns_snapshot(client: TestClient) -> None:
     data = r.json()
     assert data["active"]  # comes from the default Config
     assert "alpha" in data["models"] and "beta" in data["models"]
-    assert data["effort_levels"] == ["low", "medium", "high", "max"]
+    assert data["effort_levels"] == ["off", "low", "medium", "high", "max"]
     assert data["fast_mode"] is False
 
 
@@ -210,6 +210,12 @@ def test_picker_post_sets_effort(client: TestClient) -> None:
     r = client.post("/api/model-picker", json={"effort": "high"})
     assert r.status_code == 200
     assert r.json()["effort"] == "high"
+
+
+def test_picker_post_sets_effort_off(client: TestClient) -> None:
+    r = client.post("/api/model-picker", json={"effort": "off"})
+    assert r.status_code == 200
+    assert r.json()["effort"] == "off"
 
 
 def test_picker_post_rejects_bad_effort(client: TestClient) -> None:

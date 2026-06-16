@@ -41,3 +41,30 @@ def model_supports_reasoning(model_id: str) -> bool:
     if any(hint in name for hint in _REASONING_HINTS):
         return True
     return bool(_OSERIES_RE.search(name))
+
+
+# Values that mean "don't think at all".
+_OFF = ("off", "none", "false", "0", "disabled")
+
+
+def reasoning_extra_body(effort: str, model_id: str) -> dict:
+    """Request-body fragment for the configured ``reasoning_effort``.
+
+    Centralizes the thinking knob so the agent loop just merges the result:
+
+    - non-reasoning model → ``{}`` (never send thinking; Ollama 400s on it)
+    - "off"/"none"        → ``{"think": False}`` to disable thinking on a model
+      that would otherwise think by default (Ollama reads top-level ``think``;
+      other backends ignore the unknown key). Mirrors Claude Code's
+      "turn extended thinking off".
+    - "medium" (default)  → ``{}`` (let the model use its own default)
+    - low/high/max/…      → ``{"reasoning_effort": <value>}``
+    """
+    effort = (effort or "").strip().lower()
+    if not model_supports_reasoning(model_id):
+        return {}
+    if effort in _OFF:
+        return {"think": False}
+    if effort and effort != "medium":
+        return {"reasoning_effort": effort}
+    return {}

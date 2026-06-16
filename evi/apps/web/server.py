@@ -1184,7 +1184,7 @@ def create_app() -> FastAPI:
             "fast_model": cfg.llm.fast_model,
             "models": models,
             "effort": (cfg.llm.reasoning_effort or "medium").lower(),
-            "effort_levels": ["low", "medium", "high", "max"],
+            "effort_levels": ["off", "low", "medium", "high", "max"],
             "fast_mode": bool(cfg.llm.fast_mode),
             "backend": cfg.llm.backend,
         }
@@ -1203,7 +1203,7 @@ def create_app() -> FastAPI:
             cfg.llm.fast_model = req.fast_model.strip()
         if req.effort is not None:
             level = req.effort.strip().lower()
-            if level not in ("low", "medium", "high", "max"):
+            if level not in ("off", "low", "medium", "high", "max"):
                 raise HTTPException(400, f"invalid effort {level!r}")
             cfg.llm.reasoning_effort = level
         if req.fast_mode is not None:
