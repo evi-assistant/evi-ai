@@ -15,7 +15,7 @@ from evi.tools.base import REGISTRY, Tool, get_enabled_tools, tool  # noqa: F401
 _BUILTIN_TOOL_MODULES = (
     "fs", "code", "memory", "skills", "subagent", "websearch", "git",
     "index", "calendar", "pdf", "sqlite", "ocr", "rerank", "monitor",
-    "image_comfy", "voice", "computer", "federation", "ask",
+    "image_comfy", "voice", "computer", "federation", "ask", "vision_tool",
 )
 
 

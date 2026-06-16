@@ -87,17 +87,59 @@ def _run_tesseract(image: Path, language: str) -> str:
     return proc.stdout or ""
 
 
+_VLM_OCR_PROMPT = (
+    "Transcribe ALL text in this image exactly. Preserve the layout and "
+    "structure as Markdown (tables as Markdown tables, formulas as LaTeX). "
+    "Output only the transcribed content — no commentary."
+)
+
+
+def _ocr_via_vlm(image: Path) -> str | None:
+    """OCR via the configured [models] ocr VLM, or None if unconfigured.
+    Raises RuntimeError on a backend failure so the caller can fall back."""
+    from evi.llm.specialty import load_registry
+
+    reg = load_registry()
+    if not reg.model_id("ocr"):
+        return None
+    try:
+        return reg.run_image("ocr", image, _VLM_OCR_PROMPT)
+    except Exception as exc:  # noqa: BLE001 — surface as a fallable error
+        raise RuntimeError(f"OCR VLM ({reg.model_id('ocr')}) failed: {exc}") from exc
+
+
 @tool(
     description=(
-        "Extract text from an image file using Tesseract OCR. "
-        "Returns the recognised text or an error string. `language` is "
-        "an ISO 639-2 code (default `eng`); install other Tesseract "
-        "language packs separately."
+        "Extract text from an image file. By default uses the configured OCR "
+        "specialty VLM ([models] ocr, e.g. glm-ocr / qwen2.5vl) when set — "
+        "which preserves layout/tables/formulas as Markdown — and otherwise "
+        "Tesseract. `engine`: 'auto' (default) | 'vlm' | 'tesseract'. "
+        "`language` is an ISO 639-2 code for Tesseract (default `eng`)."
     ),
     category="ocr",
 )
-def ocr_image(path: str, language: str = "eng") -> str:
+def ocr_image(path: str, language: str = "eng", engine: str = "auto") -> str:
     target = Path(path).expanduser()
+    if not target.is_file():
+        return f"ERROR: no such file: {target}"
+    engine = (engine or "auto").strip().lower()
+
+    # VLM path (auto when an OCR model is configured, or forced via engine=vlm).
+    if engine in ("auto", "vlm"):
+        try:
+            vlm = _ocr_via_vlm(target)
+        except RuntimeError as exc:
+            if engine == "vlm":
+                return f"ERROR: {exc}"
+            vlm = None  # auto → fall through to tesseract
+        if vlm is not None:
+            text = vlm.strip()
+            if len(text) > _MAX_OUTPUT_BYTES:
+                text = text[:_MAX_OUTPUT_BYTES] + "\n…(truncated)"
+            return text or "(no text recognised)"
+        if engine == "vlm":
+            return "ERROR: no OCR VLM configured — set [models] ocr (e.g. glm-ocr)"
+
     try:
         text = _run_tesseract(target, language)
     except RuntimeError as exc:

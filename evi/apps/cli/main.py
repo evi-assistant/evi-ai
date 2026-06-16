@@ -72,6 +72,7 @@ import evi.tools.ocr  # noqa: F401
 import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
 import evi.tools.ask  # noqa: F401
+import evi.tools.vision_tool  # noqa: F401
 from evi.memory import MemoryStore
 from evi.skills import SkillStore
 from evi.tools.base import get_enabled_tools
@@ -4765,6 +4766,83 @@ def models_backend(kind: str | None = typer.Argument(None)) -> None:
     console.print(
         f"[green]backend → {kind}[/green] · base_url={cfg.llm.base_url}"
     )
+
+
+specialty_app = typer.Typer(
+    help="Per-task specialty (small) models — OCR/vision/STT/TTS distinct from the main model."
+)
+models_app.add_typer(specialty_app, name="specialty")
+
+_SPECIALTY_TASKS = ("ocr", "vision", "stt", "tts")
+
+
+@specialty_app.command("list")
+def specialty_list() -> None:
+    """Show the configured specialty models ([models])."""
+    cfg = Config.load()
+    any_set = False
+    for task in _SPECIALTY_TASKS:
+        mid = (getattr(cfg.models, task, "") or "").strip()
+        if not mid:
+            console.print(f"  [dim]{task:<7} (unset → falls back to default)[/dim]")
+            continue
+        any_set = True
+        extra = ""
+        bu = (getattr(cfg.models, f"{task}_base_url", "") or "").strip()
+        bk = (getattr(cfg.models, f"{task}_backend", "") or "").strip()
+        if bu:
+            extra += f" [dim]@ {bu}[/dim]"
+        if bk:
+            extra += f" [dim]({bk})[/dim]"
+        console.print(f"  [bold]{task:<7}[/bold] {mid}{extra}")
+    if not any_set:
+        console.print(
+            "[dim]tip:[/dim] [cyan]evi models specialty set ocr glm-ocr[/cyan] "
+            "(or vision moondream, stt large-v3-turbo)"
+        )
+
+
+@specialty_app.command("set")
+def specialty_set(
+    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts."),
+    model: str = typer.Argument(..., help="Model id (e.g. glm-ocr, moondream, large-v3-turbo)."),
+    base_url: str = typer.Option("", "--base-url", help="Separate endpoint for ocr/vision (e.g. a vLLM server)."),
+    backend: str = typer.Option("", "--backend", help="Backend kind override for ocr/vision."),
+) -> None:
+    """Configure a specialty model (writes [models])."""
+    task = task.strip().lower()
+    if task not in _SPECIALTY_TASKS:
+        console.print(f"[red]unknown task[/red] — pick one of: {', '.join(_SPECIALTY_TASKS)}")
+        raise typer.Exit(1)
+    cfg = Config.load()
+    setattr(cfg.models, task, model.strip())
+    if task in ("ocr", "vision"):
+        if base_url:
+            setattr(cfg.models, f"{task}_base_url", base_url.strip())
+        if backend:
+            setattr(cfg.models, f"{task}_backend", backend.strip())
+    elif base_url or backend:
+        console.print("[yellow]note:[/yellow] --base-url/--backend only apply to ocr/vision")
+    cfg.save()
+    console.print(f"[green]{task} → {model.strip()}[/green]")
+
+
+@specialty_app.command("clear")
+def specialty_clear(
+    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts."),
+) -> None:
+    """Unset a specialty model (revert to the default behavior)."""
+    task = task.strip().lower()
+    if task not in _SPECIALTY_TASKS:
+        console.print(f"[red]unknown task[/red] — pick one of: {', '.join(_SPECIALTY_TASKS)}")
+        raise typer.Exit(1)
+    cfg = Config.load()
+    setattr(cfg.models, task, "")
+    if task in ("ocr", "vision"):
+        setattr(cfg.models, f"{task}_base_url", "")
+        setattr(cfg.models, f"{task}_backend", "")
+    cfg.save()
+    console.print(f"[green]{task} cleared[/green]")
 
 
 @models_app.command("preset")
