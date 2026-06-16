@@ -172,6 +172,13 @@ class CwdRequest(BaseModel):
     path: str
 
 
+class CompleteRequest(BaseModel):
+    prefix: str
+    suffix: str = ""
+    model: str = ""
+    max_tokens: int = 128
+
+
 # --- full-config read/write (settings screen) ----------------------------
 #
 # Secret fields are never sent to the browser in the clear. GET returns the
@@ -1261,6 +1268,20 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001
             pass
         return {"working_dir": sess.agent.cwd}
+
+    @app.post("/api/complete")
+    def complete_post(req: CompleteRequest) -> dict[str, str]:
+        """Local FIM code completion — eVi as a Tab/Copilot backend for an
+        editor extension. Returns the insertion between prefix and suffix."""
+        from evi import complete as _complete
+
+        try:
+            text = _complete.complete(
+                req.prefix, req.suffix, model=req.model, max_tokens=req.max_tokens
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"completion failed: {exc}")
+        return {"completion": text}
 
     @app.get("/api/config")
     def config_get() -> dict[str, Any]:
