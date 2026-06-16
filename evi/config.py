@@ -234,6 +234,26 @@ class FederationSettings:
 
 
 @dataclass
+class UltracodeSettings:
+    """Defaults for the ultracode pipeline (`evi ultracode` / `/ultra`).
+
+    A fixed decompose → fan-out solvers → adversarial verify → synthesize pass.
+    `breadth` is the number of parallel solver angles (1 disables fan-out);
+    `rounds` is verify→refine cycles (0 skips critique — the weakest-model
+    escape hatch). `angles` optionally names specific angles from
+    `ultracode.SOLVER_ANGLES` (empty = the first `breadth`). `auto_tune`
+    downshifts breadth/rounds for tiny / short-context models.
+    """
+
+    breadth: int = 3
+    rounds: int = 1
+    mode: str = "code"
+    angles: list[str] = field(default_factory=list)
+    max_workers: int = 4
+    auto_tune: bool = True
+
+
+@dataclass
 class PluginsSettings:
     """Plugin marketplace (lighter/later item). `index_urls` are extra remote
     plugin-index JSON files merged with the local `~/.evi/marketplace.json` for
@@ -318,6 +338,10 @@ class AutoSettings:
     # web fetches to one of these hosts — without listing the whole category.
     trusted_dirs: list[str] = field(default_factory=list)
     trusted_domains: list[str] = field(default_factory=list)
+    # Session flag set by `/effort ultracode`: auto-run each substantive REPL
+    # turn through the ultracode pipeline (the eVi analogue of Claude Code's
+    # `/effort ultracode`). Off by default; cleared by the other effort levels.
+    ultracode: bool = False
 
 
 @dataclass
@@ -335,6 +359,7 @@ class Config:
     voice: VoiceSettings = field(default_factory=VoiceSettings)
     plugins: PluginsSettings = field(default_factory=PluginsSettings)
     federation: FederationSettings = field(default_factory=FederationSettings)
+    ultracode: UltracodeSettings = field(default_factory=UltracodeSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -372,6 +397,7 @@ class Config:
             voice=VoiceSettings(**data.get("voice", {})),
             plugins=PluginsSettings(**data.get("plugins", {})),
             federation=FederationSettings(**data.get("federation", {})),
+            ultracode=UltracodeSettings(**data.get("ultracode", {})),
         )
 
     def save(self) -> None:

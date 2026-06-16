@@ -292,6 +292,22 @@ def test_hooks_editor(page: Page, evi_base_url: str):
     expect(page.locator("#hk-status")).to_have_text("Saved", timeout=10000)
 
 
+def test_ultracode_panel(page: Page, evi_base_url: str):
+    """Settings → Ultracode runs a real pipeline against the fake backend
+    (breadth=1, rounds=0 → decompose + solve + synthesize = 3 stages)."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('ultracode')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    expect(page.locator("#ultra-box")).to_be_visible(timeout=10000)
+    page.fill("#uc-breadth", "1")
+    page.fill("#uc-rounds", "0")
+    page.fill("#uc-task", "say hello to the world in a friendly way")
+    page.click("#uc-run")
+    expect(page.locator("#uc-status")).to_contain_text("stages done", timeout=30000)
+    expect(page.locator("#uc-stages details")).to_have_count(3, timeout=10000)
+    expect(page.locator("#uc-answer")).to_contain_text("Hello", timeout=10000)
+
+
 def test_mcp_panel(page: Page, evi_base_url: str):
     """Settings → MCP: add a server via the form, toggle it off/on, remove it.
     Pure mcp.json file ops — no MCP server is actually launched."""
@@ -339,6 +355,7 @@ def test_mcp_panel(page: Page, evi_base_url: str):
         ("peers", "Peers"),
         ("mcp", "MCP"),
         ("hooks", "Hooks"),
+        ("ultracode", "Ultracode"),
         ("about", "About"),
     ],
 )

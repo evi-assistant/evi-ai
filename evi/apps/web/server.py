@@ -1526,6 +1526,51 @@ def create_app() -> FastAPI:
         results = recipes.run_recipe_headless(agent, recipe)
         return {"ok": True, "name": recipe.name, "steps": results}
 
+    @app.post("/api/dispatch/ultracode")
+    def dispatch_ultracode(req: dict[str, Any]) -> dict[str, Any]:
+        """Run one task through the ultracode pipeline server-side (decompose →
+        parallel solvers → adversarial verify → synthesize). Blocks until done
+        (many model calls), like the eval/recipe runners. Returns the final
+        answer + every stage."""
+        from evi import ultracode as uc
+
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        task = str(req.get("task") or "").strip()
+        if not task:
+            raise HTTPException(400, "expected {task}")
+
+        def agent_factory(system_prompt: str | None):
+            cfg = Config.load()
+            toggles = asdict(cfg.tools)
+            kwargs: dict[str, Any] = dict(
+                client=make_client(cfg.llm),
+                config=cfg,
+                tools=get_enabled_tools(toggles),
+                memory=MemoryStore() if toggles.get("memory") else None,
+                skills=SkillStore() if toggles.get("skills") else None,
+            )
+            if system_prompt is not None:
+                kwargs["system_prompt"] = system_prompt
+            return Agent(**kwargs)
+
+        cfg_obj = Config.load()
+        ucfg = uc.load_ultra_config(cfg_obj)
+        if req.get("breadth"):
+            ucfg.breadth = int(req["breadth"])
+        if req.get("rounds") is not None:
+            ucfg.rounds = int(req["rounds"])
+        if req.get("mode"):
+            ucfg.mode = str(req["mode"])
+        if cfg_obj.ultracode.auto_tune:
+            ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
+        res = uc.run_ultracode(task, run_one=uc.make_runner(agent_factory), cfg=ucfg)
+        return {
+            "ok": True, "answer": res.answer,
+            "stages": [asdict(s) for s in res.stages],
+            "config": asdict(res.config),
+        }
+
     @app.get("/api/peers")
     def peers_list() -> dict[str, Any]:
         """Configured peers (~/.evi/peers.json) with live reachability, plus
