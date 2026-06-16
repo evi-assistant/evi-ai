@@ -3,6 +3,42 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.0] — 2026-06-16
+
+### Added — Claude Code parity, S/M batch
+
+Closes the buildable small/medium gaps from the
+[comparison](docs/claude-code-comparison.md):
+
+- **Model fallback chain** — `[llm] fallback_models` retries a turn against the
+  next model when the primary fails at setup (timeout / 5xx / not loaded).
+- **Extended thinking off** — `reasoning_effort = "off"` (and `/effort off`)
+  disables thinking; logic centralized in `reasoning.py`.
+- **Transcript retention** — `tools.cleanup_period_days` auto-prunes old
+  transcripts on startup; `evi sessions purge [--older-than N]` does it manually.
+- **Transcript search** — `evi sessions search <query>` with snippets.
+- **MCP output cap** — `tools.mcp_max_output_chars` truncates a chatty server's
+  result before it reaches the model.
+- **Conditional hooks** — `arg_match` gates a hook on tool arguments (e.g.
+  `arg_match = { path = "*.env" }`), not just the tool name.
+- **Session lifecycle hooks** — `session_start` / `session_end`.
+- **CI-gating review** — `evi review --exit-code` / `--json` (+ `/ultrareview`)
+  for gating a build on a clean verdict.
+- **Plugins** — `evi plugin init` scaffold; install from `.zip` (file or URL);
+  enabled plugins' `bin/` on PATH; nested (subfolder) skill discovery;
+  `/reload-skills`.
+- **`/add-dir`** — trust an extra directory for the session.
+- **`!cmd`** — run a shell command from the REPL; output folded into context.
+- **`ask_user` tool** — clarifying questions (AskUserQuestion parity);
+  interactive-only, a graceful no-op in web/headless.
+- **`worktree.base_ref`** — default fork point for `evi worktree create`.
+- **Usage by category** — `evi stats` attributes tool calls per category.
+
+### Notes
+
+- Desktop **0.2.15** shipped separately (updater ACL fix + federation LAN-bind);
+  install it manually once — 0.2.14's updater can't self-update.
+
 ## [0.31.0] — 2026-06-08
 
 ### Added — Claude Code parity, round 2 (phases 75–78)
