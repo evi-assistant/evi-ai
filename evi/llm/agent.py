@@ -1064,10 +1064,6 @@ class Agent:
     ) -> Iterator[Event]:
         """The streaming + tool-dispatch loop. Assumes history is exactly
         what the model should see. Shared by `chat` and `continue_chat`."""
-        tool_schemas = (
-            None if plan_only
-            else ([t.openai_schema() for t in self.tools.values()] or None)
-        )
 
         # Effective model: explicit override (routing) wins; else fast-mode;
         # else the configured default.
@@ -1089,6 +1085,12 @@ class Agent:
             extra_body["cache_prompt"] = True
 
         for turn_idx in range(max_turns):
+            # Recompute each round so tools surfaced mid-turn by `search_tools`
+            # (deferred tool-search-at-scale) become available immediately.
+            tool_schemas = (
+                None if plan_only
+                else ([t.openai_schema() for t in self.tools.values()] or None)
+            )
             dlog(
                 "llm.request",
                 {

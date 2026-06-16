@@ -160,3 +160,23 @@ This feeds `evi dream` and `evi sessions list/resume`.
 | `sqlite`    | off     | ❌                       | DB content may be sensitive |
 | `pdf`       | off     | ❌                       | File reads |
 | `mcp`       | off     | ❌                       | Whatever the MCP server does |
+
+---
+
+## Tool search at scale
+
+With many tools enabled (especially several MCP servers), sending every tool
+schema on every turn bloats the context. Turn on **deferred tool search**:
+
+```toml
+[tools]
+tool_search = true            # off by default
+tool_search_threshold = 30    # only defers once the toolset exceeds this
+```
+
+When active, the `fs` and `memory` tools stay loaded and the long tail moves
+behind a single `search_tools` meta-tool. The model calls
+`search_tools("git commit")` to surface matching tools; they're added to the
+live toolset and become callable on the next step — still subject to the normal
+per-category permission gating (`search_tools` only *exposes* tools, never runs
+them). Below the threshold it's a no-op, so it's safe to leave on.
