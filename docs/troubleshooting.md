@@ -2,6 +2,19 @@
 
 Common problems, in roughly the order new users hit them.
 
+## Safe mode — is a customization breaking things?
+
+If eVi behaves oddly and you suspect a project `EVI.md`, skill, plugin, hook,
+MCP server, memory, guardrail, or custom command, run with **`--safe-mode`** (or
+`EVI_SAFE_MODE=1`) to load **none** of them:
+
+```bash
+evi --safe-mode chat        # clean baseline — no customizations loaded
+```
+
+The REPL header shows `SAFE MODE (customizations off)`. If the problem disappears
+in safe mode, re-enable customizations one at a time to find the culprit.
+
 ## "evi: command not found" after `pip install -e .`
 
 The venv isn't on PATH. Either activate it

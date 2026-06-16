@@ -95,6 +95,11 @@ def test_tools_list(evi_cli):
     assert evi_cli("tools").code == 0
 
 
+def test_safe_mode_flag_accepted(evi_cli):
+    # The global --safe-mode flag parses and a normal command still runs.
+    assert evi_cli("--safe-mode", "tools").code == 0
+
+
 # --- skills ----------------------------------------------------------------
 
 
