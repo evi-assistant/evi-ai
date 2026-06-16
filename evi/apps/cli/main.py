@@ -67,6 +67,7 @@ import evi.tools.sqlite  # noqa: F401
 import evi.tools.index  # noqa: F401
 import evi.tools.git  # noqa: F401
 import evi.tools.federation  # noqa: F401
+import evi.tools.monitor  # noqa: F401
 import evi.tools.ocr  # noqa: F401
 import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
