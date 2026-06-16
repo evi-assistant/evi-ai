@@ -230,6 +230,27 @@ def _safe_mode() -> bool:
     return os.environ.get("EVI_SAFE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+_CLEANUP_DONE = False
+
+
+def _maybe_cleanup_transcripts(config: Config) -> None:
+    """Delete transcripts older than tools.cleanup_period_days, once per process.
+
+    Mirrors Claude Code's `cleanupPeriodDays` startup cleanup. No-op when the
+    setting is 0 (keep forever) or transcripts are disabled."""
+    global _CLEANUP_DONE
+    if _CLEANUP_DONE:
+        return
+    _CLEANUP_DONE = True
+    days = config.tools.cleanup_period_days
+    if days <= 0 or not config.tools.transcripts:
+        return
+    try:
+        TranscriptStore().prune(keep_days=days)
+    except OSError:
+        pass
+
+
 def _build_agent(
     system_prompt: str | None = None, model: str | None = None, *, register: bool = True
 ) -> Agent:
@@ -244,6 +265,7 @@ def _build_agent(
     safe = _safe_mode()
     if not safe:
         _ensure_mcp(config)  # registers MCP tools before build_agent reads REGISTRY
+        _maybe_cleanup_transcripts(config)  # transcript retention (once per process)
     toggles = asdict(config.tools)
     agent = build_agent(
         config=config,
@@ -3460,6 +3482,44 @@ def plugin_add(
     )
 
 
+@plugin_app.command("init")
+def plugin_init(
+    name: str = typer.Argument(..., help="Name for the new plugin."),
+    dest: str = typer.Option(
+        "", "--dir", help="Parent directory to scaffold into (default: current dir)."
+    ),
+    description: str = typer.Option("", "--description", "-d", help="Manifest description."),
+    install: bool = typer.Option(
+        False, "--install", help="Scaffold straight into ~/.evi/plugins (live immediately)."
+    ),
+) -> None:
+    """Scaffold a new plugin skeleton (plugin.toml + a starter command and skill)."""
+    from pathlib import Path as _Path
+
+    from evi import plugins
+
+    try:
+        out = plugins.init_plugin(
+            name,
+            _Path(dest) if dest else None,
+            description=description,
+            install_now=install,
+        )
+    except plugins.PluginError as exc:
+        console.print(f"[red]init failed:[/red] {exc}")
+        raise typer.Exit(1)
+    if install:
+        console.print(
+            f"[green]created[/green] {out}\n"
+            f"[dim]it's installed and live — try[/dim] [cyan]/{out.name}:hello[/cyan]"
+        )
+    else:
+        console.print(
+            f"[green]created[/green] {out}\n"
+            f"[dim]edit it, then install with[/dim] [cyan]evi plugin add {out}[/cyan]"
+        )
+
+
 @plugin_app.command("list")
 def plugin_list(
     enabled: bool = typer.Option(False, "--enabled", help="Only enabled plugins."),
@@ -4975,6 +5035,53 @@ def sessions_list(
             f"[cyan]{s.message_count:>3} msgs[/cyan]  "
             f"{s.first_user_message}"
         )
+
+
+@sessions_app.command("purge")
+def sessions_purge(
+    older_than: int = typer.Option(
+        0,
+        "--older-than",
+        help="Delete transcripts older than N days. Default: the configured "
+        "tools.cleanup_period_days.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation."),
+) -> None:
+    """Delete old stored transcripts (retention; mirrors cleanupPeriodDays)."""
+    from datetime import datetime, timedelta
+
+    from evi.config import Config
+    from evi.transcripts import TranscriptStore
+
+    days = older_than or Config.load().tools.cleanup_period_days
+    if days <= 0:
+        console.print(
+            "[yellow]no retention window set[/yellow] — pass [cyan]--older-than N[/cyan] "
+            "or set [cyan]tools.cleanup_period_days[/cyan] in config.toml"
+        )
+        raise typer.Exit(1)
+
+    if not yes:
+        # Preview how many day-directories will be deleted.
+        store = TranscriptStore()
+        cutoff = datetime.now() - timedelta(days=days)
+        doomed = 0
+        if store.root.is_dir():
+            for dd in store.root.iterdir():
+                try:
+                    if dd.is_dir() and datetime.strptime(dd.name, "%Y-%m-%d") < cutoff:
+                        doomed += 1
+                except ValueError:
+                    continue
+        if not doomed:
+            console.print(f"[dim]nothing older than {days} days[/dim]")
+            return
+        console.print(f"[yellow]will delete {doomed} day(s) of transcripts older than {days} days[/yellow]")
+        if not typer.confirm("Proceed?"):
+            raise typer.Exit(0)
+
+    removed = TranscriptStore().prune(keep_days=days)
+    console.print(f"[green]purged[/green] {removed} day(s) of transcripts older than {days} days")
 
 
 @sessions_app.command("show")

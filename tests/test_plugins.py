@@ -173,6 +173,40 @@ def test_plugin_hooks_loaded(tmp_path, monkeypatch):
     assert [h.name for h in reg.hooks] == ["log"]
 
 
+def test_init_plugin_scaffold_then_install(tmp_path):
+    """init_plugin writes a working skeleton that install() can pick up."""
+    dest = plugins.init_plugin("gitx", tmp_path, description="git stuff")
+    assert dest == tmp_path / "gitx"
+    assert (dest / "plugin.toml").is_file()
+    assert (dest / "commands" / "hello.md").is_file()
+    assert (dest / "skills" / "gitx-example" / "SKILL.md").is_file()
+    assert 'description = "git stuff"' in (dest / "plugin.toml").read_text(encoding="utf-8")
+
+    # The scaffold is immediately installable and exposes its starter command.
+    root = tmp_path / "home"
+    name = plugins.install(str(dest), root=root)
+    assert name == "gitx"
+    p = plugins.list_plugins(root=root)[0]
+    assert p.commands == 1 and p.skills == 1
+
+    # Refuses to clobber an existing plugin dir.
+    with pytest.raises(plugins.PluginError):
+        plugins.init_plugin("gitx", tmp_path)
+
+
+def test_init_plugin_install_now(tmp_path):
+    """--install scaffolds straight into the live plugins dir."""
+    root = tmp_path / "home"
+    dest = plugins.init_plugin("live", root=root, install_now=True)
+    assert dest == root / "plugins" / "live"
+    assert any(p.name == "live" for p in plugins.plugin_dirs(root=root))
+
+
+def test_init_plugin_rejects_bad_name(tmp_path):
+    with pytest.raises(plugins.PluginError):
+        plugins.init_plugin("has spaces", tmp_path)
+
+
 def test_plugin_mcp_loaded(tmp_path, monkeypatch):
     """A plugin's mcp.json is merged, namespaced <plugin>:<name> (Phase 80)."""
     import evi.config as config

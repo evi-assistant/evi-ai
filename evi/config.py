@@ -76,9 +76,16 @@ class LLMSettings:
     embed_dimensions: int = 768
     # Reasoning effort knob, mirroring the OpenAI o-series + many local
     # reasoning models (DeepSeek-R1, Qwen3 with `enable_thinking`, …). One
-    # of "low" | "medium" | "high" | "max". Passed via `extra_body` so
+    # of "off" | "low" | "medium" | "high" | "max". "off" (alias "none")
+    # suppresses thinking entirely — nothing is sent, matching Claude Code's
+    # ability to turn extended thinking off. Passed via `extra_body` so
     # backends that ignore it just drop it on the floor.
     reasoning_effort: str = "medium"
+    # Model fallback chain. When the primary `model` request fails with a
+    # retryable backend error (timeout, 5xx, connection refused), the agent
+    # retries the turn against each model here in order before giving up.
+    # Mirrors Claude Code's `fallbackModel`. Empty = no fallback.
+    fallback_models: list[str] = field(default_factory=list)
     # Fast mode — when on, swap to `fast_model` if set. Common pattern:
     # main model is a 14B for daily work, fast_model is a 3B-7B for
     # boilerplate. Empty fast_model = fast_mode is a no-op.
@@ -330,6 +337,18 @@ class ToolToggles:
     # many MCP tools). Core categories (fs, memory) stay always-loaded.
     tool_search: bool = False
     tool_search_threshold: int = 30
+    # When True, eVi's built-in (bundled) skills are hidden from the picker and
+    # system prompt — only user/project/plugin skills load. Mirrors Claude
+    # Code's `disableBundledSkills`. User skills with the same name still work.
+    disable_bundled_skills: bool = False
+    # Cap on how many characters a single MCP tool result is truncated to
+    # before being handed back to the model (keeps a chatty server from
+    # blowing the context window). 0 = no cap. Mirrors Claude Code's
+    # `--max-mcp-output-tokens` (we measure characters, not tokens).
+    mcp_max_output_chars: int = 0
+    # Transcript retention: delete stored sessions older than this many days
+    # on startup. 0 = keep forever. Mirrors Claude Code's `cleanupPeriodDays`.
+    cleanup_period_days: int = 0
 
 
 @dataclass
