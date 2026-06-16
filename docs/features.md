@@ -99,7 +99,10 @@ that can carry `commands/`, `skills/`, `hooks.toml`, `mcp.json`, and
 ## Agents & orchestration
 
 **Subagents** — the `delegate` tool runs a scoped sub-agent by profile
-(built-in `explore`/`plan` + plugin `agents.toml`); `evi agents` lists profiles.
+(built-in `explore`/`plan` + plugin/user `agents.toml`); `evi agents` lists them,
+`evi agents new` scaffolds a custom one. **Agent teams** — a shared, claimable
+task list (`evi team new/run`): a lead decomposes a goal into dependency-ordered
+tasks and teammates drain it in parallel (`evi/teams.py`).
 **Parallel research** — `parallel_research` tool fans out read-only explorers.
 **Workflows** — `~/.evi/workflows/<name>.toml`, multi-step with parallel blocks +
 `{step}`/`{var}` interpolation; `evi workflow new|run`. **Dispatch** (Web 🗂) —

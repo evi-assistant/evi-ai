@@ -89,6 +89,28 @@ system_prompt = "You are a security reviewer…"
 tools = ["fs"]            # tool *categories* the subagent may use
 ```
 
+### Agent teams
+
+Agent teams (`evi/teams.py`) are a **dynamic, claimable** task list — distinct
+from workflows (a declarative DAG you author) and ultracode (a fixed pipeline). A
+**lead** decomposes a goal into tasks with `blocked_by` dependencies, persisted to
+a shared file (`~/.evi/team.json`); **teammates** (subagents) then claim ready
+tasks, run them, and record results, draining the list in dependency order with
+bounded parallelism. Claims are thread-safe (no double-claim) and the store is
+persisted, so the team's progress is inspectable and survives a restart.
+
+```bash
+evi team new "add OpenAPI docs to the HTTP API"   # lead decomposes -> task list
+evi team list                                      # see tasks + status + deps
+evi team run --workers 3                            # teammates drain it in dep order
+evi team add "write the integration test" --blocked-by t2   # hand-add a task
+evi team clear
+```
+
+A task whose dependency **fails** is reported (its dependents stay pending rather
+than hanging the run). The core is model-free — `TeamStore` + `drain_team(store,
+run_one)` (injected runner, like ultracode) — and re-exported from `evi.sdk`.
+
 ### Workflows
 
 A workflow (`evi/workflows.py`) orchestrates **independent** steps, where a

@@ -4459,6 +4459,133 @@ def models_preset(
         console.print(f"  [dim]{preset.note}[/dim]")
 
 
+team_app = typer.Typer(
+    help="Agent teams — a shared task list a lead fills and teammates drain."
+)
+app.add_typer(team_app, name="team")
+
+_TEAM_LEAD_PROMPT = (
+    "You are the lead of an agent team. Decompose the user's goal into a small "
+    "set of concrete, independently-actionable tasks. Use blocked_by to express "
+    "real dependencies (a task's id list it must wait for). Keep it lean — only "
+    "as many tasks as the goal needs."
+)
+_TEAM_MATE_PROMPT = (
+    "You are a teammate executing ONE task from a shared plan. Do exactly your "
+    "task and report a concise result. Stay within your task's scope."
+)
+
+
+def _team_status_color(status: str) -> str:
+    return {
+        "completed": "green", "in_progress": "cyan",
+        "failed": "red", "blocked": "yellow",
+    }.get(status, "dim")
+
+
+@team_app.command("new")
+def team_new(
+    goal: str = typer.Argument(..., help="The goal to decompose into a team task list."),
+) -> None:
+    """Lead-decompose a goal into a fresh shared task list (~/.evi/team.json)."""
+    import json
+
+    from evi import teams
+    from evi.headless import run_headless
+    from evi.structured import as_response_format
+
+    agent = _build_agent(system_prompt=_TEAM_LEAD_PROMPT, register=False)
+    agent.tools = {}  # the lead only plans
+    rf = as_response_format(teams.plan_schema(), name="team_plan")
+    res = run_headless(agent, f"Goal:\n{goal}\n\nReturn the team task list.", response_format=rf)
+    try:
+        plan = (json.loads(res.text) or {}).get("tasks", [])
+    except json.JSONDecodeError:
+        console.print("[red]lead did not return a valid plan[/red]")
+        raise typer.Exit(1)
+    if not plan:
+        console.print("[yellow]no tasks produced[/yellow]")
+        raise typer.Exit(1)
+    store = teams.TeamStore()
+    store.clear()
+    tasks = teams.populate_from_plan(store, plan)
+    console.print(f"[green]team plan ready[/green] — {len(tasks)} tasks:")
+    _team_print(tasks)
+    console.print("\n[dim]run it:[/dim] [cyan]evi team run[/cyan]")
+
+
+@team_app.command("add")
+def team_add(
+    subject: str = typer.Argument(..., help="The task description."),
+    blocked_by: str = typer.Option("", "--blocked-by", help="Comma-separated task ids this waits on."),
+) -> None:
+    """Add a single task to the shared list."""
+    from evi import teams
+
+    deps = [b.strip() for b in blocked_by.split(",") if b.strip()]
+    t = teams.TeamStore().add(subject, deps)
+    console.print(f"[green]added[/green] {t.id}: {t.subject}")
+
+
+@team_app.command("list")
+def team_list() -> None:
+    """Show the shared task list with status."""
+    from evi import teams
+
+    tasks = teams.TeamStore().load()
+    if not tasks:
+        console.print("[dim]no team tasks. create some with[/dim] [cyan]evi team new <goal>[/cyan]")
+        return
+    _team_print(tasks)
+
+
+def _team_print(tasks) -> None:
+    for t in tasks:
+        color = _team_status_color(t.status)
+        dep = f" [dim](after {', '.join(t.blocked_by)})[/dim]" if t.blocked_by else ""
+        console.print(f"  [{color}]{t.status:<11}[/{color}] [bold]{t.id}[/bold] {t.subject}{dep}")
+        if t.result and t.status in ("completed", "failed"):
+            console.print(f"      [dim]{t.result[:160].splitlines()[0] if t.result else ''}[/dim]")
+
+
+@team_app.command("run")
+def team_run(
+    workers: int = typer.Option(3, "--workers", "-w", help="Max concurrent teammates."),
+) -> None:
+    """Spawn teammates to drain the shared list in dependency order."""
+    from evi import teams
+    from evi.llm.subagent import run_subagent
+
+    store = teams.TeamStore()
+    if not teams.ready_tasks(store.load()) and not store.any_active():
+        console.print("[yellow]nothing to run[/yellow] — add tasks with `evi team new`/`evi team add`")
+        raise typer.Exit(1)
+
+    def run_one(task) -> str:
+        return run_subagent(
+            system_prompt=_TEAM_MATE_PROMPT,
+            task=task.subject,
+            tool_categories=("fs", "code"),
+            max_turns=8,
+        )
+
+    console.print(f"[dim]draining team with up to {workers} teammates…[/dim]")
+    final = teams.drain_team(store, run_one, max_workers=workers)
+    _team_print(final)
+    done = sum(1 for t in final if t.status == "completed")
+    failed = sum(1 for t in final if t.status == "failed")
+    console.print(f"\n[green]{done} completed[/green]" + (f", [red]{failed} failed[/red]" if failed else ""))
+
+
+@team_app.command("clear")
+def team_clear() -> None:
+    """Empty the shared task list."""
+    from evi import teams
+
+    teams.TeamStore().clear()
+    console.print("[yellow]team list cleared[/yellow]")
+
+
 obsidian_app = typer.Typer(help="Sync eVi memory with an Obsidian vault.")
 app.add_typer(obsidian_app, name="obsidian")
 
