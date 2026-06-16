@@ -42,12 +42,31 @@ Transports: **stdio** (the default; what a desktop MCP client spawns) or **strea
 | Field | Type | Required | Default | Meaning |
 |-------|------|----------|---------|---------|
 | `name` | string | yes | — | Server label; tools register as `<name>.<tool>` |
-| `command` | string | yes | — | Executable to launch (e.g. `npx`, `uvx`, `python`) |
+| `command` | string | stdio only | — | Executable to launch (e.g. `npx`, `uvx`, `python`) |
 | `args` | string[] | no | `[]` | Arguments passed to the command |
 | `env` | object | no | `{}` | Extra environment variables for the child process |
+| `transport` | string | no | `stdio` | `stdio` (spawn `command`) or a remote transport: `http` (streamable-http) / `sse` |
+| `url` | string | http/sse only | — | The remote server's endpoint URL |
+| `headers` | object | no | `{}` | Request headers for the remote transport (e.g. `Authorization`) |
 | `enabled` | bool | no | `true` | Set `false` to keep a server in the file but skip it |
 
-Entries missing `name` or `command` are skipped silently. Print the exact path any time with `evi mcp path`.
+A stdio entry needs `command`; a remote entry needs `url` (transport defaults to `http` when a `url` is present). Entries missing the required field are skipped silently. Print the exact path any time with `evi mcp path`.
+
+**Remote (HTTP) servers.** To connect to a hosted MCP server instead of spawning a local process:
+
+```json
+[
+  { "name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp",
+    "headers": { "Authorization": "Bearer <token>" } }
+]
+```
+
+or add it from the CLI (header values are never echoed back by `list-servers`):
+
+```bash
+evi mcp add-http linear https://mcp.linear.app/mcp -H "Authorization=Bearer <token>"
+evi mcp add-http legacy https://host/sse --sse        # legacy SSE transport
+```
 
 **2. Enable MCP** in `~/.evi/config.toml` (it is **off by default**):
 

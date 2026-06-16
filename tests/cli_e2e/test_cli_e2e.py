@@ -304,6 +304,18 @@ def test_mcp(evi_cli):
     assert evi_cli("mcp", "remove", "fs", check=False).code == 1
 
 
+def test_mcp_add_http(evi_cli):
+    out = evi_cli(
+        "mcp", "add-http", "linear", "https://mcp.linear.app/mcp",
+        "-H", "Authorization=Bearer tok",
+    ).out
+    assert "added" in out and "http" in out
+    listed = evi_cli("mcp", "list-servers").out
+    assert "linear" in listed
+    # secrets aren't echoed back by list-servers
+    assert "Bearer tok" not in listed
+
+
 # --- usage stats -----------------------------------------------------------
 
 
