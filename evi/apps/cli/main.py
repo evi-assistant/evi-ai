@@ -5095,6 +5095,9 @@ def stats_cmd(
         top = list(data["tools"].items())[:8]
         parts = ", ".join(f"{k} ({v})" for k, v in top)
         console.print(f"  [dim]top tools:[/dim] {parts}")
+    if data.get("tool_categories"):
+        parts = ", ".join(f"{k} ({v})" for k, v in data["tool_categories"].items())
+        console.print(f"  [dim]by category:[/dim] {parts}")
     if data["busiest_days"]:
         parts = ", ".join(f"{d} ({n})" for d, n in data["busiest_days"].items())
         console.print(f"  [dim]busiest days:[/dim] {parts}")

@@ -36,9 +36,20 @@ def compute_stats(*, root: Path | None = None, days: int | None = None) -> dict[
     """Aggregate transcript stats. Returns a dict (printed by `evi stats`)."""
     from evi.sessions import list_sessions
 
+    # Resolve tool name -> category so we can attribute usage per category
+    # (fs, code, web, mcp, …). Falls back to "other" for names not in the
+    # registry (e.g. tools from a since-removed plugin).
+    try:
+        from evi.tools.base import REGISTRY
+
+        _cat_of = {name: getattr(t, "category", "other") for name, t in REGISTRY.items()}
+    except Exception:  # registry import must never break stats
+        _cat_of = {}
+
     infos = list_sessions(root=root, days=days, limit=100_000)
     roles: Counter[str] = Counter()
     tools: Counter[str] = Counter()
+    tool_categories: Counter[str] = Counter()
     per_day: Counter[str] = Counter()
     total_msgs = 0
     char_total = 0
@@ -60,13 +71,19 @@ def compute_stats(*, root: Path | None = None, days: int | None = None) -> dict[
                 last_ts = ts if last_ts is None else max(last_ts, ts)
             # Count actual tool executions (tool-result entries carry tool_name).
             if role == "tool" and e.get("tool_name"):
-                tools[str(e["tool_name"])] += 1
+                tname = str(e["tool_name"])
+                tools[tname] += 1
+                # MCP tools are "server.tool"; bucket them as mcp even when the
+                # specific server isn't in this process's registry.
+                cat = _cat_of.get(tname) or ("mcp" if "." in tname else "other")
+                tool_categories[cat] += 1
 
     return {
         "sessions": len(infos),
         "messages": total_msgs,
         "roles": dict(roles),
         "tools": dict(tools.most_common()),
+        "tool_categories": dict(tool_categories.most_common()),
         "busiest_days": dict(per_day.most_common(7)),
         "approx_tokens": char_total // 4,
         "first_ts": first_ts,

@@ -41,6 +41,9 @@ def test_aggregates(tmp_path):
     assert data["tools"]["read_file"] == 2 and data["tools"]["web_search"] == 1
     # most-used tool first
     assert list(data["tools"])[0] == "read_file"
+    # per-category attribution: read_file -> fs (x2), web_search -> web (x1)
+    cats = data["tool_categories"]
+    assert cats.get("fs") == 2 and cats.get("web") == 1
     assert set(data["busiest_days"]) == {"2026-06-01", "2026-06-02"}
     assert data["approx_tokens"] >= 0
     assert data["first_ts"] == 1.0
