@@ -159,7 +159,7 @@ def build_agent(
         loaded = Guardrails.load()
         guardrails = loaded if loaded.enabled else None
 
-    return Agent(
+    agent = Agent(
         client=client,
         config=config,
         tools=tools,
@@ -174,3 +174,12 @@ def build_agent(
         guardrails=guardrails,
         **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
+    # Tool-search-at-scale (opt-in): with many tools, defer the long tail behind
+    # a `search_tools` meta-tool so per-turn context stays small.
+    if getattr(config.tools, "tool_search", False):
+        from evi.tools.resolver import apply_tool_search
+
+        apply_tool_search(
+            agent, tools, threshold=getattr(config.tools, "tool_search_threshold", 30)
+        )
+    return agent

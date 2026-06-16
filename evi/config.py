@@ -319,6 +319,12 @@ class ToolToggles:
     # Consume-side MCP allowlist: when non-empty, only these server names (from
     # mcp.json) load — lets a shared/synced mcp.json be gated per machine.
     mcp_allow: list[str] = field(default_factory=list)
+    # Tool-search-at-scale: when on AND the enabled toolset exceeds
+    # `tool_search_threshold`, defer the long tail behind a `search_tools` meta
+    # tool instead of sending every schema each turn (keeps context small with
+    # many MCP tools). Core categories (fs, memory) stay always-loaded.
+    tool_search: bool = False
+    tool_search_threshold: int = 30
 
 
 @dataclass
