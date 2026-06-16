@@ -345,6 +345,18 @@ class AutoSettings:
     )
     mode: str = "ask"  # ask | accept_edits | plan | yolo
     rules: list[str] = field(default_factory=list)
+    # Always-deny rules, evaluated BEFORE everything (even yolo / allow rules) —
+    # an unconditional block an allow can't override. Same syntax as `rules`
+    # (the action is forced to deny), e.g. "shell rm -rf*" or "fs *.pem".
+    hard_deny: list[str] = field(default_factory=list)
+    # Paths that force a prompt even under accept_edits / trusted_dirs — writing
+    # code-executing or secret files should never be silently auto-approved.
+    # Matched (fnmatch) against the path and its basename. Edit to taste.
+    protected_paths: list[str] = field(default_factory=lambda: [
+        ".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
+        ".bashrc", ".zshrc", ".bash_profile", ".profile",
+        "*.pem", "id_rsa", "id_ed25519",
+    ])
     # Auto-approve fs/code tools whose path is under one of these dirs, and
     # web fetches to one of these hosts — without listing the whole category.
     trusted_dirs: list[str] = field(default_factory=list)

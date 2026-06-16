@@ -33,8 +33,12 @@ Every time the model requests a tool call, eVi resolves it to exactly one of
 (`decide()`), called by the agent before any tool runs. It evaluates layers in
 this order:
 
-1. **Mode** (`auto.mode`). Checked first and can short-circuit everything:
-   - `yolo` → **allow** every call, unconditionally.
+0. **Hard-deny** (`auto.hard_deny`). Evaluated **before everything — even
+   `yolo` and any `allow` rule.** A list of `[deny] <tool-glob> [arg-glob]`
+   strings; if one matches, the call is **denied**, full stop. Use for calls
+   that must never run regardless of mode (e.g. `hard_deny = ["shell rm -rf*"]`).
+1. **Mode** (`auto.mode`). Checked next and can short-circuit the rest:
+   - `yolo` → **allow** every call (but hard-deny above still blocks).
    - `plan` → **deny** every call (read-only planning; the model can think but
      not act).
    - `accept_edits` and `ask` fall through to the lower layers.
@@ -43,6 +47,13 @@ this order:
    against the tool name (`fnmatch`); the optional arg glob is matched against
    the call's string-valued arguments. The first rule that matches wins —
    **so an explicit `deny` here beats trusted dirs/domains below.**
+   - **Protected paths** (`auto.protected_paths`). Before any *implicit* allow
+     below, an `fs`/`code` write whose path matches a protected pattern
+     (fnmatch on the path or its basename) is forced to **ask** — so
+     `accept_edits` / auto-approve / trusted-dirs never silently write a
+     secret or code-executing file. Defaults cover `.env`, `.npmrc`,
+     `.gitconfig`, `.pypirc`, shell rc files, `*.pem`, SSH keys. An explicit
+     `allow` rule (step 2) still wins, honouring your intent.
 3. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
    tool's category is `fs` or `code`, the call is **allowed**.
 4. **Auto-approve categories** (`auto.auto_approve`). If the tool's category is

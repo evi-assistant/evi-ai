@@ -623,6 +623,8 @@ class Agent:
             args_json,
             getattr(auto, "trusted_dirs", []) or [],
             getattr(auto, "trusted_domains", []) or [],
+            getattr(auto, "hard_deny", []) or [],
+            getattr(auto, "protected_paths", []) or [],
         )
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
