@@ -38,6 +38,22 @@ def clear_read_cache() -> None:
     _READ_CACHE.clear()
 
 
+def _post_write(p: Path) -> str:
+    """Optional format-on-edit. Returns a note to append to the tool result
+    (empty when disabled / no formatter). Never raises."""
+    try:
+        from evi.config import Config
+
+        if not Config.load().tools.format_on_edit:
+            return ""
+        from evi import codeintel
+
+        ran, tool = codeintel.format_file(p)
+        return f" (formatted with {tool})" if ran else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 @tool(
     description=(
         "Read a UTF-8 text file from disk. For large files, paginate with "
@@ -158,7 +174,7 @@ def write_file(path: str, content: str) -> str:
     # Windows turning \n into \r\n and flipping a whole file to CRLF).
     p.write_text(content, encoding="utf-8", newline="")
     _READ_CACHE.pop(str(p.resolve()), None)
-    return f"wrote {len(content)} chars to {p}"
+    return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
 
 @tool(
@@ -205,7 +221,7 @@ def edit_file(
         pass
     p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
     _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
-    return f"edited {p}: {count if replace_all else 1} replacement(s)"
+    return f"edited {p}: {count if replace_all else 1} replacement(s){_post_write(p)}"
 
 
 _PATCH_RE = re.compile(
@@ -267,7 +283,7 @@ def apply_patch(path: str, patch: str) -> str:
         pass
     p.write_text(new_text, encoding="utf-8", newline="")
     _READ_CACHE.pop(str(p.resolve()), None)
-    return f"applied {len(blocks)} hunk(s) to {p}"
+    return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
 
 
 @tool(
