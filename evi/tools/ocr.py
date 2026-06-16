@@ -108,6 +108,13 @@ def _ocr_via_vlm(image: Path) -> str | None:
         raise RuntimeError(f"OCR VLM ({reg.model_id('ocr')}) failed: {exc}") from exc
 
 
+def _clip_ocr(text: str) -> str:
+    text = (text or "").strip()
+    if len(text) > _MAX_OUTPUT_BYTES:
+        text = text[:_MAX_OUTPUT_BYTES] + "\n…(truncated)"
+    return text or "(no text recognised)"
+
+
 @tool(
     description=(
         "Extract text from an image file. By default uses the configured OCR "
@@ -120,12 +127,12 @@ def _ocr_via_vlm(image: Path) -> str | None:
 )
 def ocr_image(path: str, language: str = "eng", engine: str = "auto") -> str:
     target = Path(path).expanduser()
-    if not target.is_file():
-        return f"ERROR: no such file: {target}"
     engine = (engine or "auto").strip().lower()
+    exists = target.is_file()
 
-    # VLM path (auto when an OCR model is configured, or forced via engine=vlm).
-    if engine in ("auto", "vlm"):
+    # VLM path — only on a real file; otherwise fall through so tesseract emits
+    # the canonical missing-file / install-hint errors (preserving precedence).
+    if engine in ("auto", "vlm") and exists:
         try:
             vlm = _ocr_via_vlm(target)
         except RuntimeError as exc:
@@ -133,21 +140,17 @@ def ocr_image(path: str, language: str = "eng", engine: str = "auto") -> str:
                 return f"ERROR: {exc}"
             vlm = None  # auto → fall through to tesseract
         if vlm is not None:
-            text = vlm.strip()
-            if len(text) > _MAX_OUTPUT_BYTES:
-                text = text[:_MAX_OUTPUT_BYTES] + "\n…(truncated)"
-            return text or "(no text recognised)"
+            return _clip_ocr(vlm)
         if engine == "vlm":
             return "ERROR: no OCR VLM configured — set [models] ocr (e.g. glm-ocr)"
+    if engine == "vlm" and not exists:
+        return f"ERROR: no such file: {target}"
 
     try:
         text = _run_tesseract(target, language)
     except RuntimeError as exc:
         return f"ERROR: {exc}"
-    text = text.strip()
-    if len(text) > _MAX_OUTPUT_BYTES:
-        text = text[:_MAX_OUTPUT_BYTES] + "\n…(truncated)"
-    return text or "(no text recognised)"
+    return _clip_ocr(text)
 
 
 @tool(
