@@ -179,6 +179,26 @@ def test_picker_get_returns_snapshot(client: TestClient) -> None:
     assert "alpha" in data["models"] and "beta" in data["models"]
     assert data["effort_levels"] == ["off", "low", "medium", "high", "max"]
     assert data["fast_mode"] is False
+    # Capability flags per model + for the active model (UI chips).
+    assert "capabilities" in data and "active_capabilities" in data
+    assert set(data["active_capabilities"]) >= {"vision", "reasoning", "infill", "audio"}
+
+
+def test_picker_capabilities_detect_per_model(client: TestClient, monkeypatch) -> None:
+    # A VLM + a coder among the models → vision/infill flags light up.
+    import evi.apps.web.server as server_mod
+
+    class _B:
+        name = "fake"; base_url = "http://x"
+        def list_models(self):
+            return [type("M", (), {"id": x})() for x in
+                    ("qwen2.5-vl:7b", "qwen2.5-coder:14b", "qwen2.5:7b")]
+
+    monkeypatch.setattr(server_mod, "get_backend", lambda *_a, **_k: _B())
+    caps = client.get("/api/model-picker").json()["capabilities"]
+    assert caps["qwen2.5-vl:7b"]["vision"] is True
+    assert caps["qwen2.5-coder:14b"]["infill"] is True
+    assert caps["qwen2.5:7b"]["vision"] is False
 
 
 def test_picker_get_includes_active_model_even_if_backend_missing(

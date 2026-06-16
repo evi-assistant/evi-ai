@@ -1234,6 +1234,8 @@ def create_app() -> FastAPI:
         active = cfg.llm.model
         if active and active not in models:
             models = [active, *models]
+        from evi.capabilities import capabilities as _caps
+
         return {
             "active": active,
             "fast_model": cfg.llm.fast_model,
@@ -1242,6 +1244,11 @@ def create_app() -> FastAPI:
             "effort_levels": ["off", "low", "medium", "high", "max"],
             "fast_mode": bool(cfg.llm.fast_mode),
             "backend": cfg.llm.backend,
+            "api": cfg.llm.api,  # "chat" | "responses" (cloud server-side tools)
+            # Per-model capability flags (vision/reasoning/infill/audio) +
+            # the active model's, so the UI can show capability chips.
+            "capabilities": {m: _caps(m) for m in models},
+            "active_capabilities": _caps(active),
         }
 
     @app.post("/api/model-picker")
