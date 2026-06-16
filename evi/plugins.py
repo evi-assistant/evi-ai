@@ -345,6 +345,31 @@ def plugin_dirs(root: Path | None = None) -> list[Path]:
     ]
 
 
+def plugin_bin_dirs(root: Path | None = None) -> list[Path]:
+    """`bin/` directories of enabled plugins that exist (for PATH)."""
+    return [b for pd in plugin_dirs(root) if (b := pd / "bin").is_dir()]
+
+
+def activate_plugin_bins(root: Path | None = None) -> list[str]:
+    """Prepend enabled plugins' `bin/` dirs to PATH (idempotent). Returns the
+    dirs added this call. Lets a plugin ship executables its commands/skills
+    can invoke. Mirrors Claude Code adding plugin `bin/` to PATH."""
+    import os
+
+    added: list[str] = []
+    sep = os.pathsep
+    current = os.environ.get("PATH", "")
+    entries = current.split(sep) if current else []
+    for b in plugin_bin_dirs(root):
+        s = str(b)
+        if s not in entries:
+            entries.insert(0, s)
+            added.append(s)
+    if added:
+        os.environ["PATH"] = sep.join(entries)
+    return added
+
+
 def list_plugins(root: Path | None = None) -> list[Plugin]:
     d = _plugins_dir(root)
     out: list[Plugin] = []

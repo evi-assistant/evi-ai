@@ -226,6 +226,27 @@ def test_install_from_zip(tmp_path):
     assert cs.get("zipme:status") is not None
 
 
+def test_plugin_bin_dirs_and_activate(tmp_path, monkeypatch):
+    import os
+
+    src = tmp_path / "src"
+    _make_plugin(src, name="withbin")
+    (src / "bin").mkdir()
+    (src / "bin" / "tool.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    root = tmp_path / "home"
+    plugins.install(str(src), root=root)
+
+    bins = plugins.plugin_bin_dirs(root=root)
+    assert len(bins) == 1 and bins[0].name == "bin"
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+    added = plugins.activate_plugin_bins(root=root)
+    assert added == [str(root / "plugins" / "withbin" / "bin")]
+    assert os.environ["PATH"].startswith(added[0])
+    # idempotent — second call adds nothing
+    assert plugins.activate_plugin_bins(root=root) == []
+
+
 def test_install_bad_zip_errors(tmp_path):
     bad = tmp_path / "broken.zip"
     bad.write_text("not actually a zip", encoding="utf-8")

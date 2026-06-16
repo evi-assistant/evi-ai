@@ -267,6 +267,11 @@ def _build_agent(
     if not safe:
         _ensure_mcp(config)  # registers MCP tools before build_agent reads REGISTRY
         _maybe_cleanup_transcripts(config)  # transcript retention (once per process)
+        try:
+            from evi import plugins as _plugins
+            _plugins.activate_plugin_bins()  # plugin bin/ dirs onto PATH
+        except Exception:  # noqa: BLE001 — plugin PATH wiring must never block startup
+            pass
     toggles = asdict(config.tools)
     agent = build_agent(
         config=config,
