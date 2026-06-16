@@ -324,6 +324,7 @@ class ToolToggles:
     federation: bool = False # delegate_peer — call a trusted peer eVi (network)
     ocr: bool = False        # tesseract OCR — needs the binary installed
     calendar: bool = False   # iCal / CalDAV calendar reading
+    ask: bool = True         # ask_user — clarifying questions (no-op when non-interactive)
     # When true, run_python executes under an OS sandbox (read-only FS except a
     # temp workdir, no network) where one is available (bwrap / sandbox-exec).
     # Falls back to unsandboxed if no sandboxer is present. See evi/sandbox.py.
