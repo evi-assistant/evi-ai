@@ -158,6 +158,77 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+_STARTER_COMMAND = """\
+---
+description: Example slash command from the {name} plugin
+---
+
+This is a starter command. Replace this body with the prompt you want
+`/{name}:hello` to run. Anything the user types after the command name is
+appended as `$ARGUMENTS`.
+"""
+
+_STARTER_SKILL = """\
+---
+name: {name}-example
+description: Example skill from the {name} plugin — replace this description so the picker knows when to use it
+---
+
+# {name} example skill
+
+Replace this with the skill's instructions. The frontmatter `description`
+above is what the skill picker matches against, so make it specific.
+"""
+
+
+def init_plugin(
+    name: str,
+    dest_dir: Path | None = None,
+    *,
+    description: str = "",
+    root: Path | None = None,
+    install_now: bool = False,
+) -> Path:
+    """Scaffold a new plugin skeleton and return its directory.
+
+    By default the skeleton is written to ``<dest_dir>/<slug>`` (``dest_dir``
+    defaults to the current directory) so it can be developed and then
+    ``evi plugin add``-ed. Pass ``install_now=True`` to scaffold straight into
+    the installed-plugins dir (``~/.evi/plugins/<slug>``) so it's live at once.
+
+    Creates ``plugin.toml`` plus a starter ``commands/hello.md`` and
+    ``skills/<slug>-example/SKILL.md`` so the plugin works immediately.
+    """
+    slug = _slug(name)
+    if not _NAME_RE.match(slug):
+        raise PluginError(f"invalid plugin name {slug!r}")
+
+    if install_now:
+        dest = _plugins_dir(root) / slug
+    else:
+        base = Path(dest_dir).expanduser() if dest_dir is not None else Path.cwd()
+        dest = base / slug
+    if (dest / "plugin.toml").exists():
+        raise PluginError(f"plugin already exists at {dest}")
+
+    (dest / "commands").mkdir(parents=True, exist_ok=True)
+    (dest / "skills" / f"{slug}-example").mkdir(parents=True, exist_ok=True)
+    (dest / "plugin.toml").write_text(
+        f'name = "{slug}"\n'
+        f'description = "{description}"\n'
+        'version = "0.1.0"\n'
+        '# default_enabled = false   # uncomment to ship installed-but-off\n',
+        encoding="utf-8",
+    )
+    (dest / "commands" / "hello.md").write_text(
+        _STARTER_COMMAND.format(name=slug), encoding="utf-8"
+    )
+    (dest / "skills" / f"{slug}-example" / "SKILL.md").write_text(
+        _STARTER_SKILL.format(name=slug), encoding="utf-8"
+    )
+    return dest
+
+
 def _state_path(root: Path | None = None) -> Path:
     return _plugins_dir(root) / ".state.json"
 
