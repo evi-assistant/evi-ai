@@ -84,22 +84,28 @@ class SkillStore:
 
     def list(self) -> list[SkillEntry]:
         entries: list[SkillEntry] = []
+        seen: set[str] = set()
         for prefix, root in self._scan_roots():
-            for sub in sorted(p for p in root.iterdir() if p.is_dir()):
-                skill_file = sub / "SKILL.md"
+            # Recursive: any directory holding a SKILL.md is a skill, so skills
+            # can be organised in subfolders (`skills/web/auth/SKILL.md`), not
+            # just immediate children. The invocation name still comes from the
+            # frontmatter `name` (else the skill dir's own name).
+            for skill_file in sorted(root.rglob("SKILL.md")):
                 if not skill_file.is_file():
                     continue
                 try:
                     meta, _ = _split_frontmatter(skill_file.read_text(encoding="utf-8"))
                 except OSError:
                     continue
-                local = (meta.get("name") or sub.name).strip()
+                local = (meta.get("name") or skill_file.parent.name).strip()
                 if not _NAME_RE.match(local):
                     continue
+                name = prefix + local
+                if name in seen:  # first match wins (deterministic via sort)
+                    continue
+                seen.add(name)
                 desc = (meta.get("description") or "").strip() or "(no description)"
-                entries.append(
-                    SkillEntry(name=prefix + local, description=desc, path=skill_file)
-                )
+                entries.append(SkillEntry(name=name, description=desc, path=skill_file))
         return entries
 
     def read(self, name: str) -> str:

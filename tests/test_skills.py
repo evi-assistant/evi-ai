@@ -65,6 +65,20 @@ def test_list_returns_entries(store: SkillStore, tmp_path: Path) -> None:
     assert by_name["code-review"] == "Review code for bugs."
 
 
+def test_list_finds_nested_skills(store: SkillStore, tmp_path: Path) -> None:
+    # A skill organised in a subfolder is discovered too (recursive scan).
+    nested = tmp_path / "web" / "auth"
+    nested.mkdir(parents=True)
+    (nested / "SKILL.md").write_text(
+        "---\nname: auth-helper\ndescription: OAuth helper\n---\nbody", encoding="utf-8"
+    )
+    _make_skill(tmp_path, "top", "top-level one", "nested body here")
+    entries = {e.name: e.description for e in store.list()}
+    assert set(entries) == {"auth-helper", "top"}
+    assert entries["auth-helper"] == "OAuth helper"
+    assert store.read("auth-helper") == "body"
+
+
 def test_list_skips_dirs_without_skill_md(store: SkillStore, tmp_path: Path) -> None:
     (tmp_path / "empty").mkdir()
     _make_skill(tmp_path, "real", "real one", "body")
