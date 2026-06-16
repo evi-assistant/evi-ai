@@ -13,6 +13,8 @@ from evi.review import (
     ReviewError,
     _MAX_DIFF_BYTES,
     get_diff,
+    parse_verdict,
+    review_exit_code,
     review_prompt,
     truncate_diff,
 )
@@ -29,6 +31,35 @@ def _have_git() -> bool:
 
 
 needs_git = pytest.mark.skipif(not _have_git(), reason="git not installed")
+
+
+# ----- verdict parsing / exit codes -----------------------------------------
+
+
+def test_parse_verdict_picks_keyword() -> None:
+    assert parse_verdict("looks good.\n\nVerdict: APPROVE") == "APPROVE"
+    assert parse_verdict("issues found\nREQUEST_CHANGES") == "REQUEST_CHANGES"
+    assert parse_verdict("let's talk\nNEEDS_DISCUSSION") == "NEEDS_DISCUSSION"
+    assert parse_verdict("no verdict line here") == ""
+
+
+def test_parse_verdict_rightmost_wins() -> None:
+    # An early mention of one keyword, then the real final verdict.
+    text = "I considered REQUEST_CHANGES but ultimately APPROVE"
+    assert parse_verdict(text) == "APPROVE"
+
+
+def test_review_exit_code_from_verdict() -> None:
+    assert review_exit_code("all good\nAPPROVE") == 0
+    assert review_exit_code("nope\nREQUEST_CHANGES") == 1
+    assert review_exit_code("hmm\nNEEDS_DISCUSSION") == 1
+
+
+def test_review_exit_code_falls_back_to_file_line_issues() -> None:
+    # No verdict line (multi-lens style): concrete issues -> gate fails.
+    assert review_exit_code("## Correctness\n- foo.py:42 off-by-one") == 1
+    # No verdict and no concrete issues -> pass.
+    assert review_exit_code("Everything looks clean, no issues.") == 0
 
 
 # ----- truncate_diff ---------------------------------------------------------
