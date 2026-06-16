@@ -184,6 +184,34 @@ def drain_team(store, run_one, *, max_workers: int = 3, poll: float = 0.02) -> l
     return store.load()
 
 
+def make_distributed_runner(local_run_one, peers, *, mode: str = ""):
+    """Wrap a local ``run_one`` so teammates round-robin claimed tasks across the
+    local backend AND federation peers — real cross-machine parallelism (local
+    teammates serialize on one GPU; each peer is separate hardware). ``peers`` is
+    a list of :class:`evi.federation.Peer`. A peer error mid-run falls back to
+    running that task locally, so an unreachable peer never fails a task."""
+    import itertools
+
+    targets = ["local"] + list(peers)
+    cyc = itertools.cycle(targets)
+    lock = threading.Lock()
+
+    def run_one(task) -> str:
+        with lock:
+            tgt = next(cyc)
+        if tgt == "local":
+            return local_run_one(task)
+        from evi import federation
+
+        try:
+            out = federation.delegate(tgt, task.subject, mode=mode)
+            return f"[peer:{tgt.name}] {out}"
+        except Exception:  # noqa: BLE001 — peer down mid-run -> do it locally
+            return local_run_one(task)
+
+    return run_one
+
+
 def plan_schema() -> dict:
     """JSON schema for a lead's decomposition — a list of {subject, blocked_by}."""
     return {

@@ -111,6 +111,15 @@ A task whose dependency **fails** is reported (its dependents stay pending rathe
 than hanging the run). The core is model-free — `TeamStore` + `drain_team(store,
 run_one)` (injected runner, like ultracode) — and re-exported from `evi.sdk`.
 
+**Distributed teammates (`evi team run --peers`).** Local teammates all share one
+backend, so they serialise on a single GPU. With `--peers` (alias `--distribute`)
+the team round-robins claimed tasks across the local backend **and reachable
+[federation peers](#federation)** — each peer is separate hardware, so this is
+where team parallelism becomes real wall-clock speedup (e.g. your main box + a
+P40 box draining one task list together). A peer that goes unreachable mid-run
+falls back to running its task locally, so it never stalls the team. Peers must be
+running `evi web --host 0.0.0.0` and listed via `evi peer add`.
+
 ### Workflows
 
 A workflow (`evi/workflows.py`) orchestrates **independent** steps, where a

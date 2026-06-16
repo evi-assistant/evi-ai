@@ -124,3 +124,45 @@ def test_clear(tmp_path):
     s.add("x")
     s.clear()
     assert s.load() == []
+
+
+# ---- peers-as-teammates (distributed runner) -------------------------------
+
+
+class _Task:
+    def __init__(self, subject):
+        self.subject = subject
+
+
+def test_distributed_runner_round_robins_local_and_peers(monkeypatch):
+    from evi import federation
+
+    p1 = federation.Peer(name="gpu1", url="http://gpu1:8473", token="")
+    p2 = federation.Peer(name="gpu2", url="http://gpu2:8473", token="")
+    monkeypatch.setattr(federation, "delegate",
+                        lambda peer, task, **kw: f"done-by-{peer.name}")
+
+    run_one = teams.make_distributed_runner(lambda t: "done-by-local", [p1, p2])
+    out = [run_one(_Task(f"t{i}")) for i in range(6)]
+    # cycle is local, gpu1, gpu2, local, gpu1, gpu2
+    assert out[0] == "done-by-local"
+    assert out[1] == "[peer:gpu1] done-by-gpu1"
+    assert out[2] == "[peer:gpu2] done-by-gpu2"
+    assert out[3] == "done-by-local"
+    # work landed on every target
+    assert any("gpu1" in o for o in out) and any("gpu2" in o for o in out)
+
+
+def test_distributed_runner_falls_back_to_local_on_peer_error(monkeypatch):
+    from evi import federation
+
+    p1 = federation.Peer(name="flaky", url="http://flaky:8473", token="")
+
+    def boom(peer, task, **kw):
+        raise federation.FederationError("unreachable")
+
+    monkeypatch.setattr(federation, "delegate", boom)
+    run_one = teams.make_distributed_runner(lambda t: "LOCAL", [p1])
+    # first call -> local; second -> peer (errors) -> local fallback
+    assert run_one(_Task("a")) == "LOCAL"
+    assert run_one(_Task("b")) == "LOCAL"  # peer failed, ran locally
