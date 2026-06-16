@@ -1190,16 +1190,50 @@ class Agent:
                 # Opt-in Responses API path (default "chat" keeps every local
                 # backend working). Env override wins for quick experiments.
                 import os as _os
-                if (_os.environ.get("EVI_LLM_API") or self.config.llm.api) == "responses":
-                    from evi.llm.responses import stream_chat_via_responses
-                    stream = stream_chat_via_responses(
-                        self.client,
-                        builtin_tools=self.config.llm.responses_tools,
-                        **create_kwargs,
+                use_responses = (
+                    _os.environ.get("EVI_LLM_API") or self.config.llm.api
+                ) == "responses"
+
+                def _open(model_id: str):
+                    create_kwargs["model"] = model_id
+                    if use_responses:
+                        from evi.llm.responses import stream_chat_via_responses
+                        return stream_chat_via_responses(
+                            self.client,
+                            builtin_tools=self.config.llm.responses_tools,
+                            **create_kwargs,
+                        )
+                    return self.client.chat.completions.create(**create_kwargs)
+
+                # Model fallback chain: try the primary, then each configured
+                # fallback on a setup-time failure (timeout / 5xx / model not
+                # loaded). Mirrors Claude Code's fallbackModel. Mid-stream
+                # failures aren't retried — output may already be partway out.
+                candidates = [create_kwargs["model"]]
+                for fb in self.config.llm.fallback_models:
+                    if fb and fb not in candidates:
+                        candidates.append(fb)
+                stream = None
+                last_err: Exception | None = None
+                for ci, cand in enumerate(candidates):
+                    try:
+                        stream = _open(cand)
+                    except Exception as e:  # network / model not loaded / etc.
+                        last_err = e
+                        dlog("llm.error",
+                             {"type": type(e).__name__, "msg": str(e), "model": cand})
+                        continue
+                    if ci > 0:  # we fell back — tell the UI which model won
+                        yield RouteInfo(model=cand, route="fallback")
+                        dlog("llm.fallback", {"to": cand})
+                    break
+                if stream is None:
+                    yield Error(
+                        f"LLM request failed: "
+                        f"{type(last_err).__name__}: {last_err}"
                     )
-                else:
-                    stream = self.client.chat.completions.create(**create_kwargs)
-            except Exception as e:  # network / model not loaded / etc.
+                    return
+            except Exception as e:  # kwargs building / unexpected
                 dlog("llm.error", {"type": type(e).__name__, "msg": str(e)})
                 yield Error(f"LLM request failed: {type(e).__name__}: {e}")
                 return
