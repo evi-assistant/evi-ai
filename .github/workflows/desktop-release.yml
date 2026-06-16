@@ -43,7 +43,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # Windows-only for now: it's the only OS verified end-to-end, and it
+        # keeps runner spend down (macOS bills ~10x). Re-add macos-latest /
+        # ubuntu-latest here to cut a full cross-platform desktop release.
+        os: [windows-latest]
 
     steps:
       - uses: actions/checkout@v4
