@@ -381,6 +381,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/notools <prompt>", "answer the next turn without using any tools"),
         ("/forcetool <name> <prompt>", "force the model to call a specific tool"),
         ("/reload", "re-read config.toml without restarting"),
+        ("/reload-skills", "rescan skills dirs and refresh the skill index"),
         ("/audio <path>", "transcribe an audio file and send as the next turn"),
         ("/audioraw <path> [prompt]", "attach raw audio (omni models) / auto-transcribe otherwise"),
         ("/speak [on|off]", "auto-speak assistant replies sentence-by-sentence"),
@@ -781,6 +782,26 @@ def _handle_reload(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRes
     return "continue"
 
 
+def _handle_reload_skills(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/reload-skills` — rescan the skills dirs and re-compose the prompt.
+
+    The SkillStore rescans on every read, so re-composing the system prompt is
+    enough to surface skills added/edited mid-session. Mirrors Claude Code's
+    /reload-skills."""
+    if agent.skills is None:
+        console.print("[yellow]skills are disabled[/yellow] (tools.skills = false)")
+        return "continue"
+    # Re-compose the system prompt so the freshly-scanned skill index lands.
+    if agent.history:
+        agent.history[0] = {"role": "system", "content": agent._compose_system_prompt()}
+    names = [e.name for e in agent.skills.list()]
+    if names:
+        console.print(f"[green]reloaded {len(names)} skill(s):[/green] {', '.join(names)}")
+    else:
+        console.print("[dim]no skills found[/dim] (~/.evi/skills/ + plugins)")
+    return "continue"
+
+
 def _handle_image(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
     """`/image <path> [your prompt]` — attach an image to the next turn."""
     from pathlib import Path as _Path
@@ -949,6 +970,8 @@ _BUILTINS: dict[str, callable] = {
     "notools": _handle_notools,
     "forcetool": _handle_forcetool,
     "reload": _handle_reload,
+    "reload-skills": _handle_reload_skills,
+    "reloadskills": _handle_reload_skills,
     "audio": _handle_audio,
     "audioraw": _handle_audioraw,
     "speak": _handle_speak,
@@ -3543,10 +3566,12 @@ app.add_typer(plugin_app, name="plugin")
 
 @plugin_app.command("add")
 def plugin_add(
-    source: str = typer.Argument(..., help="Local directory or git URL."),
+    source: str = typer.Argument(
+        ..., help="Local directory, git URL, or .zip (local file or http(s) URL)."
+    ),
     name: str = typer.Option("", "--name", help="Override the plugin name."),
 ) -> None:
-    """Install a plugin from a local directory or a git URL."""
+    """Install a plugin from a local directory, a git URL, or a .zip."""
     from evi import plugins
 
     try:
