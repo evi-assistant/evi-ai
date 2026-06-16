@@ -317,6 +317,31 @@ class WebSession:
     busy: bool = False  # a turn is mid-flight — surfaced by the dispatch live-watch
 
 
+# ---- federation activity (inbound peer requests) -------------------------
+# Module-level so it survives across requests. federate() records each delegated
+# task here; the dispatch snapshot exposes `active` + recent items so the UI can
+# show a "processing a peer request" indicator on the RECEIVER.
+from collections import deque as _deque  # noqa: E402
+
+_FED_ACTIVITY: "_deque[dict[str, Any]]" = _deque(maxlen=20)
+_FED_ACTIVE = {"n": 0}
+
+
+def _fed_begin(source: str, task: str) -> dict[str, Any]:
+    import time
+
+    entry = {"source": source or "peer", "task": task[:100],
+             "ts": time.time(), "status": "running"}
+    _FED_ACTIVITY.appendleft(entry)
+    _FED_ACTIVE["n"] += 1
+    return entry
+
+
+def _fed_end(entry: dict[str, Any], status: str) -> None:
+    entry["status"] = status
+    _FED_ACTIVE["n"] = max(0, _FED_ACTIVE["n"] - 1)
+
+
 # ---- event serialization -------------------------------------------------
 
 
@@ -1071,7 +1096,16 @@ def create_app() -> FastAPI:
             }
             for w in _wf.list_workflows()
         ]
-        return {"sessions": sess_list, "workflows": wfs}
+        return {
+            "sessions": sess_list,
+            "workflows": wfs,
+            # Inbound federation (peer→this node) so the receiver UI can show a
+            # "processing a peer request" indicator.
+            "federation": {
+                "active": _FED_ACTIVE["n"],
+                "recent": list(_FED_ACTIVITY)[:8],
+            },
+        }
 
     @app.get("/api/dispatch")
     def dispatch_snapshot() -> dict[str, Any]:
@@ -1176,7 +1210,14 @@ def create_app() -> FastAPI:
         # Non-interactive: deny tools not already in the auto-approve list.
         agent.permission_callback = lambda *a, **k: False
         agent.permission_batch_callback = None
-        res = run_headless(agent, task)
+        # Record inbound peer activity so the receiver UI can show an indicator.
+        entry = _fed_begin(str(req.get("source") or "peer"), task)
+        try:
+            res = run_headless(agent, task)
+        except Exception:
+            _fed_end(entry, "error")
+            raise
+        _fed_end(entry, "error" if res.error else "ok")
         return {"text": res.text, "error": res.error}
 
     @app.get("/api/model-picker")

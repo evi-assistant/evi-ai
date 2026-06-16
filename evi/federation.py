@@ -77,7 +77,7 @@ def get_peer(name: str, peers: list[Peer] | None = None) -> Peer | None:
 def delegate(peer: Peer, task: str, *, mode: str = "", timeout: float = 180.0) -> str:
     """Run `task` on `peer` and return its answer text. Raises FederationError
     on transport/HTTP failure; a peer-side error comes back as 'ERROR: …'."""
-    body = json.dumps({"task": task, "mode": mode}).encode("utf-8")
+    body = json.dumps({"task": task, "mode": mode, "source": socket.gethostname()}).encode("utf-8")
     headers = {"Content-Type": "application/json", "User-Agent": "evi-federation"}
     if peer.token:
         headers["Authorization"] = f"Bearer {peer.token}"
