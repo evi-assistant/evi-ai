@@ -1408,6 +1408,36 @@ def init(
 
 
 @app.command()
+def complete(
+    file: str = typer.Option(..., "--file", "-f", help="File to complete in."),
+    line: int = typer.Option(..., "--line", "-l", help="1-based cursor line."),
+    col: int = typer.Option(1, "--col", "-c", help="1-based cursor column."),
+    model: str = typer.Option("", "--model", help="Override the completion (FIM) model."),
+    max_tokens: int = typer.Option(128, "--max-tokens", help="Max tokens to generate."),
+) -> None:
+    """Fill-in-the-middle code completion at a cursor position.
+
+    eVi as a fully-local Tab/Copilot backend: prints the model's insertion for
+    the cursor at (line, col). Pair with an editor extension that POSTs to
+    /api/complete for inline ghost-text.
+    """
+    from pathlib import Path as _Path
+
+    from evi import complete as _complete
+
+    p = _Path(file).expanduser()
+    if not p.is_file():
+        console.print(f"[red]not a file:[/red] {p}")
+        raise typer.Exit(1)
+    try:
+        out = _complete.complete_at(p, line, col, model=model, max_tokens=max_tokens)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]completion failed:[/red] {exc}")
+        raise typer.Exit(1)
+    print(out, end="")
+
+
+@app.command()
 def doctor(
     strict: bool = typer.Option(
         False, "--strict", help="Exit non-zero if any check fails.",
