@@ -208,6 +208,68 @@ def edit_file(
     return f"edited {p}: {count if replace_all else 1} replacement(s)"
 
 
+_PATCH_RE = re.compile(
+    r"<{3,}\s*SEARCH[^\n]*\n(.*?)\n?={3,}[^\n]*\n(.*?)\n?>{3,}\s*REPLACE",
+    re.DOTALL,
+)
+
+
+def _parse_patch(patch: str) -> list[tuple[str, str]]:
+    """Parse SEARCH/REPLACE blocks into (old, new) pairs."""
+    return [(m.group(1), m.group(2)) for m in _PATCH_RE.finditer(patch or "")]
+
+
+@tool(
+    description=(
+        "Apply several edits to ONE file in a single call. `patch` holds one or "
+        "more search/replace blocks in this exact format:\n"
+        "<<<<<<< SEARCH\n<existing text>\n=======\n<replacement>\n>>>>>>> REPLACE\n"
+        "Each SEARCH must match the current file exactly and uniquely; blocks "
+        "apply in order. Cheaper/safer than rewriting the whole file for "
+        "multi-spot changes. Use edit_file for a single replacement."
+    ),
+    category="fs",
+)
+def apply_patch(path: str, patch: str) -> str:
+    p = workdir.resolve(path)
+    if not p.is_file():
+        return f"ERROR: not a file: {p}"
+    blocks = _parse_patch(patch)
+    if not blocks:
+        return (
+            "ERROR: no SEARCH/REPLACE blocks found — use\n"
+            "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"
+        )
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR: cannot read {p}: {exc}"
+    new_text = text
+    for i, (old, new) in enumerate(blocks, 1):
+        if old == "":
+            return f"ERROR: block {i} has an empty SEARCH section"
+        n = new_text.count(old)
+        if n == 0:
+            return f"ERROR: block {i} SEARCH not found in {p}"
+        if n > 1:
+            return (
+                f"ERROR: block {i} SEARCH matches {n} times in {p} — "
+                "add surrounding context to make it unique"
+            )
+        new_text = new_text.replace(old, new, 1)
+    if new_text == text:
+        return "ERROR: patch made no changes"
+    try:
+        from evi.checkpoints import record_before_write
+
+        record_before_write(p)
+    except Exception:  # noqa: BLE001
+        pass
+    p.write_text(new_text, encoding="utf-8", newline="")
+    _READ_CACHE.pop(str(p.resolve()), None)
+    return f"applied {len(blocks)} hunk(s) to {p}"
+
+
 @tool(
     description="List entries in a directory. Returns one path per line.",
     category="fs",
