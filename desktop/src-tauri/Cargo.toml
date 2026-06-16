@@ -1,6 +1,6 @@
 [package]
 name = "evi-desktop"
-version = "0.2.17"
+version = "0.2.18"
 description = "eVi — desktop shell"
 authors = ["eVi"]
 edition = "2021"
