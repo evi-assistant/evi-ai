@@ -4075,8 +4075,13 @@ def models_info(model_id: str) -> None:
 
 
 @models_app.command("use")
-def models_use(model_id: str) -> None:
-    """Set `[llm] model` to this id and save config.toml."""
+def models_use(
+    model_id: str,
+    fast: bool = typer.Option(
+        False, "--fast", help="Set the fast/downshift model (llm.fast_model) instead of the main model."
+    ),
+) -> None:
+    """Set `[llm] model` (or `--fast` → `[llm] fast_model`) to this id and save."""
     cfg = Config.load()
     backend = get_backend(cfg.llm)
     if backend.model_info(model_id) is None and not typer.confirm(
@@ -4084,6 +4089,14 @@ def models_use(model_id: str) -> None:
         default=False,
     ):
         raise typer.Exit(1)
+    if fast:
+        cfg.llm.fast_model = model_id
+        cfg.save()
+        console.print(
+            f"[green]fast model →[/green] {model_id} "
+            f"[dim](used by /fast and ultracode downshift)[/dim]"
+        )
+        return
     cfg.llm.model = model_id
     cfg.save()
     console.print(f"[green]using[/green] {model_id}")
@@ -4243,6 +4256,12 @@ def models_recommend() -> None:
         )
         if c.notes:
             console.print(f"        [dim]{c.notes}[/dim]")
+    if rec.fast is not None:
+        f = rec.fast
+        console.print(
+            f"[bold]Fast:[/bold]  [green]{f.id}[/green] "
+            f"[dim]({f.parameters}, {f.quantization}) — for /fast swaps + ultracode downshift[/dim]"
+        )
 
     cfg = Config.load()
     if cfg.llm.backend == "ollama" and rec.chat is not None:
@@ -4253,6 +4272,11 @@ def models_recommend() -> None:
     console.print(
         f"\n[dim]Apply with:[/dim] [bold]evi models use {rec.chat.id if rec.chat else '<id>'}[/bold]"
     )
+    if rec.fast is not None:
+        console.print(
+            f"[dim]Set the fast/downshift model:[/dim] "
+            f"[bold]evi models use {rec.fast.id} --fast[/bold]"
+        )
 
 
 @models_app.command("backend")

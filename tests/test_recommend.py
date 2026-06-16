@@ -91,6 +91,29 @@ def test_recommend_5070ti_picks_14b_chat() -> None:
     assert "14b" in rec.chat.id.lower()
 
 
+def test_recommend_includes_fast_companion() -> None:
+    # 16 GB → a small fast/downshift companion is recommended (largest fast_ok
+    # that fits; 3B-class here, not the 14B chat model)
+    rec = recommend(_hw(vram=16380, name="RTX 5070 Ti", cc="12.0"))
+    assert rec.fast is not None and rec.fast.fast_ok
+    assert "3b" in rec.fast.id.lower()
+    assert rec.fast.id != rec.chat.id
+
+
+def test_recommend_fast_on_cpu_box() -> None:
+    rec = recommend(_hw(vram=0, ram_gb=16))  # no GPU → cpu branch
+    assert rec.mode == "cpu" and rec.fast is not None and rec.fast.fast_ok
+
+
+def test_pick_fast_boundaries() -> None:
+    from evi.recommend import _pick_fast
+
+    # tiny VRAM still yields a sub-1B floor; big VRAM yields the 3B companion
+    assert _pick_fast(vram_mb=800) is not None
+    assert "3b" in _pick_fast(vram_mb=16000).id.lower()
+    assert _pick_fast(vram_mb=300) is None  # below even the 0.5B floor
+
+
 def test_recommend_modern_gpu_not_flagged_pre_pascal() -> None:
     # Regression: the compute-capability check used a STRING comparison, so a
     # modern GPU ("12.0") was wrongly flagged pre-Pascal because "12.0" < "6.0".
