@@ -125,3 +125,59 @@ def test_parallel_research_caps_and_validates(monkeypatch) -> None:
     assert out.count("### ") == 6  # capped at _MAX_PARALLEL
     empty = REGISTRY["parallel_research"].call(json.dumps({"tasks": []}))
     assert empty.startswith("ERROR:")
+
+
+# ---- user subagent profiles (evi agents new) -------------------------------
+
+
+def test_add_and_load_user_profile(tmp_path) -> None:
+    f = tmp_path / "agents.toml"
+    subagent_mod.add_user_profile(
+        "security", "You are a security reviewer.", ("fs", "code"), path=f
+    )
+    loaded = subagent_mod.load_user_profiles(f)
+    assert loaded == {
+        "security": {
+            "system_prompt": "You are a security reviewer.",
+            "tool_categories": ("fs", "code"),
+        }
+    }
+
+
+def test_add_user_profile_rejects_builtin_name(tmp_path) -> None:
+    with pytest.raises(ValueError, match="built-in"):
+        subagent_mod.add_user_profile("explore", "x", path=tmp_path / "a.toml")
+
+
+def test_add_user_profile_rejects_bad_name(tmp_path) -> None:
+    with pytest.raises(ValueError, match="no spaces"):
+        subagent_mod.add_user_profile("two words", "x", path=tmp_path / "a.toml")
+
+
+def test_add_user_profile_dup_needs_force(tmp_path) -> None:
+    f = tmp_path / "agents.toml"
+    subagent_mod.add_user_profile("rev", "first", path=f)
+    with pytest.raises(ValueError, match="already exists"):
+        subagent_mod.add_user_profile("rev", "second", path=f)
+    # --force overwrites and keeps the file parseable
+    subagent_mod.add_user_profile("rev", "second", path=f, overwrite=True)
+    assert subagent_mod.load_user_profiles(f)["rev"]["system_prompt"] == "second"
+
+
+def test_add_user_profile_escapes_quotes(tmp_path) -> None:
+    f = tmp_path / "agents.toml"
+    subagent_mod.add_user_profile("q", 'say "hi"\nline2', path=f)
+    assert subagent_mod.load_user_profiles(f)["q"]["system_prompt"] == 'say "hi"\nline2'
+
+
+def test_all_profiles_merges_user(monkeypatch, tmp_path) -> None:
+    f = tmp_path / "agents.toml"
+    subagent_mod.add_user_profile("mine", "custom", ("fs",), path=f)
+    monkeypatch.setattr(subagent_mod, "_user_profiles_path", lambda: f)
+    profs = subagent_mod.all_profiles()
+    assert "explore" in profs and "mine" in profs  # built-in + user
+    # built-ins still win over a same-named user entry
+    subagent_mod.add_user_profile("explore2", "x", path=f)
+    assert subagent_mod.get_profile("mine") == {
+        "system_prompt": "custom", "tool_categories": ("fs",)
+    }

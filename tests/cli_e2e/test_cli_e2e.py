@@ -78,6 +78,19 @@ def test_agents_list(evi_cli):
     assert evi_cli("agents").code == 0
 
 
+def test_agents_new_then_list(evi_cli):
+    created = evi_cli(
+        "agents", "new", "reviewer",
+        "--prompt", "You review code for bugs.", "--tools", "fs,code",
+    )
+    assert created.code == 0 and "reviewer" in created.out
+    listed = evi_cli("agents", "list")
+    assert listed.code == 0 and "reviewer" in listed.out and "user" in listed.out
+    # duplicate without --force fails
+    dup = evi_cli("agents", "new", "reviewer", "--prompt", "x", check=False)
+    assert dup.code != 0
+
+
 def test_tools_list(evi_cli):
     assert evi_cli("tools").code == 0
 

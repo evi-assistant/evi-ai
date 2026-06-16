@@ -32,6 +32,7 @@ SCHEDULED_DIR = HOME / "scheduled"
 SCHEDULED_LOG_DIR = LOG_DIR / "scheduled"
 HOOKS_CONFIG_PATH = HOME / "hooks.toml"
 KEYBINDINGS_PATH = HOME / "keybindings.toml"
+AGENTS_CONFIG_PATH = HOME / "agents.toml"  # user-defined subagent profiles
 MARKETPLACE_PATH = HOME / "marketplace.json"
 PEERS_PATH = HOME / "peers.json"
 USERS_PATH = HOME / "users.json"
