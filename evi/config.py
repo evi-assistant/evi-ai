@@ -325,6 +325,7 @@ class ToolToggles:
     ocr: bool = False        # tesseract OCR — needs the binary installed
     calendar: bool = False   # iCal / CalDAV calendar reading
     ask: bool = True         # ask_user — clarifying questions (no-op when non-interactive)
+    vision: bool = True      # describe_image — caption/inspect images via a VLM specialty
     # When true, run_python executes under an OS sandbox (read-only FS except a
     # temp workdir, no network) where one is available (bwrap / sandbox-exec).
     # Falls back to unsandboxed if no sandboxer is present. See evi/sandbox.py.
@@ -389,6 +390,35 @@ class AutoSettings:
 
 
 @dataclass
+class SpecialtyModels:
+    """Per-task SLM (small specialty models), distinct from the main
+    instruct/coder model — so a small dedicated model can handle OCR / vision /
+    speech without swapping the chat model. Empty = today's behavior (main
+    model / tesseract / faster-whisper / [voice] engine).
+
+    ``ocr`` and ``vision`` are chat-VLM ids served over the OpenAI image schema
+    on eVi's backends (Ollama / LM Studio / llama.cpp / openai_compat). By
+    default they use the ``[llm]`` backend + base_url; set ``*_base_url`` (and
+    optionally ``*_backend``) to point a specialty at a SEPARATE local server
+    (e.g. a vLLM OCR endpoint, or a dedicated Ollama). ``stt`` is a
+    faster-whisper model id consumed by ``[voice]`` (e.g. ``large-v3-turbo``);
+    ``tts`` names an engine-specific voice/model where applicable.
+
+    Examples: ocr = "glm-ocr" (Ollama), vision = "moondream",
+    stt = "large-v3-turbo".
+    """
+
+    ocr: str = ""
+    ocr_base_url: str = ""
+    ocr_backend: str = ""
+    vision: str = ""
+    vision_base_url: str = ""
+    vision_backend: str = ""
+    stt: str = ""
+    tts: str = ""
+
+
+@dataclass
 class WorktreeSettings:
     """`evi worktree` defaults. `base_ref` is the branch/commit new worktrees
     fork from when `--base` isn't given (e.g. "main", so feature worktrees
@@ -415,6 +445,7 @@ class Config:
     federation: FederationSettings = field(default_factory=FederationSettings)
     ultracode: UltracodeSettings = field(default_factory=UltracodeSettings)
     worktree: WorktreeSettings = field(default_factory=WorktreeSettings)
+    models: SpecialtyModels = field(default_factory=SpecialtyModels)
 
     @classmethod
     def load(cls) -> "Config":
@@ -454,6 +485,7 @@ class Config:
             federation=FederationSettings(**data.get("federation", {})),
             ultracode=UltracodeSettings(**data.get("ultracode", {})),
             worktree=WorktreeSettings(**data.get("worktree", {})),
+            models=SpecialtyModels(**data.get("models", {})),
         )
 
     def save(self) -> None:
