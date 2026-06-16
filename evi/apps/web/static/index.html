@@ -2208,8 +2208,8 @@ initModes();
       { type:'select', section:'llm', key:'reasoning_effort', label:'Reasoning effort',
         options:['low','medium','high','max'] },
       { type:'bool', section:'llm', key:'fast_mode', label:'Fast mode' },
-      { type:'text', section:'llm', key:'fast_model', label:'Fast model',
-        help:'Smaller model used when fast mode is on.' },
+      { type:'model', section:'llm', key:'fast_model', label:'Fast model',
+        help:'Smaller model used when fast mode is on; pick Custom… to type one.' },
     ]},
     { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
       fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) }))

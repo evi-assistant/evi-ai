@@ -67,9 +67,9 @@ class FakeAgent:
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
-    monkeypatch.setattr(server_mod, "Agent", FakeAgent)
+    import evi.sdk.builder as builder_mod
+    monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: FakeAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
     monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path)
     app = server_mod.create_app()
     return TestClient(app)
@@ -235,9 +235,9 @@ class _PermAgent:
 
 @pytest.fixture
 def perm_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setattr(server_mod, "Agent", _PermAgent)
+    import evi.sdk.builder as builder_mod
+    monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: _PermAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(server_mod, "get_enabled_tools", lambda _: [])
     monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path)
     app = server_mod.create_app()
     # Expose the sessions dict so the test can introspect the agent.
