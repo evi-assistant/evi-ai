@@ -3,6 +3,22 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.39.0] — 2026-06-17
+
+### Added — models.dev catalog + config linter (feature-scan Batch B)
+- **models.dev catalog** — `evi/modelsdev.py` consults a model-metadata catalog
+  for ground-truth capability flags + context window + (hosted) pricing. A baked
+  snapshot (`evi/data/models-catalog.json`) ships for offline use; `evi models
+  refresh` downloads the full live catalog to `~/.evi/models-catalog.json`.
+  `capabilities()` and `recommend.context_window_for()` now prefer the catalog
+  and fall back to the existing heuristics for any model it doesn't list (exact +
+  canonical id match only — no loose substring matching that could mis-resolve).
+- **Config linter** — `evi lint` validates authored resources (skills, hooks,
+  commands, guardrails, agents): missing SKILL.md `description`, oversized
+  bodies, broken file refs, typo'd hook events, unparseable agents.toml. Reuses
+  the existing per-resource validators. `evi lint --path ./skills` is the CI gate
+  for an evi-skills repo (`evi/configlint.py`).
+
 ## [0.38.0] — 2026-06-17
 
 ### Added — Tier-1 fold-ins (from the AI-dev-tool feature scan)

@@ -21,7 +21,7 @@ def capabilities(model_id: str) -> dict[str, bool]:
     from evi.vision import model_supports_vision
 
     mid = model_id or ""
-    return {
+    caps = {
         "vision": model_supports_vision(mid),
         "reasoning": model_supports_reasoning(mid),
         "infill": supports_fim(mid),
@@ -30,6 +30,21 @@ def capabilities(model_id: str) -> dict[str, bool]:
         "guard": model_is_guard(mid),
         "embed": model_is_embed_class(mid),
     }
+    # Ground-truth override from the models.dev catalog when it knows this model
+    # (the heuristics above are the fallback for ids the catalog lacks, e.g.
+    # exotic local GGUF tags). infill/guard/embed have no catalog equivalent.
+    try:
+        from evi.modelsdev import lookup
+
+        info = lookup(mid)
+        if info is not None:
+            caps["vision"] = info.vision
+            caps["reasoning"] = info.reasoning
+            caps["tools"] = info.tool_call
+            caps["audio"] = info.audio
+    except Exception:  # noqa: BLE001 — catalog is best-effort, never break chips
+        pass
+    return caps
 
 
 # Short labels for UI chips (emoji + name), in display order.

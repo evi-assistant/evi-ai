@@ -235,6 +235,16 @@ def context_window_for(model_id: str) -> int | None:
     mid = (model_id or "").strip().lower()
     if not mid:
         return None
+    # Ground-truth from the models.dev catalog first (exact + canonical match);
+    # falls through to the registry / family heuristics when it's not listed.
+    try:
+        from evi.modelsdev import lookup
+
+        info = lookup(model_id)
+        if info is not None and info.context:
+            return info.context
+    except Exception:  # noqa: BLE001
+        pass
     for m in REGISTRY:
         if m.id.lower() == mid and m.context_window:
             return m.context_window
