@@ -76,6 +76,31 @@ def find_project_files(start: Path | None = None) -> list[Path]:
     return found
 
 
+def _find_anatomy(
+    project_files: list[Path], start: Path | None
+) -> tuple[Path, str] | None:
+    """Locate a generated `.evi/anatomy.md` near the project: at the root of the
+    outermost project file if any, else at `start`/cwd. Returns (path, text)."""
+    from evi.anatomy import anatomy_path
+
+    roots: list[Path] = []
+    if project_files:
+        roots.append(project_files[0].parent)  # outermost (repo root)
+    roots.append((start or Path.cwd()))
+    seen: set[Path] = set()
+    for root in roots:
+        p = anatomy_path(root)
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            if p.is_file():
+                return (p, p.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    return None
+
+
 def load_project_context(start: Path | None = None) -> ProjectContext | None:
     """Aggregate project files from root → cwd into one context.
 
@@ -90,6 +115,15 @@ def load_project_context(start: Path | None = None) -> ProjectContext | None:
         except (OSError, UnicodeDecodeError):
             continue
         sections.append((path, text))
+
+    # Project anatomy map (.evi/anatomy.md), if it's been generated — gives the
+    # model a file/token map so it stops blind full-file reads. Opt-in by virtue
+    # of existing (created via `evi anatomy --write`); appended last so the cap
+    # truncates the (regenerable) map before any authored context.
+    anatomy = _find_anatomy(files, start)
+    if anatomy is not None:
+        sections.append(anatomy)
+
     if not sections:
         return None
 
