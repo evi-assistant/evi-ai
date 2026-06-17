@@ -1473,6 +1473,44 @@ def doctor(
         raise typer.Exit(1)
 
 
+@app.command()
+def lint(
+    path: str = typer.Option(
+        "", "--path", help="Lint a skills directory (e.g. an evi-skills checkout) "
+        "instead of your ~/.evi resources.",
+    ),
+    strict: bool = typer.Option(
+        False, "--strict", help="Exit non-zero if any error (not just warn) is found.",
+    ),
+) -> None:
+    """Validate authored resources: skills, hooks, commands, guardrails, agents.
+
+    Unlike `evi doctor` (which checks the environment), this checks the things
+    YOU wrote — a SKILL.md missing its description, a typo'd hook event, a
+    command with broken frontmatter. Also the CI gate for an evi-skills repo
+    (`evi lint --path ./skills`).
+    """
+    from rich.markup import escape
+
+    from evi import configlint
+
+    issues = configlint.lint_path(Path(path)) if path else configlint.lint()
+    if not issues:
+        console.print("[green]✓ no issues[/green]")
+        return
+    glyph = {"error": "[red]✗[/red]", "warn": "[yellow]⚠[/yellow]"}
+    for i in issues:
+        console.print(
+            f"  {glyph.get(i.level, '?')} [bold]{escape(i.resource)}[/bold] "
+            f"[dim]{escape(i.message)}[/dim]"
+        )
+    errors = sum(1 for i in issues if i.level == "error")
+    warns = sum(1 for i in issues if i.level == "warn")
+    console.print(f"\n[red]{errors} error[/red] · [yellow]{warns} warn[/yellow]")
+    if errors and strict:
+        raise typer.Exit(1)
+
+
 hooks_app = typer.Typer(help="Inspect and dry-run tool/lifecycle hooks (~/.evi/hooks.toml).")
 app.add_typer(hooks_app, name="hooks")
 
@@ -5012,6 +5050,27 @@ def models_backend(kind: str | None = typer.Argument(None)) -> None:
     console.print(
         f"[green]backend → {kind}[/green] · base_url={cfg.llm.base_url}"
     )
+
+
+@models_app.command("refresh")
+def models_refresh(
+    url: str = typer.Option("", "--url", help="Catalog URL (default models.dev/api.json)."),
+) -> None:
+    """Download the models.dev catalog for ground-truth capability/context/pricing.
+
+    Saves to ~/.evi/models-catalog.json (takes precedence over the baked-in
+    snapshot). Capability chips + context-window sizing then use exact metadata,
+    falling back to heuristics for any model the catalog doesn't list.
+    """
+    from evi import modelsdev
+
+    try:
+        n = modelsdev.refresh(url or modelsdev.DEFAULT_URL)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]refresh failed:[/red] {type(exc).__name__}: {exc}")
+        raise typer.Exit(1)
+    console.print(f"[green]catalog updated[/green] — {n} models "
+                  f"[dim]({modelsdev.USER_CATALOG})[/dim]")
 
 
 specialty_app = typer.Typer(
