@@ -189,7 +189,9 @@ def test_picker_capabilities_detect_per_model(client: TestClient, monkeypatch) -
     import evi.apps.web.server as server_mod
 
     class _B:
-        name = "fake"; base_url = "http://x"
+        name = "fake"
+        base_url = "http://x"
+
         def list_models(self):
             return [type("M", (), {"id": x})() for x in
                     ("qwen2.5-vl:7b", "qwen2.5-coder:14b", "qwen2.5:7b")]
