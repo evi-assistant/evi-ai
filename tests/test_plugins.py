@@ -254,6 +254,14 @@ def test_install_bad_zip_errors(tmp_path):
         plugins.install(str(bad), root=tmp_path / "home")
 
 
+def test_install_rejects_dash_source(tmp_path):
+    """A dash-leading git-like source (e.g. `--upload-pack=…`) must be rejected
+    before reaching `git clone`, so git can't treat it as an option (RCE)."""
+    # Ends with `.git` so it passes _looks_like_git, but begins with `-`.
+    with pytest.raises(plugins.PluginError, match="suspicious"):
+        plugins.install("--upload-pack=touch x.git", root=tmp_path / "home")
+
+
 def test_plugin_mcp_loaded(tmp_path, monkeypatch):
     """A plugin's mcp.json is merged, namespaced <plugin>:<name> (Phase 80)."""
     import evi.config as config
