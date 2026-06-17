@@ -30,16 +30,24 @@ regex-first and fully local. Off by default. Rules live in
     threshold = 0.7
     applies_to = "both"
 
-Three rule kinds layer together (regex → judge → classifier):
+    [[guard]]                    # dedicated safety-guard model (its own taxonomy)
+    name = "safety"
+    model = ""                   # "" → [models] guard (e.g. "llama-guard3")
+    applies_to = "both"
+
+Four rule kinds layer together (regex → judge → classifier → guard):
 - `[[rule]]` regex — fast, deterministic, can block OR redact.
 - `[[judge]]` — an LLM classifies the text against `policy` (needs a `judge_fn`,
   supplied by the agent's own model). Block-only.
 - `[[classifier]]` — a local HuggingFace text-classification model scores the
   text; blocks when a `labels` score crosses `threshold` (needs a `classify_fn`;
   install `evi-assistant[moderation]`). Block-only, fully offline.
+- `[[guard]]` — a dedicated generative guard model (Llama Guard / ShieldGemma,
+  from `[models] guard`) classifies the turn against its built-in safety
+  taxonomy (needs a `guard_fn`; see `evi/guardmodel.py`). Block-only.
 
 The semantic kinds only run when their injected fn is provided, so this module
-stays model-free. Both fail *open* (a missing/flaky model skips the rule, not
+stays model-free. All fail *open* (a missing/flaky model skips the rule, not
 the turn).
 
 Semantics:
@@ -116,6 +124,21 @@ class ClassifierRule:
 
 
 @dataclass
+class GuardRule:
+    """A rule graded by a dedicated safety-guard model (Llama Guard / ShieldGemma).
+
+    Unlike `JudgeRule` there's no free-form `policy` — the guard model carries
+    its own safety taxonomy. `model` overrides `[models] guard` for this rule."""
+
+    name: str
+    model: str = ""              # guard model id ("" → [models] guard)
+    applies_to: str = "both"     # "input" | "output" | "both"
+
+    def covers(self, direction: str) -> bool:
+        return self.applies_to in (direction, "both")
+
+
+@dataclass
 class GuardrailResult:
     allowed: bool                 # False => a block rule matched
     text: str                     # possibly-redacted text
@@ -137,11 +160,13 @@ class Guardrails:
         *,
         judge_rules: list[JudgeRule] | None = None,
         classifier_rules: list[ClassifierRule] | None = None,
+        guard_rules: list[GuardRule] | None = None,
         enabled: bool = True,
     ) -> None:
         self.rules = rules
         self.judge_rules = judge_rules or []
         self.classifier_rules = classifier_rules or []
+        self.guard_rules = guard_rules or []
         self.enabled = enabled
 
     @classmethod
@@ -203,25 +228,37 @@ class Guardrails:
                                threshold=threshold, applies_to=applies_to)
             )
 
+        guard_rules: list[GuardRule] = []
+        for raw in data.get("guard", []):
+            name = (raw.get("name") or "guard").strip()
+            model = str(raw.get("model", "")).strip()
+            applies_to = (raw.get("applies_to") or "both").strip().lower()
+            if applies_to not in ("input", "output", "both"):
+                applies_to = "both"
+            guard_rules.append(GuardRule(name=name, model=model, applies_to=applies_to))
+
         enabled = bool(data.get("enabled", True)) and bool(
-            rules or judge_rules or classifier_rules
+            rules or judge_rules or classifier_rules or guard_rules
         )
         return cls(
             rules=rules,
             judge_rules=judge_rules,
             classifier_rules=classifier_rules,
+            guard_rules=guard_rules,
             enabled=enabled,
         )
 
-    def check(self, text: str, direction: str, judge_fn=None, classify_fn=None) -> GuardrailResult:
+    def check(self, text: str, direction: str, judge_fn=None, classify_fn=None,
+              guard_fn=None) -> GuardrailResult:
         """Apply all rules covering `direction` ('input' or 'output').
 
         Layers, in order, stopping at the first block: regex `[[rule]]`
         (block/redact) → `[[judge]]` (needs `judge_fn(policy, text) ->
         (allowed, reason)`) → `[[classifier]]` (needs `classify_fn(model, text)
-        -> {label: score}`). The semantic layers only run when their fn is
-        supplied; either failing raises are swallowed (fail *open*) so a flaky
-        model skips the rule, not the turn.
+        -> {label: score}`) → `[[guard]]` (needs `guard_fn(model, text,
+        direction) -> (allowed, reason)`). The semantic layers only run when
+        their fn is supplied; failing raises are swallowed (fail *open*) so a
+        flaky model skips the rule, not the turn.
         """
         if not self.enabled or not text:
             return GuardrailResult(allowed=True, text=text)
@@ -274,6 +311,20 @@ class Guardrails:
                 if top >= cr.threshold:
                     blocked.append(cr.name)
                     notes.append(f"{cr.name}: {lbl} {top:.2f}")
+
+        # Dedicated guard-model layer — same gating (only if nothing blocked).
+        if guard_fn is not None and not blocked:
+            for gr in self.guard_rules:
+                if not gr.covers(direction):
+                    continue
+                try:
+                    allowed, reason = guard_fn(gr.model, out, direction)
+                except Exception:
+                    continue  # fail open
+                if not allowed:
+                    blocked.append(gr.name)
+                    if reason:
+                        notes.append(f"{gr.name}: {reason}")
 
         return GuardrailResult(
             allowed=not blocked,

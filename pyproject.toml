@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # import package and the CLI command both stay `evi` — install with
 # `pip install evi-assistant`, then run `evi` and `import evi` as usual.
 name = "evi-assistant"
-version = "0.36.1"
+version = "0.37.0"
 description = "Local-first personal AI assistant — CLI, web, and desktop frontends over a shared agent core."
 requires-python = ">=3.13"
 readme = "README.md"
@@ -107,6 +107,16 @@ ast = [
     # analysis. Prebuilt wheels, Python 3.13+. Optional — evi/pyanalyze.py
     # falls back to stdlib ast.walk when absent.
     "fast-walk>=0.2",
+]
+diarize = [
+    # Speaker diarization ("who spoke when") on the STT pipeline. Heavy (torch);
+    # most pyannote models are gated (need an HF token). See evi/diarize.py.
+    "pyannote.audio>=3.1",
+]
+doc = [
+    # Document layout/OCR — structure-aware PDF/scanned-doc → Markdown. Heavy
+    # (torch-backed). Optional; evi/doclayout.py + ocr_image engine='doc'.
+    "docling>=2.0",
 ]
 telemetry = [
     # Opt-in, off by default — crash reporting to a Sentry-compatible endpoint

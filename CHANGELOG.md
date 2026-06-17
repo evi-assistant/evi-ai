@@ -3,6 +3,25 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.37.0] — 2026-06-17
+
+### Added — specialty SLMs + capability chips
+- **Safety-guard model layer** 🛡 — a new `[[guard]]` guardrail kind backed by a
+  dedicated generative guard model (Llama Guard 3 / ShieldGemma, set via
+  `[models] guard`). It's the 4th guardrail layer (regex → judge → classifier →
+  guard), classifies each turn against the model's built-in safety taxonomy, and
+  fails *open* like the others. New `evi/guardmodel.py`; a 🛡 capability chip
+  marks guard models in the picker so they're not mistaken for chat models.
+- **Embeddings / reranker chip** ◆ — the picker now flags embedding and
+  cross-encoder/reranker model families (`evi/embedcap.py`), so a
+  nomic-embed / bge-reranker id reads as a model *class*, not a chat model.
+- **Speaker diarization** — `evi/diarize.py` + `evi voice diarize <audio>`
+  ("who spoke when", pyannote.audio). Optional `[diarize]` extra; degrades
+  gracefully when the deps/HF-token are missing.
+- **Document layout / OCR** — `evi/doclayout.py` + `ocr_image(engine="doc")`
+  (Docling: layout-aware PDF/scanned-doc → Markdown). Optional `[doc]` extra.
+- `evi models specialty` now manages `guard` / `diarize` / `doc_layout` too.
+
 ## [0.36.1] — 2026-06-17
 
 ### Added

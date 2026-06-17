@@ -416,6 +416,15 @@ class SpecialtyModels:
     vision_backend: str = ""
     stt: str = ""
     tts: str = ""
+    # Dedicated safety-guard model for the [[guard]] guardrail layer
+    # (Llama Guard / ShieldGemma, e.g. "llama-guard3"). See evi/guardmodel.py.
+    guard: str = ""
+    guard_base_url: str = ""
+    guard_backend: str = ""
+    # Speaker diarization + document-layout/OCR specialty models (heavy, lazy
+    # optional extras — evi/diarize.py [diarize] and evi/doclayout.py [doc]).
+    diarize: str = ""
+    doc_layout: str = ""
 
 
 @dataclass

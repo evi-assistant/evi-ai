@@ -117,11 +117,13 @@ def _clip_ocr(text: str) -> str:
 
 @tool(
     description=(
-        "Extract text from an image file. By default uses the configured OCR "
-        "specialty VLM ([models] ocr, e.g. glm-ocr / qwen2.5vl) when set — "
-        "which preserves layout/tables/formulas as Markdown — and otherwise "
-        "Tesseract. `engine`: 'auto' (default) | 'vlm' | 'tesseract'. "
-        "`language` is an ISO 639-2 code for Tesseract (default `eng`)."
+        "Extract text from an image OR document file (image / PDF / office doc). "
+        "By default uses the configured OCR specialty VLM ([models] ocr, e.g. "
+        "glm-ocr / qwen2.5vl) when set — which preserves layout/tables/formulas "
+        "as Markdown — and otherwise Tesseract. `engine`: 'auto' (default) | "
+        "'vlm' | 'tesseract' | 'doc' (Docling layout-aware extraction for PDFs "
+        "and scanned/multi-column docs — needs the [doc] extra). `language` is "
+        "an ISO 639-2 code for Tesseract (default `eng`)."
     ),
     category="ocr",
 )
@@ -129,6 +131,19 @@ def ocr_image(path: str, language: str = "eng", engine: str = "auto") -> str:
     target = Path(path).expanduser()
     engine = (engine or "auto").strip().lower()
     exists = target.is_file()
+
+    # Docling layout-aware path (PDFs, scanned/multi-column docs) — explicit.
+    if engine in ("doc", "docling", "layout"):
+        if not exists:
+            return f"ERROR: no such file: {target}"
+        from evi.config import Config
+        from evi.doclayout import DocLayoutError, extract_document
+
+        model_id = (Config.load().models.doc_layout or "").strip()
+        try:
+            return _clip_ocr(extract_document(str(target), model_id))
+        except DocLayoutError as exc:
+            return f"ERROR: {exc}"
 
     # VLM path — only on a real file; otherwise fall through so tesseract emits
     # the canonical missing-file / install-hint errors (preserving precedence).
