@@ -49,10 +49,10 @@ jobs:
         os: [windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -65,7 +65,7 @@ jobs:
           workspaces: desktop/src-tauri -> target
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: lts/*
 
@@ -134,7 +134,7 @@ jobs:
       - name: Warm bundler cache (retry transient 504s, Windows)
         if: runner.os == 'Windows'
         continue-on-error: true
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 20
           max_attempts: 3
@@ -179,7 +179,7 @@ jobs:
       # (untagged) runs still produce something downloadable.
       - name: Upload installers as artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evi-desktop-${{ matrix.os }}
           if-no-files-found: warn
