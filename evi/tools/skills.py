@@ -39,12 +39,26 @@ def invoke_skill(name: str) -> str:
         body, _skill_dir, resources = _store.load(name)
     except KeyError:
         return f"ERROR: no skill named '{name}'"
+    # Scope the toolset for the rest of this turn if the skill declares it.
+    scope_note = ""
+    try:
+        from evi import skillscope
+
+        allowed, disallowed = _store.tool_scope(name)
+        if allowed is not None or disallowed:
+            skillscope.activate(allowed, disallowed)
+            if allowed is not None:
+                scope_note = "\n\n[tools scoped to: " + (", ".join(sorted(allowed)) or "none") + "]"
+            elif disallowed:
+                scope_note = "\n\n[tools disallowed: " + ", ".join(sorted(disallowed)) + "]"
+    except Exception:  # noqa: BLE001 — scoping must never break skill loading
+        pass
     if not resources:
-        return body
+        return body + scope_note
     shown = resources[:50]
     lines = [body, "", "---", "Bundled files for this skill (read with the file "
              "tools if the instructions reference them):"]
     lines += [f"- {p}" for p in shown]
     if len(resources) > len(shown):
         lines.append(f"- … and {len(resources) - len(shown)} more")
-    return "\n".join(lines)
+    return "\n".join(lines) + scope_note
