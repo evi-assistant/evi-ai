@@ -1,0 +1,55 @@
+# Ready-to-use GitHub Actions workflow: have eVi review every pull request.
+#
+# Copy this to `.github/workflows/pr-review.yml` in your repo. It uses the
+# packaged `evi-run` composite action (no install steps needed) and posts the
+# review as a PR comment. eVi is the *app* — point it at any OpenAI-compatible
+# backend via repo secrets (LLM_BASE_URL / LLM_API_KEY / LLM_MODEL), or a
+# self-hosted runner with a reachable Ollama.
+#
+# Note: files under .github/workflows/ SUBDIRS (and this examples/ dir) are NOT
+# run by Actions — copy it to the top-level workflows dir to activate it.
+
+name: eVi PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so the diff resolves
+
+      - name: Build the PR diff
+        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+
+      - name: eVi review
+        id: review
+        uses: dmang-dev/evi-ai/.github/actions/evi-run@main
+        with:
+          prompt: "Review the changes in pr.diff. Flag bugs, security issues, and missing tests; tag each finding [error]/[warn]/[info]. Be concise."
+          format: text
+          mode: code
+          backend: openai_compat
+          base_url: ${{ secrets.LLM_BASE_URL }}
+          api_key: ${{ secrets.LLM_API_KEY }}
+          model: ${{ secrets.LLM_MODEL }}
+
+      - name: Post the review as a PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `### eVi review\n\n${{ toJSON(steps.review.outputs.result) }}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
