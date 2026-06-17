@@ -185,16 +185,59 @@ export function activate(ctx: vscode.ExtensionContext) {
     }),
   );
 
-  // Status bar: eVi reachability.
+  // Status bar: reachability + autocomplete state + completion model.
+  // Click toggles autocomplete; tooltip shows server/model details.
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.text = 'eVi';
-  status.tooltip = 'eVi local copilot';
-  status.command = 'evi.openChat';
+  status.command = 'evi.toggleAutocomplete';
   status.show();
   ctx.subscriptions.push(status);
-  fetch(`${serverUrl()}/api/health`, { headers: authHeaders() })
-    .then((r) => { status.text = r.ok ? 'eVi ✓' : 'eVi ✗'; })
-    .catch(() => { status.text = 'eVi ✗ (server?)'; });
+
+  let reachable = false;
+  let model = '';
+  let warnedDown = false;
+
+  async function refreshStatus() {
+    const auto = cfg().get<boolean>('autocomplete.enabled') ? 'auto on' : 'auto off';
+    try {
+      const r = await fetch(`${serverUrl()}/api/health`, { headers: authHeaders() });
+      reachable = r.ok;
+    } catch {
+      reachable = false;
+    }
+    if (reachable) {
+      try {
+        const p = await fetch(`${serverUrl()}/api/model-picker`, { headers: authHeaders() });
+        if (p.ok) model = ((await p.json()) as { active?: string }).active || '';
+      } catch { /* keep last */ }
+      status.text = `$(check) eVi · ${auto}`;
+      status.tooltip = `eVi local copilot — reachable at ${serverUrl()}\nmodel: ${model || '?'}\nclick to toggle autocomplete`;
+      status.backgroundColor = undefined;
+      warnedDown = false;
+    } else {
+      status.text = `$(warning) eVi · offline`;
+      status.tooltip = `eVi server not reachable at ${serverUrl()} — run \`evi web\` (or open the desktop app).`;
+      status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      if (!warnedDown) {
+        warnedDown = true;
+        vscode.window.showWarningMessage(
+          `eVi: can't reach the server at ${serverUrl()}. Start it with "evi web" (or the desktop app), then completions + chat will work.`,
+          'Open Settings',
+        ).then((pick) => {
+          if (pick === 'Open Settings')
+            vscode.commands.executeCommand('workbench.action.openSettings', 'evi.serverUrl');
+        });
+      }
+    }
+  }
+
+  refreshStatus();
+  const timer = setInterval(refreshStatus, 30_000);
+  ctx.subscriptions.push({ dispose: () => clearInterval(timer) });
+  ctx.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('evi')) refreshStatus();
+    }),
+  );
 }
 
 export function deactivate() {}

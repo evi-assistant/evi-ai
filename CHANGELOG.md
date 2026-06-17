@@ -3,6 +3,25 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.0] — 2026-06-16
+
+### Changed (breaking)
+- **Minimum Python is now 3.13** (was 3.11). Dropped the `tomli` fallback;
+  updated CI, Dockerfile (`3.13-slim`), install scripts, the Tauri launcher,
+  and docs. **0.34.x is the last 3.11/3.12-compatible release.** Recreate a
+  local dev venv with 3.13 (`py -3.13 -m venv .venv`).
+
+### Added
+- **`python_symbols` tool** — AST outline of a Python file (functions/classes/
+  methods/imports) for fast code navigation (`evi/pyanalyze.py`).
+- **Optional `[ast]` extra** — Reflex **fast-walk** (Rust `ast.walk`, 3.13+
+  wheels) accelerates `python_symbols`; `evi/pyanalyze.py` falls back to stdlib
+  `ast.walk` when it isn't installed. `pip install 'evi-assistant[ast]'`.
+- **eVi VS Code extension — Phase 3 polish** (`editors/vscode/`): status-bar
+  item shows reachability + autocomplete on/off + active model (click to
+  toggle), 30 s re-check, and a graceful "server not reachable — run evi web"
+  prompt.
+
 ## [0.34.1] — 2026-06-16
 
 ### Fixed
