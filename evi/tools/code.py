@@ -92,6 +92,43 @@ def run_python(code: str) -> str:
 
 @tool(
     description=(
+        "Outline a Python file's structure via its AST: functions (with args), "
+        "classes (with methods), and imports — without reading the whole file. "
+        "Use to navigate/understand code quickly."
+    ),
+    category="code",
+)
+def python_symbols(path: str) -> str:
+    p = workdir.resolve(path)
+    if not p.is_file():
+        return f"ERROR: not a file: {p}"
+    if p.suffix != ".py":
+        return f"ERROR: not a Python file: {p}"
+    from evi import pyanalyze
+
+    try:
+        info = pyanalyze.analyze_file(p)
+    except SyntaxError as exc:
+        return f"ERROR: syntax error in {p}: {exc}"
+    except OSError as exc:
+        return f"ERROR: cannot read {p}: {exc}"
+    lines = [f"{p.name}: {len(info['functions'])} functions, "
+             f"{len(info['classes'])} classes, {len(info['imports'])} imports"]
+    for c in info["classes"]:
+        lines.append(f"  class {c['name']}  (L{c['line']})")
+        for m in c["methods"]:
+            lines.append(f"    .{m}()")
+    for f in info["functions"]:
+        a = ", ".join(f["args"])
+        kw = "async def" if f["async"] else "def"
+        lines.append(f"  {kw} {f['name']}({a})  (L{f['line']})")
+    if info["imports"]:
+        lines.append("  imports: " + ", ".join(info["imports"][:40]))
+    return "\n".join(lines)
+
+
+@tool(
+    description=(
         "Run the locally-installed linter for a file's language (ruff/eslint/"
         "go vet/clippy, by extension) and return its diagnostics. Use after "
         "editing a file to catch errors. No-op message when no linter is "

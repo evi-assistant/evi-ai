@@ -102,6 +102,12 @@ calendar = [
 rerank = [
     "sentence-transformers>=3.0",
 ]
+ast = [
+    # Reflex fast-walk: Rust ast.walk accelerator for python_symbols / code
+    # analysis. Prebuilt wheels, Python 3.13+. Optional — evi/pyanalyze.py
+    # falls back to stdlib ast.walk when absent.
+    "fast-walk>=0.2",
+]
 telemetry = [
     # Opt-in, off by default — crash reporting to a Sentry-compatible endpoint
     # (self-hosted GlitchTip or hosted Sentry). See evi/reporting.py.
