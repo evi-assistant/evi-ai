@@ -1809,10 +1809,12 @@ async function loadPicker() {
   } catch {}
 }
 
-const _CAP_CHIPS = { vision: '👁', reasoning: '🧠', infill: '⌨', audio: '🎤', tools: '🔧' };
+const _CAP_CHIPS = { vision: '👁', reasoning: '🧠', infill: '⌨', audio: '🎤',
+                     tools: '🔧', guard: '🛡', embed: '◆' };
 const _CAP_TITLE = { vision: 'Vision (VLM)', reasoning: 'Extended thinking',
                      infill: 'Code infill / FIM', audio: 'Audio input',
-                     tools: 'Tool / function calling' };
+                     tools: 'Tool / function calling',
+                     guard: 'Safety-guard model', embed: 'Embeddings / reranker' };
 
 function _capChips() {
   // Emoji chips for the active model's capabilities (vision/thinking/infill/audio).

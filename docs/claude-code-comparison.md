@@ -38,7 +38,7 @@ planned (philosophy mismatch / separate big track).
 | Auto-mode config (trusted dirs / domains) | `auto.trusted_dirs` + `trusted_domains` (Ph 77) | ✅ |
 | Sandboxed bash/code | `[tools] sandbox` (Ph 67) | ✅ |
 | Security / vuln review | guardrails, `security.yml` (pip/cargo audit), `review --multi` | ✅ |
-| Content moderation / safety filter | `guardrails.toml` — regex (block/redact) **+ LLM-judge + offline ML classifier** on input/output | ✅ (no in-harness equivalent in Claude Code) |
+| Content moderation / safety filter | `guardrails.toml` — regex (block/redact) **+ LLM-judge + offline ML classifier + dedicated guard model** (Llama Guard / ShieldGemma) on input/output | ✅ (no in-harness equivalent in Claude Code) |
 
 ## Extension & customization
 
@@ -154,9 +154,14 @@ planned (philosophy mismatch / separate big track).
 Beyond Claude Code, eVi pulled in the genuinely-local wins from **opencode** and
 **Cursor** and added small **specialty models**:
 
-- **Specialty SLMs** — `[models]` ocr/vision/stt/tts registry; `describe_image`
-  + OCR-VLM routing (Moondream2 / Qwen2.5-VL / GLM-OCR), Kokoro TTS, faster-whisper
-  turbo. A small model per task, no main-model swap.
+- **Specialty SLMs** — `[models]` ocr/vision/stt/tts/**guard/diarize/doc_layout**
+  registry; `describe_image` + OCR-VLM routing (Moondream2 / Qwen2.5-VL / GLM-OCR),
+  Kokoro TTS, faster-whisper turbo. A small model per task, no main-model swap.
+  **(0.37.0)** added a **safety-guard** layer (Llama Guard / ShieldGemma →
+  `[[guard]]` rule), **speaker diarization** (`evi voice diarize`, pyannote),
+  and **document layout/OCR** (`ocr_image engine=doc`, Docling). **Capability
+  chips** now cover 🔧 tools, 🛡 guard, ◆ embeddings/reranker (plus the existing
+  👁 vision / 🧠 thinking / ⌨ infill / 🎤 audio).
 - **Working folder** — per-session cwd (`/cd`, `--cwd`, web `📁` chip).
 - **opencode core** — real **shell tool**, `apply_patch` (multi-hunk),
   format-on-edit + `check_file` diagnostics (LSP-lite), persistent `/plan` toggle,

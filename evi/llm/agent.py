@@ -795,7 +795,10 @@ class Agent:
         if self.guardrails is not None:
             _jf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
             _cf = self._guardrail_classify_fn() if self.guardrails.classifier_rules else None
-            gres = self.guardrails.check(user_msg, "input", judge_fn=_jf, classify_fn=_cf)
+            _gf = self._guardrail_guard_fn() if self.guardrails.guard_rules else None
+            gres = self.guardrails.check(
+                user_msg, "input", judge_fn=_jf, classify_fn=_cf, guard_fn=_gf
+            )
             if gres.changed:
                 yield Guardrail(
                     direction="input",
@@ -944,6 +947,26 @@ class Agent:
             return moderation.classify(model_id, text)
 
         return classify
+
+    def _guardrail_guard_fn(self):
+        """A guard(model, text, direction) -> (allowed, reason) backed by a
+        dedicated safety-guard model (Llama Guard / ShieldGemma). Used by
+        [[guard]] rules; the rule's model wins, else [models] guard. Reaches the
+        model via the specialty registry so it can live on a separate backend.
+        Any failure raises, which the guardrail catches and fails open."""
+        from evi import guardmodel
+        from evi.llm.specialty import SpecialtyRegistry
+
+        registry = SpecialtyRegistry(self.config.llm, self.config.models)
+
+        def guard(model: str, text: str, direction: str) -> tuple[bool, str]:
+            mid = (model or self.config.models.guard or "").strip()
+            role = "assistant" if direction == "output" else "user"
+            return guardmodel.classify_safety(
+                mid, text, role=role, registry=registry, llm=self.config.llm
+            )
+
+        return guard
 
     def _fire_lifecycle(self, event: str, payload: str = "") -> bool:
         """Run lifecycle hooks for `event`. Returns True if a hook vetoed.
@@ -1381,8 +1404,10 @@ class Agent:
             if self.guardrails is not None and assistant_msg.get("content"):
                 _ojf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
                 _ocf = self._guardrail_classify_fn() if self.guardrails.classifier_rules else None
+                _ogf = self._guardrail_guard_fn() if self.guardrails.guard_rules else None
                 ores = self.guardrails.check(
-                    assistant_msg["content"], "output", judge_fn=_ojf, classify_fn=_ocf
+                    assistant_msg["content"], "output",
+                    judge_fn=_ojf, classify_fn=_ocf, guard_fn=_ogf
                 )
                 if ores.blocked_by:
                     assistant_msg["content"] = (

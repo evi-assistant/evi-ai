@@ -2226,6 +2226,35 @@ def voice_transcribe(
         raise typer.Exit(1)
 
 
+@voice_app.command("diarize")
+def voice_diarize(
+    path: str,
+    model: str = typer.Option("", help="Diarization model id (default [models] diarize / pyannote)."),
+    speakers: int = typer.Option(0, "--speakers", help="Pin the speaker count when known (0 = auto)."),
+    hf_token: str = typer.Option("", "--hf-token", help="Hugging Face token (else $HF_TOKEN)."),
+) -> None:
+    """Speaker diarization — print 'who spoke when' for an audio file.
+
+    Needs the [diarize] extra (pyannote.audio) and, for most models, an HF token
+    with the model's terms accepted. See `evi models specialty set diarize ...`.
+    """
+    from evi.diarize import DiarizeError, diarize
+
+    mid = (model or Config.load().models.diarize or "").strip()
+    try:
+        segments = diarize(
+            path, mid, hf_token=hf_token, num_speakers=(speakers or None)
+        )
+    except DiarizeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    if not segments:
+        console.print("[dim]no speech segments found[/dim]")
+        return
+    for s in segments:
+        console.print(f"  [cyan]{s.speaker:<12}[/cyan] {s.start:7.2f}s → {s.end:7.2f}s")
+
+
 @voice_app.command("loop")
 def voice_loop(
     wake: str = typer.Option(
@@ -4944,11 +4973,14 @@ def models_backend(kind: str | None = typer.Argument(None)) -> None:
 
 
 specialty_app = typer.Typer(
-    help="Per-task specialty (small) models — OCR/vision/STT/TTS distinct from the main model."
+    help="Per-task specialty (small) models — OCR/vision/STT/TTS/guard/diarize/doc "
+    "distinct from the main model."
 )
 models_app.add_typer(specialty_app, name="specialty")
 
-_SPECIALTY_TASKS = ("ocr", "vision", "stt", "tts")
+_SPECIALTY_TASKS = ("ocr", "vision", "stt", "tts", "guard", "diarize", "doc_layout")
+# Tasks that also accept a separate endpoint/backend (chat-schema models).
+_SPECIALTY_ENDPOINT_TASKS = ("ocr", "vision", "guard")
 
 
 @specialty_app.command("list")
@@ -4979,10 +5011,10 @@ def specialty_list() -> None:
 
 @specialty_app.command("set")
 def specialty_set(
-    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts."),
-    model: str = typer.Argument(..., help="Model id (e.g. glm-ocr, moondream, large-v3-turbo)."),
-    base_url: str = typer.Option("", "--base-url", help="Separate endpoint for ocr/vision (e.g. a vLLM server)."),
-    backend: str = typer.Option("", "--backend", help="Backend kind override for ocr/vision."),
+    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts, guard, diarize, doc_layout."),
+    model: str = typer.Argument(..., help="Model id (e.g. glm-ocr, moondream, large-v3-turbo, llama-guard3)."),
+    base_url: str = typer.Option("", "--base-url", help="Separate endpoint for ocr/vision/guard (e.g. a vLLM server)."),
+    backend: str = typer.Option("", "--backend", help="Backend kind override for ocr/vision/guard."),
 ) -> None:
     """Configure a specialty model (writes [models])."""
     task = task.strip().lower()
@@ -4991,20 +5023,20 @@ def specialty_set(
         raise typer.Exit(1)
     cfg = Config.load()
     setattr(cfg.models, task, model.strip())
-    if task in ("ocr", "vision"):
+    if task in _SPECIALTY_ENDPOINT_TASKS:
         if base_url:
             setattr(cfg.models, f"{task}_base_url", base_url.strip())
         if backend:
             setattr(cfg.models, f"{task}_backend", backend.strip())
     elif base_url or backend:
-        console.print("[yellow]note:[/yellow] --base-url/--backend only apply to ocr/vision")
+        console.print("[yellow]note:[/yellow] --base-url/--backend only apply to ocr/vision/guard")
     cfg.save()
     console.print(f"[green]{task} → {model.strip()}[/green]")
 
 
 @specialty_app.command("clear")
 def specialty_clear(
-    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts."),
+    task: str = typer.Argument(..., help="One of: ocr, vision, stt, tts, guard, diarize, doc_layout."),
 ) -> None:
     """Unset a specialty model (revert to the default behavior)."""
     task = task.strip().lower()
@@ -5013,7 +5045,7 @@ def specialty_clear(
         raise typer.Exit(1)
     cfg = Config.load()
     setattr(cfg.models, task, "")
-    if task in ("ocr", "vision"):
+    if task in _SPECIALTY_ENDPOINT_TASKS:
         setattr(cfg.models, f"{task}_base_url", "")
         setattr(cfg.models, f"{task}_backend", "")
     cfg.save()
