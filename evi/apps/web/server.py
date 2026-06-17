@@ -1016,9 +1016,11 @@ def create_app() -> FastAPI:
     @app.post("/api/session/{session_id}/channel")
     def push_channel(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
         """Push an external alert/notification into a (live or revived) session
-        (Phase 83). The text is added as a system note so the assistant sees it
-        on its next turn; an external sender (webhook, script) authenticates with
-        the normal web token. Live-session context — not persisted across reloads.
+        (Phase 83). By default the text is added as a system note so the
+        assistant sees it on its NEXT turn. With ``run: true`` it pushes into the
+        LIVE session — the agent acts on it immediately (headless turn) and the
+        reply lands in the session history. An external sender (webhook, script)
+        authenticates with the normal web token.
         """
         if not isinstance(req, dict):
             raise HTTPException(400, "expected an object body")
@@ -1026,11 +1028,32 @@ def create_app() -> FastAPI:
         if not text:
             raise HTTPException(400, "text is required")
         source = (str(req.get("source") or "channel").strip() or "channel")[:64]
+        run_now = bool(req.get("run"))
         sess = get_session(session_id)
+
+        if run_now:
+            if sess.busy:
+                # Can't drive a turn while one is mid-flight — fall back to a note.
+                sess.agent.history.append(
+                    {"role": "system", "content": f"[channel:{source}] {text}"}
+                )
+                sess.channel_log.append({"source": source, "text": text, "ran": False})
+                return {"ok": True, "source": source, "ran": False, "reason": "session busy"}
+            from evi.headless import run_headless
+
+            sess.busy = True  # surfaced live by /api/dispatch/stream
+            try:
+                res = run_headless(sess.agent, f"[channel:{source}] {text}")
+                reply = (res.text or res.error or "").strip()
+            finally:
+                sess.busy = False
+            sess.channel_log.append({"source": source, "text": text, "ran": True, "reply": reply[:1000]})
+            return {"ok": True, "source": source, "ran": True, "reply": reply}
+
         sess.agent.history.append(
             {"role": "system", "content": f"[channel:{source}] {text}"}
         )
-        sess.channel_log.append({"source": source, "text": text})
+        sess.channel_log.append({"source": source, "text": text, "ran": False})
         return {"ok": True, "source": source, "pending": len(sess.channel_log)}
 
     @app.get("/api/session/{session_id}/channel")

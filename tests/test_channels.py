@@ -56,6 +56,20 @@ def test_push_channel_injects_system_note(client: TestClient) -> None:
     )
 
 
+def test_push_channel_run_drives_live_turn(client: TestClient) -> None:
+    # run=true pushes into the LIVE session: the agent acts immediately and the
+    # reply comes back (the fake agent streams "ok").
+    r = client.post(
+        "/api/session/cr/channel",
+        json={"text": "deploy finished", "source": "ci", "run": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ran"] is True and body["reply"] == "ok"
+    log = client.get("/api/session/cr/channel").json()["messages"]
+    assert log and log[-1]["ran"] is True
+
+
 def test_push_channel_requires_text(client: TestClient) -> None:
     r = client.post("/api/session/c2/channel", json={"text": "  "})
     assert r.status_code == 400

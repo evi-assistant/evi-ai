@@ -52,7 +52,7 @@ planned (philosophy mismatch / separate big track).
 | Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop/**session_start**/**session_end**; **conditional `arg_match`**) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
 | Keybindings | `keybindings.toml` + `evi keybindings` (Ph 82) | ✅ |
-| Skills tool-scoping (allowed/disallowed-tools) | — | ❌ buildable (needs an "active-skill" mode in the loop) |
+| Skills tool-scoping (allowed/disallowed-tools) | SKILL.md `allowed-tools`/`disallowed-tools` → `evi/skillscope.py` scopes the toolset while a skill is active | ✅ |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
 | Nested skills (subfolders) | recursive `SKILL.md` scan | ✅ |
 | `/add-dir` (extra working dirs) | `/add-dir` → session trusted_dirs | ✅ |
@@ -102,8 +102,8 @@ planned (philosophy mismatch / separate big track).
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
 | Routines (schedule / webhook trigger) | scheduler + `evi routine` webhook→recipe (Ph 73) | ✅ |
-| Channels (push alerts into a session) | routines (inbound webhook) | ⚠️ no push-into-live-session |
-| GitHub Actions / GitLab CI | runnable via `evi run` headless | ⚠️ no packaged action |
+| Channels (push alerts into a session) | `POST /api/session/{id}/channel` — note by default, or `run:true` drives a live agent turn | ✅ |
+| GitHub Actions / GitLab CI | packaged `evi-run` composite action + ready `examples/github/pr-review.yml` | ✅ |
 
 ## Config · models · cost
 
