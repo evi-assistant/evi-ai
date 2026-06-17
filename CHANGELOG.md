@@ -3,6 +3,24 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.0] — 2026-06-17
+
+### Added — last parity gaps closed
+- **Skill tool-scoping** — a SKILL.md may declare `allowed-tools` /
+  `disallowed-tools`; while that skill is active the agent's toolset is scoped
+  accordingly (`evi/skillscope.py`), and a stray out-of-scope call is refused.
+  This was the last buildable Claude Code parity gap.
+- **Channels → live session** — `POST /api/session/{id}/channel` with
+  `run: true` drives an immediate agent turn on the session (webhook can act
+  now), not just a note for the next turn.
+- **Packaged CI action** — ready-to-copy `examples/github/pr-review.yml` using
+  the existing `evi-run` composite action (PR review → comment).
+
+### Validated
+- The 0.35.0 **Python 3.13** floor is now verified locally too (fresh 3.13
+  venv: full suite green, **fast-walk active** for `python_symbols`), in
+  addition to CI on 3.13.
+
 ## [0.35.0] — 2026-06-16
 
 ### Changed (breaking)
