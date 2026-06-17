@@ -3,6 +3,30 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.0] — 2026-06-17
+
+### Added — Tier-1 fold-ins (from the AI-dev-tool feature scan)
+- **Completion notifications** — `evi/notify.py` + `[notify]` config (off by
+  default). The CLI pings on turn-done (sound + native toast on macOS/Linux +
+  optional ntfy/webhook URL); the web/desktop UI fires a browser Notification
+  via a 🔔 toggle when the tab is backgrounded. Walk away from long local turns.
+- **check-on-edit** — `[tools] check_on_edit` runs the linter after a write and
+  folds diagnostics into the tool result (cheap LSP-lite feedback), alongside
+  `format_on_edit`. `codeintel.diagnose` now keys off the linter exit code so
+  clean banners ("All checks passed!") aren't mistaken for findings.
+- **Pluggable web search** — `[tools] search_backend = ddg | searxng | ollama`;
+  SearXNG is the fully self-hosted, keyless option. DuckDuckGo stays the default.
+- **`evi skill add <name|git|zip|dir>`** — one-line skill installer; the
+  marketplace index now carries a `skills` section (`load_skill_index`).
+
+### Security / fixes (from an adversarial review of this batch)
+- Skill `.zip` install no longer requires `plugin.toml` (extract + find SKILL.md);
+  download/unzip is now a shared `plugins.download_and_unzip` helper.
+- `git clone` for skill/plugin sources now uses `--` and rejects `-`-leading
+  sources (closes an option-injection vector via a malicious/MITM'd index).
+- Multi-skill repos require `--name` to disambiguate instead of silently
+  installing whichever sorts first; plugin download errors surface as `SkillError`.
+
 ## [0.37.0] — 2026-06-17
 
 ### Added — specialty SLMs + capability chips

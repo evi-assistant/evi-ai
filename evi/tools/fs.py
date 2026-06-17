@@ -60,8 +60,11 @@ def _post_write(p: Path) -> str:
             from evi import codeintel
 
             diag = codeintel.diagnose(p).strip()
-            # Only surface real findings — skip the "no issues" / "no linter" noise.
-            if diag and "no issues" not in diag and not diag.startswith("(no linter"):
+            # Only surface real findings — skip the "no issues" / "no linter" /
+            # clean-banner noise (diagnose() already keys off exit code; this is
+            # a belt-and-suspenders guard for any linter that prints a banner).
+            _clean = "no issues" in diag or "All checks passed" in diag
+            if diag and not _clean and not diag.startswith("(no linter"):
                 note += f"\n[check] {diag[:2000]}"
         return note
     except Exception:  # noqa: BLE001

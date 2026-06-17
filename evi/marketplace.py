@@ -109,7 +109,7 @@ def load_skill_index(
     path: Path | None = None, *, index_urls: list[str] | None = None
 ) -> list[MarketplaceEntry]:
     """Skill catalog — the ``skills`` section of the same index files that carry
-    plugins. Lets ``evi skills add <name>`` resolve a name to a source."""
+    plugins. Lets ``evi skill add <name>`` resolve a name to a source."""
     return load_index(path, index_urls=index_urls, key="skills")
 
 

@@ -304,13 +304,18 @@ def install_skill(
     .zip (local/http), or a local directory. Downloads if needed, then imports
     with reference rewriting. Returns the installed name.
 
-    This is the one-line ``evi skills add`` path — for a name it consults the
+    This is the one-line ``evi skill add`` path — for a name it consults the
     ``skills`` section of the marketplace index ([plugins] index_urls + the local
     marketplace.json); a git/zip/dir source is installed directly.
     """
     import tempfile
 
-    from evi.plugins import _fetch_and_extract_zip, _looks_like_git, _looks_like_zip
+    from evi.plugins import (
+        PluginError,
+        _looks_like_git,
+        _looks_like_zip,
+        download_and_unzip,
+    )
 
     src = source.strip()
     if not src:
@@ -335,38 +340,63 @@ def install_skill(
     try:
         if _looks_like_zip(src):
             tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
-            skill_src: str | Path = _fetch_and_extract_zip(src, tmp)
+            skill_src: str | Path = _find_skill_dir(download_and_unzip(src, tmp), name)
         elif _looks_like_git(src):
             import subprocess
 
+            if src.startswith("-"):
+                raise SkillError(f"refusing suspicious source: {src!r}")
             tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
             res = subprocess.run(
-                ["git", "clone", "--depth", "1", src, str(tmp)],
+                # `--` stops git treating "--upload-pack=…" sources as options.
+                ["git", "clone", "--depth", "1", "--", src, str(tmp)],
                 capture_output=True, text=True,
             )
             if res.returncode != 0:
                 raise SkillError("git clone failed:\n" + (res.stderr or res.stdout))
-            skill_src = _find_skill_dir(tmp)
+            skill_src = _find_skill_dir(tmp, name)
         else:
             skill_src = src
         return import_skill(
             str(skill_src), name=name, rewrite_paths=True,
             overwrite=overwrite, root=root,
         )
+    except PluginError as exc:  # surface download/unzip errors as SkillError
+        raise SkillError(str(exc)) from exc
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _find_skill_dir(root: Path) -> Path:
-    """Locate the directory containing SKILL.md within a cloned/extracted tree:
-    the root if it has one, else the nearest single SKILL.md found by walking."""
+def _find_skill_dir(root: Path, name: str | None = None) -> Path:
+    """Locate the SKILL.md directory within a cloned/extracted tree.
+
+    The root if it has one; else the single SKILL.md found by walking. When a
+    tree holds MORE than one skill, pick the one whose folder or frontmatter
+    `name` matches the requested `name`, and otherwise raise (rather than
+    silently installing whichever sorts first)."""
     if (root / "SKILL.md").is_file():
         return root
-    hits = sorted(root.rglob("SKILL.md"))
+    hits = sorted(p.parent for p in root.rglob("SKILL.md"))
     if not hits:
         raise SkillError("no SKILL.md found in the downloaded source")
-    return hits[0].parent
+    if len(hits) == 1:
+        return hits[0]
+    if name:
+        want = _slug(name)
+        for d in hits:
+            if _slug(d.name) == want:
+                return d
+            try:
+                meta, _ = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            if _slug(meta.get("name", "")) == want:
+                return d
+    raise SkillError(
+        "multiple skills found — pass --name to pick one of: "
+        + ", ".join(sorted(d.name for d in hits))
+    )
 
 
 def remove(name: str, root: Path | None = None) -> bool:

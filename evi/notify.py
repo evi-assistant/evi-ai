@@ -2,8 +2,8 @@
 
 eVi runs long *local*-model turns; without a ping you have to babysit the
 terminal. This sends a best-effort desktop notification + sound when a turn
-completes (or the agent blocks on `ask_user`), so you can walk away. Everything
-is best-effort and never raises — a missing `notify-send` just means no toast.
+completes, so you can walk away. Everything is best-effort and never raises —
+a missing `notify-send` just means no toast.
 
 Channels, by platform:
 - **sound**: winsound (Windows), `afplay` (macOS), `paplay`/`aplay` (Linux).

@@ -140,14 +140,16 @@ def _find_manifest_dir(base: Path) -> Path:
     raise PluginError("no plugin.toml found in archive")
 
 
-def _fetch_and_extract_zip(source: str, tmp: Path) -> Path:
-    """Download (if a URL) and unzip `source` into `tmp`; return the plugin dir."""
+def download_and_unzip(source: str, tmp: Path) -> Path:
+    """Download (if a URL) and unzip `source` into `tmp`; return the extraction
+    root. Manifest/SKILL.md discovery is left to the caller so both the plugin
+    and skill installers can reuse this (DRY). Raises PluginError on failure."""
     import zipfile
 
     if _is_url(source):
         import urllib.request
 
-        zip_path = tmp / "plugin.zip"
+        zip_path = tmp / "archive.zip"
         try:
             with urllib.request.urlopen(source, timeout=60) as resp:  # noqa: S310
                 zip_path.write_bytes(resp.read())
@@ -163,7 +165,12 @@ def _fetch_and_extract_zip(source: str, tmp: Path) -> Path:
             zf.extractall(dest)
     except (OSError, zipfile.BadZipFile) as exc:
         raise PluginError(f"bad zip: {exc}") from exc
-    return _find_manifest_dir(dest)
+    return dest
+
+
+def _fetch_and_extract_zip(source: str, tmp: Path) -> Path:
+    """Download + unzip `source` and locate the plugin dir (has plugin.toml)."""
+    return _find_manifest_dir(download_and_unzip(source, tmp))
 
 
 def install(source: str, name: str | None = None, root: Path | None = None) -> str:
@@ -176,8 +183,11 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
             plugin_src = _fetch_and_extract_zip(source, tmp)
         elif _looks_like_git(source):
             tmp = Path(tempfile.mkdtemp(prefix="evi-plugin-"))
+            if source.startswith("-"):
+                raise PluginError(f"refusing suspicious source: {source!r}")
             res = subprocess.run(
-                ["git", "clone", "--depth", "1", source, str(tmp)],
+                # `--` stops git treating a source like "--upload-pack=…" as an option.
+                ["git", "clone", "--depth", "1", "--", source, str(tmp)],
                 capture_output=True, text=True,
             )
             if res.returncode != 0:
