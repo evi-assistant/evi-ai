@@ -24,10 +24,10 @@ def _telemetry(*, crash_reports=False, dsn="", backend="sentry"):
 
 
 def test_scrub_rewrites_home_and_user():
-    ev = {"msg": r"failed at C:\Users\user\evi\x.py for user"}
-    out = reporting.scrub_event(ev, home=r"C:\Users\user", user="user")
+    ev = {"msg": r"failed at C:\Users\alice\evi\x.py for alice"}
+    out = reporting.scrub_event(ev, home=r"C:\Users\alice", user="alice")
     assert "<HOME>" in out["msg"]
-    assert "user" not in out["msg"]
+    assert "alice" not in out["msg"]
     assert "<USER>" in out["msg"]
 
 
