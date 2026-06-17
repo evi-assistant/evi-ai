@@ -151,6 +151,33 @@ class SkillStore:
         lines.append("Call `invoke_skill(name)` to load the full instructions.")
         return "\n".join(lines)
 
+    def tool_scope(self, name: str) -> tuple[frozenset[str] | None, frozenset[str]]:
+        """The skill's tool scope from frontmatter: ``(allowed, disallowed)``.
+
+        ``allowed`` is None when no ``allowed-tools`` key is present (only the
+        deny-list applies); otherwise it's the set of permitted tool names.
+        Values are comma- or space-separated. Mirrors Claude Code's
+        allowed/disallowed-tools."""
+        entry = self._find(name)
+        if entry is None:
+            return (None, frozenset())
+        try:
+            meta, _ = _split_frontmatter(entry.path.read_text(encoding="utf-8"))
+        except OSError:
+            return (None, frozenset())
+
+        def _items(*keys: str) -> set[str]:
+            out: set[str] = set()
+            for k in keys:
+                v = meta.get(k, "")
+                out |= {t.strip() for t in str(v).replace(",", " ").split() if t.strip()}
+            return out
+
+        has_allow = ("allowed-tools" in meta) or ("allowed_tools" in meta)
+        allowed = frozenset(_items("allowed-tools", "allowed_tools")) if has_allow else None
+        disallowed = frozenset(_items("disallowed-tools", "disallowed_tools"))
+        return (allowed, disallowed)
+
     # --- internals -------------------------------------------------------
 
     def _find(self, name: str) -> SkillEntry | None:

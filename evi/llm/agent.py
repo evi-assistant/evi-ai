@@ -26,6 +26,7 @@ from evi.hooks import HookRegistry
 if TYPE_CHECKING:
     from evi.guardrails import Guardrails
 from evi import otel
+from evi import skillscope
 from evi.memory import MemoryStore
 from evi.project import ProjectContext
 from evi.skills import SkillStore
@@ -788,6 +789,8 @@ class Agent:
             from evi import workdir
 
             workdir.set_cwd(self.cwd)
+        # Reset active-skill tool scope each turn; invoke_skill re-arms it.
+        skillscope.clear()
         # Input guardrails run on the raw user text, before any composition.
         if self.guardrails is not None:
             _jf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
@@ -1099,10 +1102,12 @@ class Agent:
 
         for turn_idx in range(max_turns):
             # Recompute each round so tools surfaced mid-turn by `search_tools`
-            # (deferred tool-search-at-scale) become available immediately.
+            # (deferred tool-search-at-scale) become available immediately, and
+            # so an active skill's tool scope (set by invoke_skill) takes effect
+            # on the following rounds.
             tool_schemas = (
                 None if plan_only
-                else ([t.openai_schema() for t in self.tools.values()] or None)
+                else ([t.openai_schema() for t in skillscope.filter_tools(self.tools.values())] or None)
             )
             dlog(
                 "llm.request",
@@ -1433,6 +1438,12 @@ class Agent:
             for m in calls_meta:
                 if m["tool"] is None:
                     m["blocked"] = f"ERROR: unknown tool '{m['name']}'"
+                elif not skillscope.allows(m["name"]):
+                    # Defense-in-depth: the active skill's scope withholds this
+                    # tool from the schema, but refuse it if called anyway.
+                    m["blocked"] = (
+                        f"ERROR: tool '{m['name']}' is not allowed by the active skill's scope"
+                    )
                 elif not m["perm"]:
                     m["blocked"] = (
                         f"PERMISSION DENIED: user did not approve "
