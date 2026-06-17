@@ -11,10 +11,11 @@ from __future__ import annotations
 
 
 def capabilities(model_id: str) -> dict[str, bool]:
-    """Return {vision, reasoning, infill, audio} for a model id."""
+    """Return {vision, reasoning, infill, audio, tools} for a model id."""
     from evi.audio_input import model_supports_audio
     from evi.complete import supports_fim
     from evi.reasoning import model_supports_reasoning
+    from evi.toolcalling import model_supports_tools
     from evi.vision import model_supports_vision
 
     mid = model_id or ""
@@ -23,6 +24,7 @@ def capabilities(model_id: str) -> dict[str, bool]:
         "reasoning": model_supports_reasoning(mid),
         "infill": supports_fim(mid),
         "audio": model_supports_audio(mid),
+        "tools": model_supports_tools(mid),
     }
 
 
@@ -32,4 +34,5 @@ CHIP_LABELS = {
     "reasoning": ("🧠", "Thinking"),
     "infill": ("⌨", "Infill"),
     "audio": ("🎤", "Audio"),
+    "tools": ("🔧", "Tools"),
 }

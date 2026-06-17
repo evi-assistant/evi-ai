@@ -3,6 +3,17 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.1] — 2026-06-17
+
+### Added
+- **Tool-calling capability chip** 🔧 — the model picker (web + status bar) now
+  shows whether the selected model's family is known to do OpenAI-style
+  function calling. eVi is an agent: a model that can't tool-call silently
+  produces prose instead of acting, and there was no signal for it. Detection
+  lives in `evi/toolcalling.py` (known-good families, with anti-hints so
+  base/FIM/embedding/guard models don't false-positive), wired through
+  `capabilities()` like the vision/thinking/infill/audio chips.
+
 ## [0.36.0] — 2026-06-17
 
 ### Added — last parity gaps closed
