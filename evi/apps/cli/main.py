@@ -1316,6 +1316,14 @@ def _run_repl(agent: Agent) -> None:
                     console.print(md)
                 else:
                     console.print()
+                # Ping when a turn finishes (off unless [notify] enabled) — lets
+                # you walk away from a long local turn. Best-effort, never raises.
+                try:
+                    from evi import notify as _notify
+
+                    _notify.notify_if_enabled("eVi", "Turn complete")
+                except Exception:
+                    pass
                 break
         console.print()
 
@@ -4162,6 +4170,40 @@ def skill_import(
     console.print(
         f"[green]imported[/green] {installed}{extra} "
         f"[dim](see `evi skill list`)[/dim]"
+    )
+
+
+@skill_app.command("add")
+def skill_add(
+    source: str = typer.Argument(
+        ..., help="A skill NAME (from the index), a git URL, a .zip URL, or a local dir."
+    ),
+    name: str = typer.Option("", "--name", help="Override the installed skill name."),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing skill of the same name."
+    ),
+) -> None:
+    """Install a skill in one line — download (if needed) + import.
+
+    A bare name resolves against the skills index (`[plugins] index_urls` + the
+    local marketplace.json `skills` section, e.g. the evi-skills repo). A git/zip
+    URL or local directory is installed directly. References in SKILL.md are
+    rewritten to absolute installed paths.
+    """
+    from evi import skills
+
+    try:
+        installed = skills.install_skill(source, name=name or None, overwrite=force)
+    except skills.SkillError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    try:
+        _, _dir, resources = skills.SkillStore().load(installed)
+    except KeyError:
+        resources = []
+    extra = f" [dim](+{len(resources)} bundled file(s))[/dim]" if resources else ""
+    console.print(
+        f"[green]installed[/green] {installed}{extra} [dim](see `evi skill list`)[/dim]"
     )
 
 

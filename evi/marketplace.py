@@ -44,8 +44,8 @@ class MarketplaceEntry:
     tags: list[str] = field(default_factory=list)
 
 
-def _parse_entries(data: Any) -> list[MarketplaceEntry]:
-    items = data.get("plugins", []) if isinstance(data, dict) else data
+def _parse_entries(data: Any, key: str = "plugins") -> list[MarketplaceEntry]:
+    items = data.get(key, []) if isinstance(data, dict) else data
     if not isinstance(items, list):
         return []
     out: list[MarketplaceEntry] = []
@@ -69,22 +69,24 @@ def _parse_entries(data: Any) -> list[MarketplaceEntry]:
     return out
 
 
-def _fetch_remote(url: str) -> list[MarketplaceEntry]:
+def _fetch_remote(url: str, key: str = "plugins") -> list[MarketplaceEntry]:
     try:
         import urllib.request
 
         with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 (user-configured)
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
-        return _parse_entries(data)
+        return _parse_entries(data, key)
     except Exception:
         return []  # best-effort — a bad index URL must not break search
 
 
 def load_index(
-    path: Path | None = None, *, index_urls: list[str] | None = None
+    path: Path | None = None, *, index_urls: list[str] | None = None,
+    key: str = "plugins",
 ) -> list[MarketplaceEntry]:
     """Load the local index plus any remote ``index_urls``. Local entries win
-    on a name clash; result is sorted by name. Never raises."""
+    on a name clash; result is sorted by name. ``key`` selects the section
+    ("plugins" or "skills"). Never raises."""
     by_name: dict[str, MarketplaceEntry] = {}
 
     p = path or MARKETPLACE_PATH
@@ -93,14 +95,22 @@ def load_index(
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = None
-        for e in _parse_entries(data or {}):
+        for e in _parse_entries(data or {}, key):
             by_name.setdefault(e.name, e)
 
     for url in index_urls or []:
-        for e in _fetch_remote(url):
+        for e in _fetch_remote(url, key):
             by_name.setdefault(e.name, e)
 
     return sorted(by_name.values(), key=lambda e: e.name.lower())
+
+
+def load_skill_index(
+    path: Path | None = None, *, index_urls: list[str] | None = None
+) -> list[MarketplaceEntry]:
+    """Skill catalog — the ``skills`` section of the same index files that carry
+    plugins. Lets ``evi skills add <name>`` resolve a name to a source."""
+    return load_index(path, index_urls=index_urls, key="skills")
 
 
 def search(query: str, entries: list[MarketplaceEntry]) -> list[MarketplaceEntry]:

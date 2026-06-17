@@ -34,7 +34,7 @@ def test_load_index_merges_remote_local_wins(tmp_path, monkeypatch):
     monkeypatch.setattr(
         marketplace,
         "_fetch_remote",
-        lambda url: [
+        lambda url, key="plugins": [
             MarketplaceEntry(name="dup", source="remote-src"),
             MarketplaceEntry(name="extra", source="remote-extra"),
         ],

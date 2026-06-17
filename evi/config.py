@@ -347,6 +347,15 @@ class ToolToggles:
     # gofmt/rustfmt, by extension) after write_file/edit_file/apply_patch.
     # No-op when the formatter isn't installed. Mirrors opencode's format-on-edit.
     format_on_edit: bool = False
+    # When True, run the linter after a write and fold any diagnostics into the
+    # tool result so the model sees errors it just introduced (cheap LSP-lite
+    # feedback). No-op when the linter isn't installed / no findings.
+    check_on_edit: bool = False
+    # web_search backend: "ddg" (DuckDuckGo, keyless, default), "searxng" (a
+    # self-hosted SearXNG instance — set searxng_url), or "ollama" (Ollama's
+    # web search API — needs OLLAMA_API_KEY). All keep search local-first.
+    search_backend: str = "ddg"
+    searxng_url: str = ""  # e.g. "http://localhost:8888" for the searxng backend
 
 
 @dataclass
@@ -438,6 +447,20 @@ class WorktreeSettings:
 
 
 @dataclass
+class NotifySettings:
+    """Completion notifications (off by default). When `enabled`, eVi pings on
+    turn-done / blocked-on-ask_user so you can walk away from a long local turn.
+    `sound` = a beep; `desktop` = a native toast (macOS/Linux; Windows visual
+    toasts come from the desktop/web UI); `url` = an ntfy topic or webhook POSTed
+    so a remote turn can still reach your phone. See evi/notify.py."""
+
+    enabled: bool = False
+    sound: bool = True
+    desktop: bool = True
+    url: str = ""
+
+
+@dataclass
 class Config:
     llm: LLMSettings = field(default_factory=LLMSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
@@ -455,6 +478,7 @@ class Config:
     ultracode: UltracodeSettings = field(default_factory=UltracodeSettings)
     worktree: WorktreeSettings = field(default_factory=WorktreeSettings)
     models: SpecialtyModels = field(default_factory=SpecialtyModels)
+    notify: NotifySettings = field(default_factory=NotifySettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -495,6 +519,7 @@ class Config:
             ultracode=UltracodeSettings(**data.get("ultracode", {})),
             worktree=WorktreeSettings(**data.get("worktree", {})),
             models=SpecialtyModels(**data.get("models", {})),
+            notify=NotifySettings(**data.get("notify", {})),
         )
 
     def save(self) -> None:

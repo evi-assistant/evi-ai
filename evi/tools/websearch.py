@@ -28,10 +28,11 @@ _HTTP_TIMEOUT = 30.0
 
 @tool(
     description=(
-        "Search the web with DuckDuckGo. Returns up to `limit` results as "
-        "JSON: [{title, url, snippet}, …]. Use this when the user asks "
-        "about current events, public docs, or anything not in your "
-        "training data."
+        "Search the web. Returns up to `limit` results as JSON: "
+        "[{title, url, snippet}, …]. Backend is configurable ([tools] "
+        "search_backend = ddg | searxng | ollama); DuckDuckGo (keyless) is the "
+        "default. Use this for current events, public docs, or anything not in "
+        "your training data."
     ),
     category="web",
     long=True,
@@ -40,6 +41,21 @@ def web_search(query: str, limit: int = 5) -> str:
     if not query.strip():
         return "ERROR: empty query"
     limit = max(1, min(int(limit), 25))
+    try:
+        from evi.config import Config
+
+        tools = Config.load().tools
+        backend = (tools.search_backend or "ddg").strip().lower()
+    except Exception:
+        backend, tools = "ddg", None
+    if backend == "searxng":
+        return _search_searxng((tools.searxng_url if tools else ""), query, limit)
+    if backend == "ollama":
+        return _search_ollama(query, limit)
+    return _search_ddg(query, limit)
+
+
+def _search_ddg(query: str, limit: int) -> str:
     try:
         from duckduckgo_search import DDGS
     except ImportError:
@@ -59,6 +75,64 @@ def web_search(query: str, limit: int = 5) -> str:
             "snippet": r.get("body", "") or r.get("snippet", ""),
         }
         for r in results
+    ]
+    return json.dumps(cleaned)
+
+
+def _search_searxng(base_url: str, query: str, limit: int) -> str:
+    """Query a self-hosted SearXNG instance's JSON API (fully local-first, no
+    key). Configure the instance URL via [tools] searxng_url."""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return "ERROR: searxng backend selected but [tools] searxng_url is unset"
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+            r = client.get(
+                f"{base}/search",
+                params={"q": query, "format": "json"},
+                headers={"User-Agent": _USER_AGENT},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        return f"ERROR: searxng search failed: {type(exc).__name__}: {exc}"
+    cleaned = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": item.get("content", ""),
+        }
+        for item in (data.get("results") or [])[:limit]
+    ]
+    return json.dumps(cleaned)
+
+
+def _search_ollama(query: str, limit: int) -> str:
+    """Ollama's hosted web-search API (needs OLLAMA_API_KEY). Kept here for
+    parity; SearXNG is the fully-self-hosted option."""
+    import os
+
+    key = os.environ.get("OLLAMA_API_KEY", "").strip()
+    if not key:
+        return "ERROR: ollama search backend needs OLLAMA_API_KEY in the environment"
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+            r = client.post(
+                "https://ollama.com/api/web_search",
+                headers={"Authorization": f"Bearer {key}", "User-Agent": _USER_AGENT},
+                json={"query": query, "max_results": limit},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        return f"ERROR: ollama search failed: {type(exc).__name__}: {exc}"
+    cleaned = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": item.get("content", "") or item.get("snippet", ""),
+        }
+        for item in (data.get("results") or [])[:limit]
     ]
     return json.dumps(cleaned)
 
