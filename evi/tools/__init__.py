@@ -16,6 +16,7 @@ _BUILTIN_TOOL_MODULES = (
     "fs", "code", "shell", "memory", "skills", "subagent", "websearch", "git",
     "index", "calendar", "pdf", "sqlite", "ocr", "rerank", "monitor",
     "image_comfy", "voice", "computer", "federation", "ask", "vision_tool",
+    "bugledger",
 )
 
 

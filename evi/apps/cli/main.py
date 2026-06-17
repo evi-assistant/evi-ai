@@ -74,6 +74,7 @@ import evi.tools.calendar  # noqa: F401
 import evi.tools.rerank  # noqa: F401
 import evi.tools.ask  # noqa: F401
 import evi.tools.vision_tool  # noqa: F401
+import evi.tools.bugledger  # noqa: F401
 from evi.memory import MemoryStore
 from evi.skills import SkillStore
 from evi.tools.base import get_enabled_tools
@@ -105,6 +106,39 @@ def _ensure_mcp(config: Config) -> MCPManager | None:
     atexit.register(manager.stop)
     return manager
 
+
+def _force_utf8_io() -> None:
+    """Make console output survive a non-UTF-8 stdout/stderr.
+
+    Rich prints status glyphs and box drawing (✓ ✗ ⚠ …) all over the CLI
+    (`evi lint`, `evi doctor`, `evi stats`, permission prompts, …). When stdout
+    is a real terminal that's fine, but the moment output is redirected or
+    piped on Windows the stream defaults to the cp1252 locale codec, which
+    can't encode those glyphs — `file.write()` raises
+    ``UnicodeEncodeError: 'charmap' codec can't encode character '✓'`` and the
+    command crashes (repro: ``evi doctor > out.txt`` or ``evi lint | more``).
+
+    Upgrading the std streams to UTF-8 keeps the glyphs intact through a
+    redirect; ``errors="replace"`` is a belt-and-suspenders fallback for the
+    rare stream that still can't encode (it degrades to ``?`` instead of
+    raising). Streams that are already a UTF flavour — every modern terminal,
+    Linux/macOS in general — are left untouched, and objects without
+    ``reconfigure`` (e.g. ``StringIO`` under pytest capture) are skipped.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower()
+        if encoding.replace("-", "").replace("_", "").startswith("utf"):
+            continue  # utf-8/16/32 already encode the glyphs fine
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue  # not a TextIOWrapper (e.g. pytest's captured StringIO)
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass  # stream detached/closed — leave it as-is rather than crash
+
+
+_force_utf8_io()
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="eVi — personal AI assistant.")
 console = Console()
@@ -1509,6 +1543,79 @@ def lint(
     console.print(f"\n[red]{errors} error[/red] · [yellow]{warns} warn[/yellow]")
     if errors and strict:
         raise typer.Exit(1)
+
+
+@app.command()
+def anatomy(
+    write: bool = typer.Option(
+        False, "--write", "-w", help="Write to .evi/anatomy.md (auto-injected into "
+        "project context) instead of printing.",
+    ),
+    path: str = typer.Option("", "--path", help="Project root (default: current dir)."),
+) -> None:
+    """Generate a project map — every file with an estimated token count.
+
+    Gives the agent (and you) an orientation map so it budgets reads instead of
+    blindly opening whole files. With --write it lands at .evi/anatomy.md and is
+    auto-injected into the system prompt on the next session.
+    """
+    from evi import anatomy as _anatomy
+
+    root = path or None
+    if write:
+        p = _anatomy.write_anatomy(root)
+        console.print(f"[green]wrote[/green] {p}")
+    else:
+        console.print(_anatomy.build_anatomy(root), markup=False, highlight=False)
+
+
+@app.command()
+def reflect(
+    hours: float = typer.Option(
+        24.0, "--hours", help="Reflect over transcript entries from the last N hours.",
+    ),
+) -> None:
+    """Distill durable lessons + corrections from recent sessions into memory.
+
+    Looks back over your recent conversation, extracts standing preferences and
+    corrections the agent may not have saved in the moment, and writes them to
+    long-term memory (tagged 'reflected') so the next session starts smarter.
+    """
+    from datetime import datetime, timedelta
+
+    from evi import reflect as _reflect
+    from evi.llm.client import make_client
+    from evi.transcripts import TranscriptStore
+
+    cutoff = datetime.now() - timedelta(hours=hours)
+    entries = list(TranscriptStore().iter_since(cutoff))
+    messages = [
+        {"role": e.role, "content": e.content}
+        for e in entries
+        if e.role in ("user", "assistant") and (e.content or "").strip()
+    ]
+    if not messages:
+        console.print(f"[dim]no conversation in the last {hours:g}h to reflect on[/dim]")
+        return
+
+    cfg = Config.load()
+    client = make_client(cfg.llm)
+
+    def run_one(prompt: str) -> str:
+        resp = client.chat.completions.create(
+            model=cfg.llm.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            stream=False,
+        )
+        return resp.choices[0].message.content or "" if resp.choices else ""
+
+    with console.status("reflecting…"):
+        written = _reflect.reflect(messages, run_one=run_one)
+    if written:
+        console.print(f"[green]saved {len(written)} memory(ies):[/green] {', '.join(written)}")
+    else:
+        console.print("[dim]nothing durable to save[/dim]")
 
 
 hooks_app = typer.Typer(help="Inspect and dry-run tool/lifecycle hooks (~/.evi/hooks.toml).")

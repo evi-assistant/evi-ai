@@ -3,6 +3,28 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.40.0] — 2026-06-17
+
+### Added — project-intelligence pack (feature-scan Batch C)
+- **Project anatomy map** — `evi anatomy [--write]` builds a token-estimated file
+  map (git-aware) so the agent budgets reads instead of blindly opening files.
+  Written to `.evi/anatomy.md` and auto-injected into project context when present
+  (`evi/anatomy.py`).
+- **Bug-fix ledger** — per-project `.evi/bug-ledger.jsonl` with `record_fix` /
+  `search_fixes` tools so the agent checks past fixes before retrying a repair
+  (`evi/bugledger.py`).
+- **Session reflection** — `evi reflect` distills durable preferences/corrections
+  from recent sessions into long-term memory (`evi/reflect.py`); model call is
+  injected so it's testable.
+
+### Fixes (from an adversarial review of this batch)
+- reflect: robust JSON extraction (handles brackets in surrounding prose), name
+  slugification (non-slug names normalised, not dropped), and no clobbering of a
+  hand-authored memory on a name collision (+ in-batch dedupe).
+- anatomy: git mode now honours the same ignore filter as the walk (drops `.evi/`
+  & binaries), keeps non-ASCII filenames (`core.quotepath=false`), no longer
+  drops files merely *named* like an ignored dir, and flags char-cap truncation.
+
 ## [0.39.0] — 2026-06-17
 
 ### Added — models.dev catalog + config linter (feature-scan Batch B)
