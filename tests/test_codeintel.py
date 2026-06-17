@@ -53,6 +53,7 @@ def test_diagnose_reports_output(tmp_path, monkeypatch):
 
     def fake_run(argv, **kw):
         class R:
+            returncode = 1  # linters exit non-zero when they find issues
             stdout = "a.py:1:1 F401 unused import"
             stderr = ""
 

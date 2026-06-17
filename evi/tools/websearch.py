@@ -96,6 +96,8 @@ def _search_searxng(base_url: str, query: str, limit: int) -> str:
             data = r.json()
     except Exception as exc:
         return f"ERROR: searxng search failed: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return "ERROR: searxng returned an unexpected response shape"
     cleaned = [
         {
             "title": item.get("title", ""),
@@ -126,6 +128,8 @@ def _search_ollama(query: str, limit: int) -> str:
             data = r.json()
     except Exception as exc:
         return f"ERROR: ollama search failed: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return "ERROR: ollama returned an unexpected response shape"
     cleaned = [
         {
             "title": item.get("title", ""),

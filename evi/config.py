@@ -449,7 +449,7 @@ class WorktreeSettings:
 @dataclass
 class NotifySettings:
     """Completion notifications (off by default). When `enabled`, eVi pings on
-    turn-done / blocked-on-ask_user so you can walk away from a long local turn.
+    turn-done so you can walk away from a long local turn.
     `sound` = a beep; `desktop` = a native toast (macOS/Linux; Windows visual
     toasts come from the desktop/web UI); `url` = an ntfy topic or webhook POSTed
     so a remote turn can still reach your phone. See evi/notify.py."""

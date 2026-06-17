@@ -61,6 +61,29 @@ def test_post_write_skips_clean_and_no_linter(monkeypatch, tmp_path):
     assert "[check]" not in fs._post_write(tmp_path / "x.py")
     monkeypatch.setattr(codeintel, "diagnose", lambda p: "(no linter configured for .xyz)")
     assert "[check]" not in fs._post_write(tmp_path / "x.xyz")
+    # ruff's clean banner (exit 0) must not surface as a finding either.
+    monkeypatch.setattr(codeintel, "diagnose", lambda p: "All checks passed!")
+    assert "[check]" not in fs._post_write(tmp_path / "x.py")
+
+
+def test_diagnose_keys_off_exit_code(monkeypatch, tmp_path):
+    from evi import codeintel
+
+    f = tmp_path / "x.py"
+    f.write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(codeintel, "_first_available", lambda cmds: ["ruff", "check"])
+
+    class _R:
+        def __init__(self, rc, out):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = ""
+    # exit 0 with a success banner → "no issues", not the banner text.
+    monkeypatch.setattr(codeintel.subprocess, "run", lambda *a, **k: _R(0, "All checks passed!"))
+    assert "no issues" in codeintel.diagnose(f)
+    # exit non-zero → the findings surface.
+    monkeypatch.setattr(codeintel.subprocess, "run", lambda *a, **k: _R(1, "x.py:1 E501 long"))
+    assert "E501" in codeintel.diagnose(f)
 
 
 # --- pluggable web search -----------------------------------------------------
@@ -136,3 +159,47 @@ def test_install_skill_unknown_name_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(marketplace, "load_skill_index", lambda **k: [])
     with pytest.raises(skills.SkillError):
         skills.install_skill("does-not-exist")
+
+
+def test_install_skill_from_zip(tmp_path):
+    """A skill .zip (SKILL.md, not plugin.toml) must install, not raise PluginError."""
+    import zipfile
+
+    from evi import skills
+
+    inner = tmp_path / "pkg" / "my-zip-skill"
+    inner.mkdir(parents=True)
+    (inner / "SKILL.md").write_text(
+        "---\nname: my-zip-skill\ndescription: zipped\n---\n# body\n", encoding="utf-8"
+    )
+    zpath = tmp_path / "skill.zip"
+    with zipfile.ZipFile(zpath, "w") as zf:
+        zf.write(inner / "SKILL.md", "my-zip-skill/SKILL.md")
+    dest_root = tmp_path / "installed"
+    name = skills.install_skill(str(zpath), root=dest_root)
+    assert name == "my-zip-skill"
+    assert (dest_root / "my-zip-skill" / "SKILL.md").is_file()
+
+
+def test_find_skill_dir_multi_requires_name(tmp_path):
+    from evi import skills
+
+    for n in ("alpha", "beta"):
+        d = tmp_path / "repo" / n
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {n}\ndescription: d\n---\n#\n", encoding="utf-8"
+        )
+    root = tmp_path / "repo"
+    # No name → ambiguous → error listing candidates.
+    with pytest.raises(skills.SkillError):
+        skills._find_skill_dir(root)
+    # With a name → picks the matching skill.
+    assert skills._find_skill_dir(root, "beta").name == "beta"
+
+
+def test_install_skill_rejects_dash_source():
+    from evi import skills
+
+    with pytest.raises(skills.SkillError):
+        skills.install_skill("--upload-pack=touch x.git")

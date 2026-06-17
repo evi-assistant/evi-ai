@@ -89,5 +89,10 @@ def diagnose(path: str | Path) -> str:
                              timeout=_LINT_TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"{cmd[0]} failed: {exc}"
+    # Linters (ruff/eslint/go vet/clippy) exit 0 only when clean. Key off the
+    # exit code rather than parsing output, so success banners like ruff's
+    # "All checks passed!" aren't mistaken for findings.
+    if res.returncode == 0:
+        return f"{cmd[0]}: no issues found"
     out = ((res.stdout or "") + (res.stderr or "")).strip()
     return out or f"{cmd[0]}: no issues found"

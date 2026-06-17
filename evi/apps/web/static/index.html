@@ -1394,15 +1394,21 @@ window.workStatus = workStatus;  // exposed for e2e tests
 // Completion notifications. Opt-in via the bell toggle (localStorage). Fires a
 // browser Notification + short beep when a turn finishes while this tab is
 // hidden — works in the Tauri desktop webview too. No-op when off / focused.
-function notifyEnabled() { return localStorage.getItem('evi-notify') === '1'; }
+const NOTIFY_KEY = 'evi-notify';  // kept hyphenated to not reset existing opt-ins
+function notifyEnabled() { return localStorage.getItem(NOTIFY_KEY) === '1'; }
 async function notifyToggle() {
-  if (notifyEnabled()) { localStorage.removeItem('evi-notify'); return false; }
+  if (notifyEnabled()) { localStorage.removeItem(NOTIFY_KEY); return false; }
+  // Only enable if the browser will actually deliver toasts (a denied prompt
+  // would otherwise show the bell ON while toasts silently never appear).
+  let perm = 'granted';
   try {
-    if ('Notification' in window && Notification.permission !== 'granted') {
-      await Notification.requestPermission();
+    if ('Notification' in window) {
+      perm = Notification.permission === 'granted'
+        ? 'granted' : await Notification.requestPermission();
     }
-  } catch {}
-  localStorage.setItem('evi-notify', '1');
+  } catch { perm = 'granted'; }  // no Notification API (e.g. some webviews) → allow beep-only
+  if (perm === 'denied') return false;
+  localStorage.setItem(NOTIFY_KEY, '1');
   return true;
 }
 function notifyBeep() {
