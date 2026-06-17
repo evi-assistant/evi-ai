@@ -549,6 +549,7 @@
   <span class="chip" id="chip-goal" style="display:none"></span>
   <span class="chip" id="chip-plan" style="display:none">plan</span>
   <span class="chip" id="chip-auto" style="display:none">auto</span>
+  <button id="notify-btn" type="button" title="Notify when a turn finishes while this tab is in the background" style="margin-left:8px">🔕</button>
   <button id="speak-btn" type="button" title="Auto-speak replies (sentence-by-sentence TTS)">🔇</button>
   <button id="dispatch-btn" type="button" title="Dispatch — sessions & workflows" style="margin-left:8px">🗂</button>
   <button id="settings-btn" type="button" title="Settings (Ctrl+,)" style="margin-left:8px">⚙</button>
@@ -1390,6 +1391,45 @@ const workStatus = (() => {
 })();
 window.workStatus = workStatus;  // exposed for e2e tests
 
+// Completion notifications. Opt-in via the bell toggle (localStorage). Fires a
+// browser Notification + short beep when a turn finishes while this tab is
+// hidden — works in the Tauri desktop webview too. No-op when off / focused.
+function notifyEnabled() { return localStorage.getItem('evi-notify') === '1'; }
+async function notifyToggle() {
+  if (notifyEnabled()) { localStorage.removeItem('evi-notify'); return false; }
+  try {
+    if ('Notification' in window && Notification.permission !== 'granted') {
+      await Notification.requestPermission();
+    }
+  } catch {}
+  localStorage.setItem('evi-notify', '1');
+  return true;
+}
+function notifyBeep() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = 660; g.gain.value = 0.05;
+    o.start(); o.stop(ctx.currentTime + 0.15);
+  } catch {}
+}
+function notifyTurnDone(assistant) {
+  if (!notifyEnabled()) return;
+  if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  const src = (assistant && (assistant.dataset.source || assistant.textContent)) || '';
+  const body = src.trim().slice(0, 120) || 'Turn complete';
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const n = new Notification('eVi — turn complete', { body });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+  } catch {}
+  notifyBeep();
+}
+
 async function sendMessage(text, images) {
   // Don't fire a real LLM turn into the void. Slash commands (/help, /reset,
   // …) are handled without a model, so only gate normal messages.
@@ -1566,6 +1606,9 @@ async function handleEvent(ev, assistant) {
   } else if (ev.kind === 'Done') {
     // Flush any trailing partial sentence to the TTS queue.
     flushSpeak(assistant);
+    // Completion notification — only when this tab is in the background, so it
+    // doesn't nag while you're watching. Toggle in localStorage('evi-notify').
+    notifyTurnDone(assistant);
     // Scan the just-completed assistant bubble for ```mermaid blocks
     // and render them inline.
     if (assistant && window.mermaid) {
@@ -2080,6 +2123,20 @@ async function handleAttachment(file) {
 }
 
 // --- auto-speak (browser speechSynthesis) -------------------------------
+
+const notifyBtn = document.getElementById('notify-btn');
+function updateNotifyButton() {
+  const on = notifyEnabled();
+  notifyBtn.textContent = on ? '🔔' : '🔕';
+  notifyBtn.title = on
+    ? 'Turn-done notifications ON (when tab backgrounded) — click to disable'
+    : 'Turn-done notifications OFF — click to enable';
+}
+updateNotifyButton();
+notifyBtn.addEventListener('click', async () => {
+  await notifyToggle();
+  updateNotifyButton();
+});
 
 const speakBtn = document.getElementById('speak-btn');
 const SPEAK_KEY = 'evi.autoSpeak';

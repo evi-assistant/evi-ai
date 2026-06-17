@@ -293,6 +293,82 @@ def import_skill(
     return slug
 
 
+def install_skill(
+    source: str,
+    *,
+    name: str | None = None,
+    overwrite: bool = False,
+    root: Path | None = None,
+) -> str:
+    """Install a skill from a NAME (resolved via the skills index), a git URL, a
+    .zip (local/http), or a local directory. Downloads if needed, then imports
+    with reference rewriting. Returns the installed name.
+
+    This is the one-line ``evi skills add`` path — for a name it consults the
+    ``skills`` section of the marketplace index ([plugins] index_urls + the local
+    marketplace.json); a git/zip/dir source is installed directly.
+    """
+    import tempfile
+
+    from evi.plugins import _fetch_and_extract_zip, _looks_like_git, _looks_like_zip
+
+    src = source.strip()
+    if not src:
+        raise SkillError("empty skill source")
+
+    # Bare name → resolve against the skills index.
+    if not _looks_like_git(src) and not _looks_like_zip(src) and "/" not in src and "\\" not in src:
+        from evi import marketplace
+        from evi.config import Config
+
+        index_urls = Config.load().plugins.index_urls
+        entries = marketplace.load_skill_index(index_urls=index_urls)
+        match = marketplace.resolve(src, entries)
+        if match is None:
+            raise SkillError(
+                f"no skill named {src!r} in the index — try a git URL, or add an "
+                "index via [plugins] index_urls"
+            )
+        src = match.source
+
+    tmp: Path | None = None
+    try:
+        if _looks_like_zip(src):
+            tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
+            skill_src: str | Path = _fetch_and_extract_zip(src, tmp)
+        elif _looks_like_git(src):
+            import subprocess
+
+            tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
+            res = subprocess.run(
+                ["git", "clone", "--depth", "1", src, str(tmp)],
+                capture_output=True, text=True,
+            )
+            if res.returncode != 0:
+                raise SkillError("git clone failed:\n" + (res.stderr or res.stdout))
+            skill_src = _find_skill_dir(tmp)
+        else:
+            skill_src = src
+        return import_skill(
+            str(skill_src), name=name, rewrite_paths=True,
+            overwrite=overwrite, root=root,
+        )
+    finally:
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _find_skill_dir(root: Path) -> Path:
+    """Locate the directory containing SKILL.md within a cloned/extracted tree:
+    the root if it has one, else the nearest single SKILL.md found by walking."""
+    if (root / "SKILL.md").is_file():
+        return root
+    hits = sorted(root.rglob("SKILL.md"))
+    if not hits:
+        raise SkillError("no SKILL.md found in the downloaded source")
+    return hits[0].parent
+
+
 def remove(name: str, root: Path | None = None) -> bool:
     """Delete a user skill directory (``~/.evi/skills/<name>/``).
 

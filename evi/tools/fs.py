@@ -39,17 +39,31 @@ def clear_read_cache() -> None:
 
 
 def _post_write(p: Path) -> str:
-    """Optional format-on-edit. Returns a note to append to the tool result
-    (empty when disabled / no formatter). Never raises."""
+    """Optional format-on-edit + check-on-edit. Returns a note to append to the
+    tool result (empty when both disabled / no tools). Never raises.
+
+    `format_on_edit` formats in place; `check_on_edit` then runs the linter and
+    folds any diagnostics back into the tool result so the model sees the errors
+    it just introduced (the cheap, dep-light tier of LSP-style feedback)."""
     try:
         from evi.config import Config
 
-        if not Config.load().tools.format_on_edit:
-            return ""
-        from evi import codeintel
+        cfg = Config.load()
+        note = ""
+        if cfg.tools.format_on_edit:
+            from evi import codeintel
 
-        ran, tool = codeintel.format_file(p)
-        return f" (formatted with {tool})" if ran else ""
+            ran, tool = codeintel.format_file(p)
+            if ran:
+                note += f" (formatted with {tool})"
+        if cfg.tools.check_on_edit:
+            from evi import codeintel
+
+            diag = codeintel.diagnose(p).strip()
+            # Only surface real findings — skip the "no issues" / "no linter" noise.
+            if diag and "no issues" not in diag and not diag.startswith("(no linter"):
+                note += f"\n[check] {diag[:2000]}"
+        return note
     except Exception:  # noqa: BLE001
         return ""
 
