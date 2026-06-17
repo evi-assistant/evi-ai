@@ -54,8 +54,8 @@ Local-first personal AI assistant living at `C:\evi`.
   + NSIS installers (~78–79 MB) embedding a ~72 MB PyInstaller sidecar.
 - **Under version control now.** `git init` done — initial commit `208ea02`
   ("eVi v0.21.2", 235 files) on `main` (origin/main set). Working tree clean.
-- **Migrated to this machine (`dusti`).** The old `.venv` (base interpreter
-  under `C:\Users\Dustin Kost\…`) was dead on arrival; recreated with
+- **Migrated to a new dev machine.** The old `.venv` (base interpreter under a
+  prior user profile) was dead on arrival; recreated with
   `py -3.11` (3.11.9) + all extras. cargo/node/npm are present here.
 - We are mid **Phase 48** (desktop bundling polish + "no LLM backend" UX).
   Version **bumped to 0.22.0**; CHANGELOG + `docs/desktop-bundling.md` updated.
