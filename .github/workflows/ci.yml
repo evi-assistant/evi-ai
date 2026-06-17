@@ -15,14 +15,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # Every push to main runs ONE cheap Ubuntu/py3.12 job; the full
-      # 3-OS × 2-Python matrix runs on PRs, the weekly schedule, and manual
-      # dispatch. macOS bills at ~10×, so full-matrix-on-every-push was the
-      # bulk of our Actions minutes — this keeps coverage where it matters
-      # (PRs + weekly) at a fraction of the cost.
+      # Every push to main runs ONE cheap Ubuntu/py3.13 job; the full
+      # 3-OS matrix runs on PRs, the weekly schedule, and manual dispatch.
+      # macOS bills at ~10×, so full-matrix-on-every-push was the bulk of our
+      # Actions minutes — this keeps coverage where it matters (PRs + weekly)
+      # at a fraction of the cost. (Python is 3.13-only since the 0.35.0 floor.)
       matrix:
         os: ${{ (github.event_name == 'push') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
-        python: ${{ (github.event_name == 'push') && fromJSON('["3.13"]') || fromJSON('["3.13"]') }}
+        python: ["3.13"]
 
     steps:
       - uses: actions/checkout@v4
