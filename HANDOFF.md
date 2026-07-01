@@ -1,297 +1,225 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-06-07 · version 0.24.3 (desktop app 0.2.4)_
+_Last updated: 2026-07-01 · v1.0.0 (desktop 1.0.0) · **PUBLIC**_
 
-> **⚠ The body of this file below is stale (0.24.3 / Phase 48 era).** For the
-> authoritative current state see the per-session memory note
-> `~/.claude/projects/C--evi/memory/evi-project-status.md`. Quick snapshot as of
-> **2026-06-09**:
->
-> - **Released line:** v0.31.0 (desktop 0.2.12), but **all releases are PAUSED on
->   a GitHub Actions billing block** (account-level; USER-only fix — do not touch
->   billing). Local `main` is far ahead of the last release, committed but not
->   pushed/released.
-> - **Done locally:** the entire roadmap Phase 79–94, plus a docs-review parity
->   batch (Structured Outputs, Batch, expanded hooks, Evals + LLM-judge, stats,
->   scheduled evals, federation, Responses API, multi-user web, semantic
->   guardrails: regex→judge→classifier).
-> - **All 5 cli-parity web/desktop gaps now shipped** as Settings sections:
->   **Guardrails** editor, **Plugins** browser, **Usage** stats, **Evals** panel,
->   **Routes & Recipes** — each with `/api/*` endpoints + unit/api/e2e tests +
->   docs. See `docs/cli-parity.md`.
-> - **Tests:** 954 passed, 2 skipped; e2e `test_ui_features` 25 passed (run e2e
->   with `--timeout=120`). Clean ruff.
-> - **Desktop build works locally** (see Gotchas: build via bash/cmd redirection,
->   not PowerShell `*>>`).
-
-This is a working-state snapshot for picking the project up on another machine.
-Read the **Status**, **Open items**, and **Gotchas** sections first, then follow
-**Migration**.
+This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at 1.0.0, and the `evi-skills` catalog is public. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
 ---
 
 ## 1. What eVi is
 
-Local-first personal AI assistant living at `C:\evi`.
+A local-first personal AI assistant: **one shared Python core (`evi/`) behind three frontends**, talking to local LLM backends.
 
-- **Shared Python core** (`evi/`) consumed by **three frontends**:
-  - CLI — `evi` (Typer/Rich REPL)
-  - Web — FastAPI + SSE at `evi/apps/web/` (single-page `static/index.html`)
-  - Desktop — Tauri 2 shell in `desktop/` that wraps the web UI
-- Talks to **local LLM backends**: LM Studio (`:1234`), Ollama (`:11434`),
-  llama.cpp (`:8080`), or any OpenAI-compatible server.
-- Distributed as PyPI package **`evi-assistant`**; the import package stays **`evi`**.
-- Big feature set already built across Phases 1–47: memory, MCP bridge, skills,
-  scheduler, multi-backend model management, hooks/permissions, worktrees,
-  dream engine, web+computer+voice(STT/TTS)+vision+OCR+PDF+SQLite tools,
-  calendar, self-update, citations, routing, auth, etc.
+| Frontend | What it is |
+|---|---|
+| **CLI** | `evi` — Typer/Rich REPL (`evi/apps/cli/main.py`) |
+| **Web** | FastAPI + SSE app (`evi/apps/web/server.py`) + vanilla-JS single-page UI in `static/` |
+| **Desktop** | Tauri 2 shell (`desktop/`) wrapping the web UI, shipping a frozen Python sidecar |
+
+- **Local LLM backends:** LM Studio (`:1234`, default), Ollama (`:11434`), llama.cpp (`:8080`, auto-discovers ports 8080–8090), or any OpenAI-compatible endpoint.
+- **Distribution:** PyPI dist name is **`evi-assistant`**; the import package and CLI command both stay **`evi`**. Install with `pip install evi-assistant`, then `import evi` / run `evi`.
+- **License:** MIT. **Python floor:** 3.13 (`requires-python = ">=3.13"`).
 
 ## 2. Current status
 
-- **Tests:** `570 passed, 1 skipped` (re-verified on this machine 2026-06-06,
-  ~33s under the fresh `.venv`). Clean ruff.
-- **Desktop:** standalone Tauri build works end-to-end on Windows — produces MSI
-  + NSIS installers (~78–79 MB) embedding a ~72 MB PyInstaller sidecar.
-- **Under version control now.** `git init` done — initial commit `208ea02`
-  ("eVi v0.21.2", 235 files) on `main` (origin/main set). Working tree clean.
-- **Migrated to a new dev machine.** The old `.venv` (base interpreter under a
-  prior user profile) was dead on arrival; recreated with
-  `py -3.11` (3.11.9) + all extras. cargo/node/npm are present here.
-- We are mid **Phase 48** (desktop bundling polish + "no LLM backend" UX).
-  Version **bumped to 0.22.0**; CHANGELOG + `docs/desktop-bundling.md` updated.
-  Remaining Phase-48 work is the desktop sidecar rebuild → verify → installers.
+**1.0 shipped (2026-07-01):**
 
-### Work done in Phase 48 (now committed; the 0.22.0 changes are documented)
+- **Public repo:** `https://github.com/evi-assistant/evi-ai` (transferred from the old private `dmang-dev/evi-ai`). All `[project.urls]` point at the `evi-assistant` org.
+- **PyPI:** `evi-assistant` **v1.0.0** — Development Status classifier flipped to **Production/Stable**.
+- **Desktop:** **v1.0.0**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired).
+- **Skills:** `evi-skills` catalog is public.
+- **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
+- Version is consistent across `pyproject.toml`, `evi/__init__.py`, and `desktop/src-tauri/tauri.conf.json` (all `1.0.0`).
 
-| Area | Change |
-|---|---|
-| Sidecar launch | `--onefile` → `--onedir` in `scripts/build-sidecar.*` → ~2.7 s launch (was ~16 s) |
-| `desktop/src-tauri/src/main.rs` | Loading-shim pattern (non-blocking), `resource_dir()` sidecar resolution + adjacent-exe fallbacks, `CREATE_NO_WINDOW`, server log to `~/.evi/logs/desktop-server.log`, `app.windows: []` fix, tesseract env wiring |
-| `desktop/src-tauri/tauri.standalone.conf.json` | `externalBin` → `bundle.resources` (ships the onedir folder) |
-| `desktop/dist-shim/index.html` | "Starting eVi…" spinner that polls `/api/health` and redirects |
-| **NEW `evi/portprobe.py`** | Socket-first port check, OpenAI-`/models`-shape validation, **llama.cpp 8080→8090 discovery**, `localhost`→`127.0.0.1` normalization |
-| `evi/backends/llamacpp.py` | Auto-discovers a live llama.cpp on 8080–8090 when the configured port isn't one (`discover_ports=True`, cached) |
-| `evi/apps/web/server.py` | `/api/backend/status` now probes **concurrently**, **caches 3 s**, validates OpenAI shape (kills 8080 false-positives), and reports llama.cpp's resolved port; `/api/backend/start` (ollama auto-start), `/api/backend/open-download` |
-| `evi/apps/web/static/index.html` | "⚠ No local LLM backend" banner with Start/Install/Recheck; gates message send |
-| Tests | NEW `tests/test_portprobe.py`; rewrote `tests/test_backend_status.py`; +5 in `tests/test_backends.py`; fixed a time-bomb date in `tests/test_transcripts.py` |
+**Tests:** ~**1367** default unit tests (~**1451** total; the ~84 e2e tests are opt-in, deselected by default via `addopts = -m 'not e2e'`). Live count comes from `pytest --collect-only -q`. Ruff clean.
 
-Bugs fixed this session: 8080 false-positive (any service answering `<500`
-counted as an LLM); 13.8 s → ~1.5 s status latency; the Windows `localhost`
-IPv6 (`::1`) connect stall; the stale-date transcript test.
+> ⚠ **Local `.venv` caveat:** the active `C:\evi\.venv` (and `.venv-build`) are still **Python 3.11.9**, below the declared 3.13 floor — the bump was validated by CI-on-3.13, not locally. A ready **`.venv313` (3.13.14)** exists on this box; use it, or recreate `.venv` with `py -3.13 -m venv .venv`.
 
-## 3. Open items / TODO (in priority order)
+**1.0.0 bundles the whole 0.34–0.40 line:** specialty SLMs + the 7 capability chips, the guard-model guardrail layer, the models.dev catalog, the config linter (`evi lint`), completion notifications, pluggable web search, `evi skill add`, the project-intelligence pack (anatomy map, bug ledger, session reflection), the VS Code extension, local FIM completion, federation, ultracode, and the full CLI/web/desktop parity set.
 
-**Phases 48–55 complete.** Distribution-polish arc (48–52), MCP-server-publish
-+ follow-ups (53–54), and an opt-in Responses API path (55). See
-`docs/roadmap.md` for what's next: cross-machine `~/.evi` sync, `evi recipe`,
-memory tags, plugin loader, multi-user web mode.
+## 3. Feature inventory
 
-### Releases (2026-06-07)
+Core is ~135 top-level modules under `evi/` plus subpackages `evi/backends`, `evi/llm`, `evi/tools`, `evi/mcp`, `evi/apps`, `evi/sdk`.
 
-- ✅ **PyPI `v0.24.0` PUBLISHED** — `evi-assistant` 0.24.0 is live on PyPI
-  (`pip install evi-assistant`), via `release.yml` + Trusted Publishing. The
-  source repo stays **private** (Trusted Publishing is OIDC, visibility-agnostic;
-  only the package on PyPI is public). The `evi-ai` PyPI name was taken by an
-  unrelated project → renamed to `evi-assistant` (import/CLI stay `evi`).
-- ⏳ **Desktop updater → public channel (`evi-assistant/evi-ai`).** A
-  PUBLIC releases repo was created; the in-app updater endpoint now points there
-  (private release assets 404 for end users). `desktop-release.yml` gained a
-  `mirror` job that copies signed installers + a URL-rewritten `latest.json` to
-  it. Desktop bumped to **0.2.1**. **NEEDS a one-time `RELEASES_TOKEN` secret**
-  (PAT with contents:write on `evi-assistant/evi-ai`) — see `docs/releasing.md` — then
-  cut a `desktop-v0.2.1` tag. The old `desktop-v0.2.0` (private, old endpoint)
-  won't auto-update; 0.2.1 is the first real updatable release.
+**Agent + LLM layer (`evi/llm/`)**
+- `agent.py` — the agent loop; `Agent.chat` streams completions and dispatches tool calls (yields TextDelta / ToolCall / ToolResult / Done / Error).
+- `client.py` — dispatches to the configured backend (OpenAI-compatible chat client).
+- `subagent.py` — scoped Agent runner backing `delegate_*` tools via `SUBAGENT_PROFILES`.
+- `responses.py` — opt-in OpenAI Responses API path (`[llm] api = "responses"`); local backends stay on Chat Completions.
+- `specialty.py` — specialty-model registry: route one task (OCR/vision/etc.) to a small dedicated model without swapping the main model, configured under `[models]`.
 
-Near-term loose ends:
+**Local-LLM backends (`evi/backends/`)** — `base.py` interface + `lmstudio.py`, `ollama.py`, `llamacpp.py` (auto-discovers a live llama.cpp on 8080–8090), `openai_compat.py`, `presets.py`, `factory.py` (picks backend from `LLMSettings.backend`).
 
-1. **Code-sign the desktop installers** — unsigned, so SmartScreen / Gatekeeper
-   warn. Needs an Authenticode cert + Apple Developer ID wired into
-   `tauri-action`. (Separate from the Phase 51 updater's minisign signing,
-   which is done.) See `docs/releasing.md`.
-2. **First-run wizard UI click-through** — Python side unit-tested +
-   live-verified; the JS wizard in `static/index.html` is code-review-verified
-   only (no browser in this env). A real click-through installs Ollama — verify
-   on a clean machine.
-3. **Updater end-to-end** — the updater compiles + the workflow emits signed
-   artifacts, but a true self-update needs two published `desktop-v*` releases
-   to compare. The signing keys live in repo secrets + `~/.evi/evi-updater.*`
-   (back them up — losing them breaks future update verification).
+**Model capability chips (`evi/capabilities.py`)** — **seven** best-effort chips (id-substring heuristics, with models.dev ground-truth override where known):
 
-**Done (2026-06-07):**
+| Chip | | Chip | |
+|---|---|---|---|
+| 👁 Vision | `vision` | 🔧 Tools | `tools` |
+| 🧠 Thinking | `reasoning` | 🛡 Guard | `guard` |
+| ⌨ Infill | `infill` | ◆ Embeddings | `embed` |
+| 🎤 Audio | `audio` | | |
 
-- ✅ **0.24.3 — rebranded to eVi + desktop updater lock fix.** Display name is
-  now **eVi** everywhere shown (productName, window title, web/PWA title, CLI,
-  docs); lowercase `evi`/`EVI_`/`evi-assistant`/`evi-assistant/evi-ai` unchanged.
-  ⚠ productName change ⇒ eVi installs to a NEW dir; one-time clean switch
-  (uninstall Evi, install eVi 0.2.4). Updater now kills the sidecar before
-  installing (fixes the "Error opening file for writing" lock). Desktop → 0.2.4.
-- ✅ **UI regression testing set up** (closes the gap that let the chat bug
-  ship). Playwright e2e harness in `tests/e2e/` (fake streaming LLM backend +
-  real eVi server subprocess + headless chromium); `test_chat_renders_reply`
-  guards the SSE-render regression. `e2e` extra, `e2e` pytest marker (excluded
-  from default run), `.github/workflows/e2e.yml` (PR + weekly). Process +
-  full feature inventory + the "new UI feature ⇒ e2e test" rule in **TESTING.md**.
-  Run: `pytest tests/e2e -m e2e --timeout=120`.
-- ✅ **0.24.2 fix — chat now renders replies (SSE CRLF bug).** Frontend split
-  SSE frames on `\n\n` but sse-starlette 3.4.x emits `\r\n\r\n` → zero events
-  parsed → no reply. Both SSE readers now use `/\r?\n\r?\n/`. Broke all chat in
-  0.23.0–0.24.1; verified fixed live in a browser. Desktop → 0.2.3. (Gap: no
-  browser/e2e test of the chat stream — worth adding.)
-- ✅ **0.24.1 fix — first-run wizard activates the backend it sets up.** New
-  `POST /api/backend/use` writes `{backend,base_url,model}` + rebuilds live
-  clients; wizard now does install→start→pull→**use**; banner keys off the
-  *configured* backend's reachability (not any_reachable) and offers
-  "Use <backend>" when a different one is live; install shows a spinner.
-  Fixes the "banner cleared but chat hangs" bug. Desktop → 0.2.2.
-- ✅ **Phase 55 — opt-in Responses API (0.24.0).** `[llm] api = "responses"`
-  (default `"chat"`; env `EVI_LLM_API`) routes the agent loop through OpenAI's
-  Responses API via `evi/llm/responses.py` (chat↔responses conversion + a
-  stream adapter that keeps `agent.py`'s loop unchanged). NOT a migration —
-  local backends stay on Chat Completions. Unit-tested; not verified against a
-  live Responses endpoint (no cloud in CI). 627 tests green.
-- ✅ **Phase 53–54 — MCP-server-publish (0.24.0).** `evi mcp serve` runs eVi as
-  an MCP server exposing curated **tools** (memory/index/calendar/git) +
-  **memory resources** (`evi://memory/<name>`) + **command prompts** to Claude
-  Desktop / Cursor / Cline. Transports: **stdio** + streamable **HTTP**
-  (`--http`, bearer `--token`); per-tool allow-list (`--tools`).
-  `evi mcp serve-config` prints the client config; `python -m evi` added.
-  `evi/mcp/publish.py`. Verified end-to-end (stdio list tools/resources/prompts;
-  HTTP 401/auth). 619 tests green.
-- ✅ **Phase 52 — opt-in crash reporting.** `evi/reporting.py` (Reporter seam +
-  shared PII scrubber + sentry-sdk), `[telemetry]` config (OFF by default,
-  inert until a DSN is set), CLI excepthook + web `create_app` hook. Optional
-  extra `evi-assistant[telemetry]`. 603 tests green.
-- ✅ **Phase 51 — desktop auto-update (desktop 0.2.0).** Tauri updater plugin in
-  the Rust shell checks `releases/latest/download/latest.json` and self-installs
-  signed updates (opt out: `EVI_AUTO_UPDATE=0`). Updater keypair generated;
-  pubkey in `tauri.conf.json`, private key + password in repo secrets
-  (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`) used by `desktop-release.yml`.
-  `cargo check` clean.
+**Models registry / catalog** — `recommend.py` (hand-curated registry + hardware-aware recommendation), `modelsdev.py` (models.dev catalog: context limit, modalities, tool/reasoning flags, pricing; baked snapshot `evi/data/models-catalog.json`, `evi models refresh` pulls the full catalog), `hardware.py` (GPU+RAM detection), `downloads.py` (Ollama / `hf:` pulls).
 
-- ✅ **Phase 50 — frictionless first run (0.23.0).** `evi/firstrun.py` (per-OS
-  Ollama install), `recommend.first_run_model` (auto-pull qwen2.5:3b),
-  `POST /api/backend/install` + SSE `GET /api/backend/pull`, status hints, and
-  the web banner → setup wizard. Do NOT bundle a runtime; vLLM excluded.
-- ✅ **MIT license** confirmed (LICENSE present) — was the old open item.
-- ✅ **Phase 49 — vuln checking (0.23.0).** `dependabot.yml`, `security.yml`
-  (pip-audit + cargo-audit), `deny.toml`; Dependabot alerts + security updates
-  enabled. cargo-audit (not cargo-deny) so Tauri's transitive "unmaintained"
-  GTK3 advisories stay warnings, not failures.
-- ✅ **desktop-release CI verified on all 3 OS** (first-run green): Windows
-  (MSI+NSIS, 105 MB artifact), macOS (DMG+.app, 159 MB), Linux
-  (deb/rpm/AppImage, 396 MB). `desktop-v*` tag or manual dispatch.
-- ✅ **roadmap rewritten** (`docs/roadmap.md`); **CI red-since-init fixed**.
+**Project-intelligence pack** — `anatomy.py` (token-estimated file index → `.evi/anatomy.md`, auto-injected), `bugledger.py` (append-only symptom→root-cause→fix ledger `.evi/bug-ledger.jsonl`, backs `record_fix`/`search_fixes`), `reflect.py` (session reflection into memory; `evi reflect` or a `session_end` hook).
 
-- ✅ **Desktop rebuild track verified end-to-end.** Rebuilt the onedir sidecar
-  with the new portprobe/server code (127.9 MB; `evi-server --check` OK),
-  regenerated both installers (`eVi_0.1.0_x64_en-US.msi` 59.5 MB,
-  `eVi_0.1.0_x64-setup.exe` 46.0 MB), and confirmed the built
-  `evi-desktop.exe` resolves + spawns the sidecar, which serves
-  `/api/health` 200 and the no-backend banner. Toolchain installed: Rust
-  stable 1.96 (was a 2022 nightly), via the existing rustup; MSVC 2022 +
-  WebView2 + Tauri CLI 2.11 were already present.
-- ✅ **Fixed: `python-multipart` missing from the `web` extra** — the
-  `/api/transcribe` + `/api/upload` endpoints need it at route-registration
-  time, so the standalone server crashed on boot. Was only present via the
-  `mcp` extra. Now declared + a PyInstaller `--hidden-import`.
-- ✅ **Fixed: sidecar build bloat** — `build-sidecar.{ps1,sh}` now prefer an
-  isolated **`.venv-build`** so a fat dev `.venv` (stt/computer/rerank) can't
-  drag torch/av/sounddevice into the practical-tier sidecar.
-- ✅ **Version bump → 0.22.0** (`evi/__init__.py`, `pyproject.toml`) + a
-  Phase-48 **CHANGELOG** entry + **`docs/desktop-bundling.md`** updated
-  (onedir/`bundle.resources`, pywebview all-Python fallback, llama.cpp
-  8080–8090 port fallback, the build-venv + multipart notes). Memory refreshed.
-- ✅ **`git init`** — initial commit on `main` (was the old item #5).
-- ✅ **`apps/` namespace** — verified resolved; no stray top-level `apps/`
-  (frontends live under `evi/apps/`).
-- ✅ **`.venv` recreated** on this machine (`py -3.11`, all extras) +
-  **`.venv-build`** created (web/pdf/index/build-desktop only, for the sidecar).
+**Code/dev tooling** — `pyanalyze.py` (AST symbol outline → `python_symbols` tool; Reflex Rust fast-walk with `[ast]` extra, else stdlib), `complete.py` (local FIM completion; `evi complete` + `/api/complete`), `configlint.py` (`evi lint` — static skill/hook/command/agent validation, also CI gate for evi-skills), `codeintel.py` (formatters/linters by extension; backs `format_on_edit` + `check_file`), `doctor.py` (`evi doctor` — environment checks).
 
-## 4. Known issues & gotchas
+**Tools (`evi/tools/`)** — `base.py` holds `REGISTRY` (`@tool`); `register_builtin_tools()` imports 22 modules: fs, code, shell, memory, skills, subagent, websearch, git, index, calendar, pdf, sqlite, ocr, rerank, monitor, image_comfy, voice, computer, federation, ask, vision_tool, bugledger. Notable: `resolver.py` (`search_tools` meta-tool — defers the long tail of tool schemas), `monitor.py` (bounded watch until regex/timeout), `ask.py` (`ask_user`), `shell.py`, `code.py` (`run_python` subprocess; sandboxed via `sandbox.py` when `[tools] sandbox` on).
 
-- **Use the venv Python.** System `python` lacks the web deps. Use **`.venv`**
-  (Python 3.11.9 on this machine) — it has `evi` installed editable plus all
-  extras. Run tests/tools via `.venv\Scripts\python.exe`. A second
-  **`.venv-build`** (web/pdf/index/build-desktop only) exists purely for
-  freezing the sidecar — do NOT add the heavy extras to it.
-- **Sidecar build venv must stay lean.** `build-sidecar.{ps1,sh}` prefer
-  `.venv-build`; building from the fat `.venv` pulls torch/av/sounddevice into
-  the practical-tier sidecar (>1 GB). See `docs/desktop-bundling.md`.
-- **Windows `localhost` IPv6 stall:** connecting to a closed `::1` port is
-  *dropped* (SYN filtered), not refused, so it blocks for the full timeout.
-  `portprobe` pins probes to `127.0.0.1` to avoid multi-second stalls. Keep this
-  in mind for any new local-port code.
-- **This machine has a flaky non-LLM server on `:8080`** (returns 404 HTML /
-  `RemoteProtocolError`, variable latency). That's environment noise, not an eVi
-  bug — the probe correctly rejects it now.
-- **Desktop runtime details:** Tauri picks a random free port and injects it via
-  `window.__EVI_PORT__`; the sidecar logs to `~/.evi/logs/desktop-server.log`
-  (block-buffered — may look empty until the process exits).
-- **PowerShell 5.1 traps:** `$ErrorActionPreference="Stop"` aborts on a native
-  command's *stderr* (rustup/npm warnings); `if(){}` is a statement, not an
-  expression; `-WindowStyle Hidden` ≠ `CREATE_NO_WINDOW`; `setx` truncates at
-  1024 chars (use `[Environment]::SetEnvironmentVariable(...,"User")`).
-- **Tauri config:** avoid `"//"` comment keys (strict schema rejects them).
+**Multi-agent orchestration** — `ultracode.py` (fixed decompose→solve→critic→synthesize pipeline over one task), `workflows.py` (declarative TOML DAG, `parallel=true`, `~/.evi/workflows/*.toml`), `teams.py` (dynamic claimable shared task list with `blocked_by`), `recipes.py` (ordered prompts in one shared conversation).
 
-## 5. Toolchains
+**MCP (`evi/mcp/`)** — client side (`bridge.py`, `manager.py`, `servers.py`) consumes other servers' tools; `publish.py` (`evi mcp serve`) runs eVi **as** an MCP server (curated tools + `evi://memory/<name>` resources + command prompts over stdio and streamable HTTP).
 
-| Need | For |
-|---|---|
-| Python 3.11+ (3.12 OK) | everything Python |
-| Rust + Cargo | desktop shell build only |
-| MSVC C++ Build Tools | Rust linker on Windows (desktop only) |
-| Node LTS + npm | `tauri` CLI (desktop only) |
-| WebView2 runtime | desktop run (preinstalled on Win10/11) |
-| tesseract / ffmpeg (optional) | OCR / audio tools (else those tools degrade) |
+**Federation** — `federation.py` + `tools/federation.py`: delegate a subtask to a trusted peer eVi via `POST /api/federate`; peers in `~/.evi/peers.json`; off by default (`[federation] serve = true`).
 
-The PyPI package name is `evi-assistant`; optional extras:
-`email, web, mcp, scheduler, downloads, web-tools, computer, stt, pdf, index,
-calendar, rerank, build-desktop, dev`.
+**Plugins & skills** — `plugins.py` (installable `plugin.toml` bundles under `~/.evi/plugins/`), `marketplace.py` (`evi plugin search`/`install`), `skills.py` + `skillscope.py` (active-skill tool scoping via SKILL.md frontmatter).
 
----
+**Other core subsystems** — memory (`memory.py`, `dream.py`), semantic search (`embeddings.py`, `index.py`, `search.py`), session data/analytics (`transcripts.py`, `sessions.py`, `stats.py`, `finetune.py`, `context_report.py`), scheduling (`scheduler.py`, `scheduled.py`, `routines.py`), routing (`routing.py`), safety stack (`hooks.py`, `permissions.py`, `guardrails.py`, `guardmodel.py`, `moderation.py` — regex→judge→classifier), evals (`evals.py`), observability (`otel.py`, `reporting.py`), portable state (`sync.py`, `backup.py`, `update.py`, `worktree.py`, `profiles.py`, `users.py`), media (`voice.py`, `audio_input.py`, `diarize.py`, `vision.py`, `doclayout.py`), and the embeddable SDK (`sdk/builder.py`).
 
-## 6. Migration to another system
+**VS Code extension** — `editors/vscode/` (TypeScript): ghost-text FIM via `/api/complete` + a chat webview via `/api/chat`. Deliberately kept out of the Python package.
 
-### 6a. What to copy vs. recreate
+## 4. Build / test / release
 
-**Copy the repo `C:\evi`, but SKIP these reproducible/large dirs**
-(all are in `.gitignore`):
-
-- `.venv/` (recreate)
-- `desktop/src-tauri/target/` — **1.6 GB** Rust build cache (recreate)
-- `desktop/src-tauri/binaries/` — **250 MB** staged sidecar (rebuild)
-- `desktop/node_modules/`, `build/`, `dist/`, `*.egg-info/`, `__pycache__/`
-
-A clean copy of the source is only a few MB. Easiest: zip `C:\evi` excluding the
-above, or just `git init` first and copy the working tree.
-
-**Copy the user-data dir `%USERPROFILE%\.evi\`** — this is real state:
-`config.toml`, `tokens/` (OAuth — **sensitive**, currently empty), `models/`,
-`profiles/`, `skills/`, `commands/`, `transcripts/`, `indices/`, `images/`,
-`screenshots/`, `uploads/`, `scheduled/`, `logs/`.
-
-### 6b. Set up on the new machine
+### Run the tests
 
 ```powershell
-# 1. Install toolchains (Python always; Rust+MSVC+Node only if building desktop)
-# 2. Place the repo (ideally at the SAME path — see 6c for why), then:
+# Full unit suite (repo .venv):
+.\.venv\Scripts\python.exe -m pytest -q --timeout=30
+# Helper scripts: scripts\test.ps1 (Windows) / scripts/test.sh (Unix)  — bundle --timeout=15
+# Verify the collect count (~1367 unit / ~1451 total):
+.\.venv\Scripts\python.exe -m pytest --collect-only -q
+# Lint:
+.\.venv\Scripts\python.exe -m ruff check evi tests scripts
+# E2E (opt-in, Ubuntu-only in CI): needs .[e2e] + playwright chromium
+.\.venv\Scripts\python.exe -m pytest tests/e2e -m e2e --timeout=120
+```
+
+### Two-venv model
+
+| Venv | Purpose |
+|---|---|
+| **`.venv`** | Fat local **dev** env — all extras (incl. stt/computer/rerank → torch/av/sounddevice). |
+| **`.venv-build`** | Isolated env used **only** to freeze the desktop sidecar (`.[web,pdf,index,build-desktop]`). |
+
+The sidecar freeze uses PyInstaller `--collect-submodules evi`, which pulls **every** `evi.tools.*` module. Building from the fat `.venv` would drag torch/av/sounddevice into the "practical tier" sidecar, ballooning it from ~75 MB to >1 GB — hence the separate lean build env. The build scripts auto-prefer `.venv-build` when present.
+
+### Cut a PyPI release (`release.yml`)
+
+Trigger: push a `v*.*.*` tag (also `workflow_dispatch` for manual re-publish). Steps: sanity-check the tag equals `pyproject` version → `python -m build` → install `.[dev,web,mcp,scheduler,downloads,web-tools,index]` + pytest → publish to PyPI via OIDC **Trusted Publishing** (no API token) → sigstore keyless signing → GitHub release with auto notes + dist artifacts.
+
+**Bump two files** (`pyproject.toml [project] version` **and** `evi/__init__.py __version__`), then:
+
+```powershell
+git add pyproject.toml evi/__init__.py CHANGELOG.md
+git commit -m "release: X.Y.Z"
+git tag vX.Y.Z
+git push origin main --tags
+```
+
+> The workflow's tag-vs-version tripwire only checks `pyproject.toml`, **not** `evi/__init__.py` — a forgotten `__init__` bump would ship a mismatched `evi --version` without failing CI.
+
+### Cut a desktop release (`desktop-release.yml`)
+
+Trigger: push a `desktop-v*` tag (versions independently of the package; `workflow_dispatch` with blank input = artifacts-only). Matrix: windows/macos/ubuntu (`fail-fast: false`). Per OS: setup Python 3.13 + Rust + Node, freeze the sidecar in a fresh `.venv-build` + `evi-server --check`, `npm install`, then `tauri-action` with `--config src-tauri/tauri.standalone.conf.json`. Publishes a **non-draft** release; signs updater artifacts (`.sig` + `latest.json`) with `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`.
+
+**Bump four files** (all currently `1.0.0`): `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, `desktop/package.json`, and the `evi-desktop` entry in `desktop/src-tauri/Cargo.lock`. Then:
+
+```powershell
+git tag desktop-vX.Y.Z
+git push origin desktop-vX.Y.Z
+```
+
+Updater endpoint: `https://github.com/evi-assistant/evi-ai/releases/latest/download/latest.json`. The version in `latest.json` must increase for clients to update. Updater signing is **minisign**, not OS code-signing — SmartScreen/Gatekeeper still warn (see Open items).
+
+### Freeze the sidecar / build the whole desktop app (Windows)
+
+```powershell
+py -3.13 -m venv .venv-build
+scripts\build-sidecar.ps1
+desktop\src-tauri\binaries\evi-server\evi-server.exe --check
+powershell -File scripts\build-desktop.ps1   # end-to-end
+```
+
+PyInstaller does **not** cross-compile — each OS's installer must be built on that OS (the CI matrix handles this per-runner).
+
+### CI workflows (7 total in `.github/workflows/`)
+
+| Workflow | Trigger | Notes |
+|---|---|---|
+| `ci.yml` | push/PR to main, weekly, dispatch | Lint + unit gate. Push→1 cheap ubuntu/3.13 job; full 3-OS matrix only on PR/weekly/dispatch (macOS bills ~10×). |
+| `release.yml` | `v*.*.*` tag, dispatch | PyPI Trusted Publishing + sigstore + GitHub release. |
+| `desktop-release.yml` | `desktop-v*` tag, dispatch | 3-OS Tauri matrix, non-draft, minisign-signed updater. |
+| `security.yml` | push/PR, weekly, dispatch | pip-audit, cargo-audit, gitleaks, CodeQL (python+js). |
+| `e2e.yml` | PR, weekly, dispatch | Playwright UI tests, Ubuntu only, fake in-thread backend. |
+| `docker.yml` | `v*.*.*` tag, dispatch | GHCR image (web+scheduler), push opt-in. |
+| `evi-run-example.yml` | — | Example workflow. |
+
+Build backend: setuptools ≥68 + wheel. **21** optional-dependency extras (`email, web, mcp, scheduler, downloads, web-tools, computer, stt, pdf, index, calendar, rerank, ast, diarize, doc, telemetry, otel, moderation, e2e, build-desktop, dev`).
+
+## 5. Open items / next steps
+
+None block the 1.0 launch. Remaining items are optional/hardening:
+
+1. **Enable GitHub secret scanning + push protection** on `evi-assistant/evi-ai` — both currently `disabled` (verified via `gh api`). Free on public repos and prudent right after the pre-public history scrub. The `security.yml` gitleaks job already runs in CI; this is a repo-settings gap. To enable:
+   `gh api -X PATCH repos/evi-assistant/evi-ai -f 'security_and_analysis[secret_scanning][status]=enabled' -f 'security_and_analysis[secret_scanning_push_protection][status]=enabled'`
+   ⚠ It also scans history, so any key ever committed in the past surfaces as a (legitimate) alert.
+2. **OS code-signing** for the desktop installers (Windows Authenticode, Apple Developer ID) is still TODO — updater minisign signing is done, but SmartScreen/Gatekeeper still warn.
+3. **Recreate the local `.venv` on 3.13** (`py -3.13 -m venv .venv`) — it's still 3.11.9. A `.venv313` (3.13.14) already exists as the on-floor env.
+4. **Uncommitted working-tree paths** — `git status` shows 3 untracked entries only (`.claude/`, `desktop/src-tauri/permissions/`, `tests/test_console_encoding.py`); the 1.0.0 release commits themselves are committed. Decide whether to commit, ignore, or leave (`.claude/` is agent-harness scaffolding that likely belongs in `.gitignore`).
+5. **Delete the local mirror backup** (a bare pre-scrub `evi-backup.git` on this box) once confident the public history is clean — kept as a safety net for now.
+6. **Legacy releases repo** `dmang-dev/evi-ai-releases` is archived (verified `archived=true`); its assets stay downloadable so legacy desktop clients still self-update. No action unless retiring old clients.
+7. **Optional hardening:** add `evi/__init__.py` to `release.yml`'s tag-vs-version check so the two version files can't drift; add `.venv313/` (or `.venv*/`) to root `.gitignore` to make the skip explicit.
+8. **Stale docs to refresh** (not blocking): `README.md` (Layout/phase-table/test-count), `docs/releasing.md` (says desktop 0.1.0 / draft / sigstore-TODO), `TESTING.md` (test count), and the `desktop-release.yml` header comment. Authoritative architecture doc is **`EVI.md`**.
+
+## 6. Gotchas (still true)
+
+- **Use the venv Python.** System `python` lacks the web deps; run everything via `.venv\Scripts\python.exe`.
+- **Keep `.venv-build` lean.** Don't add torch/av/sounddevice to it — the practical-tier sidecar balloons >1 GB. See `docs/desktop-bundling.md`.
+- **Windows `localhost` IPv6 stall:** connecting to a closed `::1` port is *dropped* (SYN filtered), not refused, so it blocks the full timeout. `evi/portprobe.py` pins probes to `127.0.0.1`. Keep this in mind for any new local-port code.
+- **Desktop runtime:** Tauri picks a random free port injected via `window.__EVI_PORT__`; the sidecar logs to `~/.evi/logs/desktop-server.log` (block-buffered — may look empty until the process exits).
+- **PowerShell 5.1 traps:** `$ErrorActionPreference="Stop"` aborts on a native command's *stderr* (rustup/npm warnings); `if(){}` is a statement, not an expression; `-WindowStyle Hidden` ≠ `CREATE_NO_WINDOW`; `setx` truncates at 1024 chars (use `[Environment]::SetEnvironmentVariable(...,"User")`).
+- **Tauri config:** avoid `"//"` comment keys — the strict schema rejects them.
+- **Two egg-info dirs at repo root:** `evi_assistant.egg-info` (current) and a stale `evi_ai.egg-info` (pre-rename). Both git-ignored; the stale one is harmless residue, safe to delete (regenerated on build).
+
+## 7. Migration to another machine
+
+### 7a. Copy vs. recreate
+
+Copy the repo, but **skip these reproducible/large dirs** (all in `.gitignore`) and recreate them:
+
+- `.venv/`, `.venv-build/`, `venv/`, `env/` (`.venv313/` too — git-ignores itself via its internal `.gitignore`)
+- `desktop/node_modules/`, `desktop/src-tauri/target/` (Rust cache, ~1.6 GB), `desktop/src-tauri/gen/`, `desktop/src-tauri/binaries/` (staged sidecar, ~250 MB)
+- `build/`, `dist/`, `*.egg-info/`, `__pycache__/`
+
+A clean source tree is only a few MB — zip the repo excluding the above, or copy the git working tree.
+
+**Copy the user-data dir `%USERPROFILE%\.evi\`** — this is real state:
+`config.toml`, `evi-updater.key` / `.key.pub` / `.pass` (**signing keys — losing them breaks future update verification**), `tokens/` (OAuth), `models/`, `profiles/`, `skills/`, `commands/`, `transcripts/`, `indices/`, `images/`, `screenshots/`, `uploads/`, `scheduled/`, `logs/`, `checkpoints/`, `memory/`, `recipes/`, `styles/`, `routes.json`.
+
+### 7b. Set up on the new machine
+
+```powershell
+# 1. Install toolchains (Python 3.13 always; Rust + MSVC C++ Build Tools + Node LTS only for desktop)
+# 2. Place the repo (ideally at the SAME path — see 7c), then:
 cd C:\evi
-python -m venv .venv
+py -3.13 -m venv .venv                          # 3.13 floor — do NOT use plain `python -m venv`
 .\.venv\Scripts\python -m pip install -U pip
 .\.venv\Scripts\python -m pip install -e ".[web,mcp,scheduler,downloads,web-tools,computer,stt,pdf,index,calendar,rerank,email,dev]"
 
 # 3. Sanity check
-.\.venv\Scripts\python -m pytest -q          # expect ~570 passed
-.\.venv\Scripts\python -m evi --version
+.\.venv\Scripts\python -m pytest -q             # ~1367 unit tests
+.\.venv\Scripts\python -m evi --version         # 1.0.0
 
-# 4. (Desktop only) rebuild sidecar + installers
+# 4. (Desktop only) freeze sidecar + build
+py -3.13 -m venv .venv-build
 powershell -ExecutionPolicy Bypass -File scripts\build-sidecar.ps1
 cd desktop ; npm install ; npm run tauri build -- --config src-tauri\tauri.standalone.conf.json
 ```
 
-Restore `%USERPROFILE%\.evi\` from your copy (or re-run `evi setup`).
+Toolchains: Python 3.13 (everything); Rust + Cargo, MSVC C++ Build Tools, Node LTS + npm, WebView2 (desktop only, WebView2 preinstalled on Win10/11); tesseract / ffmpeg optional (OCR / audio, else those tools degrade). Restore `%USERPROFILE%\.evi\` from your copy afterward.
 
-### 6c. Keeping the Claude Code chat history / context  ← the important part
+### 7c. Carry over Claude Code chat history + memory
 
 Claude Code stores per-project session transcripts as JSONL under:
 
@@ -299,70 +227,57 @@ Claude Code stores per-project session transcripts as JSONL under:
 %USERPROFILE%\.claude\projects\<mangled-project-path>\
 ```
 
-For this project the folder is **`C--evi`** (the cwd `C:\evi` with the colon and
-backslash turned into dashes). It contains:
+The folder name is the project's absolute path with the drive colon and **every** path separator replaced by `-`:
 
-- `*.jsonl` — one file per session. **`f21b243a-…jsonl` (21 MB) is THIS
-  conversation.** `cd37adb2-…jsonl` is an earlier one.
-- `f21b243a-…/` — per-session sidecar dir.
-- `memory/` — the cross-session auto-memory: `MEMORY.md` + `project_evi.md`.
+| Project path | Mangled folder |
+|---|---|
+| `C:\evi` | `C--evi` |
+| `D:\code\evi` | `D--code-evi` |
+| `/home/you/evi` | `-home-you-evi` |
 
-**To carry the history over:**
+The folder contains one `*.jsonl` per session (plus a per-session sidecar dir) and a `memory/` subdir (the cross-session auto-memory: `MEMORY.md` + topic notes).
 
-1. Copy the whole `%USERPROFILE%\.claude\projects\C--evi\` folder to the new
-   machine's `%USERPROFILE%\.claude\projects\`.
-2. **Match the path, or rename the folder.** The folder name is derived from the
-   project's absolute path. If the new machine also puts the project at `C:\evi`,
-   copy it as-is. If the path differs, rename the folder to the new mangled path:
-   - Windows `D:\code\evi` → `D--code-evi`
-   - macOS/Linux `/home/you/evi` → `-home-you-evi`
-   (Replace the drive colon and every path separator with `-`.) If the folder
-   name doesn't match the project's path, Claude Code won't link the history to
-   the project.
-3. In the new project dir, start Claude Code and **`--resume`** (or `--continue`
-   for the latest). It reads the `.jsonl` and restores the conversation.
-4. Optionally also copy your global `%USERPROFILE%\.claude\` settings if you want
-   identical config — but that's machine/global, not project state.
+**To carry it over:**
 
-> Note: chat history can be large (this one is 21 MB). Resuming replays it into
-> context; expect a slower first turn.
+1. Copy the whole `%USERPROFILE%\.claude\projects\<mangled>\` folder to the new machine's `%USERPROFILE%\.claude\projects\`.
+2. **Match the path, or rename the folder** to the new machine's mangled path (per the table). If the folder name doesn't match the project's path, Claude Code won't link the history.
+3. In the new project dir, start Claude Code and `--resume` (or `--continue` for the latest).
+4. Optionally copy global `%USERPROFILE%\.claude\` settings for identical config — that's machine/global, not project state.
 
----
-
-## 7. Handy commands
-
-```powershell
-# Tests / lint (always via the venv)
-.\.venv\Scripts\python -m pytest -q
-.\.venv\Scripts\python -m ruff check evi tests scripts
-
-# Run the web UI from source
-.\.venv\Scripts\python -m uvicorn evi.apps.web.server:app --host 127.0.0.1 --port 8000
-
-# Backend availability check (the Phase-48 UX)
-#   GET /api/backend/status  → {configured, candidates[], any_reachable, ollama_installed}
-
-# Desktop dev/run path needs cargo + node on PATH:
-#   $env:USERPROFILE\.cargo\bin  and  $env:LOCALAPPDATA\node-lts
-```
+> Session JSONLs can be large (tens of MB); resuming replays them into context, so expect a slower first turn.
 
 ## 8. Layout cheatsheet
 
 ```
 C:\evi
-├─ evi/                     core library
-│  ├─ portprobe.py          (NEW) local-server probing + llama.cpp port discovery
-│  ├─ backends/             llamacpp.py has the 8080–8090 fallback
-│  └─ apps/{cli,web}/       CLI + FastAPI frontends
-├─ desktop/                 Tauri 2 shell
-│  ├─ dist-shim/index.html  loading spinner
-│  └─ src-tauri/            main.rs, tauri.conf.json, tauri.standalone.conf.json
-├─ scripts/                 build-sidecar.*, evi-tools.*, sidecar_entry.py, install.*
-├─ docs/                    desktop-bundling.md, sdk-coverage.md, etc.
-├─ tests/                   pytest suite
-└─ pyproject.toml           dist name evi-assistant, import evi
-```
-```
-%USERPROFILE%\.evi\         user data (config, tokens, models, transcripts, …)
-%USERPROFILE%\.claude\projects\C--evi\   Claude Code chat history + memory
+├─ evi/                       shared Python core (~135 top-level modules)
+│  ├─ __init__.py             __version__ = "1.0.0"
+│  ├─ capabilities.py         7 model-capability chips
+│  ├─ anatomy.py bugledger.py reflect.py   project-intelligence pack
+│  ├─ pyanalyze.py complete.py configlint.py codeintel.py doctor.py
+│  ├─ ultracode.py workflows.py teams.py recipes.py   orchestration
+│  ├─ federation.py plugins.py marketplace.py skills.py skillscope.py
+│  ├─ portprobe.py workdir.py sandbox.py recommend.py modelsdev.py
+│  ├─ backends/               lmstudio, ollama, llamacpp (8080–8090 discovery), openai_compat, factory
+│  ├─ llm/                    agent.py, client.py, subagent.py, responses.py, specialty.py
+│  ├─ tools/                  base.py (REGISTRY) + 22 builtin modules; resolver.py, monitor.py, ask.py …
+│  ├─ mcp/                    bridge.py, manager.py, servers.py, publish.py
+│  ├─ apps/{cli,web}/         Typer CLI + FastAPI/SSE web (~74 /api/* routes)
+│  ├─ sdk/                    embeddable SDK (builder.py)
+│  └─ data/                   models-catalog.json (baked models.dev snapshot)
+├─ desktop/                   Tauri 2 shell (NOT a Python package)
+│  ├─ dist-shim/index.html    loading spinner
+│  ├─ package.json            version 1.0.0
+│  └─ src-tauri/              Rust src/, Cargo.toml, tauri.conf.json + tauri.standalone.conf.json,
+│                             capabilities/, permissions/, icons/, binaries/ (staged sidecar)
+├─ editors/vscode/            VS Code extension (TypeScript; FIM + chat webview)
+├─ scripts/                   build-sidecar.*, build-desktop.ps1, sidecar_entry.py, test.*, install.*
+├─ docs/                      EVI.md is authoritative; features.md, releasing.md, desktop-bundling.md …
+├─ tests/                     pytest suite (~1451 total; e2e opt-in) + tests/e2e (Playwright)
+├─ .github/workflows/         ci, release, desktop-release, security, e2e, docker, evi-run-example
+├─ CHANGELOG.md
+└─ pyproject.toml             dist name evi-assistant, version 1.0.0, requires-python >=3.13, MIT
+
+%USERPROFILE%\.evi\                        user data (config, signing keys, models, transcripts, memory, …)
+%USERPROFILE%\.claude\projects\<mangled>\  Claude Code chat history + cross-session memory
 ```
