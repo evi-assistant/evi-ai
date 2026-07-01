@@ -43,10 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows-only for now: it's the only OS verified end-to-end, and it
-        # keeps runner spend down (macOS bills ~10x). Re-add macos-latest /
-        # ubuntu-latest here to cut a full cross-platform desktop release.
-        os: [windows-latest]
+        # Full cross-platform matrix. Free on a PUBLIC repo's standard runners
+        # (incl. macOS), so we build Windows + macOS + Linux every release.
+        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v6
@@ -161,10 +160,8 @@ jobs:
           # Empty tagName => build only, no release (artifacts uploaded below).
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: "eVi Desktop ${{ steps.tag.outputs.name }}"
-          # Published (not draft) so the `mirror` job below can read the merged
-          # latest.json + signed assets and copy them to the PUBLIC releases
-          # repo (the channel the in-app updater actually fetches from — private
-          # release assets 404 for unauthenticated end users).
+          # Published (not draft): on a PUBLIC repo the in-app updater fetches
+          # these release assets directly — no separate mirror repo needed.
           releaseDraft: false
           prerelease: false
           releaseBody: |
@@ -173,7 +170,7 @@ jobs:
 
             > Updater-signed (minisign) but NOT OS-code-signed yet, so Windows
             > SmartScreen / macOS Gatekeeper still warn on first run. Tracked in
-            > docs/releasing.md. Public channel: dmang-dev/evi-ai-releases.
+            > docs/releasing.md.
 
       # Always upload the built bundles as workflow artifacts too, so manual
       # (untagged) runs still produce something downloadable.
@@ -193,45 +190,3 @@ jobs:
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             desktop/src-tauri/target/release/bundle/**/*.sig
             desktop/src-tauri/target/release/**/latest.json
-
-  # Mirror the (private) build release to the PUBLIC releases repo, which is the
-  # channel the in-app updater fetches from — private release assets 404 for
-  # unauthenticated end users. Requires a RELEASES_TOKEN secret (a PAT with
-  # contents:write on dmang-dev/evi-ai-releases). If it's absent the job warns
-  # and skips, so builds still succeed.
-  mirror:
-    name: mirror to public release channel
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Copy installers + rewritten latest.json to the public repo
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}        # read the private release
-          PUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}     # write the public release
-          TAG: ${{ github.ref_name }}
-          SRC: ${{ github.repository }}                # dmang-dev/evi-ai (private)
-          DST: dmang-dev/evi-ai-releases               # public channel
-        run: |
-          set -euo pipefail
-          if [ -z "${PUB_TOKEN:-}" ]; then
-            echo "::warning::RELEASES_TOKEN not set — skipping public mirror. Add a PAT with contents:write on $DST to enable in-app auto-update."
-            exit 0
-          fi
-          mkdir mirror && cd mirror
-          echo ">> downloading $TAG assets from $SRC"
-          gh release download "$TAG" -R "$SRC" -D .
-          # Repoint the updater manifest at the PUBLIC repo's asset URLs.
-          if [ -f latest.json ]; then
-            sed -i 's#/dmang-dev/evi-ai/releases/download/#/dmang-dev/evi-ai-releases/releases/download/#g' latest.json
-            echo ">> rewritten latest.json:"; cat latest.json
-          fi
-          echo ">> publishing $TAG to $DST"
-          if GH_TOKEN="$PUB_TOKEN" gh release view "$TAG" -R "$DST" >/dev/null 2>&1; then
-            GH_TOKEN="$PUB_TOKEN" gh release upload "$TAG" -R "$DST" ./* --clobber
-          else
-            GH_TOKEN="$PUB_TOKEN" gh release create "$TAG" -R "$DST" \
-              --title "eVi Desktop $TAG" \
-              --notes "Installers + auto-update manifest, mirrored from the private build." \
-              ./*
-          fi

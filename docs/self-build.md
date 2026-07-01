@@ -73,7 +73,7 @@ config. Installers land in
 1. Tests green (`pytest -q` + the relevant e2e), `ruff` clean.
 2. Conventional Commit on a branch (don't commit on `main` without intent).
 3. Docs touched? Mirror the changed `docs/*.md` to the public wiki
-   (`dmang-dev/evi-ai-releases.wiki`) — see [releasing.md](releasing.md).
+   (`evi-assistant/evi-ai.wiki`) — see [releasing.md](releasing.md).
 4. **Releases are currently paused** on a GitHub Actions billing block (a
    human-only fix). Until that clears, keep changes local on `main`; don't tag or
    trigger the release workflows.

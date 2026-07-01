@@ -3492,7 +3492,7 @@ resetBtn.addEventListener('click', async () => {
     actions.appendChild(mk('Check for updates', checkForUpdates));
     actions.appendChild(mk('Open logs', openLogs));
     actions.appendChild(mk('Keyboard shortcuts', openShortcuts));
-    actions.appendChild(mk('Get support', () => openExternal('https://github.com/dmang-dev/evi-ai-releases/issues')));
+    actions.appendChild(mk('Get support', () => openExternal('https://github.com/evi-assistant/evi-ai/issues')));
     box.appendChild(actions);
     contentEl.appendChild(box);
     fetch('/api/health').then(r => r.json()).then(d => {
@@ -3845,7 +3845,7 @@ resetBtn.addEventListener('click', async () => {
       case 'shortcuts': openShortcuts(); break;
       case 'about': openSettings('about'); break;
       case 'toggle_theme': toggleTheme(); break;
-      case 'get_support': openExternal('https://github.com/dmang-dev/evi-ai-releases/issues'); break;
+      case 'get_support': openExternal('https://github.com/evi-assistant/evi-ai/issues'); break;
       case 'check_updates': checkForUpdates(); break;
       case 'open_logs': openLogs(); break;
       case 'rewind': rewindFiles(); break;
