@@ -1,6 +1,10 @@
 # eVi — personal AI assistant
 
-Local-first personal assistant. Chat with a model on **your** hardware,
+[![PyPI](https://img.shields.io/pypi/v/evi-assistant.svg)](https://pypi.org/project/evi-assistant/)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+**eVi 1.0 — shipped and public.** Local-first personal assistant. Chat with a model on **your** hardware,
 let it use tools, generate images, automate scheduled tasks, drive your
 browser, and reach the same core from a terminal, a web app, or a
 native desktop window.
@@ -33,14 +37,21 @@ native desktop window.
 ## Quickstart
 
 > **Package name:** the project is **eVi**, but the PyPI distribution is
-> **`evi-assistant`** (the bare `evi` name was taken). Once published you'll
+> **`evi-assistant`** (the bare `evi` name was taken). Install with
 > `pip install evi-assistant`; the import package and CLI command are both still
-> `evi` (`import evi`, run `evi`). The steps below use an editable install
-> from a clone, which doesn't depend on the published name.
+> `evi` (`import evi`, run `evi`).
 
 ```bash
-git clone <repo> evi && cd evi
-python -m venv .venv
+pip install evi-assistant                # from PyPI
+evi models recommend                     # honest read on what'll fit
+evi chat                                 # off you go
+```
+
+Or work from a clone (editable install, all extras):
+
+```bash
+git clone https://github.com/evi-assistant/evi-ai.git evi && cd evi
+py -3.13 -m venv .venv
 .venv\Scripts\Activate.ps1            # Windows
 # source .venv/bin/activate            # Linux / macOS
 
@@ -87,21 +98,24 @@ evi mcp serve                      Run eVi AS an MCP server (other agents use eV
 
 ## What's built
 
-| Phase | Feature                                          | Status |
-|-------|--------------------------------------------------|--------|
-| 1     | Foundation, CLI, agent loop, fs/code tools       | ✅     |
-| 2     | Gmail / Microsoft 365 email                      | ⏸ deferred |
-| 3     | ComfyUI image generation                         | ✅     |
-| 4     | FastAPI + SSE web UI                             | ✅     |
-| 5     | Tauri desktop shell (local + remote modes)       | ✅     |
-| 6     | Persistent memory + scoped subagents             | ✅     |
-| 7     | MCP (Model Context Protocol) integration         | ✅     |
-| 8     | Skills + scheduled tasks                         | ✅     |
-| 9     | Backends, model registry, hardware recommender, profiles | ✅ |
-| 10    | EVI.md, slash commands, /goal, plan mode         | ✅     |
-| 11    | Hooks, auto mode, git worktrees                  | ✅     |
-| 12    | Transcripts, dreaming, web search, voice TTS, computer use | ✅ |
-| 13    | STT, web UI parity, polish                       | ✅     |
+Everything below ships in 1.0. Gmail / Microsoft 365 email is the one deferred
+surface — scaffolded but off by default.
+
+| Feature                                                       | Status |
+|---------------------------------------------------------------|--------|
+| Foundation, CLI, agent loop, fs/code tools                    | ✅     |
+| ComfyUI image generation                                      | ✅     |
+| FastAPI + SSE web UI                                          | ✅     |
+| Tauri desktop shell (local + remote modes)                    | ✅     |
+| Persistent memory + scoped subagents                          | ✅     |
+| MCP (Model Context Protocol) integration                      | ✅     |
+| Skills + scheduled tasks                                      | ✅     |
+| Backends, model registry, hardware recommender, profiles      | ✅     |
+| EVI.md, slash commands, /goal, plan mode                      | ✅     |
+| Hooks, auto mode, git worktrees                               | ✅     |
+| Transcripts, dreaming, web search, voice TTS, computer use    | ✅     |
+| STT, web UI parity, polish                                    | ✅     |
+| Gmail / Microsoft 365 email                                   | ⏸ deferred |
 
 ## Layout
 
@@ -174,7 +188,7 @@ pip install -e '.[dev,web,mcp,scheduler,downloads,web-tools,stt,computer]'
 
 ```bash
 pip install -e '.[dev]'
-pytest -q              # 183 tests, ~12 s
+pytest -q              # ~1,300+ unit tests (E2E are opt-in: -m e2e)
 ruff check evi apps    # style + bug-pattern lint
 ```
 

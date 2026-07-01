@@ -5,17 +5,17 @@ name: desktop-release
 # them to a GitHub release.
 #
 # The desktop app versions INDEPENDENTLY of the Python package (tauri.conf.json
-# `version`, currently 0.1.0) — so this is driven by its own `desktop-v*` tags,
+# `version`, currently 1.0.0) — so this is driven by its own `desktop-v*` tags,
 # not the PyPI `v*.*.*` tags that `release.yml` watches. Cut a desktop release:
 #
-#     git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
+#     git tag desktop-v1.0.0 && git push origin desktop-v1.0.0
 #
 # Or run it manually from the Actions tab (workflow_dispatch) to produce
 # downloadable build artifacts without creating a release.
 #
-# NOTE: only the Windows path is verified end-to-end (2026-06-06). The macOS
-# and Linux jobs use the standard Tauri 2 setup but are unverified here; treat
-# their first green run as the verification. `fail-fast: false` keeps a working
+# All three OSes ship as of the public 1.0.0 release: the matrix builds
+# Windows / macOS / Linux and publishes a single NON-DRAFT release with
+# minisign-signed installers + latest.json. `fail-fast: false` keeps a working
 # OS's artifacts even if another OS's job fails.
 
 on:
@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Tag to publish a draft release to (e.g. desktop-v0.1.0). Leave blank for an artifacts-only build."
+        description: "Tag to publish a release to (e.g. desktop-v1.0.0). Leave blank for an artifacts-only build."
         required: false
         default: ""
 

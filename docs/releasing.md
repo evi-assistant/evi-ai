@@ -32,12 +32,14 @@ git push origin main --tags
 
 The `release.yml` workflow:
 
-1. Verifies the git tag matches `pyproject.toml`'s version.
+1. Verifies the git tag matches **both** `pyproject.toml`'s version and
+   `evi/__init__.py`'s `__version__` (fails on any drift).
 2. Installs the package + all useful extras.
 3. Runs the full test suite.
 4. Builds sdist + wheel via `python -m build`.
-5. Publishes to PyPI via Trusted Publishing.
-6. Creates a GitHub release with auto-generated notes + attached artifacts.
+5. Publishes to PyPI via Trusted Publishing (OIDC — no API token).
+6. Keyless (OIDC) sigstore-signs the artifacts and creates a GitHub release
+   with auto-generated notes + attached artifacts (wheel/sdist + `*.sigstore.json`).
 
 If anything fails before publish, fix it on a new commit and retag with a
 patched version (`v0.8.1`). Don't re-push the same tag — GitHub releases
@@ -65,14 +67,15 @@ python -m venv /tmp/wheel-check
 ## Desktop installers (separate pipeline)
 
 The Tauri desktop app versions **independently** of the Python package
-(`desktop/src-tauri/tauri.conf.json` → `version`, currently `0.1.0`), so it
+(`desktop/src-tauri/tauri.conf.json` → `version`, currently `1.0.0`), so it
 has its own workflow — `.github/workflows/desktop-release.yml` — driven by
 `desktop-v*` tags, not the PyPI `v*.*.*` tags above.
 
 ```bash
-# Bump desktop/src-tauri/tauri.conf.json "version" first if needed, then:
-git tag desktop-v0.1.0
-git push origin desktop-v0.1.0
+# Bump desktop/src-tauri/tauri.conf.json "version" first if needed
+# (keep Cargo.toml / package.json in lockstep), then:
+git tag desktop-v1.0.0
+git push origin desktop-v1.0.0
 ```
 
 The workflow (Windows / macOS / Linux matrix, `fail-fast: false`):
@@ -82,19 +85,21 @@ The workflow (Windows / macOS / Linux matrix, `fail-fast: false`):
 2. Builds the standalone app via `tauri-action` with
    `--config src-tauri/tauri.standalone.conf.json` (ships the onedir sidecar
    through `bundle.resources`).
-3. Creates a **draft** GitHub release for the tag and attaches the installers
-   (`.msi`/`-setup.exe` on Windows, `.dmg`/`.app` on macOS,
-   `.deb`/`.rpm`/`.AppImage` on Linux). Also uploads them as workflow
+3. Creates a **non-draft (published)** GitHub release for the tag and attaches
+   the minisign-signed installers (`.msi`/`-setup.exe` on Windows,
+   `.dmg`/`.app` on macOS, `.deb`/`.rpm`/`.AppImage` on Linux) plus a generated
+   `latest.json` for the in-app updater. Also uploads them as workflow
    artifacts, so a manual `workflow_dispatch` run (no tag) still produces
    downloadables.
 
 Caveats:
 
-- Installers are **unsigned** — Windows SmartScreen and macOS Gatekeeper warn
-  on first run. Code-signing is still TODO (see *Roadmap* below).
-- Only the **Windows** path is verified end-to-end (2026-06-06); the macOS and
-  Linux jobs use the standard Tauri 2 setup but are unverified — treat their
-  first green run as the verification.
+- Installers carry a **minisign** signature (for the in-app updater), but are
+  **not OS code-signed** — Windows SmartScreen and macOS Gatekeeper still warn
+  on first run. Authenticode/Apple notarization is still TODO (see *Roadmap* below).
+- All three OSes are verified end-to-end as of the **desktop-v1.0.0** matrix
+  (2026-07-01): the Windows / macOS / Linux jobs all built and published signed
+  installers + `latest.json` to the public release.
 
 ### In-app auto-update (Tauri updater)
 
@@ -162,7 +167,6 @@ clearly in the CHANGELOG under a `### Breaking` heading.
 ## Roadmap
 
 - Optional Docker push step in `release.yml` (commented out for now).
-- Signing wheels with sigstore (post-1.0).
 - macOS/Windows code-signing for the Tauri desktop bundle — the build
   pipeline now exists (`desktop-release.yml`); signing the artifacts (so
   SmartScreen/Gatekeeper don't warn) is the remaining gap. Needs an

@@ -5,7 +5,7 @@ How eVi is tested, and the process for keeping it working as phases land.
 ## Why this exists
 
 The 0.24.2 bug — **chat rendered nothing** for two minor releases — slipped
-through because we had 600+ unit tests but **zero tests that drive the actual
+through because we had a large unit suite but **zero tests that drive the actual
 UI**. The Python tests asserted the server *emits* SSE events; nothing checked
 that the browser *renders* them. The fix is a real end-to-end (e2e) layer plus
 a standing rule: **every UI-affecting change ships with an e2e test.**
@@ -14,7 +14,7 @@ a standing rule: **every UI-affecting change ships with an e2e test.**
 
 | Layer | Tool | Speed | Covers | Runs |
 |---|---|---|---|---|
-| **Unit** | `pytest` (`tests/*.py`) | fast (~50 s, 967 tests) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push (CI `ci.yml`) + locally |
+| **Unit** | `pytest` (`tests/*.py`) | fast (~1,300+ tests; run `pytest --collect-only` for the live count) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push (CI `ci.yml`) + locally |
 | **E2E (CLI)** | subprocess (`tests/cli_e2e/`) | medium (~100 s, no browser) | the real `evi` CLI per subsystem — arg parsing, config wiring, file I/O, output (the offline commands) | opt-in (`-m e2e`) |
 | **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs + weekly + dispatch (CI `e2e.yml`) |
 | **Manual** | a human + the desktop app | slow | things no harness reaches: the Tauri window itself, the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
