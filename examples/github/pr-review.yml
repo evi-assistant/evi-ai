@@ -32,7 +32,7 @@ jobs:
 
       - name: eVi review
         id: review
-        uses: dmang-dev/evi-ai/.github/actions/evi-run@main
+        uses: evi-assistant/evi-ai/.github/actions/evi-run@main
         with:
           prompt: "Review the changes in pr.diff. Flag bugs, security issues, and missing tests; tag each finding [error]/[warn]/[info]. Be concise."
           format: text

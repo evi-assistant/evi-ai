@@ -43,11 +43,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-user/evi"
-Source = "https://github.com/your-user/evi"
-Changelog = "https://github.com/your-user/evi/blob/main/CHANGELOG.md"
-Issues = "https://github.com/your-user/evi/issues"
-Documentation = "https://github.com/your-user/evi/tree/main/docs"
+Homepage = "https://github.com/evi-assistant/evi-ai"
+Source = "https://github.com/evi-assistant/evi-ai"
+Changelog = "https://github.com/evi-assistant/evi-ai/blob/main/CHANGELOG.md"
+Issues = "https://github.com/evi-assistant/evi-ai/issues"
+Documentation = "https://github.com/evi-assistant/evi-ai/tree/main/docs"
 
 [project.optional-dependencies]
 email = [

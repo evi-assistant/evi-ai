@@ -68,7 +68,7 @@ and [TESTING.md](TESTING.md) for the four test layers.
   Multi-line messages via `git commit -F <file>` (PowerShell/bash heredocs mangle
   apostrophes/pipes). Don't push or release unless asked.
 - **Docs ↔ wiki**: user-facing docs live in `docs/`; when you change them, mirror
-  the touched files to the `dmang-dev/evi-ai-releases` wiki (see self-build.md).
+  the touched files to the `evi-assistant/evi-ai` wiki (see self-build.md).
 - **DRY**: extract shared setup into a helper rather than copy >5 lines between
   two entry points.
 - **Windows/PowerShell gotcha**: don't pipe a native exe's stderr with `*>>` /

@@ -196,4 +196,4 @@ See [docs/development.md](docs/development.md) for architecture notes, and
 
 ## License
 
-MIT (or whatever you prefer — pick when publishing).
+MIT - see [LICENSE](LICENSE).

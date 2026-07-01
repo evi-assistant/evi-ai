@@ -93,12 +93,12 @@ memory tags, plugin loader, multi-user web mode.
   source repo stays **private** (Trusted Publishing is OIDC, visibility-agnostic;
   only the package on PyPI is public). The `evi-ai` PyPI name was taken by an
   unrelated project → renamed to `evi-assistant` (import/CLI stay `evi`).
-- ⏳ **Desktop updater → public channel (`dmang-dev/evi-ai-releases`).** A
+- ⏳ **Desktop updater → public channel (`evi-assistant/evi-ai`).** A
   PUBLIC releases repo was created; the in-app updater endpoint now points there
   (private release assets 404 for end users). `desktop-release.yml` gained a
   `mirror` job that copies signed installers + a URL-rewritten `latest.json` to
   it. Desktop bumped to **0.2.1**. **NEEDS a one-time `RELEASES_TOKEN` secret**
-  (PAT with contents:write on `evi-ai-releases`) — see `docs/releasing.md` — then
+  (PAT with contents:write on `evi-assistant/evi-ai`) — see `docs/releasing.md` — then
   cut a `desktop-v0.2.1` tag. The old `desktop-v0.2.0` (private, old endpoint)
   won't auto-update; 0.2.1 is the first real updatable release.
 
@@ -121,7 +121,7 @@ Near-term loose ends:
 
 - ✅ **0.24.3 — rebranded to eVi + desktop updater lock fix.** Display name is
   now **eVi** everywhere shown (productName, window title, web/PWA title, CLI,
-  docs); lowercase `evi`/`EVI_`/`evi-assistant`/`dmang-dev/evi-ai` unchanged.
+  docs); lowercase `evi`/`EVI_`/`evi-assistant`/`evi-assistant/evi-ai` unchanged.
   ⚠ productName change ⇒ eVi installs to a NEW dir; one-time clean switch
   (uninstall Evi, install eVi 0.2.4). Updater now kills the sidecar before
   installing (fixes the "Error opening file for writing" lock). Desktop → 0.2.4.
