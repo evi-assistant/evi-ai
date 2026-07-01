@@ -28,12 +28,13 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 - **PyPI:** `evi-assistant` **v1.0.0** — Development Status classifier flipped to **Production/Stable**.
 - **Desktop:** **v1.0.0**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired).
 - **Skills:** `evi-skills` catalog is public.
+- **Site:** landing page live at **https://evi-assistant.github.io/evi-ai/** (GitHub Pages from `site/`, deployed by `.github/workflows/pages.yml`).
 - **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
 - Version is consistent across `pyproject.toml`, `evi/__init__.py`, and `desktop/src-tauri/tauri.conf.json` (all `1.0.0`).
 
-**Tests:** ~**1367** default unit tests (~**1451** total; the ~84 e2e tests are opt-in, deselected by default via `addopts = -m 'not e2e'`). Live count comes from `pytest --collect-only -q`. Ruff clean.
+**Tests:** **1364 passed, 4 skipped** on the local `.venv` (32 e2e deselected by default via `addopts = -m 'not e2e'`); ~1451 collected including e2e. Live count: `pytest --collect-only -q`. Ruff clean.
 
-> ⚠ **Local `.venv` caveat:** the active `C:\evi\.venv` (and `.venv-build`) are still **Python 3.11.9**, below the declared 3.13 floor — the bump was validated by CI-on-3.13, not locally. A ready **`.venv313` (3.13.14)** exists on this box; use it, or recreate `.venv` with `py -3.13 -m venv .venv`.
+> ✅ **Local `.venv` is now Python 3.13.14** (recreated 2026-07-01; full suite green on Windows/3.13). The 3.11 line is retired. `.venv-build` should likewise be recreated with `py -3.13` when next freezing the sidecar.
 
 **1.0.0 bundles the whole 0.34–0.40 line:** specialty SLMs + the 7 capability chips, the guard-model guardrail layer, the models.dev catalog, the config linter (`evi lint`), completion notifications, pluggable web search, `evi skill add`, the project-intelligence pack (anatomy map, bug ledger, session reflection), the VS Code extension, local FIM completion, federation, ultracode, and the full CLI/web/desktop parity set.
 
@@ -159,17 +160,28 @@ Build backend: setuptools ≥68 + wheel. **21** optional-dependency extras (`ema
 
 ## 5. Open items / next steps
 
-None block the 1.0 launch. Remaining items are optional/hardening:
+None block the 1.0 launch. Everything below is optional/hardening or forward-looking.
 
-1. **✅ Secret scanning + push protection ENABLED** (2026-07-01) on `evi-assistant/evi-ai`; `dependabot_security_updates` also on. Push protection blocks new commits containing detected secrets; the one-time history scan runs across all commits. Two lower-value sub-toggles left off by choice: `secret_scanning_non_provider_patterns` (generic/custom patterns — noisier) and `secret_scanning_validity_checks` (pings providers to test if a detected token is live).
-2. **Tracked — Dependabot alert #1: `glib` unsoundness** (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, medium). **Left open and tracked, not dismissed.** Transitive in `desktop/src-tauri/Cargo.lock` via `tauri 2.11.2 → webkit2gtk 2.0.2 → gtk-rs 0.18` (which pins `glib 0.18.5`; vulnerable `< 0.20.0`). **No non-breaking fix exists** — `glib 0.20` needs the gtk-rs 0.20 generation, which Tauri's Linux webkitgtk binding doesn't use yet, so `cargo update -p glib` can't advance it (also why Dependabot hasn't opened a PR). Risk is low: Linux GTK-webview only (Windows=WebView2, macOS=WKWebView never exercise it), eVi's own Rust never calls `glib::VariantStrIter`, and it's a crash-class unsoundness, not RCE. **Unblock condition:** a Tauri release that moves the Linux backend to gtk-rs 0.20 → then `cargo update` + rebuild + retag `desktop-v*`. Recheck state: `gh api repos/evi-assistant/evi-ai/dependabot/alerts/1 -q .state` (note: the *list*/GraphQL alert endpoints returned empty due to a post-transfer consistency lag — query the alert **by number**).
-3. **OS code-signing** for the desktop installers (Windows Authenticode, Apple Developer ID) is still TODO — updater minisign signing is done, but SmartScreen/Gatekeeper still warn.
-4. **Recreate the local `.venv` on 3.13** (`py -3.13 -m venv .venv`) — it's still 3.11.9. A `.venv313` (3.13.14) already exists as the on-floor env.
-5. **Uncommitted working-tree paths** — `git status` shows 3 untracked entries only (`.claude/`, `desktop/src-tauri/permissions/`, `tests/test_console_encoding.py`); the 1.0.0 release commits themselves are committed. Decide whether to commit, ignore, or leave (`.claude/` is agent-harness scaffolding that likely belongs in `.gitignore`).
-6. **Delete the local mirror backup** (a bare pre-scrub `evi-backup.git` on this box) once confident the public history is clean — kept as a safety net for now.
-7. **Legacy releases repo** `dmang-dev/evi-ai-releases` is archived (verified `archived=true`); its assets stay downloadable so legacy desktop clients still self-update. No action unless retiring old clients.
-8. **Optional hardening:** add `evi/__init__.py` to `release.yml`'s tag-vs-version check so the two version files can't drift; add `.venv313/` (or `.venv*/`) to root `.gitignore` to make the skip explicit.
-9. **Stale docs to refresh** (not blocking): `README.md` (Layout/phase-table/test-count), `docs/releasing.md` (says desktop 0.1.0 / draft / sigstore-TODO), `TESTING.md` (test count), and the `desktop-release.yml` header comment. Authoritative architecture doc is **`EVI.md`**.
+**Still open:**
+
+- **OS code-signing** for the desktop installers (Windows Authenticode, Apple Developer ID) — updater minisign signing is done, but SmartScreen/Gatekeeper still warn. Needs certs/secrets (user-provided).
+- **Tracked — Dependabot alert #1: `glib` unsoundness** (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, medium). **Left open and tracked, not dismissed.** Transitive in `desktop/src-tauri/Cargo.lock` via `tauri 2.11.2 → webkit2gtk 2.0.2 → gtk-rs 0.18` (pins `glib 0.18.5`; vulnerable `< 0.20.0`). **No non-breaking fix exists** — `glib 0.20` needs the gtk-rs 0.20 generation, which Tauri's Linux webkitgtk binding doesn't use yet, so `cargo update -p glib` can't advance it (also why Dependabot hasn't opened a PR). Risk is low: Linux GTK-webview only (Windows=WebView2, macOS=WKWebView never exercise it), eVi's own Rust never calls `glib::VariantStrIter`, crash-class not RCE. **Unblock:** a Tauri release on gtk-rs 0.20 → `cargo update` + rebuild + retag `desktop-v*`. Recheck **by number**: `gh api repos/evi-assistant/evi-ai/dependabot/alerts/1 -q .state` (the list/GraphQL endpoints lag).
+- **Delete the local mirror backup** (`evi-backup.git`) once confident the scrubbed public history is clean — kept as a safety net for now.
+
+**Done 2026-07-01 (post-launch cleanup session):**
+
+- ✅ **Secret scanning + push protection ENABLED**; `dependabot_security_updates` on. (Left off: `secret_scanning_non_provider_patterns`, `secret_scanning_validity_checks` — noisier.)
+- ✅ **Local `.venv` recreated on Python 3.13.14** — full suite **1364 passed / 4 skipped** on Windows/3.13; the 3.11 line is retired.
+- ✅ **Uncommitted paths resolved** — `tests/test_console_encoding.py` tracked; `.claude/` + `desktop/src-tauri/permissions/autogenerated/` gitignored.
+- ✅ **CI hardening** — `release.yml` now fails unless tag == `pyproject` == `evi/__init__.py`; `.gitignore` generalized to `.venv*/`.
+- ✅ **Docs refreshed** to 1.0 — `README.md`, `docs/releasing.md`, `TESTING.md`, `desktop-release.yml` comments.
+- ✅ **GitHub Pages site** live at https://evi-assistant.github.io/evi-ai/ (`site/` + `.github/workflows/pages.yml`).
+- ✅ **Legacy releases repo** `dmang-dev/evi-ai-releases` archived (assets stay downloadable for old clients).
+
+**Roadmap (evaluated 2026-07-01 — see the A2A/Hermes analysis; not yet built):**
+
+- **A2A (Agent2Agent) adapter — recommended, effort ≈ M.** Keep the zero-dep LAN federation as the "private fast path"; ADD an optional A2A adapter behind an `[a2a]` extra as the "interop path" — expose an Agent Card at `/.well-known/agent-card.json` + `message/send`/`tasks/*` mapped onto the existing agent loop (tool-gating, streaming, bearer already exist), plus an A2A client for foreign agents. **Do NOT rip out federation** — it's a feature-subset of A2A but serves a different niche (private, same-owner, zero-ceremony). Build against the official `a2a-sdk` (several v1.0 JSON-RPC wire strings were flagged unverified). Defer push/OAuth2/mTLS/signed-cards (L).
+- **Hermes borrow — autonomous skill synthesis (S/M).** Let a scoped agent write a new `SKILL.md` from a successful multi-step transcript (extends `dream.py`/`skills.py`), gated by review. Secondary: Python-RPC subagent pipelines (S/M); run Hermes-4 as a steerable local backend (S — preset only). eVi already matches Hermes on nearly everything else.
 
 ## 6. Gotchas (still true)
 
@@ -270,10 +282,11 @@ C:\evi
 │  └─ src-tauri/              Rust src/, Cargo.toml, tauri.conf.json + tauri.standalone.conf.json,
 │                             capabilities/, permissions/, icons/, binaries/ (staged sidecar)
 ├─ editors/vscode/            VS Code extension (TypeScript; FIM + chat webview)
+├─ site/                      GitHub Pages landing site (→ evi-assistant.github.io/evi-ai)
 ├─ scripts/                   build-sidecar.*, build-desktop.ps1, sidecar_entry.py, test.*, install.*
 ├─ docs/                      EVI.md is authoritative; features.md, releasing.md, desktop-bundling.md …
 ├─ tests/                     pytest suite (~1451 total; e2e opt-in) + tests/e2e (Playwright)
-├─ .github/workflows/         ci, release, desktop-release, security, e2e, docker, evi-run-example
+├─ .github/workflows/         ci, release, desktop-release, security, e2e, docker, pages, evi-run-example
 ├─ CHANGELOG.md
 └─ pyproject.toml             dist name evi-assistant, version 1.0.0, requires-python >=3.13, MIT
 
