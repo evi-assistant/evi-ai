@@ -27,7 +27,9 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
           pyver=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          initver=$(python -c "import re, pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('evi/__init__.py').read_text()).group(1))")
           [ "$tag" = "$pyver" ] || (echo "tag $tag != pyproject $pyver"; exit 1)
+          [ "$pyver" = "$initver" ] || (echo "pyproject $pyver != evi/__init__.py $initver — bump both files"; exit 1)
 
       - name: Install build deps
         run: python -m pip install --upgrade pip build
