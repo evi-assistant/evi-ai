@@ -3,6 +3,31 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0] — 2026-07-01
+
+**eVi 1.0 — first stable public release.** The project is now developed in the
+open at [`evi-assistant/evi-ai`](https://github.com/evi-assistant/evi-ai) (MIT).
+No breaking API changes from 0.40.0 — 1.0.0 marks stability, a public repo, and a
+coordinated launch across the PyPI package, the desktop app, and the
+[`evi-skills`](https://github.com/evi-assistant/evi-skills) catalog.
+
+Everything from the 0.34–0.40 line is in 1.0: specialty SLMs + capability chips
+(vision/thinking/infill/audio/tools/guard/embeddings), the guard-model guardrail
+layer, the models.dev catalog, the config linter (`evi lint`), completion
+notifications, pluggable web search, `evi skill add`, the project-intelligence
+pack (anatomy map, bug ledger, session reflection), the VS Code extension, local
+FIM completion, federation, ultracode, and the full CLI/web/desktop parity set.
+
+### Changed
+- `Development Status` classifier → Production/Stable.
+- Desktop releases build the full Windows/macOS/Linux matrix and serve the
+  in-app updater directly from the public repo (the private release-mirror
+  channel is retired).
+
+### Fixed
+- Flaky `test_url_hook_non_2xx_vetoes` (HTTP hook test now drains the request
+  body before responding, avoiding an intermittent connection-reset race).
+
 ## [0.40.0] — 2026-06-17
 
 ### Added — project-intelligence pack (feature-scan Batch C)
