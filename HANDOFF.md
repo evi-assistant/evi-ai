@@ -98,7 +98,7 @@ memory tags, plugin loader, multi-user web mode.
   (private release assets 404 for end users). `desktop-release.yml` gained a
   `mirror` job that copies signed installers + a URL-rewritten `latest.json` to
   it. Desktop bumped to **0.2.1**. **NEEDS a one-time `RELEASES_TOKEN` secret**
-  (PAT with contents:write on `evi-ai-releases`) — see `docs/releasing.md` — then
+  (PAT with contents:write on `evi-assistant/evi-ai`) — see `docs/releasing.md` — then
   cut a `desktop-v0.2.1` tag. The old `desktop-v0.2.0` (private, old endpoint)
   won't auto-update; 0.2.1 is the first real updatable release.
 

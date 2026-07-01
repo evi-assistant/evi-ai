@@ -107,7 +107,7 @@ downloads, installs, and restarts. Opt out with `EVI_AUTO_UPDATE=0`.
   attaches the signed installers + `latest.json` straight to the repo's own
   releases and the updater reads them there — no mirror repo or `RELEASES_TOKEN`
   needed. (Historically, while the repo was private, a `mirror` job copied assets
-  to a public `evi-ai-releases` channel; that's been removed.)
+  to a separate public releases channel; that's been removed.)
 
 - **Signing keys.** The updater only installs bundles signed with our key. The
   **public** key lives in `tauri.conf.json` (`plugins.updater.pubkey`); the

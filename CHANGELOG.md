@@ -404,7 +404,7 @@ The product is now stylized **eVi** (lowercase-e, capital-V, lowercase-i)
 everywhere it's shown: the app/installer name (`productName`), window title,
 web/PWA title + header, CLI help/output, and the docs. The lowercase `evi`
 import package, the `evi` CLI command, `EVI_*` env vars, the `evi-assistant`
-PyPI name, and the `dmang-dev/evi-ai` repo are unchanged (code/identifier
+PyPI name, and the `evi-assistant/evi-ai` repo are unchanged (code/identifier
 surfaces).
 
 > **Desktop note:** because the app's `productName` changed, the eVi installer

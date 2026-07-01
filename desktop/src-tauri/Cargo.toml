@@ -3,6 +3,7 @@ name = "evi-desktop"
 version = "0.2.20"
 description = "eVi — desktop shell"
 authors = ["eVi"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.77"
 

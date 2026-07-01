@@ -27,7 +27,7 @@ Thumbs.db
 *.swp
 *~
 
-# Tooling state (internal-tooling pipeline / agent harness scratch)
+# Local agent / tooling scratch dirs
 .rstk/
 
 # Tauri / Node

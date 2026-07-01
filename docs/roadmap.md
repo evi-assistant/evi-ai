@@ -105,7 +105,7 @@ A Claude-Desktop-style control surface (the "UI enhancements" detour).
   tray** with **minimize-to-tray**; **force-update** via Help→Check for Updates.
 - **In-app docs** (`/api/docs` + dependency-free `mdlite.py`, bundled offline) and
   **diagnostics** (`/api/doctor`); **light theme** toggle.
-- Public docs **wiki** mirror on `evi-ai-releases`; Playwright e2e for the lot.
+- Public docs **wiki** mirror on `evi-assistant/evi-ai`; Playwright e2e for the lot.
 
 ## Larger backlog (unsequenced — L unless noted)
 
