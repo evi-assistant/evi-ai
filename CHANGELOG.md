@@ -6,6 +6,15 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Multiple model backends at once.** eVi now keeps a registry of backends
+  (`~/.evi/backends.json`) — local (ollama / lmstudio / llamacpp) and online via
+  presets (openai / xai / anthropic / openrouter / groq / together, base URL
+  pre-filled, just supply a key — inline or an `env:VARNAME` reference). The
+  **model picker aggregates models across all of them**, each tagged with its
+  **source backend** (hover shows the provider); selecting a model also switches
+  the active backend. Manage via `evi backend list/add/remove/use` or
+  `/api/backends` (add/list/remove) + the reworked `/api/model-picker`. `[llm]`
+  stays the materialized active backend, so nothing else changed underneath.
 - **A2A (Agent2Agent) adapter — interop with any standards-compliant agent.**
   Complements eVi's own federation (the zero-dep *private fast path* for your own
   eVis) with the *interop path*:
