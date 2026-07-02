@@ -145,9 +145,23 @@ class PickerUpdate(BaseModel):
     """Patch shape for POST /api/model-picker. All fields optional."""
 
     model: str | None = None
+    # Registry entry name to switch the ACTIVE backend to (its kind/base_url/
+    # api_key get copied into [llm]). None = keep the current backend.
+    backend: str | None = None
     fast_model: str | None = None
     effort: str | None = None
     fast_mode: bool | None = None
+
+
+class BackendUpsert(BaseModel):
+    """POST /api/backends — register a backend, either from a preset or custom."""
+
+    name: str | None = None            # label; defaults to the preset name/kind
+    preset: str | None = None          # openai|xai|anthropic|openrouter|groq|together
+    kind: str | None = None            # lmstudio|ollama|llamacpp|openai_compat (custom)
+    base_url: str | None = None
+    api_key: str | None = None         # inline secret OR "env:VARNAME"
+    enabled: bool | None = None
 
 
 class TruncateRequest(BaseModel):
@@ -1297,32 +1311,48 @@ def create_app() -> FastAPI:
 
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:
-        """Snapshot for the picker UI: available models + current settings."""
+        """Snapshot for the picker UI: models across ALL configured backends,
+        each tagged with its source backend, + current settings."""
         cfg = Config.load()
-        backend = get_backend(cfg.llm)
-        try:
-            models = [m.id for m in backend.list_models()]
-        except Exception:
-            models = []
-        # Always include the currently-active model so the picker can show
-        # a non-empty list even when the backend isn't reachable.
-        active = cfg.llm.model
-        if active and active not in models:
-            models = [active, *models]
+        from evi.backends import registry as _reg
         from evi.capabilities import capabilities as _caps
+
+        groups = _reg.all_models(cfg)  # [{backend, kind, reachable, models:[ids]}]
+        active = cfg.llm.model
+        active_backend = _reg.active_backend_name(cfg)
+        # Flat, de-duped model list + a source map (model id -> [backend names]).
+        flat: list[str] = []
+        sources: dict[str, list[str]] = {}
+        for g in groups:
+            for mid in g["models"]:
+                if mid not in sources:
+                    sources[mid] = []
+                    flat.append(mid)
+                if g["backend"] not in sources[mid]:
+                    sources[mid].append(g["backend"])
+        # Always include the active model so the picker is never empty.
+        if active and active not in sources:
+            flat.insert(0, active)
+            sources[active] = [active_backend] if active_backend else []
 
         return {
             "active": active,
+            "active_backend": active_backend,
             "fast_model": cfg.llm.fast_model,
-            "models": models,
+            "models": flat,
+            # Per-backend grouping (name/kind/reachable/models) for source tags
+            # + greying-out unreachable backends in the UI.
+            "backends": groups,
+            # model id -> [backend names] that serve it (the source tag/hover).
+            "sources": sources,
             "effort": (cfg.llm.reasoning_effort or "medium").lower(),
             "effort_levels": ["off", "low", "medium", "high", "max"],
             "fast_mode": bool(cfg.llm.fast_mode),
             "backend": cfg.llm.backend,
             "api": cfg.llm.api,  # "chat" | "responses" (cloud server-side tools)
-            # Per-model capability flags (vision/reasoning/infill/audio) +
-            # the active model's, so the UI can show capability chips.
-            "capabilities": {m: _caps(m) for m in models},
+            # Per-model capability flags (vision/reasoning/infill/audio) + the
+            # active model's, so the UI can show capability chips.
+            "capabilities": {m: _caps(m) for m in flat},
             "active_capabilities": _caps(active),
         }
 
@@ -1334,6 +1364,15 @@ def create_app() -> FastAPI:
         so the change takes effect on the next turn without a restart.
         """
         cfg = Config.load()
+        from evi.backends import registry as _reg
+        if req.backend is not None:
+            entry = _reg.get_entry(req.backend.strip())
+            if entry is None:
+                raise HTTPException(400, f"unknown backend {req.backend!r}")
+            # Materialize the chosen registry entry into [llm] (the active backend).
+            cfg.llm.backend = entry.kind
+            cfg.llm.base_url = entry.base_url
+            cfg.llm.api_key = entry.api_key
         if req.model is not None:
             cfg.llm.model = req.model.strip()
         if req.fast_model is not None:
@@ -1349,18 +1388,88 @@ def create_app() -> FastAPI:
         # Push into every live session so the current chat reflects the new
         # settings on the next turn.
         for sess in _all_sessions():
+            sess.agent.config.llm.backend = cfg.llm.backend
+            sess.agent.config.llm.base_url = cfg.llm.base_url
+            sess.agent.config.llm.api_key = cfg.llm.api_key
             sess.agent.config.llm.model = cfg.llm.model
             sess.agent.config.llm.fast_model = cfg.llm.fast_model
             sess.agent.config.llm.reasoning_effort = cfg.llm.reasoning_effort
             sess.agent.config.llm.fast_mode = cfg.llm.fast_mode
-            sess.agent.refresh_prompt()  # re-stitch identity so it reflects the new model
+            if req.backend is not None:  # backend changed → rebuild the client
+                try:
+                    sess.agent.client = make_client(cfg.llm)
+                except Exception:  # noqa: BLE001
+                    pass
+            sess.agent.refresh_prompt()  # re-stitch identity for the new model
         return {
             "ok": True,
             "active": cfg.llm.model,
+            "active_backend": _reg.active_backend_name(cfg),
+            "backend": cfg.llm.backend,
             "fast_model": cfg.llm.fast_model,
             "effort": cfg.llm.reasoning_effort,
             "fast_mode": cfg.llm.fast_mode,
         }
+
+    @app.get("/api/backends")
+    def backends_list() -> dict[str, object]:
+        """The configured backend registry + available presets. Never leaks the
+        raw API key — only whether one is set and if it's an env reference."""
+        from evi.backends import registry as _reg
+        from evi.backends.presets import ONLINE_PRESETS
+
+        cfg = Config.load()
+        entries = _reg.load_backends()
+        return {
+            "backends": [
+                {
+                    "name": e.name, "kind": e.kind, "base_url": e.base_url,
+                    "enabled": e.enabled,
+                    "has_key": bool(e.api_key),
+                    "key_is_env": e.api_key.startswith("env:"),
+                }
+                for e in entries
+            ],
+            "active_backend": _reg.active_backend_name(cfg),
+            "presets": [
+                {"name": p.name, "base_url": p.base_url, "api_key_env": p.api_key_env,
+                 "default_model": p.default_model, "note": p.note}
+                for p in ONLINE_PRESETS.values()
+            ],
+            "kinds": ["lmstudio", "ollama", "llamacpp", "openai_compat"],
+        }
+
+    @app.post("/api/backends")
+    def backends_add(req: BackendUpsert) -> dict[str, object]:
+        """Register (or overwrite) a backend — from a preset or a custom entry."""
+        from evi.backends import registry as _reg
+
+        if req.preset:
+            entry = _reg.from_preset(
+                req.preset.strip(), name=(req.name or "").strip(),
+                api_key=(req.api_key or "").strip(),
+            )
+            if entry is None:
+                raise HTTPException(400, f"unknown preset {req.preset!r}")
+        else:
+            name = (req.name or "").strip()
+            if not name:
+                raise HTTPException(400, "name is required for a custom backend")
+            kind = (req.kind or "openai_compat").strip()
+            base = (req.base_url or "").strip() or _reg._default_base_url(kind)
+            entry = _reg.BackendEntry(
+                name=name, kind=kind, base_url=base, api_key=(req.api_key or "").strip(),
+            )
+        if req.enabled is not None:
+            entry.enabled = bool(req.enabled)
+        _reg.add_backend(entry, overwrite=True)
+        return {"ok": True, "name": entry.name, "kind": entry.kind}
+
+    @app.delete("/api/backends/{name}")
+    def backends_remove(name: str) -> dict[str, object]:
+        from evi.backends import registry as _reg
+
+        return {"ok": _reg.remove_backend(name)}
 
     @app.get("/api/session/cwd")
     def session_cwd_get(session_id: str) -> dict[str, str]:

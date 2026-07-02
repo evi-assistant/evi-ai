@@ -168,6 +168,19 @@ def client(
     monkeypatch.setattr(builder_mod, "build_agent", lambda *_, **__: _FakeAgent())
     monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
     monkeypatch.setattr(server_mod, "get_backend", lambda *_a, **_k: _FakeBackend())
+    # The picker now aggregates models via the backend registry. Isolate its
+    # file to tmp (empty → falls back to the single [llm] backend) and route its
+    # per-backend model listing through the test-mocked get_backend.
+    from evi.backends import registry as _reg
+    monkeypatch.setattr(_reg, "BACKENDS_PATH", tmp_path / "backends.json")
+
+    def _list_models_for(entry):
+        try:
+            return [m.id for m in server_mod.get_backend(entry).list_models()]
+        except Exception:
+            return []
+
+    monkeypatch.setattr(_reg, "list_models_for", _list_models_for)
     app = server_mod.create_app()
     return TestClient(app)
 

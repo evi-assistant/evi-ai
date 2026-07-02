@@ -31,6 +31,7 @@ KEYBINDINGS_PATH = HOME / "keybindings.toml"
 AGENTS_CONFIG_PATH = HOME / "agents.toml"  # user-defined subagent profiles
 MARKETPLACE_PATH = HOME / "marketplace.json"
 PEERS_PATH = HOME / "peers.json"
+BACKENDS_PATH = HOME / "backends.json"  # multi-backend registry (see evi/backends/registry.py)
 USERS_PATH = HOME / "users.json"
 TRANSCRIPTS_DIR = HOME / "transcripts"
 DREAM_LOG_DIR = LOG_DIR / "dreams"
