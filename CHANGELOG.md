@@ -26,6 +26,15 @@ All notable user-visible changes to eVi. Format loosely follows
   and a new **`list_peers`** tool lets the model pick the right peer *before*
   `delegate_peer` (e.g. route a vision task to the peer whose model has vision).
 
+### Fixed
+- **Switching the model mid-session now actually registers.** The system prompt
+  (which carries the model identity) was composed once at session start and
+  frozen, so after a model switch the assistant kept reporting the *old* model.
+  Every switch path (`/api/model-picker`, `/api/backend/use`, the `/model`
+  command) now re-stitches the prompt via a new `Agent.refresh_prompt()`. The
+  web header (`model=…`) also refreshes on switch instead of showing the model
+  from page load.
+
 ## [1.0.1] — 2026-07-01
 
 ### Fixed

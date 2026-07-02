@@ -419,6 +419,7 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
         cfg.llm.model = args
         cfg.save()
         agent.config.llm.model = args
+        agent.refresh_prompt()  # re-stitch identity so it reflects the new model
         return _SlashOutcome(handled=True, text=f"using **{args}** (persisted)")
 
     if name == "goal":
@@ -1006,6 +1007,7 @@ def create_app() -> FastAPI:
                 sess.agent.client = make_client(cfg.llm)
             except Exception:  # noqa: BLE001
                 pass
+            sess.agent.refresh_prompt()  # re-stitch identity for the new model
         return {"ok": True, "backend": cfg.llm.backend,
                 "base_url": cfg.llm.base_url, "model": cfg.llm.model}
 
@@ -1351,6 +1353,7 @@ def create_app() -> FastAPI:
             sess.agent.config.llm.fast_model = cfg.llm.fast_model
             sess.agent.config.llm.reasoning_effort = cfg.llm.reasoning_effort
             sess.agent.config.llm.fast_mode = cfg.llm.fast_mode
+            sess.agent.refresh_prompt()  # re-stitch identity so it reflects the new model
         return {
             "ok": True,
             "active": cfg.llm.model,

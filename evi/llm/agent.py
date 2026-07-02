@@ -754,6 +754,16 @@ class Agent:
         self.auto_approve_categories = set(
             getattr(getattr(self.config, "auto", None), "auto_approve", []) or []
         )
+        self.refresh_prompt()
+
+    def refresh_prompt(self) -> None:
+        """Recompose the system prompt (history[0]) in place from current config.
+
+        The system prompt embeds live state — the model identity, memory, skills —
+        so it must be re-stitched whenever any of those change mid-session (e.g. a
+        model switch via the picker). Callers that mutate ``config.llm.model`` on a
+        running agent MUST call this, or the frozen prompt will keep telling the
+        model it's the old model (and it'll report the old name)."""
         if self.history:
             self.history[0] = {
                 "role": "system",

@@ -154,6 +154,7 @@ class _FakeAgent:
     def enable_auto_all(self): self.auto_all = True
     def disable_auto_all(self): self.auto_all = False
     def token_usage(self): return (0, 0)
+    def refresh_prompt(self): pass
 
 
 @pytest.fixture

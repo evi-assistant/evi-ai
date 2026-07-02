@@ -823,9 +823,12 @@ let goalChipText = null;
 let planArmed = false;
 let autoOn = false;
 
-fetch('/api/health').then(r => r.json()).then(d => {
-  meta.textContent = `model=${d.model}`;
-}).catch(() => { meta.textContent = 'offline'; });
+function refreshHeaderModel() {
+  fetch('/api/health').then(r => r.json()).then(d => {
+    meta.textContent = `model=${d.model}`;
+  }).catch(() => { meta.textContent = 'offline'; });
+}
+refreshHeaderModel();
 
 // Surface context-window usage. Refresh on connect and after each turn.
 refreshUsage();
@@ -1951,6 +1954,7 @@ async function applyPicker(patch) {
     pickerState.fast_mode = data.fast_mode;
     renderFooter();
     renderPicker();
+    if (data.active) meta.textContent = 'model=' + data.active;  // keep the header in sync
   } catch (err) {
     console.error('picker apply failed', err);
   }
@@ -2503,6 +2507,7 @@ resetBtn.addEventListener('click', async () => {
       if (typeof loadCwd === 'function') loadCwd();
       await loadConfig();
       renderSection();
+      if (typeof refreshHeaderModel === 'function') refreshHeaderModel();
     } catch {}
   }
   function pullRecommended(model, box) {

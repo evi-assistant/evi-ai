@@ -101,6 +101,20 @@ def test_system_prompt_states_model_identity() -> None:
     assert "not" in low
 
 
+def test_refresh_prompt_updates_identity_on_model_switch() -> None:
+    # A mid-session model switch (picker / backend-use / /model) must re-stitch the
+    # frozen system prompt, or the identity keeps naming the old model.
+    cfg = Config()
+    cfg.llm.model = "qwen2.5-coder:14b"
+    agent = Agent(client=_FakeClient([]), config=cfg, tools=[])
+    assert "qwen2.5-coder:14b" in agent.history[0]["content"]
+    agent.config.llm.model = "deepseek-r1:14b"  # what the switch endpoints do
+    agent.refresh_prompt()
+    sysmsg = agent.history[0]["content"]
+    assert "deepseek-r1:14b" in sysmsg
+    assert "qwen2.5-coder:14b" not in sysmsg
+
+
 def test_text_tool_call_json_not_shown_as_text() -> None:
     # qwen-style: the model prints the tool call as a JSON blob in `content`
     # instead of using structured tool_calls. eVi recovers it as a call and must
