@@ -452,6 +452,20 @@ class Agent:
     def _compose_system_prompt(self) -> str:
         """Stitch base + style + memory + skills + project context together."""
         parts = [self._base_system_prompt]
+        # Model identity — without this, local open-weight models hallucinate
+        # "I'm GPT-4" from their training data when asked what they are. The
+        # tool-discipline sentence curbs a common small-model failure (firing a
+        # tool on a bare "hello").
+        model_id = (getattr(self.config.llm, "model", "") or "").strip()
+        if model_id:
+            parts.append(
+                f"You are eVi, running the local open-weight model `{model_id}`. "
+                "You are NOT ChatGPT, GPT-4, Claude, or Gemini, and you were not "
+                "built by OpenAI, Anthropic, or Google. If the user asks which "
+                f"model or company you are, tell them you are eVi running `{model_id}` "
+                "locally. Do not call tools for greetings, small talk, or anything "
+                "you can answer directly — only call a tool when it is actually needed."
+            )
         # Output style (response persona), if one is selected.
         try:
             from evi.styles import style_text
@@ -1282,6 +1296,22 @@ class Agent:
             think_parser = _ThinkParser()
             usage_payload: Any = None  # captured from the final chunk
             logprob_tokens: list[dict[str, Any]] = []  # collected when enabled
+            # Some local models emit a tool call as a JSON/fenced text blob
+            # instead of via structured tool_calls. If the reply *starts* with
+            # `{` / `[` / a code fence we can't tell it's a tool call until the
+            # stream ends — so hold that text rather than streaming raw JSON to
+            # the UI, and flush it only if it turns out NOT to be a tool call.
+            hold_text = False
+            hold_decided = False
+
+            def _maybe_hold() -> None:
+                nonlocal hold_text, hold_decided
+                if hold_decided:
+                    return
+                head = "".join(text_buf).lstrip()
+                if head:
+                    hold_decided = True
+                    hold_text = head[:1] in ("`", "{", "[")
 
             for chunk in stream:
                 # The final chunk in a stream_options.include_usage stream
@@ -1308,7 +1338,9 @@ class Agent:
                         yield ThinkingDelta(thinking)
                     if visible:
                         text_buf.append(visible)
-                        yield TextDelta(visible)
+                        _maybe_hold()
+                        if not hold_text:
+                            yield TextDelta(visible)
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
                         slot = tool_buf.setdefault(
@@ -1331,7 +1363,9 @@ class Agent:
                 yield ThinkingDelta(tail_thinking)
             if tail_visible:
                 text_buf.append(tail_visible)
-                yield TextDelta(tail_visible)
+                _maybe_hold()
+                if not hold_text:
+                    yield TextDelta(tail_visible)
 
             # Real token usage from the backend (when supported).
             if usage_payload is not None:
@@ -1381,6 +1415,12 @@ class Agent:
                             }
                         text_buf = []  # don't store the JSON as visible content
                         dlog("llm.text_tool_call_recovered", {"n": len(_recovered)})
+
+            # Held leading-JSON text that was NOT a recovered tool call is a
+            # genuine reply (e.g. the user asked for JSON) — stream it now so it
+            # still renders, just non-incrementally.
+            if hold_text and text_buf:
+                yield TextDelta("".join(text_buf))
 
             assistant_msg: dict[str, Any] = {"role": "assistant"}
             if text_buf:

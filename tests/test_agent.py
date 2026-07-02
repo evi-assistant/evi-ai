@@ -89,6 +89,56 @@ def test_plain_text_response() -> None:
     assert agent.history[-1] == {"role": "assistant", "content": "Hello world"}
 
 
+def test_system_prompt_states_model_identity() -> None:
+    # Without this, local models hallucinate "I'm GPT-4" from training data.
+    cfg = Config()
+    cfg.llm.model = "qwen2.5-coder:14b-instruct"
+    agent = Agent(client=_FakeClient([]), config=cfg, tools=[])
+    sp = agent._compose_system_prompt()
+    assert "qwen2.5-coder:14b-instruct" in sp
+    low = sp.lower()
+    assert "gpt-4" in low or "chatgpt" in low  # explicitly disclaims the hallucination
+    assert "not" in low
+
+
+def test_text_tool_call_json_not_shown_as_text() -> None:
+    # qwen-style: the model prints the tool call as a JSON blob in `content`
+    # instead of using structured tool_calls. eVi recovers it as a call and must
+    # NOT leak the raw JSON into the visible transcript (the leading-JSON hold).
+    blob = '{"name": "echo", "arguments": {"msg": "hi"}}'
+    script = [
+        [_text_chunk(blob, finish="stop")],    # turn 1: tool call emitted as text
+        [_text_chunk("done", finish="stop")],  # turn 2: final answer
+    ]
+
+    def _echo(msg: str) -> str:
+        return msg
+
+    echo_tool = Tool(
+        name="echo",
+        description="echo the message back",
+        parameters={
+            "type": "object",
+            "properties": {"msg": {"type": "string"}},
+            "required": ["msg"],
+        },
+        func=_echo,
+    )
+
+    agent = Agent(client=_FakeClient(script), config=Config(), tools=[echo_tool])
+    events = list(agent.chat("hi"))
+
+    shown = "".join(e.text for e in events if isinstance(e, TextDelta))
+    # The raw JSON blob must never reach the UI as visible text.
+    assert "{" not in shown
+    assert '"name"' not in shown
+    # It was recovered and dispatched as a real tool call.
+    tcalls = [e for e in events if isinstance(e, ToolCall)]
+    assert len(tcalls) == 1 and tcalls[0].name == "echo"
+    # The genuine turn-2 answer still renders.
+    assert "done" in shown
+
+
 def test_tool_call_dispatch() -> None:
     # Turn 1: model emits a tool call. Turn 2: model emits final text.
     script = [
