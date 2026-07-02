@@ -3425,6 +3425,112 @@ def eval_run(
         raise typer.Exit(1)
 
 
+backend_app = typer.Typer(help="Model backends — register providers (local + online) to pick from.")
+app.add_typer(backend_app, name="backend")
+
+
+@backend_app.command("list")
+def backend_list() -> None:
+    """List configured backends (~/.evi/backends.json) + the active one."""
+    from evi.backends import registry as reg
+    from evi.config import Config
+
+    cfg = Config.load()
+    active = reg.active_backend_name(cfg)
+    entries = reg.load_backends()
+    if not entries:
+        console.print(
+            f"[dim]no backends registered[/dim] — the active [llm] backend "
+            f"[bold]{active}[/bold] is in use. Add one with "
+            "[cyan]evi backend add openai[/cyan] (or xai/anthropic/openrouter/groq/together), "
+            "or [cyan]evi backend add <name> --kind ollama --base-url …[/cyan]."
+        )
+        return
+    for e in entries:
+        mark = "[green]*[/green]" if e.name == active else " "
+        if not e.api_key:
+            key = ""
+        elif e.api_key.startswith("env:"):
+            key = " [dim](env key)[/dim]"
+        else:
+            key = " [dim](key set)[/dim]"
+        off = "" if e.enabled else " [red](disabled)[/red]"
+        console.print(f"  {mark} [bold]{e.name}[/bold] [dim]{e.kind} · {e.base_url}[/dim]{key}{off}")
+
+
+@backend_app.command("add")
+def backend_add(
+    name_or_preset: str = typer.Argument(
+        ..., help="A preset (openai/xai/anthropic/openrouter/groq/together) OR a custom name."
+    ),
+    kind: str = typer.Option("", "--kind", help="Custom entry kind: lmstudio|ollama|llamacpp|openai_compat."),
+    base_url: str = typer.Option("", "--base-url", help="Base URL for a custom entry (defaults per kind)."),
+    api_key: str = typer.Option("", "--api-key", help="Inline key OR an env:VARNAME reference. Presets default to env:."),
+    name: str = typer.Option("", "--name", help="Override the entry name (preset mode)."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing backend by this name."),
+) -> None:
+    """Register a backend from a preset or a custom endpoint."""
+    import os as _os
+
+    from evi.backends import registry as reg
+    from evi.backends.presets import get_preset
+
+    if not kind and get_preset(name_or_preset) is not None:
+        entry = reg.from_preset(name_or_preset, name=name, api_key=api_key)
+    else:
+        the_kind = kind or "openai_compat"
+        entry = reg.BackendEntry(
+            name=(name or name_or_preset),
+            kind=the_kind,
+            base_url=base_url or reg._default_base_url(the_kind),
+            api_key=api_key,
+        )
+    if not reg.add_backend(entry, overwrite=overwrite):
+        console.print(f"[red]backend exists:[/red] {entry.name}. Pass --overwrite to replace.")
+        raise typer.Exit(1)
+    keyhint = ""
+    if entry.api_key.startswith("env:"):
+        var = entry.api_key[4:]
+        keyhint = f" [dim](key from ${var}{'' if _os.environ.get(var) else ' — NOT set!'})[/dim]"
+    console.print(f"[green]added[/green] {entry.name} [dim]{entry.kind} · {entry.base_url}[/dim]{keyhint}")
+    console.print("[dim]make it active with `evi backend use " + entry.name + "` or the model picker.[/dim]")
+
+
+@backend_app.command("remove")
+def backend_remove(name: str) -> None:
+    """Remove a backend by name."""
+    from evi.backends import registry as reg
+
+    if not reg.remove_backend(name):
+        console.print(f"[red]no such backend:[/red] {name}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {name}")
+
+
+@backend_app.command("use")
+def backend_use(
+    name: str = typer.Argument(..., help="Registry backend name to make active."),
+    model: str = typer.Option("", "--model", help="Also set the active model."),
+) -> None:
+    """Switch the active backend (copies it into [llm]) and optionally the model."""
+    from evi.backends import registry as reg
+    from evi.config import Config
+
+    entry = reg.get_entry(name)
+    if entry is None:
+        console.print(f"[red]no such backend:[/red] {name} [dim](try `evi backend list`)[/dim]")
+        raise typer.Exit(1)
+    cfg = Config.load()
+    cfg.llm.backend = entry.kind
+    cfg.llm.base_url = entry.base_url
+    cfg.llm.api_key = entry.api_key
+    if model:
+        cfg.llm.model = model
+    cfg.save()
+    tail = f" model={model}" if model else ""
+    console.print(f"[green]active backend[/green] -> {entry.name} [dim]({entry.kind} · {entry.base_url})[/dim]{tail}")
+
+
 peer_app = typer.Typer(help="Federation — delegate tasks to trusted peer eVi instances.")
 app.add_typer(peer_app, name="peer")
 
