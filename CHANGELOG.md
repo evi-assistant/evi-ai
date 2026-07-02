@@ -3,6 +3,18 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.1] — 2026-07-01
+
+### Fixed
+- **Model identity.** The system prompt now names the running local model and
+  explicitly disclaims being GPT-4 / ChatGPT / Claude, so local models stop
+  answering "I'm based on OpenAI's GPT-4" when asked what they are. It also nudges
+  the model against firing tools for greetings / small talk.
+- **No more raw tool-call JSON in the chat.** When a local model emits a tool call
+  as a text JSON blob (common with qwen via Ollama), eVi recovers it as a real
+  tool call and no longer flashes the raw `{"name": …}` JSON as a chat message.
+  Genuine JSON replies still render (held, then flushed if not a tool call).
+
 ## [1.0.0] — 2026-07-01
 
 **eVi 1.0 — first stable public release.** The project is now developed in the
