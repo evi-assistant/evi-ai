@@ -96,6 +96,37 @@ def delegate(peer: Peer, task: str, *, mode: str = "", timeout: float = 180.0) -
     return str(data.get("text", ""))
 
 
+# --- capability cards (A2A "Agent Card", adapted) --------------------------
+#
+# A2A advertises what an agent can do via a JSON card at a well-known URL. eVi
+# federation previously only exposed version+model (via /api/health), so a
+# delegating node was flying blind about what a peer could actually handle. A
+# card lets the delegator (and its LLM) route work sensibly — e.g. send a vision
+# task to the peer whose model has vision. Served at A2A's canonical
+# ``/.well-known/agent-card.json`` so a future A2A adapter (or an external A2A
+# client) can consume the same descriptor.
+
+
+def fetch_card(peer: Peer, timeout: float = 5.0) -> dict | None:
+    """Fetch a peer's agent card from ``/.well-known/agent-card.json`` (the A2A
+    Agent Card, which also carries eVi capability flags under ``x-evi``).
+
+    Returns the card dict, or None on any transport/parse failure (callers treat
+    a missing card as "capabilities unknown", never an error)."""
+    req = urllib.request.Request(
+        f"{peer.url}/.well-known/agent-card.json",
+        headers={"User-Agent": "evi-federation"},
+    )
+    if peer.token:
+        req.add_header("Authorization", f"Bearer {peer.token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 # --- managing peers.json ---------------------------------------------------
 
 
@@ -162,11 +193,13 @@ def probe_evi(host: str, port: int = DEFAULT_PEER_PORT, timeout: float = 2.0) ->
         return None
     if not (isinstance(data, dict) and data.get("ok") and data.get("version")):
         return None
+    caps = data.get("capabilities")
     return {
         "host": host,
         "url": url,
         "version": str(data.get("version", "")),
         "model": str(data.get("model", "")),
+        "capabilities": caps if isinstance(caps, dict) else {},
     }
 
 
@@ -179,8 +212,13 @@ def check_peer(peer: Peer, timeout: float = 3.0) -> dict:
         return {"reachable": False, "version": "", "model": ""}
     info = probe_evi(host, port, timeout=timeout)
     if info is None:
-        return {"reachable": False, "version": "", "model": ""}
-    return {"reachable": True, "version": info["version"], "model": info["model"]}
+        return {"reachable": False, "version": "", "model": "", "capabilities": {}}
+    return {
+        "reachable": True,
+        "version": info["version"],
+        "model": info["model"],
+        "capabilities": info.get("capabilities", {}),
+    }
 
 
 def _host_port(url: str) -> tuple[str, int]:

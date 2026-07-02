@@ -583,7 +583,8 @@ def create_app() -> FastAPI:
     # - `/api/auth/check`             — used by the login overlay
     # - `/images/*`                   — capability-URL-style (filename is random hex)
     _PUBLIC_PATHS = frozenset(
-        {"/", "/api/health", "/api/auth/check", "/api/backend/status"}
+        {"/", "/api/health", "/api/auth/check", "/api/backend/status",
+         "/.well-known/agent-card.json"}
     )
 
     @app.middleware("http")
@@ -752,13 +753,29 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, object]:
         from evi import __version__
+        from evi.capabilities import capabilities as _caps
         cfg = Config.load()
+        try:  # health must never 500 — capability heuristics are best-effort
+            caps = _caps(cfg.llm.model or "")
+        except Exception:  # noqa: BLE001
+            caps = {}
         return {
             "ok": True,
             "version": __version__,
             "model": cfg.llm.model,
+            # Capability flags so a federating peer's LAN scan / check_peer can
+            # route work by capability without a second request (full card lives
+            # at /.well-known/agent-card.json).
+            "capabilities": caps,
             "sessions": sum(len(b) for b in _user_sessions.values()),
         }
+
+    @app.get("/.well-known/agent-card.json")
+    def agent_card(request: Request) -> dict[str, object]:
+        """A2A Agent Card (also carries eVi capability flags under `x-evi`).
+        Auth-exempt so any agent can discover this node before delegating."""
+        from evi.a2a import build_agent_card
+        return build_agent_card(Config.load(), url=str(request.base_url).rstrip("/"))
 
     # --- LLM backend availability (so the UI can warn + offer to start one) -
     #
@@ -1242,6 +1259,39 @@ def create_app() -> FastAPI:
             raise
         _fed_end(entry, "error" if res.error else "ok")
         return {"text": res.text, "error": res.error}
+
+    @app.post("/a2a")
+    def a2a_rpc(body: dict, request: Request) -> dict:
+        """A2A (Agent2Agent) JSON-RPC endpoint — message/send, tasks/get,
+        tasks/cancel. Off unless `[federation] a2a = true`. Delegated tasks run
+        non-interactively (tools not auto-approved are denied), same as
+        /api/federate. Bearer-token-gated by the auth middleware."""
+        cfg = Config.load()
+        if not cfg.federation.a2a:
+            raise HTTPException(403, "A2A serving is disabled (set [federation] a2a = true)")
+        from evi import a2a as a2a_mod
+        from evi.headless import run_headless
+        from evi.sdk.builder import build_agent
+
+        def _run(text: str) -> tuple[str, str]:
+            agent = build_agent(
+                config=cfg,
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
+            )
+            agent.permission_callback = lambda *a, **k: False
+            agent.permission_batch_callback = None
+            entry = _fed_begin("a2a", text)
+            try:
+                res = run_headless(agent, text)
+            except Exception:
+                _fed_end(entry, "error")
+                raise
+            _fed_end(entry, "error" if res.error else "ok")
+            return res.text, res.error
+
+        return a2a_mod.handle_rpc(body if isinstance(body, dict) else {}, _run)
 
     @app.get("/api/model-picker")
     def model_picker_get() -> dict[str, object]:

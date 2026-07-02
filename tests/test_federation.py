@@ -151,6 +151,22 @@ def test_federate_records_activity_for_indicator(monkeypatch, tmp_path):
     assert "hello peer" in fed["recent"][0]["task"]
 
 
+def test_agent_card_endpoint(monkeypatch, tmp_path):
+    client = _fed_client(monkeypatch, tmp_path, serve=True)
+    r = client.get("/.well-known/agent-card.json")
+    assert r.status_code == 200
+    card = r.json()
+    # A2A Agent Card shape (served at A2A's canonical well-known path)
+    assert card["protocolVersion"]
+    assert card["capabilities"]["streaming"] is False
+    assert card["url"].endswith("/a2a")
+    assert isinstance(card["skills"], list) and card["skills"]
+    # eVi extension carries the model capability flags
+    assert isinstance(card["x-evi"]["capabilities"], dict)
+    # /api/health still carries capability flags for federation discovery
+    assert isinstance(client.get("/api/health").json().get("capabilities"), dict)
+
+
 # ---- managing peers.json ---------------------------------------------------
 
 
@@ -208,6 +224,7 @@ def test_probe_evi_fingerprint():
         "url": f"http://127.0.0.1:{port}",
         "version": "0.31.0",
         "model": "qwen2.5:14b",
+        "capabilities": {},
     }
 
 
@@ -232,9 +249,74 @@ def test_check_peer_reachable_and_not():
     finally:
         srv.shutdown()
         srv.server_close()
-    assert up == {"reachable": True, "version": "1.0", "model": "m"}
+    assert up == {"reachable": True, "version": "1.0", "model": "m", "capabilities": {}}
     down = federation.check_peer(Peer(name="b", url="http://127.0.0.1:1"), timeout=0.5)
     assert down["reachable"] is False
+
+
+def test_probe_evi_captures_capabilities():
+    caps = {"vision": True, "tools": True, "reasoning": False}
+    srv, port = _serve_health(
+        {"ok": True, "version": "1.0.1", "model": "qwen2.5-vl", "capabilities": caps}
+    )
+    try:
+        info = federation.probe_evi("127.0.0.1", port, timeout=5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert info["capabilities"] == caps
+
+
+def test_fetch_card_roundtrip():
+    card_body = json.dumps(
+        {"protocol": "evi-federation/1", "model": "m", "capabilities": {"tools": True}}
+    ).encode()
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path == "/.well-known/agent-card.json":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(card_body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        card = federation.fetch_card(
+            Peer(name="p", url=f"http://127.0.0.1:{srv.server_address[1]}"), timeout=5
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert card["protocol"] == "evi-federation/1"
+    assert card["capabilities"] == {"tools": True}
+    # unreachable peer → None, never raises
+    assert federation.fetch_card(Peer(name="x", url="http://127.0.0.1:1"), timeout=0.5) is None
+
+
+def test_list_peers_tool(monkeypatch):
+    from evi.tools.federation import list_peers
+
+    monkeypatch.setattr(
+        federation, "load_peers",
+        lambda *a, **k: [Peer(name="gpu", url="http://h:8473")],
+    )
+    monkeypatch.setattr(
+        federation, "check_peer",
+        lambda *a, **k: {"reachable": True, "version": "1.0.1", "model": "big-vl",
+                         "capabilities": {"vision": True}},
+    )
+    out = json.loads(list_peers())
+    assert out[0]["name"] == "gpu"
+    assert out[0]["reachable"] is True
+    assert out[0]["capabilities"]["vision"] is True
 
 
 def test_scan_network_finds_instance_on_host_list():

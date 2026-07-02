@@ -3,6 +3,29 @@
 All notable user-visible changes to eVi. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **A2A (Agent2Agent) adapter — interop with any standards-compliant agent.**
+  Complements eVi's own federation (the zero-dep *private fast path* for your own
+  eVis) with the *interop path*:
+  - **Agent Card** at `/.well-known/agent-card.json` — a spec-compliant A2A
+    `AgentCard` (protocolVersion, capabilities, skills, securitySchemes) that also
+    carries eVi's model capability flags under an `x-evi` extension. Served
+    always, auth-exempt (discovery is public).
+  - **`POST /a2a`** JSON-RPC endpoint — `message/send`, `tasks/get`,
+    `tasks/cancel`. Off unless `[federation] a2a = true`; bearer-token-gated and
+    run non-interactively (tools not auto-approved are denied), same as
+    `/api/federate`. Streaming (`message/stream`) + push are not implemented yet
+    (the card advertises `streaming: false`).
+  - **`delegate_a2a` tool** — eVi can call *any* external A2A agent by its
+    JSON-RPC URL.
+- **Federation capability discovery (the A2A Agent-Card idea, applied locally).**
+  `/api/health` now carries model capability flags (vision / tools / reasoning /
+  audio) so a LAN scan / `check_peer` learns what a peer can do in one request,
+  and a new **`list_peers`** tool lets the model pick the right peer *before*
+  `delegate_peer` (e.g. route a vision task to the peer whose model has vision).
+
 ## [1.0.1] — 2026-07-01
 
 ### Fixed

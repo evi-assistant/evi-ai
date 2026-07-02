@@ -235,6 +235,13 @@ class FederationSettings:
     `~/.evi/peers.json` (so per-peer tokens stay out of synced config)."""
 
     serve: bool = False
+    # Expose an A2A (Agent2Agent, https://a2a-protocol.org) JSON-RPC endpoint at
+    # POST /a2a so ANY standards-compliant agent (not just trusted eVi peers) can
+    # delegate a task here. OFF by default — a broader surface than eVi↔eVi
+    # federation, so it's a separate opt-in. Still bearer-token-gated + run
+    # non-interactively. The Agent Card at /.well-known/agent-card.json is served
+    # regardless (discovery is harmless); only task execution needs this flag.
+    a2a: bool = False
     # When true, the DESKTOP app binds its bundled server to 0.0.0.0 (LAN) so
     # this machine can be reached as a federation peer — otherwise it's loopback
     # only and unreachable from other boxes. Read by the Tauri shell at launch.
