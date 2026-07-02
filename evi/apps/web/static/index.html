@@ -287,6 +287,12 @@
   .picker-row .name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .picker-row .shortcut { font-size: 11px; color: var(--dim); }
   .picker-row .check { color: var(--accent); font-size: 12px; }
+  /* Source-backend tag on a model row (which provider serves it). */
+  .picker-row .src {
+    font-size: 10px; color: var(--dim); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0 5px; margin-left: 6px; vertical-align: middle;
+    text-transform: lowercase;
+  }
   .picker-divider { height: 1px; background: var(--border); margin: 6px 0; }
   .picker-toggle {
     display: flex; align-items: center; justify-content: space-between;
@@ -1898,15 +1904,23 @@ function renderPicker() {
   rows.push(`<div class="picker-section"><span>Models</span><span class="keys"><kbd>⇧</kbd><kbd>Ctrl</kbd><kbd>I</kbd></span></div>`);
   // Show up to 9 models with number shortcuts; rest unnumbered.
   const allCaps = pickerState.capabilities || {};
+  const sources = pickerState.sources || {};
   models.slice(0, 30).forEach((id, i) => {
     const isActive = id === active;
     const num = i < 9 ? (i + 1) : '';
     const caps = allCaps[id] || {};
     const chips = Object.keys(_CAP_CHIPS).filter(k => caps[k]).map(k => _CAP_CHIPS[k]).join('');
     const capSpan = chips ? ` <span class="caps" title="capabilities">${chips}</span>` : '';
+    // Source backend tag(s) — which configured backend serves this model.
+    const srcList = sources[id] || [];
+    const srcBackend = srcList.includes(pickerState.active_backend)
+      ? pickerState.active_backend : (srcList[0] || '');
+    const srcSpan = srcList.length
+      ? ` <span class="src" title="backend: ${escapeAttr(srcList.join(', '))}">${escapeHtml(srcList.join('/'))}</span>`
+      : '';
     rows.push(
-      `<div class="picker-row${isActive ? ' selected' : ''}" data-action="model" data-value="${escapeAttr(id)}">
-        <span class="name">${escapeHtml(id)}${capSpan}</span>
+      `<div class="picker-row${isActive ? ' selected' : ''}" data-action="model" data-value="${escapeAttr(id)}" data-backend="${escapeAttr(srcBackend)}">
+        <span class="name">${escapeHtml(id)}${capSpan}${srcSpan}</span>
         <span>${isActive ? '<span class="check">✓</span> ' : ''}<span class="shortcut">${num}</span></span>
       </div>`
     );
@@ -1949,6 +1963,7 @@ async function applyPicker(patch) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     pickerState.active = data.active;
+    if (data.active_backend) pickerState.active_backend = data.active_backend;
     pickerState.fast_model = data.fast_model;
     pickerState.effort = data.effort;
     pickerState.fast_mode = data.fast_mode;
@@ -1977,7 +1992,7 @@ pickerCard.addEventListener('click', e => {
   const row = e.target.closest('[data-action]');
   if (!row) return;
   const action = row.dataset.action;
-  if (action === 'model') applyPicker({ model: row.dataset.value });
+  if (action === 'model') applyPicker({ model: row.dataset.value, backend: row.dataset.backend || undefined });
   else if (action === 'effort') applyPicker({ effort: row.dataset.value });
   else if (action === 'fast') applyPicker({ fast_mode: !pickerState.fast_mode });
 });
