@@ -289,7 +289,8 @@ def _maybe_cleanup_transcripts(config: Config) -> None:
 
 
 def _build_agent(
-    system_prompt: str | None = None, model: str | None = None, *, register: bool = True
+    system_prompt: str | None = None, model: str | None = None,
+    backend: object | None = None, *, register: bool = True
 ) -> Agent:
     # Delegates the generic Agent assembly to the SDK's build_agent (single
     # source of truth); the CLI adds only its runtime concerns: spawning MCP
@@ -313,6 +314,7 @@ def _build_agent(
         config=config,
         system_prompt=system_prompt,
         model=model,
+        backend=backend,
         permission_callback=_cli_permission_prompt,
         permission_batch_callback=_cli_permission_prompt_batch,
         transcripts=None if safe else (TranscriptStore() if toggles.get("transcripts") else None),
@@ -338,6 +340,7 @@ def _run_ultracode_cli(
     cheap_fanout: bool = False,
     solver_model: str = "",
     synth_model: str = "",
+    fanout: bool = False,
 ):
     """Build an ultracode runner over fresh per-stage CLI agents, apply config +
     overrides + small-model tuning, and run the pipeline with live stage prints.
@@ -362,9 +365,21 @@ def _run_ultracode_cli(
         ucfg.stage_models["synthesize"] = synth_model
     if cfg_obj.ultracode.auto_tune:
         ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
+    # Multi-backend fan-out pool: spread the SOLVE angles across fanout-flagged
+    # backends' models (round-robin). When present it drives the solve stage, so a
+    # solve-stage cheap_fanout override is dropped.
+    fanout_pool: list[dict] = []
+    if fanout or cfg_obj.ultracode.fanout:
+        from evi.backends import registry as _reg
+
+        fanout_pool = _reg.fanout_models()
+        if fanout_pool:
+            ucfg.stage_models.pop("solve", None)
     run_one = uc.make_runner(
-        lambda sp, model=None: _build_agent(system_prompt=sp, model=model, register=False),
+        lambda sp, model=None, backend=None: _build_agent(
+            system_prompt=sp, model=model, backend=backend, register=False),
         stage_models=ucfg.stage_models,
+        fanout_pool=fanout_pool,
     )
 
     def on_stage(st) -> None:
@@ -372,9 +387,13 @@ def _run_ultracode_cli(
 
     routed = ", ".join(f"{k}={v}" for k, v in ucfg.stage_models.items())
     routed_note = f" routed:[{routed}]" if routed else ""
+    pool_note = ""
+    if fanout_pool:
+        pool_note = " fanout:[" + ", ".join(
+            f"{t['backend']}/{t['model']}" for t in fanout_pool[:6]) + "]"
     console.print(
         f"[dim]ultracode: breadth={ucfg.breadth} rounds={ucfg.rounds} "
-        f"mode={ucfg.mode}{routed_note}[/dim]"
+        f"mode={ucfg.mode}{routed_note}{pool_note}[/dim]"
     )
     return uc.run_ultracode(task, run_one=run_one, cfg=ucfg, on_stage=on_stage)
 
@@ -3669,6 +3688,10 @@ def ultracode(
     ),
     solver_model: str = typer.Option("", "--solver-model", help="Model id for the solve stage (overrides --cheap-fanout)."),
     synth_model: str = typer.Option("", "--synth-model", help="Model id for the synthesize stage."),
+    fanout: bool = typer.Option(
+        False, "--fanout",
+        help="Spread the solver fan-out across every model on fanout-flagged backends (multi-provider).",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Print the full result (incl. stages) as JSON."),
 ) -> None:
     """Run ONE hard task through the ultracode pipeline.
@@ -3681,6 +3704,7 @@ def ultracode(
     res = _run_ultracode_cli(
         task, breadth=breadth, rounds=rounds, mode=mode,
         cheap_fanout=cheap_fanout, solver_model=solver_model, synth_model=synth_model,
+        fanout=fanout,
     )
     if json_out:
         import json as _json

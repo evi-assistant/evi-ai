@@ -236,31 +236,52 @@ def run_ultracode(
 def make_runner(
     agent_factory: Callable[..., Any],
     stage_models: dict[str, str] | None = None,
+    fanout_pool: list[dict] | None = None,
 ) -> Callable[[str, str, str, str], str]:
     """Build the ``run_one`` :func:`run_ultracode` needs from an agent factory.
 
     ``agent_factory(system_prompt, model)`` must return a FRESH Agent constructed
     WITH that system prompt (threaded through construction — never mutated after)
-    and, when ``model`` is given, that model id. Each stage gets its own agent,
-    so per-stage context stays small regardless of pipeline length.
-    ``mode == NO_TOOLS`` strips tools (decompose/critic/synth); a real mode name
-    scopes the solver's toolset.
+    and that model id (when given). Each stage gets its own agent, so per-stage
+    context stays small regardless of pipeline length. ``mode == NO_TOOLS`` strips
+    tools (decompose/critic/synth); a real mode name scopes the solver's toolset.
 
     ``stage_models`` maps a stage name (decompose | solve | verify | synthesize)
     to a model id; a stage not in the map runs on the factory's default model.
     This is how "cheaper fan-out" works — pass ``{"solve": fast_model}``.
+
+    ``fanout_pool`` (from ``registry.fanout_models()``) round-robins the parallel
+    SOLVE angles across ``{"backend", "model"}`` targets, so one run spreads across
+    every fanout-flagged provider. When a pool is given, the factory is called as
+    ``agent_factory(system_prompt, model, backend)`` for the routed solve angles —
+    so a fan-out factory must accept that 3rd ``backend`` arg; without a pool the
+    factory is only ever called with two.
     """
+    import itertools
+
     from evi.headless import run_headless
     from evi.modes import mode_tools
 
     sm = stage_models or {}
+    pool = list(fanout_pool or [])
+    _counter = itertools.count()
 
     def run_one(system_prompt: str, task: str, mode: str, stage: str = "") -> str:
         # Never raise: a flaky stage (e.g. a mid-stream backend drop) must
         # degrade to an ignorable ERROR candidate, not tear down the whole
         # fan-out via a re-raised future. synthesis is told to ignore these.
         try:
-            agent = agent_factory(system_prompt, sm.get(stage))
+            model, backend = sm.get(stage), None
+            if pool and stage == "solve":
+                tgt = pool[next(_counter) % len(pool)]  # next() is atomic (GIL)
+                model, backend = tgt["model"], tgt["backend"]
+            # Pass `backend` only when routing to one, so 2-arg factories
+            # (system_prompt, model) — the web REPL, older SDK callers — keep
+            # working; a factory only needs the 3rd arg if you supply a fanout_pool.
+            if backend is not None:
+                agent = agent_factory(system_prompt, model, backend)
+            else:
+                agent = agent_factory(system_prompt, model)
             if mode == NO_TOOLS:
                 agent.tools = {}
             elif mode:

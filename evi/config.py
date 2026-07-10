@@ -272,6 +272,11 @@ class UltracodeSettings:
     # decompose / the adversarial critic / synthesize stay on the main model.
     # No-op unless fast_model is set. Per-stage overrides are CLI-only flags.
     cheap_fanout: bool = False
+    # Multi-backend fan-out: spread the parallel SOLVER angles across every model
+    # on backends flagged `fanout` in the registry (round-robin) — so one run can
+    # use several providers at once (a big cloud model + locals). No-op if no
+    # backend is fanout-flagged. Overrides cheap_fanout for the solve stage.
+    fanout: bool = False
 
 
 @dataclass

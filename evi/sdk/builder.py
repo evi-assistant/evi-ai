@@ -61,6 +61,7 @@ def build_agent(
     config: "Config | None" = None,
     system_prompt: str | None = None,
     model: str | None = None,
+    backend: "object | str | None" = None,
     client: "OpenAI | None" = None,
     tools: "list[Tool] | None" = None,
     tool_categories: Iterable[str] | None = None,
@@ -111,6 +112,18 @@ def build_agent(
 
     ensure_dirs()
     config = config or Config.load()
+    # Optional per-build BACKEND override: bind this agent to a specific registry
+    # backend (its kind / base_url / api_key + a client for it). Used by fan-out to
+    # route an agent to a different provider. Accepts a BackendEntry or a name.
+    if backend is not None:
+        from evi.backends.registry import BackendEntry, client_for, get_entry
+
+        entry = backend if isinstance(backend, BackendEntry) else get_entry(str(backend))
+        if entry is not None:
+            config = _replace(config, llm=_replace(
+                config.llm, backend=entry.kind, base_url=entry.base_url, api_key=entry.api_key))
+            if client is None:
+                client = client_for(entry)
     # Optional per-build model override (same endpoint, different model id) — used
     # e.g. by ultracode to route a stage to a cheaper/fast model.
     if model:

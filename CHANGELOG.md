@@ -18,6 +18,13 @@ All notable user-visible changes to eVi. Format loosely follows
   per-backend **"allow for subagent fan-out"** flag marks which providers' models
   may serve delegated subagents (the eligible pool for multi-model fan-out).
   `[llm]` stays the materialized active backend, so nothing else changed underneath.
+- **Multi-backend fan-out for ultracode.** With `[ultracode] fanout = true`, the
+  parallel SOLVER angles are spread — round-robin, interleaved by provider —
+  across every model on backends flagged **fan-out** in the registry, so one run
+  can use several providers at once (a big cloud model for some angles, locals for
+  others). Opt in per backend via the Settings → Model & Backend "fan-out"
+  checkbox (or `evi backend add --fanout`); no-op if none are flagged. Built on a
+  new `build_agent(backend=…)` that binds an agent to a specific registry backend.
 - **A2A (Agent2Agent) adapter — interop with any standards-compliant agent.**
   Complements eVi's own federation (the zero-dep *private fast path* for your own
   eVis) with the *interop path*:

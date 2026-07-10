@@ -245,4 +245,8 @@ def fanout_models(*, max_workers: int = 8) -> list[dict]:
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(entries)))) as pool:
         nested = list(pool.map(_probe, entries))
-    return [row for rows in nested for row in rows]
+    # Interleave by backend (round-robin) so a downstream round-robin over the flat
+    # list spreads work across providers, not all of one backend before the next.
+    from itertools import zip_longest
+
+    return [row for group in zip_longest(*nested) for row in group if row is not None]
