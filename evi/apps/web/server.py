@@ -162,6 +162,14 @@ class BackendUpsert(BaseModel):
     base_url: str | None = None
     api_key: str | None = None         # inline secret OR "env:VARNAME"
     enabled: bool | None = None
+    fanout: bool | None = None         # allow this backend's models for subagent fan-out
+
+
+class BackendFlags(BaseModel):
+    """PATCH /api/backends/{name} — toggle enabled / fanout on an existing entry."""
+
+    enabled: bool | None = None
+    fanout: bool | None = None
 
 
 class TruncateRequest(BaseModel):
@@ -1424,7 +1432,7 @@ def create_app() -> FastAPI:
             "backends": [
                 {
                     "name": e.name, "kind": e.kind, "base_url": e.base_url,
-                    "enabled": e.enabled,
+                    "enabled": e.enabled, "fanout": e.fanout,
                     "has_key": bool(e.api_key),
                     "key_is_env": e.api_key.startswith("env:"),
                 }
@@ -1462,8 +1470,26 @@ def create_app() -> FastAPI:
             )
         if req.enabled is not None:
             entry.enabled = bool(req.enabled)
+        if req.fanout is not None:
+            entry.fanout = bool(req.fanout)
         _reg.add_backend(entry, overwrite=True)
         return {"ok": True, "name": entry.name, "kind": entry.kind}
+
+    @app.patch("/api/backends/{name}")
+    def backends_patch(name: str, req: BackendFlags) -> dict[str, object]:
+        """Toggle enabled / fanout on an existing backend without touching its
+        url or key (used by the settings-panel checkboxes)."""
+        from evi.backends import registry as _reg
+
+        entry = _reg.get_entry(name)
+        if entry is None:
+            raise HTTPException(404, f"no such backend {name!r}")
+        if req.enabled is not None:
+            entry.enabled = bool(req.enabled)
+        if req.fanout is not None:
+            entry.fanout = bool(req.fanout)
+        _reg.add_backend(entry, overwrite=True)
+        return {"ok": True, "name": entry.name, "enabled": entry.enabled, "fanout": entry.fanout}
 
     @app.delete("/api/backends/{name}")
     def backends_remove(name: str) -> dict[str, object]:

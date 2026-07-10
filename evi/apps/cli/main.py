@@ -3455,7 +3455,8 @@ def backend_list() -> None:
         else:
             key = " [dim](key set)[/dim]"
         off = "" if e.enabled else " [red](disabled)[/red]"
-        console.print(f"  {mark} [bold]{e.name}[/bold] [dim]{e.kind} · {e.base_url}[/dim]{key}{off}")
+        fan = " [cyan](fan-out)[/cyan]" if e.fanout else ""
+        console.print(f"  {mark} [bold]{e.name}[/bold] [dim]{e.kind} · {e.base_url}[/dim]{key}{off}{fan}")
 
 
 @backend_app.command("add")
@@ -3467,6 +3468,7 @@ def backend_add(
     base_url: str = typer.Option("", "--base-url", help="Base URL for a custom entry (defaults per kind)."),
     api_key: str = typer.Option("", "--api-key", help="Inline key OR an env:VARNAME reference. Presets default to env:."),
     name: str = typer.Option("", "--name", help="Override the entry name (preset mode)."),
+    fanout: bool = typer.Option(False, "--fanout", help="Allow this backend's models in the subagent fan-out pool."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing backend by this name."),
 ) -> None:
     """Register a backend from a preset or a custom endpoint."""
@@ -3485,6 +3487,7 @@ def backend_add(
             base_url=base_url or reg._default_base_url(the_kind),
             api_key=api_key,
         )
+    entry.fanout = fanout
     if not reg.add_backend(entry, overwrite=overwrite):
         console.print(f"[red]backend exists:[/red] {entry.name}. Pass --overwrite to replace.")
         raise typer.Exit(1)

@@ -164,3 +164,53 @@ def test_picker_post_switches_backend(client):
 
 def test_picker_post_unknown_backend_is_400(client):
     assert client.post("/api/model-picker", json={"backend": "ghost"}).status_code == 400
+
+
+# ---- fanout -------------------------------------------------------------
+
+
+def test_fanout_flag_persists(tmp_path):
+    p = tmp_path / "backends.json"
+    R.save_backends(
+        [
+            R.BackendEntry(name="big", kind="openai_compat",
+                           base_url="https://api.openai.com/v1", fanout=True),
+            R.BackendEntry(name="local", kind="ollama", fanout=False),
+        ],
+        p,
+    )
+    got = {e.name: e for e in R.load_backends(p)}
+    assert got["big"].fanout is True and got["local"].fanout is False
+
+
+def test_fanout_backends_and_models(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "BACKENDS_PATH", tmp_path / "backends.json")
+    R.save_backends(
+        [
+            R.BackendEntry(name="big", kind="openai_compat",
+                           base_url="https://api.openai.com/v1", fanout=True),
+            R.BackendEntry(name="local", kind="ollama", fanout=True, enabled=False),
+            R.BackendEntry(name="cpu", kind="ollama", fanout=False),
+        ],
+        R.BACKENDS_PATH,
+    )
+    monkeypatch.setattr(R, "list_models_for", lambda e: ["m1", "m2"] if e.name == "big" else ["x"])
+    assert [e.name for e in R.fanout_backends()] == ["big"]  # enabled + fanout only
+    models = R.fanout_models()
+    assert {m["model"] for m in models} == {"m1", "m2"}
+    assert all(m["backend"] == "big" for m in models)
+
+
+def test_backends_patch_toggles_flags(client):
+    client.post("/api/backends", json={"name": "local", "kind": "ollama"})
+    r = client.patch("/api/backends/local", json={"fanout": True, "enabled": False})
+    assert r.status_code == 200 and r.json()["fanout"] is True and r.json()["enabled"] is False
+    b = {x["name"]: x for x in client.get("/api/backends").json()["backends"]}["local"]
+    assert b["fanout"] is True and b["enabled"] is False
+    assert client.patch("/api/backends/ghost", json={"fanout": True}).status_code == 404
+
+
+def test_backends_add_with_fanout(client):
+    client.post("/api/backends", json={"preset": "openai", "name": "oai", "fanout": True})
+    b = {x["name"]: x for x in client.get("/api/backends").json()["backends"]}["oai"]
+    assert b["fanout"] is True

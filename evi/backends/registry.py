@@ -39,6 +39,10 @@ class BackendEntry:
     base_url: str = ""
     api_key: str = ""
     enabled: bool = True
+    # Opt this backend's models into the subagent fan-out pool (ultracode /
+    # workflows / teams may route agents to it). Off by default — you choose
+    # which providers are allowed to serve delegated agents.
+    fanout: bool = False
     request_timeout: float = 120.0
 
     @property
@@ -79,6 +83,7 @@ def load_backends(path: Path | None = None) -> list[BackendEntry]:
                 base_url=base,
                 api_key=str(e.get("api_key", "")),
                 enabled=bool(e.get("enabled", True)),
+                fanout=bool(e.get("fanout", False)),
                 request_timeout=float(e.get("request_timeout", 120.0) or 120.0),
             )
         )
@@ -95,6 +100,7 @@ def save_backends(entries: list[BackendEntry], path: Path | None = None) -> None
             "base_url": e.base_url,
             "api_key": e.api_key,
             "enabled": e.enabled,
+            "fanout": e.fanout,
         }
         for e in entries
     ]
@@ -218,3 +224,25 @@ def all_models(cfg: Any, *, max_workers: int = 8) -> list[dict]:
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(entries)))) as pool:
         rows = list(pool.map(_probe, entries))
     return sorted(rows, key=lambda r: r["backend"].lower())
+
+
+def fanout_backends() -> list[BackendEntry]:
+    """Backends flagged eligible for the subagent fan-out pool (enabled + fanout)."""
+    return [e for e in load_backends() if e.enabled and e.fanout]
+
+
+def fanout_models(*, max_workers: int = 8) -> list[dict]:
+    """(backend, model) pairs eligible for subagent fan-out — every model on a
+    backend the user flagged ``fanout=True``. Returns
+    ``[{"backend", "kind", "model"}, …]``; empty if none are flagged (fan-out then
+    just uses the active backend)."""
+    entries = fanout_backends()
+    if not entries:
+        return []
+
+    def _probe(e: BackendEntry) -> list[dict]:
+        return [{"backend": e.name, "kind": e.kind, "model": m} for m in list_models_for(e)]
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(entries)))) as pool:
+        nested = list(pool.map(_probe, entries))
+    return [row for rows in nested for row in rows]

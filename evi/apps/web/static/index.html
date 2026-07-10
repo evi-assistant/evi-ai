@@ -293,6 +293,15 @@
     border-radius: 6px; padding: 0 5px; margin-left: 6px; vertical-align: middle;
     text-transform: lowercase;
   }
+  /* Backends panel (Settings → Model & Backend). */
+  .backend-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .backend-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .backend-name { font-size: 13px; font-weight: 600; }
+  .backend-name .badge { font-size: 9px; color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 0 4px; margin-left: 6px; }
+  .backend-flag { font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 3px; white-space: nowrap; cursor: pointer; }
+  .backend-rm { padding: 2px 8px !important; }
+  .backend-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  .backend-add select, .backend-add input { background: rgba(255,255,255,0.05); color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
   .picker-divider { height: 1px; background: var(--border); margin: 6px 0; }
   .picker-toggle {
     display: flex; align-items: center; justify-content: space-between;
@@ -2464,6 +2473,7 @@ resetBtn.addEventListener('click', async () => {
 
   // System stats + hardware-recommended model (Settings → Model & Backend).
   function renderModelExtras() {
+    renderBackendsPanel();
     const box = document.createElement('div');
     box.style.marginTop = '20px';
     box.innerHTML = '<div class="sec-blurb">Loading system info…</div>';
@@ -2511,6 +2521,103 @@ resetBtn.addEventListener('click', async () => {
     const b = document.createElement('button');
     b.className = 'set-action-btn'; b.style.margin = '0'; b.textContent = label; b.onclick = fn;
     return b;
+  }
+
+  // Backends registry panel (Settings → Model & Backend).
+  function renderBackendsPanel() {
+    const box = document.createElement('div');
+    box.style.marginTop = '20px';
+    box.innerHTML = '<div class="sec-blurb">Loading backends…</div>';
+    contentEl.appendChild(box);
+    fetch('/api/backends').then(r => r.json()).then(d => {
+      const active = d.active_backend || '';
+      let html = '<div class="set-group-title">Backends</div>';
+      html += '<div class="help">Providers eVi can use. The model picker lists every enabled backend\'s models, tagged by source. Tick <b>fan-out</b> to let a backend\'s models serve delegated subagents (ultracode / workflows).</div>';
+      if (!(d.backends || []).length) {
+        html += '<div class="sec-blurb">No backends registered — the active <code>[llm]</code> backend is used. Add one below.</div>';
+      } else {
+        html += d.backends.map(b => {
+          const isActive = b.name === active;
+          const key = b.has_key ? (b.key_is_env ? ' · env key' : ' · key set') : ' · no key';
+          return `<div class="backend-row" data-name="${escapeAttr(b.name)}">
+            <div class="backend-info">
+              <span class="backend-name">${escapeHtml(b.name)}${isActive ? ' <span class="badge">active</span>' : ''}</span>
+              <span class="help">${escapeHtml(b.kind)} · ${escapeHtml(b.base_url)}${key}</span>
+            </div>
+            <label class="backend-flag" title="Include this backend when listing models"><input type="checkbox" data-flag="enabled" ${b.enabled ? 'checked' : ''}> enabled</label>
+            <label class="backend-flag" title="Allow this backend's models for subagent fan-out"><input type="checkbox" data-flag="fanout" ${b.fanout ? 'checked' : ''}> fan-out</label>
+            <button class="set-action-btn backend-rm" title="Remove">✕</button>
+          </div>`;
+        }).join('');
+      }
+      const presetOpts = ['<option value="">— preset —</option>']
+        .concat((d.presets || []).map(p => `<option value="${escapeAttr(p.name)}">${escapeHtml(p.name)}</option>`))
+        .concat(['<option value="__custom__">custom…</option>']).join('');
+      html += `<div class="set-group-title">Add a backend</div>
+        <div class="backend-add">
+          <select id="bk-preset">${presetOpts}</select>
+          <input id="bk-name" title="unique name" style="display:none">
+          <select id="bk-kind" style="display:none">
+            <option value="openai_compat">openai_compat</option>
+            <option value="ollama">ollama</option>
+            <option value="lmstudio">lmstudio</option>
+            <option value="llamacpp">llamacpp</option>
+          </select>
+          <input id="bk-url" title="base URL" style="display:none">
+          <input id="bk-key" title="API key or env:VARNAME" type="password" style="display:none">
+          <button class="set-action-btn" id="bk-add">Add</button>
+        </div>
+        <div class="help" id="bk-msg">Pick a preset (OpenAI, xAI, Anthropic, OpenRouter, …) and enter a key, or "custom…" for a local / other endpoint.</div>`;
+      box.innerHTML = html;
+      wireBackendsPanel(box);
+    }).catch(() => { box.innerHTML = '<div class="sec-blurb">Backends unavailable.</div>'; });
+  }
+
+  function wireBackendsPanel(box) {
+    box.querySelectorAll('.backend-row').forEach(row => {
+      const name = row.dataset.name;
+      row.querySelectorAll('input[data-flag]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          fetch('/api/backends/' + encodeURIComponent(name), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [cb.dataset.flag]: cb.checked }),
+          }).then(() => { if (cb.dataset.flag === 'enabled' && typeof loadPicker === 'function') loadPicker(); });
+        });
+      });
+      row.querySelector('.backend-rm').addEventListener('click', () => {
+        if (!confirm('Remove backend "' + name + '"?')) return;
+        fetch('/api/backends/' + encodeURIComponent(name), { method: 'DELETE' })
+          .then(() => { renderSection(); if (typeof loadPicker === 'function') loadPicker(); });
+      });
+    });
+    const preset = box.querySelector('#bk-preset');
+    const nameI = box.querySelector('#bk-name'), kindI = box.querySelector('#bk-kind');
+    const urlI = box.querySelector('#bk-url'), keyI = box.querySelector('#bk-key');
+    const sync = () => {
+      const custom = preset.value === '__custom__';
+      nameI.style.display = custom ? '' : 'none';
+      kindI.style.display = custom ? '' : 'none';
+      urlI.style.display = custom ? '' : 'none';
+      keyI.style.display = preset.value ? '' : 'none';
+    };
+    preset.addEventListener('change', sync); sync();
+    box.querySelector('#bk-add').addEventListener('click', async () => {
+      const msg = box.querySelector('#bk-msg');
+      const val = preset.value;
+      if (!val) { msg.textContent = 'pick a preset or "custom…"'; return; }
+      let payload;
+      if (val === '__custom__') {
+        if (!nameI.value.trim()) { msg.textContent = 'name is required'; return; }
+        payload = { name: nameI.value.trim(), kind: kindI.value, base_url: urlI.value.trim(), api_key: keyI.value };
+      } else {
+        payload = { preset: val, api_key: keyI.value };
+      }
+      const r = await fetch('/api/backends', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      if (r.ok) { renderSection(); if (typeof loadPicker === 'function') loadPicker(); }
+      else { msg.textContent = 'add failed (' + r.status + ')'; }
+    });
   }
   async function useRecommended(model) {
     try {

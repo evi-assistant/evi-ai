@@ -12,9 +12,12 @@ All notable user-visible changes to eVi. Format loosely follows
   pre-filled, just supply a key — inline or an `env:VARNAME` reference). The
   **model picker aggregates models across all of them**, each tagged with its
   **source backend** (hover shows the provider); selecting a model also switches
-  the active backend. Manage via `evi backend list/add/remove/use` or
-  `/api/backends` (add/list/remove) + the reworked `/api/model-picker`. `[llm]`
-  stays the materialized active backend, so nothing else changed underneath.
+  the active backend. Manage in **Settings → Model & Backend** (add from a preset
+  or a custom endpoint, per-backend **enabled** + **fan-out** toggles, remove) or
+  via `evi backend list/add/remove/use` / the `/api/backends` endpoints. A
+  per-backend **"allow for subagent fan-out"** flag marks which providers' models
+  may serve delegated subagents (the eligible pool for multi-model fan-out).
+  `[llm]` stays the materialized active backend, so nothing else changed underneath.
 - **A2A (Agent2Agent) adapter — interop with any standards-compliant agent.**
   Complements eVi's own federation (the zero-dep *private fast path* for your own
   eVis) with the *interop path*:
