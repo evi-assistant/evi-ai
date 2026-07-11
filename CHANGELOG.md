@@ -5,6 +5,25 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Codex CLI backend — OpenAI Codex via your ChatGPT plan (no API key).** Adds a
+  `codex` backend that talks to Claude-Code's counterpart, the local **`codex`
+  CLI**, authenticated by `codex login` (ChatGPT Plus/Pro/Business) — no
+  `OPENAI_API_KEY`. Pick it in **Settings → Model & Backend** (kind `codex`, no
+  URL/key) or `evi backend add codex --kind codex`; models are `gpt-5-codex` /
+  `gpt-5`. Codex is an autonomous agent that runs its **own** tools, so it's a
+  chat/delegate provider (eVi's tools don't route through it; it runs read-only so
+  a chat turn can't edit files). Requires `npm i -g @openai/codex` + `codex login`.
+
+### Changed
+- **Shared CLI-agent shim (`evi/llm/cli_agent.py`).** Factored the reusable core
+  out of the `claude_agent` backend — the OpenAI-shaped chunk builders, the
+  async/subprocess→sync bridge, and the `chat.completions` client shell are now
+  generic and driven by a small per-CLI "driver". `claude_agent` (SDK driver) and
+  the new `codex` backend (`codex exec --json` subprocess driver) are thin
+  consumers, so future subscription-login CLIs are cheap to add. No behavior
+  change to `claude_agent` (re-verified end-to-end on a Max plan).
+
 ## [1.0.3] — 2026-07-10
 
 ### Added

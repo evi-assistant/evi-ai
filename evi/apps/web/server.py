@@ -990,7 +990,7 @@ def create_app() -> FastAPI:
         from evi.backends.factory import default_base_url, get_backend
 
         kind = req.kind.strip().lower()
-        if kind not in {"lmstudio", "ollama", "llamacpp", "openai_compat", "claude_agent"}:
+        if kind not in {"lmstudio", "ollama", "llamacpp", "openai_compat", "claude_agent", "codex"}:
             raise HTTPException(400, f"unknown backend {kind!r}")
         base_url = (req.base_url or default_base_url(kind)).strip()
 
@@ -1444,7 +1444,7 @@ def create_app() -> FastAPI:
                  "default_model": p.default_model, "note": p.note}
                 for p in ONLINE_PRESETS.values()
             ],
-            "kinds": ["lmstudio", "ollama", "llamacpp", "openai_compat", "claude_agent"],
+            "kinds": ["lmstudio", "ollama", "llamacpp", "openai_compat", "claude_agent", "codex"],
         }
 
     @app.post("/api/backends")

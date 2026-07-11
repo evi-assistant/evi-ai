@@ -103,6 +103,26 @@ to decide *which* tool to call. Note this routes through the `claude` CLI (not a
 HTTP endpoint), so it's local-machine-only and needs the CLI logged in; if the
 SDK/CLI is missing, eVi says so the moment you select the backend.
 
+### OpenAI Codex via your ChatGPT plan — `backend = "codex"` (no API key)
+
+The `codex` backend is the OpenAI counterpart: it talks to the local **`codex`
+CLI** authenticated by `codex login` (ChatGPT **Plus/Pro/Business**), no
+`OPENAI_API_KEY`.
+
+```bash
+npm i -g @openai/codex   # the `codex` CLI (or: brew install --cask codex)
+codex login              # browser OAuth against your ChatGPT plan
+evi backend add codex --kind codex     # or Settings → Model & Backend → kind codex
+evi backend use codex --model gpt-5-codex   # models: gpt-5-codex | gpt-5
+```
+
+Under the hood eVi runs `codex exec --json` (read-only) and streams the answer.
+**Difference from `claude_agent`:** Codex is an *autonomous* agent that runs its
+**own** tools in its sandbox, so it's a **chat / delegate** provider — eVi's tools
+don't route through it, and it can't edit files during a chat turn. Both backends
+are built on the same shared CLI-agent shim (`evi/llm/cli_agent.py`), so they
+behave consistently and adding further subscription-login CLIs is cheap.
+
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
 Partial overlay merged on top of `config.toml`. Activated by env var

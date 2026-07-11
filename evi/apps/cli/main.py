@@ -3483,7 +3483,7 @@ def backend_add(
     name_or_preset: str = typer.Argument(
         ..., help="A preset (openai/xai/anthropic/openrouter/groq/together) OR a custom name."
     ),
-    kind: str = typer.Option("", "--kind", help="Custom entry kind: lmstudio|ollama|llamacpp|openai_compat|claude_agent (claude_agent = Claude via the local `claude` CLI / Max plan; no url/key)."),
+    kind: str = typer.Option("", "--kind", help="Custom entry kind: lmstudio|ollama|llamacpp|openai_compat|claude_agent|codex (claude_agent = Claude via `claude` CLI / Max plan; codex = OpenAI Codex via `codex` CLI / ChatGPT plan; both no url/key)."),
     base_url: str = typer.Option("", "--base-url", help="Base URL for a custom entry (defaults per kind)."),
     api_key: str = typer.Option("", "--api-key", help="Inline key OR an env:VARNAME reference. Presets default to env:."),
     name: str = typer.Option("", "--name", help="Override the entry name (preset mode)."),

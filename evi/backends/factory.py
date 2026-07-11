@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from evi.backends.base import Backend
 from evi.backends.claude_agent import ClaudeAgentBackend
+from evi.backends.codex_agent import CodexAgentBackend
 from evi.backends.llamacpp import LlamaCppBackend
 from evi.backends.lmstudio import LMStudioBackend
 from evi.backends.ollama import OllamaBackend
@@ -15,9 +16,11 @@ KNOWN_BACKENDS: dict[str, type[Backend]] = {
     "ollama": OllamaBackend,
     "llamacpp": LlamaCppBackend,
     "openai_compat": OpenAICompatBackend,
-    # Claude via the local `claude` CLI (Max/Pro auth). NOT OpenAI-compatible —
-    # make_client() returns a shim; see evi/backends/claude_agent.py.
-    "claude_agent": ClaudeAgentBackend,
+    # CLI-agent backends (NOT OpenAI-compatible): make_client() returns a shim
+    # over a local CLI with subscription-login auth (no API key). See
+    # evi/llm/cli_agent.py + evi/backends/{claude_agent,codex_agent}.py.
+    "claude_agent": ClaudeAgentBackend,   # Claude Code / Max plan (`claude` CLI)
+    "codex": CodexAgentBackend,           # OpenAI Codex / ChatGPT plan (`codex` CLI)
 }
 
 
@@ -26,8 +29,9 @@ _DEFAULT_URLS: dict[str, str] = {
     "ollama": "http://localhost:11434/v1",
     "llamacpp": "http://localhost:8080/v1",
     "openai_compat": "http://localhost:8000/v1",
-    # No HTTP endpoint — auth + transport are the local `claude` CLI.
+    # No HTTP endpoint — auth + transport are the local CLI.
     "claude_agent": "",
+    "codex": "",
 }
 
 
