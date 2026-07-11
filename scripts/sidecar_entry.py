@@ -61,16 +61,55 @@ def _selfcheck() -> int:
     return 0
 
 
+def _claude_check() -> int:
+    """Diagnostic: import the FULL server app (like the sidecar does), then run one
+    real claude_agent turn on a worker thread — the exact shape the web server uses.
+    Prints the active event-loop policy so we can see if a Selector loop (no Windows
+    subprocess support) is what breaks the SDK's control handshake."""
+    import asyncio
+    import queue
+    import threading
+
+    from evi.apps.web.server import app  # noqa: F401 — force server-time imports
+    print("event_loop_policy:", type(asyncio.get_event_loop_policy()).__name__)
+
+    from evi.backends.claude_agent import ClaudeAgentBackend
+    client = ClaudeAgentBackend().make_client()
+    q: queue.Queue = queue.Queue()
+
+    def w() -> None:
+        try:
+            parts = []
+            for ch in client.chat.completions.create(
+                model="sonnet",
+                messages=[{"role": "user", "content": "say hi in 3 words"}],
+                stream=True,
+            ):
+                if ch.choices and ch.choices[0].delta and ch.choices[0].delta.content:
+                    parts.append(ch.choices[0].delta.content)
+            q.put("OK: " + ("".join(parts)[:120] or "(empty)"))
+        except Exception as exc:  # noqa: BLE001
+            q.put(f"ERR: {type(exc).__name__}: {exc}")
+
+    threading.Thread(target=w, daemon=True).start()
+    print("claude_agent turn ->", q.get())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="evi-server")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--check", action="store_true",
                     help="Import bundled deps, print a report, and exit.")
+    ap.add_argument("--claude-check", action="store_true",
+                    help="Diagnostic: run one claude_agent turn and exit.")
     args = ap.parse_args(argv)
 
     if args.check:
         return _selfcheck()
+    if args.claude_check:
+        return _claude_check()
 
     import uvicorn
 
