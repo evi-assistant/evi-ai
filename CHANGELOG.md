@@ -5,6 +5,24 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-07-11
+
+### Fixed
+- **Add CLI-agent backends from Settings.** The web/desktop **Settings → Model &
+  Backend** "custom…" kind dropdown now lists the six CLI-agent kinds
+  (`claude_agent`, `codex`, `gemini`, `amp`, `qwen`, `copilot`) alongside the
+  local server kinds — previously only `openai_compat`/`ollama`/`lmstudio`/
+  `llamacpp` were selectable, so these subscription/login backends could only be
+  added from the `evi backend add --kind` CLI. Selecting a CLI-agent kind hides
+  the URL + API-key fields (they need neither) and shows a reminder to install and
+  log in to that CLI first.
+
+### Changed
+- **Desktop now auto-follows the core.** Every PyPI `v*` release also cuts the
+  matching `desktop-v*` build (`release.yml` calls `desktop-release.yml`), with the
+  desktop version derived from the tag, so the desktop app no longer lags the
+  package. (1.0.6 is the first release built this way.)
+
 ## [1.0.5] — 2026-07-11
 
 ### Added

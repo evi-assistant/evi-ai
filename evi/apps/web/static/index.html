@@ -2558,10 +2558,20 @@ resetBtn.addEventListener('click', async () => {
           <select id="bk-preset">${presetOpts}</select>
           <input id="bk-name" title="unique name" style="display:none">
           <select id="bk-kind" style="display:none">
-            <option value="openai_compat">openai_compat</option>
-            <option value="ollama">ollama</option>
-            <option value="lmstudio">lmstudio</option>
-            <option value="llamacpp">llamacpp</option>
+            <optgroup label="Local / OpenAI-compatible server">
+              <option value="openai_compat">openai_compat</option>
+              <option value="ollama">ollama</option>
+              <option value="lmstudio">lmstudio</option>
+              <option value="llamacpp">llamacpp</option>
+            </optgroup>
+            <optgroup label="CLI agent — subscription/login, no key">
+              <option value="claude_agent">claude_agent — Claude Max/Pro</option>
+              <option value="codex">codex — ChatGPT plan</option>
+              <option value="gemini">gemini — Google free login</option>
+              <option value="amp">amp — Sourcegraph Amp</option>
+              <option value="qwen">qwen — free Qwen OAuth</option>
+              <option value="copilot">copilot — GitHub Copilot</option>
+            </optgroup>
           </select>
           <input id="bk-url" title="base URL" style="display:none">
           <input id="bk-key" title="API key or env:VARNAME" type="password" style="display:none">
@@ -2593,14 +2603,25 @@ resetBtn.addEventListener('click', async () => {
     const preset = box.querySelector('#bk-preset');
     const nameI = box.querySelector('#bk-name'), kindI = box.querySelector('#bk-kind');
     const urlI = box.querySelector('#bk-url'), keyI = box.querySelector('#bk-key');
+    const msg0 = box.querySelector('#bk-msg');
+    // CLI-agent kinds authenticate via the local CLI's own subscription/login —
+    // no base URL and no API key. Keep this in step with KNOWN_BACKENDS.
+    const CLI_AGENT_KINDS = ['claude_agent', 'codex', 'gemini', 'amp', 'qwen', 'copilot'];
+    const DEFAULT_MSG = 'Pick a preset (OpenAI, xAI, Anthropic, OpenRouter, …) and enter a key, or "custom…" for a local / other endpoint.';
     const sync = () => {
       const custom = preset.value === '__custom__';
+      const cliAgent = custom && CLI_AGENT_KINDS.includes(kindI.value);
       nameI.style.display = custom ? '' : 'none';
       kindI.style.display = custom ? '' : 'none';
-      urlI.style.display = custom ? '' : 'none';
-      keyI.style.display = preset.value ? '' : 'none';
+      urlI.style.display = (custom && !cliAgent) ? '' : 'none';
+      keyI.style.display = (preset.value && !cliAgent) ? '' : 'none';
+      msg0.textContent = cliAgent
+        ? `${kindI.value} uses the local CLI's subscription/login — no URL or key. Install that CLI and log in first.`
+        : DEFAULT_MSG;
     };
-    preset.addEventListener('change', sync); sync();
+    preset.addEventListener('change', sync);
+    kindI.addEventListener('change', sync);
+    sync();
     box.querySelector('#bk-add').addEventListener('click', async () => {
       const msg = box.querySelector('#bk-msg');
       const val = preset.value;
