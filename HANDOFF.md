@@ -1,8 +1,8 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-07-01 · v1.0.0 (desktop 1.0.0) · **PUBLIC**_
+_Last updated: 2026-07-11 · PyPI v1.0.5 · desktop v1.0.2 · **PUBLIC**_
 
-This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at 1.0.0, and the `evi-skills` catalog is public. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
+This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` is at **1.0.5**, the desktop app is at **1.0.2**, and the `evi-skills` catalog is public. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
 ---
 
@@ -22,21 +22,40 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 
 ## 2. Current status
 
-**1.0 shipped (2026-07-01):**
+**1.0 shipped (2026-07-01); PyPI now at 1.0.5 (2026-07-11):**
 
 - **Public repo:** `https://github.com/evi-assistant/evi-ai` (transferred from the old private `dmang-dev/evi-ai`). All `[project.urls]` point at the `evi-assistant` org.
-- **PyPI:** `evi-assistant` **v1.0.0** — Development Status classifier flipped to **Production/Stable**.
-- **Desktop:** **v1.0.0**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired).
+- **PyPI:** `evi-assistant` **v1.0.5** (Development Status **Production/Stable**). The 1.0.1→1.0.5 line is **PyPI + Docker only** — see the CLI-agent backends note below for why.
+- **Desktop:** **v1.0.2**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired). Desktop stays at 1.0.2 because the 1.0.3+ features depend on external CLIs the frozen sidecar can't bundle.
 - **Skills:** `evi-skills` catalog is public.
 - **Site:** landing page live at **https://evi-ai.dev** (custom domain; also `evi-assistant.github.io` → 301 to it). Lives in the dedicated **`evi-assistant/evi-assistant.github.io`** org-pages repo; custom domain set via a `CNAME` file (`evi-ai.dev`) + Cloudflare DNS (grey-cloud A/AAAA → GitHub Pages IPs, `www` CNAME). HTTPS enforced, Let's Encrypt cert.
 - **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
-- Version is consistent across `pyproject.toml`, `evi/__init__.py`, and `desktop/src-tauri/tauri.conf.json` (all `1.0.0`).
+- **PyPI version** is consistent across `pyproject.toml` and `evi/__init__.py` (both `1.0.5`) — the `release.yml` gate requires this. **Desktop version** (`desktop/src-tauri/tauri.conf.json`) tracks separately at `1.0.2`, since the PyPI-only 1.0.3→1.0.5 line doesn't cut desktop builds.
 
-**Tests:** **1364 passed, 4 skipped** on the local `.venv` (32 e2e deselected by default via `addopts = -m 'not e2e'`); ~1451 collected including e2e. Live count: `pytest --collect-only -q`. Ruff clean.
+**Tests:** **1484 passed, 4 skipped** on the local `.venv` (32 e2e deselected by default via `addopts = -m 'not e2e'`). Live count: `pytest --collect-only -q`. Ruff clean.
 
 > ✅ **Local `.venv` is now Python 3.13.14** (recreated 2026-07-01; full suite green on Windows/3.13). The 3.11 line is retired. `.venv-build` should likewise be recreated with `py -3.13` when next freezing the sidecar.
 
 **1.0.0 bundles the whole 0.34–0.40 line:** specialty SLMs + the 7 capability chips, the guard-model guardrail layer, the models.dev catalog, the config linter (`evi lint`), completion notifications, pluggable web search, `evi skill add`, the project-intelligence pack (anatomy map, bug ledger, session reflection), the VS Code extension, local FIM completion, federation, ultracode, and the full CLI/web/desktop parity set.
+
+### CLI-agent backends (1.0.1 → 1.0.5, PyPI + Docker only)
+
+**Six** backends now let eVi route a turn through **another AI coding CLI using its own subscription / free login — no API key.** They are NOT OpenAI-compatible on the wire; each wraps a local CLI behind a shared shim (`evi/llm/cli_agent.py`) that adapts the CLI's streamed output into the `chat.completions` surface eVi expects. Pick one in **Settings → Model & Backend** (no URL/key) or `evi backend add <name> --kind <kind>`. `claude_agent` drives eVi's own tools (full parity); the rest are **chat / delegate** providers (the CLI runs its own tools).
+
+| kind | CLI | Auth (no API key) | Since |
+|---|---|---|---|
+| `claude_agent` | `claude` | Claude **Max/Pro** login | 1.0.3 |
+| `codex` | `codex` | ChatGPT **Plus/Pro** login | 1.0.4 |
+| `gemini` | `gemini` | Google **free** login | 1.0.4 |
+| `amp` | `amp` | Amp **subscription** (`amp login` / `AMP_API_KEY`) | 1.0.5 |
+| `qwen` | `qwen` | Qwen **free** OAuth | 1.0.5 |
+| `copilot` | `copilot` | GitHub **Copilot** login | 1.0.5 |
+
+- **1.0.5 (2026-07-11):** `amp` (Sourcegraph Amp — `amp -x --stream-json`; model = agent mode low/medium/high; guards Amp's interactive-login **hang** by refusing to start unauthenticated + a per-turn watchdog timeout), `qwen` (Qwen Code, a gemini-cli fork — `qwen -p … -o json`, free OAuth), `copilot` (GitHub Copilot CLI — `copilot -p … --output-format text -s`). `amp` + `qwen` both speak Claude Code's `stream-json`, so the event parser is shared in `cli_agent.py` (`emit_claude_events` + `cc_usage`/`cc_error_message`). **Mistral Vibe was evaluated and rejected** — it needs `MISTRAL_API_KEY` (no subscription/free-login path), which breaks the "no API key" thesis and duplicates the existing `openai_compat`→Mistral route.
+- **1.0.4:** `codex` + `gemini`, plus the shared-shim refactor that pulled the reusable core out of `claude_agent`.
+- **1.0.3:** `claude_agent` (first CLI-agent backend). **1.0.1/1.0.2:** agent-identity fix + multi-backend registry / fan-out (see CHANGELOG).
+
+**Why PyPI-only:** these route through local CLIs the frozen desktop sidecar can't bundle, so the desktop app stays at **1.0.2**. The `release.yml` version gate checks only `tag == pyproject == evi/__init__.py` (not `tauri.conf.json`), so a PyPI-only tag ships without a desktop build. Full details in `docs/configuration.md` (§ CLI-agent backends).
 
 ## 3. Feature inventory
 
@@ -124,7 +143,7 @@ git push origin main --tags
 
 Trigger: push a `desktop-v*` tag (versions independently of the package; `workflow_dispatch` with blank input = artifacts-only). Matrix: windows/macos/ubuntu (`fail-fast: false`). Per OS: setup Python 3.13 + Rust + Node, freeze the sidecar in a fresh `.venv-build` + `evi-server --check`, `npm install`, then `tauri-action` with `--config src-tauri/tauri.standalone.conf.json`. Publishes a **non-draft** release; signs updater artifacts (`.sig` + `latest.json`) with `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`.
 
-**Bump four files** (all currently `1.0.0`): `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, `desktop/package.json`, and the `evi-desktop` entry in `desktop/src-tauri/Cargo.lock`. Then:
+**Bump four files** (all currently `1.0.2`): `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, `desktop/package.json`, and the `evi-desktop` entry in `desktop/src-tauri/Cargo.lock`. Then:
 
 ```powershell
 git tag desktop-vX.Y.Z
@@ -220,7 +239,7 @@ py -3.13 -m venv .venv                          # 3.13 floor — do NOT use plai
 
 # 3. Sanity check
 .\.venv\Scripts\python -m pytest -q             # ~1367 unit tests
-.\.venv\Scripts\python -m evi --version         # 1.0.0
+.\.venv\Scripts\python -m evi --version         # 1.0.5
 
 # 4. (Desktop only) freeze sidecar + build
 py -3.13 -m venv .venv-build
@@ -262,7 +281,7 @@ The folder contains one `*.jsonl` per session (plus a per-session sidecar dir) a
 ```
 C:\evi
 ├─ evi/                       shared Python core (~135 top-level modules)
-│  ├─ __init__.py             __version__ = "1.0.0"
+│  ├─ __init__.py             __version__ = "1.0.5"
 │  ├─ capabilities.py         7 model-capability chips
 │  ├─ anatomy.py bugledger.py reflect.py   project-intelligence pack
 │  ├─ pyanalyze.py complete.py configlint.py codeintel.py doctor.py
@@ -278,7 +297,7 @@ C:\evi
 │  └─ data/                   models-catalog.json (baked models.dev snapshot)
 ├─ desktop/                   Tauri 2 shell (NOT a Python package)
 │  ├─ dist-shim/index.html    loading spinner
-│  ├─ package.json            version 1.0.0
+│  ├─ package.json            version 1.0.2
 │  └─ src-tauri/              Rust src/, Cargo.toml, tauri.conf.json + tauri.standalone.conf.json,
 │                             capabilities/, permissions/, icons/, binaries/ (staged sidecar)
 ├─ editors/vscode/            VS Code extension (TypeScript; FIM + chat webview)
@@ -287,7 +306,7 @@ C:\evi
 ├─ tests/                     pytest suite (~1451 total; e2e opt-in) + tests/e2e (Playwright)
 ├─ .github/workflows/         ci, release, desktop-release, security, e2e, docker, evi-run-example
 ├─ CHANGELOG.md
-└─ pyproject.toml             dist name evi-assistant, version 1.0.0, requires-python >=3.13, MIT
+└─ pyproject.toml             dist name evi-assistant, version 1.0.5, requires-python >=3.13, MIT
 
 %USERPROFILE%\.evi\                        user data (config, signing keys, models, transcripts, memory, …)
 %USERPROFILE%\.claude\projects\<mangled>\  Claude Code chat history + cross-session memory
