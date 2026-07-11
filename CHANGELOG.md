@@ -5,6 +5,39 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-07-11
+
+### Added
+- **Sourcegraph Amp CLI backend — your Amp subscription (no model API key).** Adds
+  an `amp` backend over the local **`amp` CLI**, authenticated by `amp login` (an
+  Amp subscription / credit balance) or an `AMP_API_KEY` access token. eVi runs
+  `amp -x --stream-json` and streams the reply; the model is chosen by **agent
+  mode** (`medium`/`low`/`high`). A chat/delegate provider — Amp is autonomous and
+  can use tools per your `amp permissions`. Because an unauthenticated `amp` opens
+  an interactive browser login that would block, eVi **refuses to start Amp without
+  evidence of auth** (`AMP_API_KEY` or a saved login) and bounds each turn with a
+  timeout. Requires `npm i -g @sourcegraph/amp`.
+- **Qwen Code CLI backend — free Qwen OAuth (no API key).** Adds a `qwen` backend
+  over **Qwen Code** (Alibaba's gemini-cli fork): sign in free with a qwen.ai
+  account (~2000 req/day). eVi runs `qwen -p … -o json` (Claude-Code-style events)
+  and streams the reply — chat/delegate, like `gemini`; models `qwen3-coder-plus` /
+  `qwen3-coder-flash`. Requires `npm i -g @qwen-code/qwen-code` + a one-time login.
+- **GitHub Copilot CLI backend — your Copilot subscription (no model API key).**
+  Adds a `copilot` backend over the local **`copilot` CLI** (`@github/copilot`),
+  authenticated by `copilot login`. eVi runs `copilot -p … --output-format text -s`
+  and streams the reply; `--model auto` lets Copilot pick (or `claude-sonnet-4.5` /
+  `gpt-5`, plan-dependent). Chat/delegate — unapproved tool calls are auto-denied
+  in non-interactive mode, so a chat turn stays answer-only. Requires
+  `npm i -g @github/copilot`.
+
+### Changed
+- **Shared Claude-Code stream-json parser in the CLI-agent shim.** `amp` and `qwen`
+  both speak Claude Code's `stream-json` event schema (`assistant` text blocks + a
+  terminal `result` with usage/error), so the parser now lives once in
+  `evi/llm/cli_agent.py` (`emit_claude_events` + `cc_usage`/`cc_error_message`) and
+  is shared by both. Six subscription/free-login CLI backends now ride the shim:
+  `claude_agent`, `codex`, `gemini`, `amp`, `qwen`, `copilot`.
+
 ## [1.0.4] — 2026-07-10
 
 ### Added

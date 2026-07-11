@@ -139,6 +139,59 @@ eVi runs `gemini -p … -o json` and streams the reply. Like `codex` it's a
 **chat / delegate** provider (Gemini drives its own tools; eVi's tools don't route
 through it), built on the same shared shim.
 
+### Sourcegraph Amp via your subscription — `backend = "amp"` (no API key)
+
+The `amp` backend uses the local **`amp` CLI**, authenticated by `amp login` (an
+Amp subscription / credit balance) or an `AMP_API_KEY` access token — not a
+per-token model API key.
+
+```bash
+npm i -g @sourcegraph/amp   # the `amp` CLI
+amp login                   # Amp subscription (or: set AMP_API_KEY)
+evi backend add amp --kind amp             # or Settings → Model & Backend → kind amp
+evi backend use amp --model medium         # modes: medium | low | high
+```
+
+eVi runs `amp -x --stream-json` and streams the reply. Amp selects its model by
+**agent mode** (`low`/`medium`/`high`), not a model id. Like `codex`/`gemini` it's
+a **chat / delegate** provider, but note Amp is autonomous and *can* use tools
+(including file edits) per your configured `amp permissions` — restrict it there if
+you want a read-only chat. eVi **won't start Amp unauthenticated** (its login flow
+would block), and it bounds each turn with a timeout as a backstop.
+
+### Qwen Code via the free Qwen login — `backend = "qwen"` (no API key)
+
+The `qwen` backend uses **Qwen Code** (Alibaba's gemini-cli fork): sign in free
+with a qwen.ai account (a generous free tier, ~2000 requests/day) — no API key.
+
+```bash
+npm i -g @qwen-code/qwen-code   # the `qwen` CLI
+qwen                            # run once and pick 'Qwen' to sign in (free OAuth)
+evi backend add qwen --kind qwen            # or Settings → Model & Backend → kind qwen
+evi backend use qwen --model qwen3-coder-plus   # models: qwen3-coder-plus | qwen3-coder-flash
+```
+
+eVi runs `qwen -p … -o json` (Claude-Code-style events) and streams the reply — a
+**chat / delegate** provider like `gemini`, on the same shared shim.
+
+### GitHub Copilot via your subscription — `backend = "copilot"` (no API key)
+
+The `copilot` backend uses the local **`copilot` CLI** (`@github/copilot`),
+authenticated by your GitHub **Copilot subscription** (`copilot login`) — no
+separate model API key.
+
+```bash
+npm i -g @github/copilot   # the `copilot` CLI
+copilot login              # GitHub Copilot subscription
+evi backend add copilot --kind copilot          # or Settings → Model & Backend → kind copilot
+evi backend use copilot --model auto            # models: auto | claude-sonnet-4.5 | gpt-5
+```
+
+eVi runs `copilot -p … --output-format text -s` and streams the reply. `--model
+auto` lets Copilot pick; the exact set depends on your plan. A **chat / delegate**
+provider; unapproved tool calls are auto-denied in non-interactive mode, so a chat
+turn stays answer-only.
+
 ### The CLI-agent backends at a glance
 
 | kind | CLI | Auth (no API key) | Tools |
@@ -146,8 +199,11 @@ through it), built on the same shared shim.
 | `claude_agent` | `claude` | Claude **Max/Pro** login | **eVi drives tools** (full parity) |
 | `codex` | `codex` | ChatGPT **Plus/Pro** login | delegate (Codex's own, read-only) |
 | `gemini` | `gemini` | Google **free** login | delegate (Gemini's own) |
+| `amp` | `amp` | Amp **subscription** (`amp login` / `AMP_API_KEY`) | delegate (Amp's own, per `amp permissions`) |
+| `qwen` | `qwen` | Qwen **free** OAuth login | delegate (Qwen's own) |
+| `copilot` | `copilot` | GitHub **Copilot** login | delegate (Copilot's own, auto-denied) |
 
-All three are local-machine-only (they shell out to a CLI, so they don't work in
+All six are local-machine-only (they shell out to a CLI, so they don't work in
 the packaged desktop sidecar) and report clearly if their CLI isn't installed.
 
 ## Profiles — `~/.evi/profiles/<name>.toml`

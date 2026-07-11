@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from evi.backends.amp_agent import AmpAgentBackend
 from evi.backends.base import Backend
 from evi.backends.claude_agent import ClaudeAgentBackend
 from evi.backends.codex_agent import CodexAgentBackend
+from evi.backends.copilot_agent import CopilotAgentBackend
 from evi.backends.gemini_agent import GeminiAgentBackend
 from evi.backends.llamacpp import LlamaCppBackend
 from evi.backends.lmstudio import LMStudioBackend
 from evi.backends.ollama import OllamaBackend
 from evi.backends.openai_compat import OpenAICompatBackend
+from evi.backends.qwen_agent import QwenAgentBackend
 
 
 KNOWN_BACKENDS: dict[str, type[Backend]] = {
@@ -23,6 +26,9 @@ KNOWN_BACKENDS: dict[str, type[Backend]] = {
     "claude_agent": ClaudeAgentBackend,   # Claude Code / Max plan (`claude` CLI)
     "codex": CodexAgentBackend,           # OpenAI Codex / ChatGPT plan (`codex` CLI)
     "gemini": GeminiAgentBackend,         # Google Gemini / free login (`gemini` CLI)
+    "amp": AmpAgentBackend,               # Sourcegraph Amp / subscription (`amp` CLI)
+    "qwen": QwenAgentBackend,             # Qwen Code / free Qwen OAuth (`qwen` CLI)
+    "copilot": CopilotAgentBackend,       # GitHub Copilot / subscription (`copilot` CLI)
 }
 
 
@@ -35,6 +41,9 @@ _DEFAULT_URLS: dict[str, str] = {
     "claude_agent": "",
     "codex": "",
     "gemini": "",
+    "amp": "",
+    "qwen": "",
+    "copilot": "",
 }
 
 

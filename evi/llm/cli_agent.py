@@ -118,6 +118,79 @@ def error(exc: BaseException):
     return ("__error__", exc)
 
 
+# --- Claude-Code stream-json events (Amp, Qwen Code, `claude -p --stream-json`) --
+#
+# Several CLIs emit the SAME event schema Claude Code's `--output-format stream-json`
+# uses: `{"type":"assistant","message":{"content":[{"type":"text","text":…}, …]}}`
+# for the agent's messages and a terminal `{"type":"result", subtype, is_error,
+# usage:{input_tokens,output_tokens,…}, result:"final text", error:{message}}`. The
+# parsing below is identical for all of them, so it lives here.
+
+
+def cc_usage(u) -> tuple[int, int]:
+    """(prompt, completion) tokens from a Claude-Code-style ``usage`` object
+    (Anthropic field names, with cache buckets); (0, 0) when absent."""
+    u = u or {}
+    prompt = (
+        (u.get("input_tokens", 0) or 0)
+        + (u.get("cache_read_input_tokens", 0) or 0)
+        + (u.get("cache_creation_input_tokens", 0) or 0)
+    )
+    if not prompt:
+        prompt = u.get("prompt_tokens", 0) or 0
+    completion = (u.get("output_tokens", 0) or 0) or (u.get("completion_tokens", 0) or 0)
+    return int(prompt), int(completion)
+
+
+def cc_error_message(ev: dict) -> str:
+    """Human error string from a Claude-Code ``result`` error event."""
+    err = ev.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])
+    if isinstance(err, str) and err:
+        return err
+    res = ev.get("result")
+    if isinstance(res, str) and res:
+        return res
+    return "turn failed"
+
+
+def emit_claude_events(events, out) -> tuple[bool, str | None, int, int]:
+    """Drive `out` from Claude-Code-style stream events (an iterable of parsed
+    dicts — a live generator for a streaming CLI, or a decoded array for a
+    batch one). Emits each ``assistant`` message's text blocks as delta chunks
+    and, if nothing streamed, the terminal ``result``'s final text. Returns
+    ``(saw_result, error_message, prompt_tokens, completion_tokens)``; the caller
+    adds the finish + usage chunks, or surfaces the error."""
+    streamed_any = False
+    saw_result = False
+    prompt_toks = comp_toks = 0
+    error_msg = None
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        etype = ev.get("type")
+        if etype == "assistant":
+            msg = ev.get("message") or {}
+            for block in (msg.get("content") or []):
+                if (isinstance(block, dict) and block.get("type") == "text"
+                        and block.get("text")):
+                    out.put(delta_chunk(content=block["text"]))
+                    streamed_any = True
+            # tool_use blocks: the CLI's own tools — ignore.
+        elif etype == "result":
+            saw_result = True
+            prompt_toks, comp_toks = cc_usage(ev.get("usage"))
+            is_err = bool(ev.get("is_error")) or (ev.get("subtype") not in (None, "success"))
+            if is_err:
+                error_msg = cc_error_message(ev)
+            elif not streamed_any and isinstance(ev.get("result"), str) and ev.get("result"):
+                out.put(delta_chunk(content=ev["result"]))
+                streamed_any = True
+        # system/init, user (tool results), and anything else: ignore.
+    return saw_result, error_msg, prompt_toks, comp_toks
+
+
 # --- async / subprocess -> sync bridge ---------------------------------------
 
 
