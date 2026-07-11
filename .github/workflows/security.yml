@@ -56,19 +56,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
-      # --ignore: unpatchable transitive advisories in the Tauri 2.11 tree. Both
-      # are in quick-xml 0.39.4, pinned `^0.39` by tauri-utils→plist; the fix
-      # (quick-xml >=0.41) needs a newer Tauri than 2.x ships. The vulnerable
-      # path is build-time plist/config XML (never fed untrusted input), so the
-      # DoS advisories don't apply to this usage. Re-audit these when Tauri moves
-      # off quick-xml 0.39; drop the flags once a fixed version is reachable.
-      #   RUSTSEC-2026-0194 — quick-xml quadratic attribute-dup scan (DoS)
-      #   RUSTSEC-2026-0195 — quick-xml unbounded ns-decl allocation (DoS)
       - name: cargo-audit (vulnerabilities only)
-        run: |
-          cargo audit --file desktop/src-tauri/Cargo.lock \
-            --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
+        run: cargo audit --file desktop/src-tauri/Cargo.lock
 
   secret-scan:
     name: gitleaks
