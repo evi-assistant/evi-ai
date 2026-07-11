@@ -5,6 +5,8 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-07-10
+
 ### Added
 - **Claude via your Max/Pro plan — no API key (`claude_agent` backend).** Adds a
   new backend that talks to Claude through the local **`claude` CLI** (the Claude
