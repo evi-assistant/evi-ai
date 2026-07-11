@@ -12,3 +12,13 @@ try:
     import playwright  # noqa: F401
 except ImportError:
     collect_ignore_glob = ["e2e/*"]
+
+# Python's http.server calls socket.getfqdn() during server_bind, which does a
+# reverse-DNS lookup that hangs for 30s+ on macOS CI runners — enough to trip
+# pytest --timeout and fail the whole run (test_a2a / test_federation / test_hooks
+# all spin up a throwaway HTTPServer). No eVi code uses getfqdn, so short-circuit
+# it in the test process to the passed host (localhost). Harmless everywhere;
+# only macOS actually stalled.
+import socket as _socket  # noqa: E402
+
+_socket.getfqdn = lambda name="": name or "localhost"
