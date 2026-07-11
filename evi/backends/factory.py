@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from evi.backends.base import Backend
+from evi.backends.claude_agent import ClaudeAgentBackend
 from evi.backends.llamacpp import LlamaCppBackend
 from evi.backends.lmstudio import LMStudioBackend
 from evi.backends.ollama import OllamaBackend
@@ -14,6 +15,9 @@ KNOWN_BACKENDS: dict[str, type[Backend]] = {
     "ollama": OllamaBackend,
     "llamacpp": LlamaCppBackend,
     "openai_compat": OpenAICompatBackend,
+    # Claude via the local `claude` CLI (Max/Pro auth). NOT OpenAI-compatible —
+    # make_client() returns a shim; see evi/backends/claude_agent.py.
+    "claude_agent": ClaudeAgentBackend,
 }
 
 
@@ -22,6 +26,8 @@ _DEFAULT_URLS: dict[str, str] = {
     "ollama": "http://localhost:11434/v1",
     "llamacpp": "http://localhost:8080/v1",
     "openai_compat": "http://localhost:8000/v1",
+    # No HTTP endpoint — auth + transport are the local `claude` CLI.
+    "claude_agent": "",
 }
 
 

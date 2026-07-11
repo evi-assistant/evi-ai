@@ -5,7 +5,21 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
-## [1.0.2] — 2026-07-10
+### Added
+- **Claude via your Max/Pro plan — no API key (`claude_agent` backend).** Adds a
+  new backend that talks to Claude through the local **`claude` CLI** (the Claude
+  Agent SDK), authenticating with your Claude subscription login instead of an
+  `ANTHROPIC_API_KEY`. Pick it in **Settings → Model & Backend** (kind
+  `claude_agent`, no URL/key) or `evi backend add claude --kind claude_agent`;
+  models are the `opus`/`sonnet`/`haiku` aliases the CLI resolves to your plan's
+  current models. **Full tool-calling parity:** eVi keeps driving its own tools
+  (permissions, checkpoints, mode-scoped toolsets, tool-activity UI all work) —
+  the SDK is coerced into proposing one tool call at a time, which eVi executes.
+  Requires `pip install 'evi-assistant[claude-agent]'` + the `claude` CLI logged
+  in. Under the hood: a stateless per-turn shim (`evi/llm/claude_agent.py`) that
+  adapts the SDK's async agent loop into the OpenAI `chat.completions` streaming
+  surface the agent loop already speaks, so CLI / web / headless / ultracode /
+  subagents all use it unchanged.
 
 ### Added
 - **Multiple model backends at once.** eVi now keeps a registry of backends

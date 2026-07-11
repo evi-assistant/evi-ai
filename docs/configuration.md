@@ -74,6 +74,35 @@ environment, not in `config.toml`. (Pass `--api-key` to store it inline instead.
 The **anthropic** preset targets Anthropic's OpenAI-compatible endpoint, not the
 native Messages API.
 
+### Claude via your Max/Pro plan — `backend = "claude_agent"` (no API key)
+
+The `claude_agent` backend talks to Claude through the local **`claude` CLI**
+(the Claude Agent SDK), authenticating with your Claude **subscription login**
+instead of an `ANTHROPIC_API_KEY` — the sanctioned, no-key way to use your
+Max/Pro plan from your own tools.
+
+Setup (one time):
+
+```bash
+npm i -g @anthropic-ai/claude-code   # the `claude` CLI, if not already installed
+claude                                # log in on your Max/Pro plan
+pip install 'evi-assistant[claude-agent]'
+```
+
+Then add + select it (no URL, no key):
+
+```bash
+evi backend add claude --kind claude_agent   # or: Settings → Model & Backend → add, kind claude_agent
+evi backend use claude --model opus           # models are aliases: opus | sonnet | haiku
+```
+
+The `opus` / `sonnet` / `haiku` aliases resolve to whatever your plan currently
+serves. **Tools work fully** — eVi still runs its own tools (with its
+permissions, checkpoints, and mode-scoped toolsets); the Agent SDK is used only
+to decide *which* tool to call. Note this routes through the `claude` CLI (not an
+HTTP endpoint), so it's local-machine-only and needs the CLI logged in; if the
+SDK/CLI is missing, eVi says so the moment you select the backend.
+
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
 Partial overlay merged on top of `config.toml`. Activated by env var
