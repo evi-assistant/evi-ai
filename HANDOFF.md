@@ -1,6 +1,6 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-07-11 · PyPI v1.0.5 · desktop v1.0.5 · **PUBLIC**_
+_Last updated: 2026-07-11 · PyPI v1.0.9 · desktop v1.0.9 · **PUBLIC**_
 
 This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at **1.0.5**, and the `evi-skills` catalog is public. As of 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
@@ -216,6 +216,8 @@ None block the 1.0 launch. Everything below is optional/hardening or forward-loo
 
 - **Use the venv Python.** System `python` lacks the web deps; run everything via `.venv\Scripts\python.exe`.
 - **Keep `.venv-build` lean.** Don't add torch/av/sounddevice to it — the practical-tier sidecar balloons >1 GB. See `docs/desktop-bundling.md`.
+- **`--collect-all <pkg>` can drag in huge vendored binaries.** `claude_agent_sdk` (the `[claude-agent]` extra) vendors a ~250 MB `_bundled/claude(.exe)` CLI; `--collect-all claude_agent_sdk` bundled it into the sidecar and broke the Linux AppImage build (`failed to run linuxdeploy`) in 1.0.7/1.0.8. Fixed in 1.0.9 with `--collect-submodules claude_agent_sdk` + `--collect-submodules mcp` (Python only; the SDK falls back to the system `claude` on PATH). Prefer `--collect-submodules` over `--collect-all` unless you truly need a package's data files.
+- **Test desktop-build changes with an artifacts-only run first.** `gh workflow run desktop-release.yml --ref main -f release_tag=""` builds all 3 OSes and uploads artifacts **without** publishing a release — validate a Linux/AppImage or freeze change there before cutting a `v*` tag (avoids shipping a half-built desktop release).
 - **Windows `localhost` IPv6 stall:** connecting to a closed `::1` port is *dropped* (SYN filtered), not refused, so it blocks the full timeout. `evi/portprobe.py` pins probes to `127.0.0.1`. Keep this in mind for any new local-port code.
 - **Desktop runtime:** Tauri picks a random free port injected via `window.__EVI_PORT__`; the sidecar logs to `~/.evi/logs/desktop-server.log` (block-buffered — may look empty until the process exits).
 - **PowerShell 5.1 traps:** `$ErrorActionPreference="Stop"` aborts on a native command's *stderr* (rustup/npm warnings); `if(){}` is a statement, not an expression; `-WindowStyle Hidden` ≠ `CREATE_NO_WINDOW`; `setx` truncates at 1024 chars (use `[Environment]::SetEnvironmentVariable(...,"User")`).
