@@ -1,6 +1,6 @@
 [package]
 name = "evi-desktop"
-version = "1.0.2"
+version = "1.0.5"
 description = "eVi — desktop shell"
 authors = ["eVi"]
 license = "MIT"
