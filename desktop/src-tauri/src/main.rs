@@ -12,6 +12,8 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuild
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+mod sidecar_update;
+
 /// Wraps the spawned Python server process so we can kill it on shutdown.
 struct ServerHandle(Mutex<Option<Child>>);
 
@@ -159,6 +161,12 @@ fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
 /// system Python.
 fn sidecar_path(app: &tauri::App) -> Option<PathBuf> {
     let bin = if cfg!(windows) { "evi-server.exe" } else { "evi-server" };
+
+    // Prefer a sidecar staged by the update channel (a newer core, downloaded +
+    // verified on a previous run) over the one bundled in the app.
+    if let Some(p) = evi_home().and_then(|h| sidecar_update::staged_sidecar(&h)) {
+        return Some(p);
+    }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(res) = app.path().resource_dir() {
@@ -707,6 +715,11 @@ fn main() {
             // EVI_AUTO_UPDATE=0.
             if std::env::var("EVI_REMOTE_URL").is_err() {
                 spawn_update_check(app.handle().clone());
+                // Sidecar update channel: background-check for a newer core and
+                // stage it for next launch (opt out with EVI_SIDECAR_UPDATE=0).
+                if let Some(home) = evi_home() {
+                    sidecar_update::spawn_check(home, app.package_info().version.to_string());
+                }
             }
             Ok(())
         })

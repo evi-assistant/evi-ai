@@ -129,6 +129,28 @@ jobs:
           ./scripts/build-sidecar.sh
           ./desktop/src-tauri/binaries/evi-server/evi-server --check
 
+      # Sidecar update channel: zip the frozen onedir per-OS and upload it as an
+      # artifact for the publish-sidecar job to sign + publish. Real releases only.
+      - name: Zip sidecar for the update channel
+        if: steps.tag.outputs.name != ''
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Windows) plat=windows-x86_64 ;;
+            Linux)   plat=linux-x86_64 ;;
+            macOS)   if [ "$(uname -m)" = "arm64" ]; then plat=darwin-aarch64; else plat=darwin-x86_64; fi ;;
+          esac
+          python scripts/zip-sidecar.py \
+            --dir desktop/src-tauri/binaries/evi-server --platform "$plat" --out-dir sidecar-dist
+
+      - name: Upload sidecar artifact
+        if: steps.tag.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: sidecar-${{ runner.os }}
+          path: sidecar-dist/*
+          if-no-files-found: error
+
       - name: Install desktop npm deps
         working-directory: desktop
         run: npm install
@@ -221,3 +243,75 @@ jobs:
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage
             desktop/src-tauri/target/release/bundle/**/*.sig
             desktop/src-tauri/target/release/**/latest.json
+
+  # Sidecar update channel (Option A): assemble + sign a manifest from the per-OS
+  # sidecar zips and publish them to the fixed-tag `sidecar-latest` release. The
+  # desktop shell fetches this to update its frozen core WITHOUT a full app
+  # rebuild (see desktop/src-tauri/src/sidecar_update.rs). Real releases only
+  # (needs a version tag). A SEPARATE job, so a failure here never blocks the
+  # installer release above; the shell no-ops until the manifest exists.
+  publish-sidecar:
+    name: publish sidecar update channel
+    needs: build
+    if: ${{ github.event_name == 'push' || inputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          ver="${TAG#desktop-v}"; ver="${ver#v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Download sidecar artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: sidecar-*
+          path: sidecar-in
+          merge-multiple: true
+
+      - name: Build + sign the manifest
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          shas=""
+          for f in sidecar-in/*.sha256; do
+            plat="$(basename "$f" .sha256)"; plat="${plat#sidecar-}"
+            shas="$shas --sha $plat=$(cat "$f")"
+          done
+          python scripts/build-sidecar-manifest.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --repo "${{ github.repository }}" $shas --out sidecar-latest.json
+          echo "== manifest =="; cat sidecar-latest.json
+          # Sign with the SAME minisign key as the app updater (reads the env vars).
+          # Produces sidecar-latest.json.sig (base64 of the .minisig); the Rust
+          # client base64-decodes it before minisign-verify.
+          npx --yes @tauri-apps/cli@2 signer sign sidecar-latest.json
+          test -f sidecar-latest.json.sig
+
+      - name: Publish to the fixed-tag sidecar-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view sidecar-latest >/dev/null 2>&1 || \
+            gh release create sidecar-latest --prerelease \
+              --title "Sidecar update channel" \
+              --notes "Signed evi-server sidecar bundles + manifest for the desktop core-update channel. Managed by desktop-release.yml; not an app release."
+          gh release upload sidecar-latest \
+            sidecar-in/sidecar-*.zip sidecar-latest.json sidecar-latest.json.sig --clobber
