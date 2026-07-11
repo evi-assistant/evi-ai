@@ -5,6 +5,8 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-07-10
+
 ### Added
 - **Codex CLI backend — OpenAI Codex via your ChatGPT plan (no API key).** Adds a
   `codex` backend that talks to Claude-Code's counterpart, the local **`codex`
