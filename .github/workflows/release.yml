@@ -72,3 +72,19 @@ jobs:
             dist/*.tar.gz
             dist/*.whl
             dist/*.sigstore.json
+
+  # Every PyPI `v*` release ALSO cuts the matching desktop release (the frozen
+  # sidecar re-built from this commit's `evi/` source), so the desktop channel
+  # never drifts behind the core. Runs AFTER build-and-publish, so the desktop
+  # release publishes last and `releases/latest` (the in-app updater's endpoint)
+  # resolves to it — carrying latest.json. Skipped on manual workflow_dispatch
+  # (no version tag to derive the desktop version from). Free on public runners.
+  desktop:
+    needs: build-and-publish
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      release_tag: desktop-${{ github.ref_name }}
+    secrets: inherit

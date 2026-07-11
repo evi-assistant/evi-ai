@@ -1,8 +1,8 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-07-11 · PyPI v1.0.5 · desktop v1.0.2 · **PUBLIC**_
+_Last updated: 2026-07-11 · PyPI v1.0.5 · desktop v1.0.5 · **PUBLIC**_
 
-This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` is at **1.0.5**, the desktop app is at **1.0.2**, and the `evi-skills` catalog is public. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
+This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at **1.0.5**, and the `evi-skills` catalog is public. As of 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
 ---
 
@@ -26,11 +26,11 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 
 - **Public repo:** `https://github.com/evi-assistant/evi-ai` (transferred from the old private `dmang-dev/evi-ai`). All `[project.urls]` point at the `evi-assistant` org.
 - **PyPI:** `evi-assistant` **v1.0.5** (Development Status **Production/Stable**). The 1.0.1→1.0.5 line is **PyPI + Docker only** — see the CLI-agent backends note below for why.
-- **Desktop:** **v1.0.2**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired). Desktop stays at 1.0.2 because the 1.0.3+ features depend on external CLIs the frozen sidecar can't bundle.
+- **Desktop:** **v1.0.5**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired). As of 1.0.5, `release.yml` **auto-invokes** `desktop-release.yml` on every `v*` tag (reusable `workflow_call`), so the frozen sidecar is re-built from the released `evi/` and desktop no longer lags PyPI. (Free on public runners — no Actions spend concern.)
 - **Skills:** `evi-skills` catalog is public.
 - **Site:** landing page live at **https://evi-ai.dev** (custom domain; also `evi-assistant.github.io` → 301 to it). Lives in the dedicated **`evi-assistant/evi-assistant.github.io`** org-pages repo; custom domain set via a `CNAME` file (`evi-ai.dev`) + Cloudflare DNS (grey-cloud A/AAAA → GitHub Pages IPs, `www` CNAME). HTTPS enforced, Let's Encrypt cert.
 - **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
-- **PyPI version** is consistent across `pyproject.toml` and `evi/__init__.py` (both `1.0.5`) — the `release.yml` gate requires this. **Desktop version** (`desktop/src-tauri/tauri.conf.json`) tracks separately at `1.0.2`, since the PyPI-only 1.0.3→1.0.5 line doesn't cut desktop builds.
+- **PyPI version** is consistent across `pyproject.toml` and `evi/__init__.py` (both `1.0.5`) — the `release.yml` gate requires this. **Desktop version** is now **derived from the release tag** at build time (`scripts/set-desktop-version.py`, run by `desktop-release.yml`), so the four Tauri version files no longer have to be hand-bumped and can't drift from the core.
 
 **Tests:** **1484 passed, 4 skipped** on the local `.venv` (32 e2e deselected by default via `addopts = -m 'not e2e'`). Live count: `pytest --collect-only -q`. Ruff clean.
 
@@ -55,7 +55,7 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 - **1.0.4:** `codex` + `gemini`, plus the shared-shim refactor that pulled the reusable core out of `claude_agent`.
 - **1.0.3:** `claude_agent` (first CLI-agent backend). **1.0.1/1.0.2:** agent-identity fix + multi-backend registry / fan-out (see CHANGELOG).
 
-**Why PyPI-only:** these route through local CLIs the frozen desktop sidecar can't bundle, so the desktop app stays at **1.0.2**. The `release.yml` version gate checks only `tag == pyproject == evi/__init__.py` (not `tauri.conf.json`), so a PyPI-only tag ships without a desktop build. Full details in `docs/configuration.md` (§ CLI-agent backends).
+**Desktop delivery:** as of desktop-v1.0.5 the desktop channel **auto-follows** the core — `release.yml` calls `desktop-release.yml` on every `v*` tag, so the frozen sidecar (re-built from the released `evi/`) carries these backends to desktop users via the Tauri auto-updater. Caveat: the CLI-agent backends still need the corresponding external CLI (`amp`/`qwen`/`codex`/…) on the user's PATH — the frozen sidecar spawns them via `shutil.which`. Full details in `docs/configuration.md` (§ CLI-agent backends); the delivery architecture + a proposed lighter "sidecar update channel" are in **Open items**.
 
 ## 3. Feature inventory
 
@@ -141,9 +141,11 @@ git push origin main --tags
 
 ### Cut a desktop release (`desktop-release.yml`)
 
-Trigger: push a `desktop-v*` tag (versions independently of the package; `workflow_dispatch` with blank input = artifacts-only). Matrix: windows/macos/ubuntu (`fail-fast: false`). Per OS: setup Python 3.13 + Rust + Node, freeze the sidecar in a fresh `.venv-build` + `evi-server --check`, `npm install`, then `tauri-action` with `--config src-tauri/tauri.standalone.conf.json`. Publishes a **non-draft** release; signs updater artifacts (`.sig` + `latest.json`) with `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`.
+**Normally you don't cut this by hand** — `release.yml` calls it via `workflow_call` on every `v*` tag (the `desktop` job → `desktop-release.yml` with `release_tag: desktop-v<version>`, `secrets: inherit`), so a PyPI release automatically produces the matching desktop release. It runs *after* `build-and-publish`, so the desktop release publishes last and `releases/latest` (the updater endpoint) resolves to it.
 
-**Bump four files** (all currently `1.0.2`): `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, `desktop/package.json`, and the `evi-desktop` entry in `desktop/src-tauri/Cargo.lock`. Then:
+Three triggers: **`workflow_call`** (from `release.yml`, the normal path), a **`desktop-v*` tag push** (a shell-only rebuild without a core release), or **`workflow_dispatch`** (blank `release_tag` = artifacts-only, no release). Matrix: windows/macos/ubuntu (`fail-fast: false`). Per OS: setup Python 3.13 + Rust + Node, **sync the desktop version to the tag** (`scripts/set-desktop-version.py`, after the Rust cache so it doesn't churn crate caches), freeze the sidecar in a fresh `.venv-build` + `evi-server --check`, `npm install`, then `tauri-action` with `--config src-tauri/tauri.standalone.conf.json`. Publishes a **non-draft** release; signs updater artifacts (`.sig` + `latest.json`) with `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`.
+
+**You no longer bump the four Tauri version files by hand** — the version-sync step derives them from the tag at build time. (The committed values are just dev defaults for local `tauri dev`.) To force a manual desktop-only rebuild:
 
 ```powershell
 git tag desktop-vX.Y.Z
@@ -151,6 +153,8 @@ git push origin desktop-vX.Y.Z
 ```
 
 Updater endpoint: `https://github.com/evi-assistant/evi-ai/releases/latest/download/latest.json`. The version in `latest.json` must increase for clients to update. Updater signing is **minisign**, not OS code-signing — SmartScreen/Gatekeeper still warn (see Open items).
+
+> ⚠ **`releases/latest` fragility:** the updater endpoint resolves to whichever release GitHub marks "latest." The auto-follow ordering (desktop publishes after the PyPI `v*` release) keeps that pointing at the desktop release, but it's timing-dependent — a future PyPI-only path or a failed desktop build would leave `latest` without a `latest.json`. The **sidecar update channel** in Open items removes this dependency (a dedicated, static manifest URL).
 
 ### Freeze the sidecar / build the whole desktop app (Windows)
 
@@ -184,6 +188,12 @@ None block the 1.0 launch. Everything below is optional/hardening or forward-loo
 **Still open:**
 
 - **OS code-signing** for the desktop installers (Windows Authenticode, Apple Developer ID) — updater minisign signing is done, but SmartScreen/Gatekeeper still warn. Needs certs/secrets (user-provided).
+- **Design: sidecar update channel (decouple core updates from the shell).** *Problem:* the desktop app is a monolith — shell + frozen PyInstaller sidecar update together, so every core update pays the full 3-OS Tauri build + installer packaging + signing. Auto-follow (shipped 1.0.5) fixes the *drift* but not the *cost*, and still leans on the fragile `releases/latest` pointer. *Proposal:* ship the sidecar as its own updatable unit.
+  - **Publish** a per-OS, minisign-signed `evi-server` bundle (the onedir folder, zipped) as an extra asset on each `v*` release, plus a **static** `sidecar-latest.json` (`{version, per-os: {url, sig, sha256}, min_shell_abi}`) at a fixed URL (a release-assets "latest" alias, or GitHub Pages) — NOT `releases/latest`, so a core update needs no full Tauri rebuild.
+  - **Client** (small Rust in `main.rs`/a new module): on launch (and/or a timer) fetch `sidecar-latest.json`; if newer **and** `min_shell_abi` ≤ this shell's ABI, download the zip to a writable dir (`%APPDATA%/eVi/sidecar/<ver>/`), verify minisign + sha256, atomically flip the active-sidecar pointer, restart the sidecar. `main.rs` already resolves `evi-server(.exe)` from the resource dir — add "prefer a compatible sidecar in the writable dir over the bundled one," with **last-known-good rollback** (if the new sidecar fails `--check`, revert to the bundled one and surface a "full app update needed" prompt).
+  - **Contract:** the shell↔sidecar launch handshake (flags/port/`--check`) is versioned by `min_shell_abi`; bump it only on a breaking change so old shells refuse an incompatible sidecar and fall back.
+  - **Wins:** core ships at PyPI cadence with only the cheap freeze+zip+sign per OS (no Tauri/installer/OS-signing); removes the `releases/latest` fragility; stays offline-safe (ships a working bundled sidecar). **Cost:** the ~one new module (download/verify/swap/rollback) + a `sidecar-release.yml`. Full shell `desktop-v*` rebuilds then only happen when the *shell itself* changes.
+  - *(Runtime pip-managed core — bundle Python, `pip install -U evi-assistant` — was considered and rejected: fragile offline, native-wheel/platform friction, worse startup.)*
 - **Tracked — Dependabot alert #1: `glib` unsoundness** (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, medium). **Left open and tracked, not dismissed.** Transitive in `desktop/src-tauri/Cargo.lock` via `tauri 2.11.2 → webkit2gtk 2.0.2 → gtk-rs 0.18` (pins `glib 0.18.5`; vulnerable `< 0.20.0`). **No non-breaking fix exists** — `glib 0.20` needs the gtk-rs 0.20 generation, which Tauri's Linux webkitgtk binding doesn't use yet, so `cargo update -p glib` can't advance it (also why Dependabot hasn't opened a PR). Risk is low: Linux GTK-webview only (Windows=WebView2, macOS=WKWebView never exercise it), eVi's own Rust never calls `glib::VariantStrIter`, crash-class not RCE. **Unblock:** a Tauri release on gtk-rs 0.20 → `cargo update` + rebuild + retag `desktop-v*`. Recheck **by number**: `gh api repos/evi-assistant/evi-ai/dependabot/alerts/1 -q .state` (the list/GraphQL endpoints lag).
 - **Delete the local mirror backup** (`evi-backup.git`) once confident the scrubbed public history is clean — kept as a safety net for now.
 
@@ -297,7 +307,7 @@ C:\evi
 │  └─ data/                   models-catalog.json (baked models.dev snapshot)
 ├─ desktop/                   Tauri 2 shell (NOT a Python package)
 │  ├─ dist-shim/index.html    loading spinner
-│  ├─ package.json            version 1.0.2
+│  ├─ package.json            version 1.0.5 (auto-synced from the release tag in CI)
 │  └─ src-tauri/              Rust src/, Cargo.toml, tauri.conf.json + tauri.standalone.conf.json,
 │                             capabilities/, permissions/, icons/, binaries/ (staged sidecar)
 ├─ editors/vscode/            VS Code extension (TypeScript; FIM + chat webview)

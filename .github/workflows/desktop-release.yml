@@ -28,6 +28,17 @@ on:
         description: "Tag to publish a release to (e.g. desktop-v1.0.0). Leave blank for an artifacts-only build."
         required: false
         default: ""
+  # Called by release.yml so every PyPI `v*` release ALSO cuts the matching
+  # desktop release (bundling the freshly-frozen core) — this is what keeps the
+  # desktop channel from drifting behind PyPI. The desktop version is synced to
+  # `release_tag` at build time (scripts/set-desktop-version.py), so no one has
+  # to remember to bump the four Tauri files.
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "desktop-vX.Y.Z tag to publish to (drives the app version)."
+        required: true
+        type: string
 
 permissions:
   contents: write   # create the GitHub release + upload installers
@@ -54,6 +65,19 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      # Resolve the release tag up front: the pushed tag on a tag event, the
+      # `release_tag` input on workflow_dispatch OR workflow_call (from
+      # release.yml). Empty only on an artifacts-only manual dispatch.
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -109,18 +133,19 @@ jobs:
         working-directory: desktop
         run: npm install
 
-      # Resolve the release tag: the pushed tag on a tag event, or the manual
-      # input on workflow_dispatch (empty -> tauri-action builds without
-      # creating a release; we still upload artifacts below).
-      - name: Resolve release tag
-        id: tag
+      # Sync the desktop app version to the tag (desktop-v1.0.6 -> 1.0.6) so the
+      # installers + updater latest.json report it, without a human bumping the
+      # four Tauri version files. Placed AFTER the Rust cache restore so a version
+      # change doesn't churn the third-party crate cache. Skipped for an
+      # artifacts-only build (blank tag).
+      - name: Sync desktop version to the release tag
+        if: steps.tag.outputs.name != ''
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
-          fi
+          ver="${{ steps.tag.outputs.name }}"
+          ver="${ver#desktop-v}"
+          ver="${ver#v}"
+          python scripts/set-desktop-version.py "$ver"
 
       # The Windows Tauri NSIS bundler downloads its toolchain from GitHub at
       # bundle time and has been intermittently returning HTTP 504 (the
