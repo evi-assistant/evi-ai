@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-07-11
+
+### Fixed
+- **Linux desktop build restored + a 250 MB sidecar bloat removed.** 1.0.7's
+  desktop `claude-agent` bundling used PyInstaller `--collect-all claude_agent_sdk`,
+  which pulled in the SDK's vendored `_bundled/claude` CLI (~250 MB) — that broke the
+  Linux AppImage bundler (`failed to run linuxdeploy`) and bloated every platform's
+  sidecar. The freeze now collects only the SDK's Python modules; the SDK falls back
+  to the system `claude` CLI (already required for `claude_agent`), so nothing is
+  lost. (No PyPI-visible change; this is a desktop-build fix.)
+
 ## [1.0.8] — 2026-07-11
 
 ### Fixed

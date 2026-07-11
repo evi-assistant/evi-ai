@@ -28,9 +28,12 @@ else py="python3"; fi
 # native-dep-heavy. OCR works via a bundled `tesseract` binary (see
 # docs/desktop-bundling.md), not a Python dep.
 echo ">> ensuring practical extras are installed in the build venv"
-# `claude-agent` bundles the Claude Agent SDK so the `claude_agent` backend works
-# in the frozen sidecar (the other CLI-agent backends just subprocess a CLI on
-# PATH and need nothing extra here).
+# `claude-agent` installs the Claude Agent SDK so the `claude_agent` backend works
+# in the frozen sidecar. We collect only its PYTHON modules below — NOT its
+# `_bundled/claude` (a ~250 MB vendored CLI that breaks the Linux AppImage bundler
+# and is useless in a cross-OS bundle anyway). The SDK falls back to the system
+# `claude` on PATH when its bundled copy is absent, which is what `claude_agent`
+# needs regardless.
 "$py" -m pip install -q -e "$root[web,pdf,index,claude-agent]"
 
 # --onedir (NOT --onefile): a folder with the evi-server binary + _internal/.
@@ -48,7 +51,8 @@ echo ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-submodules fastapi \
     --collect-all pymupdf \
     --collect-all numpy \
-    --collect-all claude_agent_sdk \
+    --collect-submodules claude_agent_sdk \
+    --collect-submodules mcp \
     --add-data "$root/docs:docs" \
     --hidden-import fitz \
     --hidden-import python_multipart \
