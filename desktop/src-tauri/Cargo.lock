@@ -813,7 +813,7 @@ dependencies = [
  "tauri-plugin-deep-link",
  "tauri-plugin-shell",
  "tauri-plugin-updater",
- "toml 0.8.2",
+ "toml 1.1.2+spec-1.1.0",
  "ureq",
  "url",
  "zip 2.4.2",
