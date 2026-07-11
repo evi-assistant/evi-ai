@@ -123,6 +123,33 @@ don't route through it, and it can't edit files during a chat turn. Both backend
 are built on the same shared CLI-agent shim (`evi/llm/cli_agent.py`), so they
 behave consistently and adding further subscription-login CLIs is cheap.
 
+### Google Gemini via the free login — `backend = "gemini"` (no API key)
+
+The `gemini` backend uses the local **`gemini` CLI**: signing in with a Google
+account gives a **free tier (~1000 requests/day)** with no `GEMINI_API_KEY`.
+
+```bash
+npm i -g @google/gemini-cli   # the `gemini` CLI
+gemini                        # run once and pick a Google login
+evi backend add gemini --kind gemini        # or Settings → Model & Backend → kind gemini
+evi backend use gemini --model gemini-2.5-flash   # models: gemini-2.5-pro | gemini-2.5-flash
+```
+
+eVi runs `gemini -p … -o json` and streams the reply. Like `codex` it's a
+**chat / delegate** provider (Gemini drives its own tools; eVi's tools don't route
+through it), built on the same shared shim.
+
+### The CLI-agent backends at a glance
+
+| kind | CLI | Auth (no API key) | Tools |
+|---|---|---|---|
+| `claude_agent` | `claude` | Claude **Max/Pro** login | **eVi drives tools** (full parity) |
+| `codex` | `codex` | ChatGPT **Plus/Pro** login | delegate (Codex's own, read-only) |
+| `gemini` | `gemini` | Google **free** login | delegate (Gemini's own) |
+
+All three are local-machine-only (they shell out to a CLI, so they don't work in
+the packaged desktop sidecar) and report clearly if their CLI isn't installed.
+
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
 Partial overlay merged on top of `config.toml`. Activated by env var

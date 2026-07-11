@@ -55,6 +55,38 @@ def flatten_content(content) -> str:
     return str(content)
 
 
+def render_transcript(messages: list[dict]) -> str:
+    """OpenAI messages → a single text prompt for CLIs that take ONE prompt (Codex,
+    Gemini, …). System messages become a preamble; the conversation is a labelled
+    transcript with any prior tool activity rendered as text (eVi resends full
+    history each turn, so this is stateless)."""
+    system: list[str] = []
+    convo: list[str] = []
+    id_to_name: dict[str, str] = {}
+    for m in messages:
+        role = m.get("role")
+        content = flatten_content(m.get("content"))
+        if role == "system":
+            if content:
+                system.append(content)
+        elif role == "tool":
+            name = id_to_name.get(m.get("tool_call_id") or "", "tool")
+            convo.append(f"[tool {name} returned: {content}]")
+        elif role == "assistant":
+            parts = [content] if content else []
+            for tc in (m.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                nm = fn.get("name") or "tool"
+                id_to_name[tc.get("id") or ""] = nm
+                parts.append(f"[called {nm}({fn.get('arguments') or '{}'})]")
+            if parts:
+                convo.append("Assistant: " + "\n".join(parts))
+        elif content:  # user (default)
+            convo.append("User: " + content)
+    text = ("\n\n".join(system) + "\n\n") if system else ""
+    return (text + "\n".join(convo)).strip()
+
+
 # --- OpenAI-shaped duck types (only the fields eVi's agent loop reads) --------
 
 

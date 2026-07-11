@@ -14,15 +14,23 @@ All notable user-visible changes to eVi. Format loosely follows
   `gpt-5`. Codex is an autonomous agent that runs its **own** tools, so it's a
   chat/delegate provider (eVi's tools don't route through it; it runs read-only so
   a chat turn can't edit files). Requires `npm i -g @openai/codex` + `codex login`.
+- **Gemini CLI backend — Google Gemini via the free login (no API key).** Adds a
+  `gemini` backend over the local **`gemini` CLI**: a Google-account login gives a
+  generous free tier (~1000 req/day) with no `GEMINI_API_KEY`. Pick it in
+  **Settings → Model & Backend** (kind `gemini`, no URL/key) or `evi backend add
+  gemini --kind gemini`; models `gemini-2.5-pro` / `gemini-2.5-flash`. Runs
+  `gemini -p … -o json` (chat/delegate provider, like `codex`). Requires
+  `npm i -g @google/gemini-cli` + a one-time `gemini` login.
 
 ### Changed
 - **Shared CLI-agent shim (`evi/llm/cli_agent.py`).** Factored the reusable core
   out of the `claude_agent` backend — the OpenAI-shaped chunk builders, the
-  async/subprocess→sync bridge, and the `chat.completions` client shell are now
-  generic and driven by a small per-CLI "driver". `claude_agent` (SDK driver) and
-  the new `codex` backend (`codex exec --json` subprocess driver) are thin
-  consumers, so future subscription-login CLIs are cheap to add. No behavior
-  change to `claude_agent` (re-verified end-to-end on a Max plan).
+  async/subprocess→sync bridge, the `chat.completions` client shell, and the
+  `render_transcript` helper are now generic and driven by a small per-CLI
+  "driver". `claude_agent` (SDK driver), `codex` (`codex exec --json` subprocess),
+  and `gemini` (`gemini -o json` subprocess) are thin consumers, so further
+  subscription/free-login CLIs are cheap to add. No behavior change to
+  `claude_agent` (re-verified end-to-end on a Max plan).
 
 ## [1.0.3] — 2026-07-10
 

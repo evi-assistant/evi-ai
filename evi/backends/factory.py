@@ -5,6 +5,7 @@ from __future__ import annotations
 from evi.backends.base import Backend
 from evi.backends.claude_agent import ClaudeAgentBackend
 from evi.backends.codex_agent import CodexAgentBackend
+from evi.backends.gemini_agent import GeminiAgentBackend
 from evi.backends.llamacpp import LlamaCppBackend
 from evi.backends.lmstudio import LMStudioBackend
 from evi.backends.ollama import OllamaBackend
@@ -17,10 +18,11 @@ KNOWN_BACKENDS: dict[str, type[Backend]] = {
     "llamacpp": LlamaCppBackend,
     "openai_compat": OpenAICompatBackend,
     # CLI-agent backends (NOT OpenAI-compatible): make_client() returns a shim
-    # over a local CLI with subscription-login auth (no API key). See
-    # evi/llm/cli_agent.py + evi/backends/{claude_agent,codex_agent}.py.
+    # over a local CLI with subscription/free-login auth (no API key). See
+    # evi/llm/cli_agent.py + evi/backends/{claude_agent,codex_agent,gemini_agent}.py.
     "claude_agent": ClaudeAgentBackend,   # Claude Code / Max plan (`claude` CLI)
     "codex": CodexAgentBackend,           # OpenAI Codex / ChatGPT plan (`codex` CLI)
+    "gemini": GeminiAgentBackend,         # Google Gemini / free login (`gemini` CLI)
 }
 
 
@@ -32,6 +34,7 @@ _DEFAULT_URLS: dict[str, str] = {
     # No HTTP endpoint — auth + transport are the local CLI.
     "claude_agent": "",
     "codex": "",
+    "gemini": "",
 }
 
 

@@ -29,7 +29,7 @@ from evi.llm.cli_agent import (
     CliAgentClient,
     CliUnavailable,
     delta_chunk,
-    flatten_content,
+    render_transcript,
     usage_chunk,
 )
 
@@ -50,35 +50,8 @@ def _codex_path() -> str:
 
 
 def render_prompt(messages: list[dict]) -> str:
-    """OpenAI messages → a single text prompt for ``codex exec`` (Codex takes one
-    prompt; eVi resends full history each turn, so this is stateless). System
-    messages become a preamble; the conversation is a labelled transcript with any
-    prior tool activity rendered as text."""
-    system: list[str] = []
-    convo: list[str] = []
-    id_to_name: dict[str, str] = {}
-    for m in messages:
-        role = m.get("role")
-        content = flatten_content(m.get("content"))
-        if role == "system":
-            if content:
-                system.append(content)
-        elif role == "tool":
-            name = id_to_name.get(m.get("tool_call_id") or "", "tool")
-            convo.append(f"[tool {name} returned: {content}]")
-        elif role == "assistant":
-            parts = [content] if content else []
-            for tc in (m.get("tool_calls") or []):
-                fn = tc.get("function") or {}
-                nm = fn.get("name") or "tool"
-                id_to_name[tc.get("id") or ""] = nm
-                parts.append(f"[called {nm}({fn.get('arguments') or '{}'})]")
-            if parts:
-                convo.append("Assistant: " + "\n".join(parts))
-        elif content:  # user (default)
-            convo.append("User: " + content)
-    text = ("\n\n".join(system) + "\n\n") if system else ""
-    return (text + "\n".join(convo)).strip()
+    """Codex takes one prompt — render the conversation as a text transcript."""
+    return render_transcript(messages)
 
 
 # Item types Codex emits for its OWN agentic activity — surfaced neither as the
