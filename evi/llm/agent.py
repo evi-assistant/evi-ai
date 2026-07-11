@@ -452,19 +452,39 @@ class Agent:
     def _compose_system_prompt(self) -> str:
         """Stitch base + style + memory + skills + project context together."""
         parts = [self._base_system_prompt]
-        # Model identity — without this, local open-weight models hallucinate
-        # "I'm GPT-4" from their training data when asked what they are. The
-        # tool-discipline sentence curbs a common small-model failure (firing a
-        # tool on a bare "hello").
+        # Model identity. The tool-discipline sentence (shared by both branches)
+        # curbs a common small-model failure — firing a tool on a bare "hello".
         model_id = (getattr(self.config.llm, "model", "") or "").strip()
-        if model_id:
+        backend_kind = (getattr(self.config.llm, "backend", "") or "").strip().lower()
+        # Backends that serve a LOCAL, typically open-weight model (the user runs
+        # the weights). openai_compat and the CLI-agent backends are NOT here:
+        # they may genuinely be Claude/GPT/Gemini via the user's key or CLI login.
+        _LOCAL_MODEL_KINDS = {"lmstudio", "ollama", "llamacpp"}
+        _tool_discipline = (
+            " Do not call tools for greetings, small talk, or anything you can "
+            "answer directly — only call a tool when it is actually needed."
+        )
+        if model_id and backend_kind in _LOCAL_MODEL_KINDS:
+            # Local open-weight models hallucinate "I'm GPT-4" from their training
+            # data when asked what they are — anchor their identity hard.
             parts.append(
                 f"You are eVi, running the local open-weight model `{model_id}`. "
                 "You are NOT ChatGPT, GPT-4, Claude, or Gemini, and you were not "
                 "built by OpenAI, Anthropic, or Google. If the user asks which "
                 f"model or company you are, tell them you are eVi running `{model_id}` "
-                "locally. Do not call tools for greetings, small talk, or anything "
-                "you can answer directly — only call a tool when it is actually needed."
+                "locally." + _tool_discipline
+            )
+        elif model_id:
+            # openai_compat / CLI-agent backends: the model may genuinely BE Claude,
+            # GPT, Gemini, etc. (via the user's API key or CLI subscription), so do
+            # NOT claim it's open-weight or deny what it is — just anchor the eVi
+            # persona and answer honestly about the underlying model.
+            parts.append(
+                f"You are eVi, a local-first personal assistant. This session is "
+                f"powered by the `{model_id}` model through your configured backend. "
+                "Identify yourself as eVi; if the user asks which model powers you, "
+                f"answer honestly that it is `{model_id}` (don't claim to be an "
+                "open-weight or purely local model if you aren't)." + _tool_discipline
             )
         # Output style (response persona), if one is selected.
         try:

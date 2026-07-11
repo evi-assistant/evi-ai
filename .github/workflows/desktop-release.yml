@@ -178,6 +178,12 @@ jobs:
           # these the build still succeeds but emits no updater artifacts.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Linux AppImage bundling shells out to linuxdeploy, which mounts via
+          # FUSE — not available on GitHub's ubuntu runners, causing intermittent
+          # "failed to run linuxdeploy". Extract-and-run instead of mounting, and
+          # skip the flaky strip pass. No-op on Windows/macOS.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: true
         with:
           projectPath: desktop
           # Standalone overlay: ships the onedir sidecar via bundle.resources.

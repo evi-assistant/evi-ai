@@ -5,6 +5,22 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.8] — 2026-07-11
+
+### Fixed
+- **Honest model identity for non-local backends.** eVi's system prompt always
+  described itself as "running the local open-weight model `X`" and denied being
+  Claude/GPT/Gemini — false for the CLI-agent and online backends, where the model
+  genuinely is proprietary (e.g. `claude_agent` → Claude Opus, which reported "I'm
+  eVi, running the local open-weight model `opus`"). The identity is now
+  backend-aware: the anti-hallucination wording applies only to local open-weight
+  backends (`ollama`/`lmstudio`/`llamacpp`); for `openai_compat` and the CLI-agent
+  backends eVi names the model honestly and no longer claims to be open-weight or
+  purely local.
+- **Linux desktop AppImage build hardened.** Set `APPIMAGE_EXTRACT_AND_RUN=1` /
+  `NO_STRIP` so AppImage bundling doesn't intermittently fail with "failed to run
+  linuxdeploy" on GitHub's FUSE-less ubuntu runners.
+
 ## [1.0.7] — 2026-07-11
 
 ### Fixed

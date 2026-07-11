@@ -92,6 +92,7 @@ def test_plain_text_response() -> None:
 def test_system_prompt_states_model_identity() -> None:
     # Without this, local models hallucinate "I'm GPT-4" from training data.
     cfg = Config()
+    cfg.llm.backend = "ollama"  # a LOCAL open-weight backend -> the anti-hallucination branch
     cfg.llm.model = "qwen2.5-coder:14b-instruct"
     agent = Agent(client=_FakeClient([]), config=cfg, tools=[])
     sp = agent._compose_system_prompt()
@@ -99,6 +100,20 @@ def test_system_prompt_states_model_identity() -> None:
     low = sp.lower()
     assert "gpt-4" in low or "chatgpt" in low  # explicitly disclaims the hallucination
     assert "not" in low
+
+
+def test_system_prompt_cli_agent_backend_is_honest() -> None:
+    # claude_agent serves a PROPRIETARY model (Claude Opus) via the CLI login —
+    # eVi must NOT claim it's a "local open-weight" model or deny being Claude.
+    cfg = Config()
+    cfg.llm.backend = "claude_agent"
+    cfg.llm.model = "opus"
+    agent = Agent(client=_FakeClient([]), config=cfg, tools=[])
+    sp = agent._compose_system_prompt()
+    assert "opus" in sp
+    ident = [p for p in sp.split("\n\n") if "eVi" in p and "opus" in p][0]
+    assert "running the local open-weight model `opus`" not in ident  # no false claim
+    assert "You are NOT" not in ident                                 # doesn't deny being Claude
 
 
 def test_refresh_prompt_updates_identity_on_model_switch() -> None:
