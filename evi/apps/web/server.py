@@ -127,14 +127,31 @@ _KNOWN_BACKENDS: list[tuple[str, str]] = [
     ("llamacpp", "http://localhost:8080/v1"),
 ]
 
+# CLI-agent backends have NO HTTP endpoint — they drive a local CLI that
+# authenticates via its own subscription/login. "reachable" for them means the
+# CLI binary is installed and on PATH, not that a port answers. (Kind -> binary.)
+_CLI_AGENT_BINS: dict[str, str] = {
+    "claude_agent": "claude",
+    "codex": "codex",
+    "gemini": "gemini",
+    "amp": "amp",
+    "qwen": "qwen",
+    "copilot": "copilot",
+}
+
 
 def _probe_candidate(kind: str, base_url: str) -> tuple[bool, str]:
     """Return (reachable, resolved_url) for one backend.
 
-    llama.cpp gets the 8080..8090 port scan so a busy default port doesn't
-    hide it; everything else is a single-URL probe. The resolved URL lets the
-    UI show where llama.cpp was actually found.
+    CLI-agent kinds have no HTTP endpoint, so "reachable" = their CLI is on PATH.
+    llama.cpp gets the 8080..8090 port scan so a busy default port doesn't hide
+    it; everything else is a single-URL HTTP probe. The resolved value lets the
+    UI show where llama.cpp was found (or which CLI a CLI-agent kind needs).
     """
+    cli = _CLI_AGENT_BINS.get(kind)
+    if cli is not None:
+        import shutil
+        return (shutil.which(cli) is not None, f"{cli} CLI")
     if kind == "llamacpp":
         found = discover_llamacpp_url(base_url)
         return (found is not None, found or base_url)

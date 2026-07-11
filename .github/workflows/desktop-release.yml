@@ -114,7 +114,7 @@ jobs:
         run: |
           python -m venv .venv-build
           .\.venv-build\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv-build\Scripts\python.exe -m pip install -e ".[web,pdf,index,build-desktop]"
+          .\.venv-build\Scripts\python.exe -m pip install -e ".[web,pdf,index,claude-agent,build-desktop]"
           .\scripts\build-sidecar.ps1
           .\desktop\src-tauri\binaries\evi-server\evi-server.exe --check
 
@@ -124,7 +124,7 @@ jobs:
         run: |
           python -m venv .venv-build
           ./.venv-build/bin/python -m pip install --upgrade pip
-          ./.venv-build/bin/python -m pip install -e ".[web,pdf,index,build-desktop]"
+          ./.venv-build/bin/python -m pip install -e ".[web,pdf,index,claude-agent,build-desktop]"
           chmod +x scripts/build-sidecar.sh
           ./scripts/build-sidecar.sh
           ./desktop/src-tauri/binaries/evi-server/evi-server --check

@@ -1238,9 +1238,19 @@ function renderBackendBanner(st) {
   // was the bug where the banner cleared but chats hit a dead backend.)
   if (cfg.reachable) { el.style.display = 'none'; return; }
 
+  // CLI-agent backends have no HTTP port — "not reachable" means their CLI
+  // isn't installed / on PATH, not that a server is down. Kind -> CLI binary.
+  const CLI_AGENT = { claude_agent:'claude', codex:'codex', gemini:'gemini', amp:'amp', qwen:'qwen', copilot:'copilot' };
   const live = (st.candidates || []).filter(function (c) { return c.reachable; });
   var html, actions = '', hint = '';
-  if (live.length) {
+  if (CLI_AGENT[cfg.backend]) {
+    // State A′ — a CLI-agent backend whose CLI isn't installed / on PATH.
+    const cli = CLI_AGENT[cfg.backend];
+    html = '<b>⚠ eVi is set to ' + cfg.backend + ', but its <code>' + cli + '</code> CLI isn\'t installed or on PATH.</b> ' +
+      'It signs in with the CLI\'s own subscription/login (no API key) — install it, run it once to log in, then Recheck.';
+    // Offer to switch to a running local backend as a fallback, if there is one.
+    if (live.length) actions = live.map(function (c) { return bkBtn('Use ' + c.kind + ' instead', 'use', c.kind); }).join('');
+  } else if (live.length) {
     // State B — a non-configured backend is running; offer to switch to it.
     html = '<b>⚠ eVi is set to ' + (cfg.backend || '?') + ' (' + (cfg.base_url || '?') +
       '), which isn\'t running</b> — but ' + live.map(function (c) { return c.kind; }).join(', ') +

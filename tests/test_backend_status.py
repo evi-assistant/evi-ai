@@ -57,6 +57,34 @@ def test_probe_candidate_other_uses_single_probe(monkeypatch):
     assert resolved == "http://localhost:11434/v1"
 
 
+def test_probe_candidate_cli_agent_checks_path_not_http(monkeypatch):
+    # CLI-agent backends have no HTTP endpoint — reachable iff the CLI is on PATH,
+    # and the HTTP probe must NOT be consulted for them.
+    calls = []
+    monkeypatch.setattr("shutil.which", lambda n: (calls.append(n), "/usr/bin/claude")[1])
+
+    def _no_http(_u):
+        raise AssertionError("HTTP probe must not run for CLI-agent kinds")
+
+    monkeypatch.setattr(server_mod, "_probe_backend", _no_http)
+    ok, resolved = server_mod._probe_candidate("claude_agent", "")
+    assert ok is True and resolved == "claude CLI"
+    assert calls == ["claude"]
+
+
+def test_probe_candidate_cli_agent_missing_cli(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _n: None)
+    ok, resolved = server_mod._probe_candidate("codex", "")
+    assert ok is False and resolved == "codex CLI"
+
+
+def test_probe_candidate_cli_agent_binary_map():
+    assert server_mod._CLI_AGENT_BINS == {
+        "claude_agent": "claude", "codex": "codex", "gemini": "gemini",
+        "amp": "amp", "qwen": "qwen", "copilot": "copilot",
+    }
+
+
 # --- /api/backend/status -------------------------------------------------
 
 

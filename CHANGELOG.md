@@ -5,6 +5,21 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.7] — 2026-07-11
+
+### Fixed
+- **CLI-agent backends no longer show a false "isn't running" warning.** The
+  backend health check probed for a reachable HTTP port — which the CLI-agent
+  backends (`claude_agent`/`codex`/`gemini`/`amp`/`qwen`/`copilot`) don't have — so
+  selecting one flagged it as down and offered to switch you back to Ollama. It now
+  checks whether that backend's CLI is on PATH instead, and the banner (only when
+  the CLI is genuinely missing) tells you to install and log in to that CLI rather
+  than pointing you at a local server.
+- **`claude_agent` now works in the packaged desktop app.** The Claude Agent SDK
+  (`claude-agent-sdk`) is bundled into the frozen sidecar, so the `claude_agent`
+  backend works in the desktop build too (it still needs the `claude` CLI installed
+  and logged in on the machine, as the other CLI-agent backends need their CLI).
+
 ## [1.0.6] — 2026-07-11
 
 ### Fixed
