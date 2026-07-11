@@ -5,6 +5,8 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-07-10
+
 ### Added
 - **Multiple model backends at once.** eVi now keeps a registry of backends
   (`~/.evi/backends.json`) — local (ollama / lmstudio / llamacpp) and online via
