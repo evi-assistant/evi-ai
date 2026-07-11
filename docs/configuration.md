@@ -462,6 +462,44 @@ Delegate a task to a trusted peer eVi (e.g. a GPU box):
 opt in with `[federation] serve = true`; it runs the task non-interactively
 (tools not auto-approved are denied).
 
+### A2A (Agent2Agent) — interop with any agent
+
+Federation is eVi's **private fast path** to your *own* eVis. **A2A**
+([a2a-protocol.org](https://a2a-protocol.org), a Linux Foundation standard) is the
+**interop path** — it lets eVi talk to *any* vendor's agent that speaks A2A, and
+lets such agents call eVi. No extra dependency (hand-rolled against the v0.3/v1.0
+wire shapes).
+
+**Discovery — always on, public.** eVi serves a spec-compliant **Agent Card** at
+`GET /.well-known/agent-card.json` (auth-exempt). It carries the standard fields
+(`protocolVersion`, `capabilities`, `skills`, `securitySchemes`) plus eVi's model
+capability flags under an `x-evi` extension, so capability-aware clients can route
+by modality.
+
+**Serve — opt in.** Set `a2a = true` under `[federation]` to expose the JSON-RPC
+endpoint `POST /a2a`:
+
+```toml
+[federation]
+a2a = true      # expose POST /a2a (off by default)
+```
+
+It implements `message/send`, `tasks/get`, and `tasks/cancel`, is **bearer-token
+gated** (same web token as the rest of the API), and runs each delegated task
+**non-interactively** — tools not already auto-approved are denied, exactly like
+`/api/federate`. Streaming (`message/stream`) and push notifications aren't
+implemented yet, so the card advertises `capabilities.streaming = false` and a
+compliant client falls back to blocking `message/send`.
+
+**Call out — the `delegate_a2a` tool.** eVi can delegate to any external A2A agent
+by its JSON-RPC URL:
+
+```
+delegate_a2a(url="https://some-agent.example/a2a", task="research X", token="…")
+```
+
+(category `federation`, off by default — enable the tool to let the model use it).
+
 ## Multi-user web — `~/.evi/users.json`
 
 Opt-in (`[web] multi_user = true`): each person logs in with their own revocable
