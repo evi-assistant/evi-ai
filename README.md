@@ -1,6 +1,7 @@
 # eVi — personal AI assistant
 
 [![PyPI](https://img.shields.io/pypi/v/evi-assistant.svg)](https://pypi.org/project/evi-assistant/)
+[![Downloads](https://static.pepy.tech/badge/evi-assistant)](https://pepy.tech/project/evi-assistant)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
