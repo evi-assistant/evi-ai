@@ -209,6 +209,14 @@ See [docs/development.md](docs/development.md) for architecture notes, and
 - **Soft-delete memory** sends "forgotten" entries to `~/.evi/memory/.attic/`
   so the dreaming engine can't permanently lose anything.
 
+## Code signing
+
+See the [Code signing policy](docs/code-signing.md) for how eVi's desktop
+installers are signed, who approves releases, and how to verify a download.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org).
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
