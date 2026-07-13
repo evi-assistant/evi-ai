@@ -5,6 +5,27 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-07-13
+
+### Fixed
+- **Settings / Model picker no longer stalls ~5s when a local backend is down.**
+  Opening Settings or the model picker enumerates every enabled backend's models
+  over HTTP; that path used the 120s chat timeout against `localhost` URLs and
+  skipped the fast socket pre-check, so a configured-but-not-running local backend
+  (e.g. LM Studio on :1234) stalled the panel for seconds on Windows' dual-stack
+  loopback (`::1` SYN-filtered → full connect timeout). Model listing now
+  fast-fails via a socket probe + `localhost`→127.0.0.1 normalisation — a down
+  backend returns empty in **~0.4s instead of ~5s**.
+
+### Added
+- **More settings surfaced in the Settings panel.** Config that was previously
+  `config.toml`/CLI-only is now editable in the web/desktop UI: `reasoning_effort:
+  off`, **fallback models**, **format-on-edit** / **check-on-edit**, **transcript
+  retention**, the **web-search backend** (ddg/searxng/ollama) + SearXNG URL,
+  **completion notifications** (sound / desktop toast / ntfy-webhook), the
+  `[ultracode]` **fan-out master toggles** (the per-backend fan-out flag no longer
+  does nothing without them), and the `[federation] a2a` interop-endpoint toggle.
+
 ## [1.0.10] — 2026-07-11
 
 ### Added
