@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-07-13
+
+### Added
+- **Desktop: "Automatically update the core" toggle.** The desktop app's
+  background core-update (the `evi-server` sidecar update channel) is now a
+  setting — **Settings → Desktop** — instead of env-var-only. It maps to a new
+  `[desktop] sidecar_auto_update` config key (default on); turn it off to pin the
+  core to the installed version. The `EVI_SIDECAR_UPDATE=0` env var still forces
+  it off. (The shell reads it at launch, so it takes effect with this release's
+  rebuilt desktop shell.)
+
 ## [1.0.11] — 2026-07-13
 
 ### Fixed

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # import package and the CLI command both stay `evi` — install with
 # `pip install evi-assistant`, then run `evi` and `import evi` as usual.
 name = "evi-assistant"
-version = "1.0.11"
+version = "1.0.12"
 description = "Local-first personal AI assistant — CLI, web, and desktop frontends over a shared agent core."
 requires-python = ">=3.13"
 readme = "README.md"
