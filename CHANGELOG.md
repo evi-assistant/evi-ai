@@ -5,6 +5,25 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-07-11
+
+### Added
+- **Desktop: sidecar update channel.** The desktop app can now update its frozen
+  Python core (`evi-server`) independently of the Tauri shell. On launch it
+  background-fetches a **minisign-signed** manifest and, if a newer,
+  ABI-compatible sidecar exists, downloads + verifies (minisign + sha256) + stages
+  it — applied on the **next launch**, with last-known-good rollback if it fails
+  `--check`. So core updates can arrive at PyPI cadence without a full 3-OS app
+  rebuild. Opt out with `EVI_SIDECAR_UPDATE=0`. (This release establishes the
+  channel; it's a no-op until a newer sidecar is published to it.)
+
+### Documentation
+- **A2A (Agent2Agent) documented.** Added a *Federation → A2A* section to
+  `docs/configuration.md` (the adapter itself shipped in 1.0.3): the public
+  agent-card, the `[federation] a2a = true` `POST /a2a` JSON-RPC endpoint, and the
+  `delegate_a2a` tool. Also recorded the OS code-signing research (Windows free via
+  SignPath Foundation; macOS notarization needs a paid Apple Developer ID).
+
 ## [1.0.9] — 2026-07-11
 
 ### Fixed
