@@ -50,6 +50,18 @@ def with_port(base_url: str, port: int) -> str:
     return f"{scheme}://{host}:{port}{path}"
 
 
+def normalize_localhost(base_url: str) -> str:
+    """Rewrite a ``localhost``/``::1`` host to 127.0.0.1, preserving scheme,
+    port, and path, so a connection skips Windows' dual-stack ``::1``-first
+    stall. Non-loopback hosts are returned unchanged.
+    """
+    u = urllib.parse.urlparse(base_url if "://" in base_url else "http://" + base_url)
+    if u.hostname in ("localhost", "::1"):
+        netloc = "127.0.0.1" + (f":{u.port}" if u.port else "")
+        u = u._replace(netloc=netloc)
+    return urllib.parse.urlunparse(u)
+
+
 def port_open(host: str, port: int, timeout: float = 0.4) -> bool:
     """Fast 'is anything listening here' check via a raw socket connect.
 
@@ -66,6 +78,42 @@ def port_open(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
     finally:
         sock.close()
+
+
+def fast_get(
+    url: str,
+    *,
+    headers: dict | None = None,
+    connect: float = 2.0,
+    read: float = 6.0,
+    port_timeout: float = 0.4,
+):
+    """GET `url` for cheap metadata (model lists), failing fast instead of
+    hanging when a backend is unreachable.
+
+    A loopback target is socket-probed first (``port_timeout``): on Windows a
+    connect to a closed local port is SYN-filtered and blocks for the full
+    timeout, so ``port_open`` bounds a down local backend to ~``port_timeout``
+    instead of the multi-second httpx connect. The host is also normalised to
+    127.0.0.1 (``localhost``/``::1``) to skip the dual-stack ``::1``-first stall
+    on the real request. Remote hosts skip the pre-probe and rely on the bounded
+    httpx connect timeout. Returns the ``httpx.Response`` or ``None`` on any
+    failure — never raises. Not for generation.
+    """
+    host, port = split_host_port(url)
+    if host == "127.0.0.1" and not port_open(host, port, port_timeout):
+        return None
+
+    import httpx
+
+    try:
+        return httpx.get(
+            normalize_localhost(url),
+            headers=headers,
+            timeout=httpx.Timeout(read, connect=connect),
+        )
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def is_openai_server(

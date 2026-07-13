@@ -62,6 +62,10 @@ def _patch_httpx(monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Reque
     monkeypatch.setattr(httpx, "post", _post)
     monkeypatch.setattr(httpx, "request", _request)
     monkeypatch.setattr(httpx, "stream", _StreamCtx)
+    # list_models() goes through portprobe.fast_get, which socket-probes a
+    # loopback port before the HTTP call. These tests mock the HTTP layer and
+    # don't run a real server, so treat the port as open (cf. test_portprobe.py).
+    monkeypatch.setattr("evi.portprobe.port_open", lambda *a, **k: True)
 
 
 # ---- factory dispatch ---------------------------------------------------

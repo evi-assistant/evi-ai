@@ -98,22 +98,22 @@ class Backend(ABC):
     def _list_via_openai_endpoint(self) -> list[ModelInfo]:
         """Hit `${base_url}/models` (the OpenAI standard) and translate.
 
-        Imported lazily so backends used in tests don't require httpx to be
-        installed (it's already a base dep, but the principle holds).
+        Goes through `portprobe.fast_get`, which fast-fails an unreachable local
+        backend instead of stalling on Windows' dual-stack loopback (a closed
+        `localhost` port would otherwise block the model picker / settings panel
+        for seconds). Never raises — an unreachable backend yields [].
         """
-        import httpx
+        from evi.portprobe import fast_get
 
         url = self.base_url.rstrip("/") + "/models"
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        r = fast_get(url, headers=headers)
+        if r is None or r.status_code != 200:
+            return []
         try:
-            r = httpx.get(
-                url,
-                headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else None,
-                timeout=self.request_timeout,
-            )
-            r.raise_for_status()
+            data = r.json().get("data", []) or []
         except Exception:
             return []
-        data = r.json().get("data", []) or []
         return [
             ModelInfo(
                 id=str(item.get("id") or item.get("name") or ""),

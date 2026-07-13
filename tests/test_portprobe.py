@@ -36,6 +36,41 @@ def test_with_port_preserves_scheme_and_path():
     assert pp.with_port("http://127.0.0.1:8080", 8081) == "http://127.0.0.1:8081"
 
 
+# --- normalize_localhost / fast_get --------------------------------------
+
+
+def test_normalize_localhost_rewrites_loopback_preserving_path():
+    assert pp.normalize_localhost("http://localhost:1234/v1") == "http://127.0.0.1:1234/v1"
+    assert pp.normalize_localhost("http://[::1]:11434/v1/models") == "http://127.0.0.1:11434/v1/models"
+    # non-loopback hosts are left untouched
+    assert pp.normalize_localhost("http://example.com:8000/v1") == "http://example.com:8000/v1"
+
+
+def test_fast_get_returns_none_when_loopback_port_closed(monkeypatch):
+    # A down local backend must fast-fail on the socket probe, never reaching
+    # httpx (this is the ~5s Settings/Model stall regression guard).
+    monkeypatch.setattr(pp, "port_open", lambda *a, **k: False)
+
+    def boom(*a, **k):
+        raise AssertionError("httpx.get must not run for a closed loopback port")
+
+    monkeypatch.setattr("httpx.get", boom)
+    assert pp.fast_get("http://localhost:1234/v1/models") is None
+
+
+def test_fast_get_normalizes_localhost_before_request(monkeypatch):
+    monkeypatch.setattr(pp, "port_open", lambda *a, **k: True)
+    seen = {}
+
+    def fake_get(url, **k):
+        seen["url"] = url
+        return _Resp(200, {"data": []})
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    pp.fast_get("http://localhost:1234/v1/models")
+    assert seen["url"] == "http://127.0.0.1:1234/v1/models"
+
+
 # --- is_openai_server ----------------------------------------------------
 
 

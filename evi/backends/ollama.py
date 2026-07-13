@@ -45,17 +45,19 @@ class OllamaBackend(Backend):
         return True
 
     def list_models(self) -> list[ModelInfo]:
-        import httpx
+        from evi.portprobe import fast_get
 
+        # fast_get avoids the Windows dual-stack loopback stall when Ollama
+        # isn't running (see portprobe); returns None instead of blocking.
+        r = fast_get(f"{self.native_base}/api/tags")
+        if r is None or r.status_code != 200:
+            return []
         try:
-            r = httpx.get(
-                f"{self.native_base}/api/tags", timeout=self.request_timeout
-            )
-            r.raise_for_status()
+            models = r.json().get("models", []) or []
         except Exception:
             return []
         out: list[ModelInfo] = []
-        for entry in r.json().get("models", []) or []:
+        for entry in models:
             details = entry.get("details") or {}
             out.append(
                 ModelInfo(
