@@ -2436,6 +2436,10 @@ resetBtn.addEventListener('click', async () => {
       { type:'bool', section:'ultracode', key:'cheap_fanout', label:'Cheap fan-out (use the fast model)',
         help:'Run the solve stage on the [llm] fast model instead of fanning out across backends.' },
     ]},
+    { id:'desktop', title:'Desktop', blurb:'Settings for the desktop app.', desktopOnly:true, fields:[
+      { type:'bool', section:'desktop', key:'sidecar_auto_update', label:'Automatically update the core',
+        help:'Keep the app\'s bundled Python core (evi-server) up to date in the background from the signed sidecar channel, applied on next launch. Turn off to pin the core to the installed version.' },
+    ]},
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
@@ -2480,6 +2484,7 @@ resetBtn.addEventListener('click', async () => {
   function renderNav() {
     navEl.innerHTML = '';
     SCHEMA.forEach(sec => {
+      if (sec.desktopOnly && !isDesktop()) return;  // hide desktop-shell settings in the browser
       const b = document.createElement('button');
       b.textContent = sec.title;
       b.className = sec.id === activeSection ? 'active' : '';

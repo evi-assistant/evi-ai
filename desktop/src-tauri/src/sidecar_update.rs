@@ -259,13 +259,33 @@ fn sidecar_selfcheck(bin: &Path) -> bool {
     matches!(cmd.status(), Ok(s) if s.success())
 }
 
+/// Read `[desktop] sidecar_auto_update` from `<evi_home>/config.toml`. Defaults
+/// to `true` — an absent file / section / key means auto-update is on. The web
+/// UI writes this key; the shell only reads it (like `federation.bind_lan`).
+fn config_auto_update_enabled(evi_home: &Path) -> bool {
+    let text = match std::fs::read_to_string(evi_home.join("config.toml")) {
+        Ok(t) => t,
+        Err(_) => return true,
+    };
+    text.parse::<toml::Value>()
+        .ok()
+        .and_then(|v| {
+            v.get("desktop")
+                .and_then(|d| d.get("sidecar_auto_update"))
+                .and_then(|b| b.as_bool())
+        })
+        .unwrap_or(true)
+}
+
 /// Kick off a background sidecar-update check. Never blocks launch; opt out with
-/// `EVI_SIDECAR_UPDATE=0`. `bundled_version` is the app/bundled sidecar version.
+/// the `EVI_SIDECAR_UPDATE=0` env var (forces off) or the `[desktop]
+/// sidecar_auto_update = false` setting. `bundled_version` is the app/bundled
+/// sidecar version.
 pub fn spawn_check(evi_home: PathBuf, bundled_version: String) {
-    if std::env::var("EVI_SIDECAR_UPDATE")
+    let env_off = std::env::var("EVI_SIDECAR_UPDATE")
         .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    if env_off || !config_auto_update_enabled(&evi_home) {
         return;
     }
     std::thread::spawn(move || {
@@ -312,5 +332,27 @@ mod tests {
     #[test]
     fn bad_signature_rejected() {
         assert!(!verify_signature(b"data", "not a real minisig"));
+    }
+
+    #[test]
+    fn config_auto_update_default_and_override() {
+        let base = std::env::temp_dir().join(format!("evi-cfg-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&base);
+        let cfg = base.join("config.toml");
+
+        // No file → default on.
+        let _ = std::fs::remove_file(&cfg);
+        assert!(config_auto_update_enabled(&base));
+        // Explicit false → off.
+        std::fs::write(&cfg, "[desktop]\nsidecar_auto_update = false\n").unwrap();
+        assert!(!config_auto_update_enabled(&base));
+        // Explicit true → on.
+        std::fs::write(&cfg, "[desktop]\nsidecar_auto_update = true\n").unwrap();
+        assert!(config_auto_update_enabled(&base));
+        // Unrelated config (section absent) → default on.
+        std::fs::write(&cfg, "[llm]\nbackend = \"ollama\"\n").unwrap();
+        assert!(config_auto_update_enabled(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

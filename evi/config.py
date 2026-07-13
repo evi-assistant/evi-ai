@@ -474,6 +474,18 @@ class NotifySettings:
 
 
 @dataclass
+class DesktopSettings:
+    """Desktop-app (Tauri shell) preferences. The shell reads these from
+    config.toml at launch; the web UI edits them like any other setting."""
+
+    # Background-update the frozen Python core (the `evi-server` sidecar) from
+    # the signed sidecar-latest channel, applied on next launch. Off pins the
+    # core to the installed version. The `EVI_SIDECAR_UPDATE=0` env var still
+    # forces it off regardless of this setting.
+    sidecar_auto_update: bool = True
+
+
+@dataclass
 class Config:
     llm: LLMSettings = field(default_factory=LLMSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
@@ -492,6 +504,7 @@ class Config:
     worktree: WorktreeSettings = field(default_factory=WorktreeSettings)
     models: SpecialtyModels = field(default_factory=SpecialtyModels)
     notify: NotifySettings = field(default_factory=NotifySettings)
+    desktop: DesktopSettings = field(default_factory=DesktopSettings)
 
     @classmethod
     def load(cls) -> "Config":
