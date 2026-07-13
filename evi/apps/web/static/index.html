@@ -2350,10 +2350,13 @@ resetBtn.addEventListener('click', async () => {
       { type:'int', section:'llm', key:'max_tokens', label:'Max tokens' },
       { type:'int', section:'llm', key:'context_size', label:'Context size' },
       { type:'select', section:'llm', key:'reasoning_effort', label:'Reasoning effort',
-        options:['low','medium','high','max'] },
+        options:['off','low','medium','high','max'],
+        help:'off fully disables extended thinking on reasoning models.' },
       { type:'bool', section:'llm', key:'fast_mode', label:'Fast mode' },
       { type:'model', section:'llm', key:'fast_model', label:'Fast model',
         help:'Smaller model used when fast mode is on; pick Custom… to type one.' },
+      { type:'lines', section:'llm', key:'fallback_models', label:'Fallback models',
+        help:'On a retryable backend error, retry the turn against each of these model ids in order (one per line).' },
     ]},
     { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
       fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) }))
@@ -2363,6 +2366,14 @@ resetBtn.addEventListener('click', async () => {
           { type:'lines', section:'tools', key:'mcp_allow', label:'MCP server allowlist',
             help:'If non-empty, only these mcp.json server names load (one per line). Empty = all enabled servers.' },
         ]) },
+    { id:'editing', title:'Editing & data', blurb:'Code-edit assists and stored-transcript retention.', fields:[
+      { type:'bool', section:'tools', key:'format_on_edit', label:'Format on edit',
+        help:'Auto-run an installed formatter (ruff/black/prettier/gofmt/rustfmt) after write/edit/apply_patch. No-op if none installed.' },
+      { type:'bool', section:'tools', key:'check_on_edit', label:'Check on edit',
+        help:'Run the linter after a write and fold any diagnostics into the tool result (cheap LSP-lite feedback).' },
+      { type:'int', section:'tools', key:'cleanup_period_days', label:'Transcript retention (days)',
+        help:'Delete stored sessions older than N days on startup. 0 = keep forever.' },
+    ]},
     { id:'permissions', title:'Permissions', blurb:'How tool calls are approved.',
       applies:'new-chat', fields:[
         { type:'select', section:'auto', key:'mode', label:'Permission mode',
@@ -2386,12 +2397,19 @@ resetBtn.addEventListener('click', async () => {
       { type:'text', section:'obsidian', key:'vault_path', label:'Obsidian vault path' },
       { type:'text', section:'google', key:'client_secrets_path', label:'Google client secrets (path)' },
       { type:'text', section:'microsoft', key:'client_id', label:'Microsoft client ID' },
+      { type:'select', section:'tools', key:'search_backend', label:'Web search backend',
+        options:['ddg','searxng','ollama'],
+        help:'ddg: DuckDuckGo, keyless · searxng: self-hosted (set the URL below) · ollama: needs OLLAMA_API_KEY.' },
+      { type:'text', section:'tools', key:'searxng_url', label:'SearXNG URL',
+        help:'Your SearXNG instance, e.g. http://localhost:8888 (only used when the backend is searxng).' },
     ]},
     { id:'server', title:'Server', blurb:'Web access control.', fields:[
       { type:'secret', section:'web', key:'auth_token', label:'Access token',
         help:'When set, the web UI requires this token. Blank = open localhost access.' },
       { type:'bool', section:'web', key:'multi_user', label:'Multi-user logins',
         help:'Opt-in: each user logs in with their own token from ~/.evi/users.json (manage with `evi web-config users`). Shared workspace.' },
+      { type:'bool', section:'federation', key:'a2a', label:'A2A interop endpoint',
+        help:'Expose POST /a2a so any standards-compliant external agent (not just trusted eVi peers) can delegate a task here. Broader surface than eVi-to-eVi — set an access token above.' },
     ]},
     { id:'voice', title:'Voice', blurb:'Text-to-speech engine for spoken replies.', fields:[
       { type:'select', section:'voice', key:'engine', label:'TTS engine',
@@ -2402,6 +2420,21 @@ resetBtn.addEventListener('click', async () => {
       { type:'text', section:'voice', key:'clone_sample', label:'Clone sample (WAV path)',
         help:'Reference audio for the cloning engines (coqui / f5).' },
       { type:'text', section:'voice', key:'language', label:'Language', help:'ISO code, e.g. en.' },
+    ]},
+    { id:'notifications', title:'Notifications', blurb:'Pings when a turn finishes so you can walk away from a long run.', fields:[
+      { type:'bool', section:'notify', key:'enabled', label:'Completion notifications',
+        help:'Notify when the assistant finishes a turn.' },
+      { type:'bool', section:'notify', key:'sound', label:'Sound', help:'Play a beep on completion.' },
+      { type:'bool', section:'notify', key:'desktop', label:'Desktop toast',
+        help:'Native OS notification on completion.' },
+      { type:'text', section:'notify', key:'url', label:'ntfy / webhook URL',
+        help:'Optional. POST completion to an ntfy topic or webhook so a remote/headless turn can reach your phone.' },
+    ]},
+    { id:'multiagent', title:'Multi-agent', blurb:'How ultracode / workflows spread work across backends.', fields:[
+      { type:'bool', section:'ultracode', key:'fanout', label:'Spread fan-out across flagged backends',
+        help:'Run ultracode SOLVER angles across every backend ticked "fan-out" in Model & Backend (multi-provider). Without this, the per-backend fan-out flags do nothing.' },
+      { type:'bool', section:'ultracode', key:'cheap_fanout', label:'Cheap fan-out (use the fast model)',
+        help:'Run the solve stage on the [llm] fast model instead of fanning out across backends.' },
     ]},
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
@@ -2542,7 +2575,7 @@ resetBtn.addEventListener('click', async () => {
     fetch('/api/backends').then(r => r.json()).then(d => {
       const active = d.active_backend || '';
       let html = '<div class="set-group-title">Backends</div>';
-      html += '<div class="help">Providers eVi can use. The model picker lists every enabled backend\'s models, tagged by source. Tick <b>fan-out</b> to let a backend\'s models serve delegated subagents (ultracode / workflows).</div>';
+      html += '<div class="help">Providers eVi can use. The model picker lists every enabled backend\'s models, tagged by source. Tick <b>fan-out</b> to let a backend\'s models serve delegated subagents — then turn on <b>Multi-agent → Spread fan-out</b> to activate it.</div>';
       if (!(d.backends || []).length) {
         html += '<div class="sec-blurb">No backends registered — the active <code>[llm]</code> backend is used. Add one below.</div>';
       } else {
