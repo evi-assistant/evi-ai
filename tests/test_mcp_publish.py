@@ -27,6 +27,37 @@ def _fake_tool(name="echo"):
     )
 
 
+def _shell_tool():
+    return Tool(
+        name="run_command",
+        description="run a shell command",
+        parameters={"type": "object", "properties": {"command": {"type": "string"}}},
+        func=lambda command="", cwd="", timeout=60: f"ran {command}",
+        category="shell",
+    )
+
+
+def test_dispatch_blocks_destructive_shell_command(monkeypatch):
+    # MCP has no interactive prompt → a matched destructive command is refused
+    # (headless fail-safe), so it never reaches tool.call.
+    monkeypatch.setattr("evi.config.Config.load", classmethod(lambda cls: cls()))
+    by_name = {"run_command": _shell_tool()}
+    blocked = publish.dispatch(by_name, "run_command", {"command": "rm -rf ~"})
+    assert "destructive-command guard" in blocked
+    # a benign command is not guard-blocked (the tool runs)
+    ok = publish.dispatch(by_name, "run_command", {"command": "echo hi"})
+    assert "destructive-command guard" not in ok and "ran echo hi" in ok
+
+
+def test_dispatch_guard_respects_disable(monkeypatch):
+    cfg = __import__("evi.config", fromlist=["Config"]).Config()
+    cfg.auto.block_destructive = False
+    monkeypatch.setattr("evi.config.Config.load", classmethod(lambda cls: cfg))
+    by_name = {"run_command": _shell_tool()}
+    out = publish.dispatch(by_name, "run_command", {"command": "rm -rf ~"})
+    assert "destructive-command guard" not in out  # guard off → tool runs
+
+
 # --- tool selection ------------------------------------------------------
 
 

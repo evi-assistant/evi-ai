@@ -645,9 +645,102 @@ class Agent:
     def _is_pre_approved(self, tool: Tool) -> bool:
         return self.auto_all or tool.category in self.auto_approve_categories
 
+    # Tools that execute a shell/OS command, and the arg field holding it. The
+    # destructive guard inspects these (not just category=="shell") so a
+    # command-runner like `monitor` (category "code", runs its `target` with
+    # shell=True) can't slip a destructive command past the guard. `run_python`
+    # is intentionally excluded — arbitrary Python is a different, broader threat
+    # surface a shell-command regex can't secure (gated by its own toggle).
+    _SHELL_EXEC_TOOLS = {"run_command": "command", "monitor": "target"}
+
+    def _guarded_command(self, tool: Tool, args_json: str) -> str | None:
+        """The shell command a guarded tool would execute, or None if `tool`
+        isn't a shell-executing call this invocation."""
+        field = self._SHELL_EXEC_TOOLS.get(getattr(tool, "name", ""))
+        if field is None:
+            if getattr(tool, "category", "") != "shell":
+                return None
+            field = "command"  # any future category-"shell" tool
+        import json
+
+        try:
+            data = json.loads(args_json) if isinstance(args_json, str) else dict(args_json)
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(data, dict):
+            return None
+        if getattr(tool, "name", "") == "monitor" and data.get("kind") != "command":
+            return None  # monitor is tailing a file, not running a command
+        val = data.get(field)
+        return val if isinstance(val, str) else None
+
+    def _destructive_decision(self, tool: Tool, args_json: str) -> tuple[str, str] | None:
+        """Guard curated destructive shell commands so they can never run
+        silently. Returns ``(decision, reason)`` — ``"ask"`` when a permission
+        UI exists (require confirmation) or ``"deny"`` when there's none
+        (headless fail-safe) — or ``None`` when the guard doesn't apply.
+
+        Sits above yolo / accept_edits / auto-approve / `/auto on`. An explicit
+        *specific* user allow-rule (matching the tool by name OR category and
+        carrying a non-trivial arg-glob) is honoured as intent and clears the
+        guard; a broad ``allow shell`` / ``allow shell *`` does NOT, so a
+        wildcard can't silently disable the safety net.
+        """
+        auto = getattr(self.config, "auto", None)
+        if not getattr(auto, "block_destructive", True):
+            return None
+        cmd = self._guarded_command(tool, args_json)
+        if cmd is None:
+            return None
+        from evi.shell_guard import destructive_hit
+
+        hit = destructive_hit(
+            cmd,
+            disable_rules=getattr(auto, "destructive_disable_rules", []) or [],
+            allow=getattr(auto, "destructive_allow", []) or [],
+        )
+        if hit is None:
+            return None
+        from evi.permissions import _arg_values, _rule_action
+
+        values = _arg_values(args_json)
+        cat = getattr(tool, "category", "")
+        for rule in getattr(auto, "rules", []) or []:
+            parts = rule.split(None, 2)
+            act = _rule_action(rule, tool.name, values)
+            if act is None and cat:
+                act = _rule_action(rule, cat, values)  # rules keyed on category too
+            if act == "deny":
+                return ("deny", hit.reason)
+            # A non-trivial arg-glob (not just "*"/"?") is a real, specific intent.
+            if act == "allow" and len(parts) > 2 and parts[2].strip().strip("*? "):
+                return None
+        has_ui = (
+            self.permission_callback is not None
+            or getattr(self, "permission_batch_callback", None) is not None
+        )
+        return ("ask" if has_ui else "deny", hit.reason)
+
+    def _denial_message(self, tool: Tool | None, name: str, args_json: str) -> str:
+        """Tool-result text for a blocked call. When the destructive-command
+        guard is the reason, tell the model *why* and to prefer a safer path
+        (mirrors Claude Code's denial feedback) instead of a bare 'denied'."""
+        if tool is not None:
+            guard = self._destructive_decision(tool, args_json)
+            if guard is not None:
+                return (
+                    f"BLOCKED by the destructive-command guard: {guard[1]}. Not run — "
+                    "find a safer approach; only re-issue if the user explicitly "
+                    "asked for this exact command."
+                )
+        return f"PERMISSION DENIED: user did not approve {name}({args_json})"
+
     def _permission_decision(self, tool: Tool, args_json: str) -> str:
         """'allow' | 'deny' | 'ask' for a tool call, via the permission policy
         (mode + rules + auto-approve categories). `/auto on` forces allow."""
+        guard = self._destructive_decision(tool, args_json)
+        if guard is not None:
+            return guard[0]  # destructive guard overrides auto-approve / yolo / /auto
         if self.auto_all:
             return "allow"
         from evi.permissions import decide
@@ -668,6 +761,17 @@ class Agent:
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
         """Return True iff the tool call is allowed to proceed."""
+        guard = self._destructive_decision(tool, args_json)
+        if guard is not None:
+            if guard[0] == "deny":
+                return False  # headless / user-denied destructive command → block
+            # 'ask': require confirmation — bypass the pre-approval short-circuit.
+            if self.permission_callback is None:
+                return False
+            try:
+                return bool(self.permission_callback(tool.name, args_json, tool.category))
+            except Exception:
+                return False
         if self._is_pre_approved(tool):
             return True
         if self.permission_callback is None:
@@ -1540,10 +1644,7 @@ class Agent:
                         f"ERROR: tool '{m['name']}' is not allowed by the active skill's scope"
                     )
                 elif not m["perm"]:
-                    m["blocked"] = (
-                        f"PERMISSION DENIED: user did not approve "
-                        f"{m['name']}({m['args']})"
-                    )
+                    m["blocked"] = self._denial_message(m.get("tool"), m["name"], m["args"])
                 else:
                     m["blocked"] = self._run_before_hooks(m["name"], m["args"])
 
@@ -1673,7 +1774,7 @@ class Agent:
         if tool is None:
             return f"ERROR: unknown tool '{name}'"
         if not self._ask_permission(tool, args_json):
-            return f"PERMISSION DENIED: user did not approve {name}({args_json})"
+            return self._denial_message(tool, name, args_json)
         return self._run_before_hooks(name, args_json)
 
     def _gate_permissions(self, calls_meta: list[dict[str, Any]]) -> None:

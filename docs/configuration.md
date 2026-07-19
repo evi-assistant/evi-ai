@@ -51,7 +51,25 @@ transcripts = true     # write session JSONL for dreaming
 [auto]
 # Categories listed here run without prompting. `computer` is never here.
 auto_approve = ["fs", "code", "memory", "skills", "image"]
+
+# Curated destructive-command guard (on by default). Commands like `rm -rf ~`,
+# `git reset --hard`, `git push --force`, disk formats, `curl | sh`, secret
+# exfil, or `terraform destroy` can never run SILENTLY: a match forces a
+# confirmation prompt, and is DENIED when there's no UI to confirm with
+# (headless / scheduler / MCP). Overrides yolo, accept_edits and auto_approve.
+block_destructive = true
+# fnmatch globs matched against the WHOLE command that exempt it from the guard.
+destructive_allow = ["*--force-with-lease*"]
+# Builtin rule ids to silence without disabling the guard (see evi/shell_guard.py).
+destructive_disable_rules = ["git-commit-amend"]
 ```
+
+Everyday commands are deliberately *not* flagged — `rm -rf ./build`, `rm -rf
+node_modules`, `git reset --soft`, `git branch -d`, `chmod 644`, `terraform
+plan`, `apt remove <app>` all run as normal. Only genuinely destructive,
+hard-to-reverse forms match. An explicit, *specific* allow rule (one carrying an
+arg-glob, e.g. `allow shell *--force*`) is honoured as intent and clears the
+guard; a broad `allow shell` / `allow shell *` does not.
 
 ### `evi config show` prints the resolved config (with profile overlay).
 ### `evi config path` prints the file path.

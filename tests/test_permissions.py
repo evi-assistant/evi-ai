@@ -142,3 +142,97 @@ def test_agent_uses_trusted_dirs(tmp_path):
     args = json.dumps({"path": str(tmp_path / "x.py"), "content": "y"})
     tool = _tool(name="write_file", category="fs")
     assert a._permission_decision(tool, args) == "allow"
+
+
+# --- destructive-command guard integration ------------------------------
+
+_DESTRUCTIVE = '{"command": "git push --force origin main"}'
+_SAFE = '{"command": "ls -la"}'
+
+
+def _agent_cb(auto: AutoSettings, cb) -> Agent:
+    cfg = Config()
+    cfg.auto = auto
+    return Agent(client=object(), config=cfg, tools=[], permission_callback=cb)
+
+
+def test_guard_headless_denies_even_under_yolo():
+    # No permission UI (scheduler/web-without-prompt): a destructive shell
+    # command is DENIED even in yolo, while a safe command is still allowed.
+    a = _agent(AutoSettings(mode="yolo"))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+    assert a._permission_decision(_tool(), _SAFE) == "allow"
+
+
+def test_guard_prompts_when_ui_exists():
+    seen = []
+    a = _agent_cb(AutoSettings(mode="yolo"), lambda n, args, cat: seen.append(args) or False)
+    # With a UI, destructive → "ask" (must confirm), never silent-allow.
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "ask"
+    # _ask_permission routes it to the callback even though yolo/pre-approval
+    # would otherwise short-circuit.
+    assert a._ask_permission(_tool(), _DESTRUCTIVE) is False
+    assert seen, "callback must be consulted for a destructive command"
+
+
+def test_guard_overrides_auto_approve_and_auto_all():
+    a = _agent(AutoSettings(mode="ask", auto_approve=["shell"]))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+    a.enable_auto_all()  # `/auto on` still can't run it silently
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+    assert a._ask_permission(_tool(), _DESTRUCTIVE) is False
+
+
+def test_guard_can_be_disabled():
+    a = _agent(AutoSettings(mode="yolo", block_destructive=False))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
+
+
+def test_guard_allow_exemption():
+    a = _agent(AutoSettings(mode="yolo", destructive_allow=["*--force-with-lease*"]))
+    args = '{"command": "git push --force-with-lease origin main"}'
+    assert a._permission_decision(_tool(), args) == "allow"
+
+
+def test_guard_specific_allow_rule_clears_but_broad_does_not():
+    specific = _agent(AutoSettings(mode="yolo", rules=["allow run_shell *--force*"]))
+    assert specific._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
+    broad = _agent(AutoSettings(mode="yolo", rules=["allow run_shell"]))
+    assert broad._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+
+
+def test_guard_only_applies_to_shell_category():
+    a = _agent(AutoSettings(mode="yolo"))
+    fs = _tool(name="write_file", category="fs")
+    # a non-shell tool carrying scary-looking text is unaffected
+    assert a._permission_decision(fs, '{"path": "git push --force"}') == "allow"
+
+
+def test_guard_disable_rules():
+    a = _agent(AutoSettings(mode="yolo", destructive_disable_rules=["git-force-push"]))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
+
+
+def test_guard_covers_monitor_command_tool():
+    # `monitor` (category "code") runs its `target` as a shell command; the guard
+    # must cover it too, not only category "shell".
+    a = _agent(AutoSettings(mode="yolo"))
+    mon = _tool(name="monitor", category="code")
+    assert a._permission_decision(mon, '{"target": "rm -rf ~", "kind": "command"}') == "deny"
+    # tailing a file (kind != command) is not a shell command → unaffected
+    assert a._permission_decision(mon, '{"target": "app.log", "kind": "file"}') == "allow"
+
+
+def test_guard_broad_star_glob_rule_does_not_clear():
+    # `allow run_shell *` is a wildcard, not a specific intent → must not disable.
+    a = _agent(AutoSettings(mode="yolo", rules=["allow run_shell *"]))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+
+
+def test_guard_rule_may_key_on_category():
+    # docs tell users to write rules against the category token ("shell"); a
+    # specific such allow-rule clears the guard for the run_shell tool.
+    a = _agent(AutoSettings(mode="yolo", rules=["allow shell *--force*"]))
+    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
+    b = _agent(AutoSettings(mode="yolo", rules=["allow shell"]))  # broad → does not clear
+    assert b._permission_decision(_tool(), _DESTRUCTIVE) == "deny"

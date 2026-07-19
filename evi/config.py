@@ -409,6 +409,18 @@ class AutoSettings:
     # turn through the ultracode pipeline (the eVi analogue of Claude Code's
     # `/effort ultracode`). Off by default; cleared by the other effort levels.
     ultracode: bool = False
+    # Curated destructive-shell-command guard (evi/shell_guard.py). A matched
+    # command (rm -rf ~, git reset --hard, disk format, force-push, secret
+    # exfil, IaC destroy, …) can never run silently: it forces a confirmation
+    # prompt when a UI exists and is DENIED when there's none (headless /
+    # scheduler). Overrides yolo / accept_edits / auto-approve. On by default.
+    block_destructive: bool = True
+    # fnmatch globs matched against the whole command that EXEMPT it from the
+    # guard, e.g. ["*--force-with-lease*", "git stash drop"].
+    destructive_allow: list[str] = field(default_factory=list)
+    # Builtin rule ids to silence without disabling the whole guard, e.g.
+    # ["git-commit-amend", "system-power"]. See evi/shell_guard.RULE_IDS.
+    destructive_disable_rules: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -77,7 +77,49 @@ def dispatch(by_name: dict[str, Tool], name: str, arguments: dict | None) -> str
     tool = by_name.get(name)
     if tool is None:
         return f"ERROR: unknown tool {name!r}"
+    blocked = _destructive_block(tool, arguments or {})
+    if blocked is not None:
+        return blocked
     return tool.call(arguments or {})
+
+
+# MCP has no interactive permission prompt, so a matched destructive command is
+# denied here (headless fail-safe) — the same posture the agent takes when it has
+# no permission callback. Honours the [auto] block_destructive/allow/disable config.
+_MCP_SHELL_TOOLS = {"run_command": "command", "monitor": "target"}
+
+
+def _destructive_block(tool: Tool, arguments: dict) -> str | None:
+    field = _MCP_SHELL_TOOLS.get(tool.name)
+    if field is None:
+        if getattr(tool, "category", "") != "shell":
+            return None
+        field = "command"
+    if tool.name == "monitor" and arguments.get("kind") != "command":
+        return None
+    cmd = arguments.get(field)
+    if not isinstance(cmd, str):
+        return None
+    from evi.config import Config
+    from evi.shell_guard import destructive_hit
+
+    try:
+        auto = Config.load().auto
+    except Exception:  # noqa: BLE001
+        return None
+    if not getattr(auto, "block_destructive", True):
+        return None
+    hit = destructive_hit(
+        cmd,
+        disable_rules=getattr(auto, "destructive_disable_rules", []) or [],
+        allow=getattr(auto, "destructive_allow", []) or [],
+    )
+    if hit is None:
+        return None
+    return (
+        f"BLOCKED by the destructive-command guard: {hit.reason}. "
+        "Not run (no interactive approval available over MCP)."
+    )
 
 
 # --- resources (long-term memory) ----------------------------------------

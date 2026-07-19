@@ -10,6 +10,11 @@ Safety posture (matches eVi's existing stance):
 - `category="shell"` is NOT in the default auto-approve set, so each call goes
   through the permission policy (mode + rules + hard_deny). A user can add a
   `hard_deny` rule like ``shell rm -rf*`` to block dangerous commands outright.
+- A curated **destructive-command guard** (`evi/shell_guard.py`, on by default)
+  is a second gate: commands like ``rm -rf ~``, ``git reset --hard``, disk
+  formats, force-pushes, or secret-exfil can never run silently — they force a
+  confirmation prompt (or are denied when there's no UI). Tune via `[auto]`
+  `block_destructive` / `destructive_allow` / `destructive_disable_rules`.
 - When `[tools] sandbox` is on AND a sandboxer (bwrap / sandbox-exec) is
   present, the command runs sandboxed (read-only FS except the workdir, no
   network), same as `run_python`. Falls back to unsandboxed with a note.
