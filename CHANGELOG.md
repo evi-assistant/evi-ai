@@ -5,6 +5,28 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.13] — 2026-07-13
+
+### Added
+- **Destructive-command guard for the shell tool — on by default.** eVi shipped
+  no curated protection for destructive shell commands; a fresh install was
+  unguarded until you hand-wrote `hard_deny` globs. A new deterministic gate
+  (`evi/shell_guard.py`, 54 cross-platform rules covering bash/zsh, PowerShell
+  and cmd) means commands like `rm -rf ~`, `git reset --hard`, `git push
+  --force`, disk formats, `curl | sh`, credential exfil, `terraform destroy` or
+  clearing shadow copies **can never run silently**: a match forces a
+  confirmation prompt, and is **denied** when there is no UI to confirm with
+  (headless / scheduler / MCP). It sits above `yolo`, `accept_edits`,
+  auto-approve and `/auto on`, and covers every shell-executing tool.
+  Everyday commands are deliberately untouched — `rm -rf ./build`, `rm -rf
+  node_modules`, `git reset --soft`, `git branch -d`, `chmod 644`, `terraform
+  plan`, `apt remove <app>` and `cat id_rsa.pub` all run as normal.
+  Tune with `[auto] block_destructive` (default `true`), `destructive_allow`
+  (whole-command globs, e.g. `"*--force-with-lease*"`) and
+  `destructive_disable_rules` (per-rule opt-out). An explicit *specific* allow
+  rule (e.g. `allow shell *--force*`) clears the guard; a broad `allow shell`
+  does not. See *Configuration → `[auto]`*.
+
 ## [1.0.12] — 2026-07-13
 
 ### Added
