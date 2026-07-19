@@ -191,7 +191,15 @@ def load_hooks(path: Path | None = None) -> "HookRegistry":
 
     Missing files = empty registry, not an error. Plugin hooks are appended
     after the user's own so user rules are evaluated first.
+
+    Safe mode returns an empty registry — gating here rather than at each call
+    site covers the SDK and `evi review`, which build hooks without going
+    through the CLI's flag handling.
     """
+    from evi import safemode
+
+    if safemode.enabled():
+        return HookRegistry(hooks=[])
     hooks = _parse_hook_file(path or HOOKS_CONFIG_PATH)
     try:
         from evi.plugins import plugin_dirs

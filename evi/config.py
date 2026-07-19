@@ -526,20 +526,29 @@ class Config:
             return cfg
         with CONFIG_PATH.open("rb") as f:
             data = tomllib.load(f)
-        # Profile overlay (cheap when none active — returns {}).
-        # Imported lazily to avoid the circular import at module load.
-        from evi.profiles import load_profile_overlay, merge_overlay
+        # Safe mode means STOCK config: skip both the profile overlay and the
+        # per-project `.evi.toml`. Either can re-introduce exactly what a clean
+        # boot is trying to rule out (a pinned model, an output_style pointing at
+        # a broken style file, tool toggles, permission rules), so gating here —
+        # inside Config.load — covers every entrypoint at once (CLI, web/desktop,
+        # subagents, dream, scheduler).
+        from evi import safemode
 
-        overlay = load_profile_overlay()
-        if overlay:
-            data = merge_overlay(data, overlay)
-        # Per-project `.evi.toml` (walked up from cwd) wins over user + profile,
-        # so a repo can pin its own model / tools / permissions.
-        from evi.project import load_project_config_overlay
+        if not safemode.enabled():
+            # Profile overlay (cheap when none active — returns {}).
+            # Imported lazily to avoid the circular import at module load.
+            from evi.profiles import load_profile_overlay, merge_overlay
 
-        project_overlay = load_project_config_overlay()
-        if project_overlay:
-            data = merge_overlay(data, project_overlay)
+            overlay = load_profile_overlay()
+            if overlay:
+                data = merge_overlay(data, overlay)
+            # Per-project `.evi.toml` (walked up from cwd) wins over user + profile,
+            # so a repo can pin its own model / tools / permissions.
+            from evi.project import load_project_config_overlay
+
+            project_overlay = load_project_config_overlay()
+            if project_overlay:
+                data = merge_overlay(data, project_overlay)
         return cls(
             llm=LLMSettings(**data.get("llm", {})),
             comfy=ComfySettings(**data.get("comfy", {})),

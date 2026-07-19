@@ -106,7 +106,15 @@ def load_project_context(start: Path | None = None) -> ProjectContext | None:
 
     A single file is returned verbatim (backwards compatible). Multiple levels
     are concatenated with per-file headers, outermost first, capped at
-    `_MAX_BYTES` total — partial context beats none."""
+    `_MAX_BYTES` total — partial context beats none.
+
+    Safe mode returns None. Gating here (not just at Agent construction) also
+    covers the mid-session reloads — `/cd`, `--cwd`, and the web workdir change
+    — which would otherwise re-inject EVI.md into a clean-boot session."""
+    from evi import safemode
+
+    if safemode.enabled():
+        return None
     files = find_project_files(start)
     sections: list[tuple[Path, str]] = []
     for path in files:

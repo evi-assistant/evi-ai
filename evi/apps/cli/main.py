@@ -190,7 +190,8 @@ def _global_options(
         # pick it up uniformly.
         os.environ[PROFILE_ENV_VAR] = profile
     if safe_mode:
-        os.environ["EVI_SAFE_MODE"] = "1"  # uniform across Config.load + children
+        from evi import safemode
+        safemode.activate()  # env-carried, so children + the sidecar inherit it
     if debug:
         from evi.debug import set_enabled
         set_enabled(True)
@@ -263,8 +264,13 @@ _AUTO_STATE: dict[str, Agent] = {}
 
 def _safe_mode() -> bool:
     """True when `--safe-mode` (or EVI_SAFE_MODE) is active — disable every
-    customization so a broken config/skill/plugin/hook can be isolated."""
-    return os.environ.get("EVI_SAFE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+    customization so a broken config/skill/plugin/hook can be isolated.
+
+    Thin alias for :func:`evi.safemode.enabled`, which every other surface
+    (web/desktop, build_agent) also consults."""
+    from evi import safemode
+
+    return safemode.enabled()
 
 
 _CLEANUP_DONE = False

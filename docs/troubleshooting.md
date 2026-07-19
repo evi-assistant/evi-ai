@@ -10,10 +10,33 @@ MCP server, memory, guardrail, or custom command, run with **`--safe-mode`** (or
 
 ```bash
 evi --safe-mode chat        # clean baseline — no customizations loaded
+evi --safe-mode web         # same clean boot for the web / desktop UI
 ```
 
 The REPL header shows `SAFE MODE (customizations off)`. If the problem disappears
 in safe mode, re-enable customizations one at a time to find the culprit.
+
+Safe mode is carried in the environment (`EVI_SAFE_MODE=1`), so it applies to the
+whole process tree — including the desktop app's sidecar and any subagents — and
+is never written to your config. It switches off:
+
+| | |
+|---|---|
+| Project context | `EVI.md` / `AGENTS.md` — including on a later `/cd` |
+| Config overlays | your profile **and** a repo's `.evi.toml` — safe mode is *stock config* |
+| Memory | the prompt-side index **and** the `remember`/`recall` tools |
+| Skills | the catalog **and** `invoke_skill` / `list_skills` |
+| Hooks | `~/.evi/hooks.toml` + every plugin's hooks |
+| Guardrails | `~/.evi/guardrails.toml` |
+| Commands | user + plugin slash commands (and their tab-completion) |
+| Plugins | `bin/` PATH wiring |
+| MCP | external servers are never spawned |
+| Output style | a user `~/.evi/styles/<name>.md` can override a builtin — skipped |
+| Keybindings | `~/.evi/keybindings.toml` — stock keys |
+| Transcripts | not written |
+
+Inspection commands still work normally, so you can find and fix the culprit —
+`evi plugin list`, `evi skill list` and `evi config show` are unaffected.
 
 ## "evi: command not found" after `pip install -e .`
 

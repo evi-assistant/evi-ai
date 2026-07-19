@@ -486,13 +486,18 @@ class Agent:
                 f"answer honestly that it is `{model_id}` (don't claim to be an "
                 "open-weight or purely local model if you aren't)." + _tool_discipline
             )
-        # Output style (response persona), if one is selected.
+        # Output style (response persona), if one is selected. Skipped in safe
+        # mode: a user file at ~/.evi/styles/<name>.md overrides the built-in of
+        # the same name, so a broken one must not survive a clean boot. (This is
+        # inline in the prompt build, so no builder flag reaches it.)
         try:
+            from evi import safemode
             from evi.styles import style_text
 
-            st = style_text(getattr(self.config.llm, "output_style", "") or "")
-            if st:
-                parts.append(st)
+            if not safemode.enabled():
+                st = style_text(getattr(self.config.llm, "output_style", "") or "")
+                if st:
+                    parts.append(st)
         except Exception:  # noqa: BLE001
             pass
         if self.memory is not None:

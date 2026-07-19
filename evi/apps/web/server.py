@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from evi import safemode
 from evi.backends import get_backend
 from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
@@ -546,7 +547,10 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         nonlocal mcp_manager, scheduler_obj
         cfg = Config.load()
-        if cfg.tools.mcp:
+        # Safe mode: never spawn external MCP servers — they're user
+        # customization (and arbitrary local processes), exactly what a clean
+        # boot is meant to rule out. build_agent handles the rest.
+        if cfg.tools.mcp and not safemode.enabled():
             servers = filter_allowed(load_servers(), cfg.tools.mcp_allow)
             if servers:
                 try:
@@ -606,7 +610,14 @@ def create_app() -> FastAPI:
         base = HOME / "users" / _safe_user(u)
         return (base / "transcripts", base / "memory")
 
-    cmd_store = CommandStore()  # rescans the dir per call, safe to share
+    # User/plugin slash commands are a customization too — in safe mode point the
+    # store at a fresh empty dir (mirrors the CLI REPL's handling).
+    if safemode.enabled():
+        import tempfile
+
+        cmd_store = CommandStore(root=Path(tempfile.mkdtemp(prefix="evi-safe-")))
+    else:
+        cmd_store = CommandStore()  # rescans the dir per call, safe to share
 
     # --- bearer-token auth (optional) -----------------------------------
     #

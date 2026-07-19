@@ -203,8 +203,13 @@ def _completer_class():
 
         def _user_commands(self) -> list[str]:
             try:
+                from evi import safemode
                 from evi.commands import CommandStore
 
+                # The REPL builds a *safe* (empty) command store in safe mode;
+                # this completer constructs its own, so gate it here too.
+                if safemode.enabled():
+                    return []
                 return [e.name for e in CommandStore().list()]
             except Exception:
                 return []
@@ -223,9 +228,12 @@ def _build_key_bindings(bindings: dict[str, str] | None = None):
     typo can't take down the editor. Returns None when there are no bindings.
     """
     if bindings is None:
+        from evi import safemode
         from evi.keybindings import load_keybindings
 
-        bindings = load_keybindings()
+        # User keybindings are a customization that can break the editor — a
+        # clean boot uses stock keys. (`evi keybindings` still lists them.)
+        bindings = {} if safemode.enabled() else load_keybindings()
     if not bindings:
         return None
 

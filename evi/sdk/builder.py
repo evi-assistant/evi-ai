@@ -131,6 +131,27 @@ def build_agent(
     client = client or make_client(config.llm)
     toggles = asdict(config.tools)
 
+    # Safe mode (`evi --safe-mode` / EVI_SAFE_MODE=1) forces every customization
+    # off regardless of what the caller asked for. Enforced HERE — the single
+    # source of truth for Agent assembly — so every surface (CLI, web, desktop,
+    # MCP, scheduler, subagents) gets a clean boot without each call site
+    # remembering to opt in.
+    from evi import safemode
+
+    if safemode.enabled():
+        enable_memory = False
+        enable_skills = False
+        enable_project = False
+        enable_hooks = False
+        enable_guardrails = False
+        transcripts = None
+        # Also drop the customization-backed tool categories. Their tools hold
+        # module-level stores (evi/tools/memory.py, evi/tools/skills.py), so
+        # clearing the prompt-side flags above is not enough to keep a broken
+        # skill or memory file out of the turn.
+        for _cat in ("memory", "skills", "mcp"):
+            toggles[_cat] = False
+
     if tools is None:
         register_builtin_tools()  # ensure REGISTRY is populated before selection
         if tool_categories is not None:
