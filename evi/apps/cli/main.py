@@ -2031,6 +2031,16 @@ def edit(
             if not typer.confirm(f"Overwrite {p}?", default=False):
                 console.print("[dim]not written[/dim]")
                 return
+        # Snapshot the prior state so `evi rewind` can undo this, same as the
+        # write_file/edit_file/apply_patch tools do. `evi edit --write`
+        # overwrites a user's source file, so without this the write was
+        # silently unrewindable. Best-effort — never block the write itself.
+        try:
+            from evi.checkpoints import record_before_write
+
+            record_before_write(p)
+        except Exception:  # noqa: BLE001
+            pass
         p.write_text(new_content, encoding="utf-8")
         console.print(f"[green]wrote[/green] {p}")
         return
