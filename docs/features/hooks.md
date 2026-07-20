@@ -239,4 +239,4 @@ The endpoint receives `POST` with body `{"event": "after_tool_call", "tool": "<n
 - **`EVI_HOOK_TOOL` for lifecycle events is the event name**, not a tool — there is no tool involved. For tool events it's the fully-qualified tool name (e.g. `write_file`, or `<server>.<tool>` for MCP tools).
 - **Security.** Hooks run arbitrary local commands with your user's privileges and full environment. Treat plugin-supplied `hooks.toml` files as code: review a plugin's hooks before installing it, since its hooks are merged into your registry and execute on every matching event.
 - **Reload requires a restart.** Hooks are loaded once at process start; edits to `hooks.toml` take effect on the next launch.
-- See also the concise summaries in [docs/configuration.md](configuration.md#hooks--evihookstoml) and [docs/features.md](features.md#hooks). The authoritative behavior is in `evi/hooks.py`.
+- See also the concise summaries in [docs/configuration.md](../configuration.md#hooks--evihookstoml) and [docs/features.md](../features.md#hooks). The authoritative behavior is in `evi/hooks.py`.

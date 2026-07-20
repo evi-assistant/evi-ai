@@ -1,0 +1,139 @@
+name: docs-publish
+
+# Regenerates the two public docs mirrors from docs/.
+#
+# On a PR it only builds and verifies (no pushing), so a broken link or a
+# renamed doc fails review instead of reaching a public site. On a push to main
+# it also publishes.
+#
+# Both generators self-verify and exit non-zero on dead links, unrewritten
+# markdown links, malformed HTML, or a nav entry naming a doc that no longer
+# exists — so this job cannot publish output it has not checked.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "scripts/build-site-docs.py"
+      - "scripts/build-wiki.py"
+      - "scripts/site-docs.css"
+      - "evi/apps/web/mdlite.py"      # the renderer — changes every page
+      - ".github/workflows/docs-publish.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "scripts/build-site-docs.py"
+      - "scripts/build-wiki.py"
+      - "scripts/site-docs.css"
+      - "evi/apps/web/mdlite.py"
+      - ".github/workflows/docs-publish.yml"
+  workflow_dispatch:                  # force a resync without touching docs
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two publishes race for the same target repos.
+  group: docs-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # Publishing needs a PAT: GITHUB_TOKEN cannot push to another repo (the
+      # site) and cannot push to a wiki. Until that secret exists the job still
+      # builds and verifies — it just skips the two push steps rather than
+      # failing, so this workflow is safe to merge before the token is set up.
+      HAS_TOKEN: ${{ secrets.DOCS_PUBLISH_TOKEN != '' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Note whether publishing is configured
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then
+            echo "DOCS_PUBLISH_TOKEN present — will publish on push to main."
+          else
+            echo "::warning::DOCS_PUBLISH_TOKEN is not set — building and"\
+                 "verifying only. Add the secret to enable publishing."
+          fi
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # No pip install: the generators import evi.apps.web.mdlite, which is
+      # pure stdlib (`re`), and add the repo root to sys.path themselves.
+
+      # --- site -----------------------------------------------------------
+      - name: Check out the site repo
+        if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: evi-assistant/evi-assistant.github.io
+          token: ${{ secrets.DOCS_PUBLISH_TOKEN }}
+          path: .site
+
+      - name: Prepare a stub site dir (verify-only runs)
+        # Whenever we did NOT check out the real site repo — a PR, or a push
+        # before the token exists — build against a stub that satisfies the
+        # generator's "does this look like the site repo" check. We only care
+        # that generation + verification succeed.
+        if: github.event_name == 'pull_request' || env.HAS_TOKEN != 'true'
+        run: |
+          mkdir -p .site
+          touch .site/index.html
+
+      - name: Build + verify the site docs
+        run: python scripts/build-site-docs.py .site
+
+      - name: Publish the site
+        if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
+        working-directory: .site
+        run: |
+          git config user.name "evi-docs-bot"
+          git config user.email "noreply@github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "site: no change"
+          else
+            git commit -m "docs: resync from evi-ai@${GITHUB_SHA::7}"
+            git push
+          fi
+
+      # --- wiki -----------------------------------------------------------
+      - name: Clone the wiki
+        if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
+        env:
+          TOKEN: ${{ secrets.DOCS_PUBLISH_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" .wiki
+
+      - name: Verify the wiki build (no publish)
+        # Same verify-only path as the site: a PR, or a push before the token
+        # exists. --check writes nothing but still validates the nav names and
+        # every source link. The .git dir satisfies the script's "is this a wiki
+        # clone" guard.
+        if: github.event_name == 'pull_request' || env.HAS_TOKEN != 'true'
+        run: |
+          mkdir -p .wiki/.git
+          python scripts/build-wiki.py .wiki --check
+
+      - name: Build + verify the wiki
+        if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
+        run: python scripts/build-wiki.py .wiki
+
+      - name: Publish the wiki
+        if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
+        working-directory: .wiki
+        run: |
+          git config user.name "evi-docs-bot"
+          git config user.email "noreply@github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki: no change"
+          else
+            git commit -m "docs: resync from evi-ai@${GITHUB_SHA::7}"
+            git push origin master
+          fi

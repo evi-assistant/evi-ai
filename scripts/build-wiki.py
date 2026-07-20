@@ -50,7 +50,14 @@ def title_of(md: str, fallback: str) -> str:
     return fallback.replace("-", " ").title()
 
 
-def rewrite(md: str, *, src_dir: str, known: set[str], titles: dict[str, str]) -> str:
+def rewrite(
+    md: str,
+    *,
+    src_dir: str,
+    known: set[str],
+    titles: dict[str, str],
+    broken: list[str] | None = None,
+) -> str:
     """Point relative links at wiki pages, or at GitHub when we don't host them."""
 
     def fix(m: re.Match[str]) -> str:
@@ -77,9 +84,40 @@ def rewrite(md: str, *, src_dir: str, known: set[str], titles: dict[str, str]) -
                 if label.strip("`").endswith(".md"):
                     label = titles.get(slug, label)
                 return f"[{label}]({slug}{frag})"
+        # GitHub fallback only counts as valid if the file is really there — a
+        # typo'd link would otherwise become an absolute URL that 404s, which
+        # verify() cannot detect because it skips absolute URLs.
+        if broken is not None and not (REPO / rel).exists():
+            broken.append(f"{src_dir}: link to missing file {href!r}")
         return f"[{label}]({REPO_URL}/blob/main/{rel}{frag})"
 
     return re.sub(r"\[([^\]]+)\]\(([^)\s#]+)(#[^)\s]*)?\)", fix, md)
+
+
+def verify(wiki: Path) -> list[str]:
+    """Every internal link must resolve to a real page. Always run — the wiki is
+    public, and a dead link there is invisible until someone clicks it."""
+    fails: list[str] = []
+    pages = {p.stem for p in wiki.glob("*.md")}
+    for p in sorted(wiki.glob("*.md")):
+        md = p.read_text(encoding="utf-8")
+        for label, href in re.findall(r"\[([^\]]+)\]\(([^)\s]+)\)", md):
+            if href.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            target = href.split("#")[0]
+            if target.endswith(".md"):
+                fails.append(f"{p.name}: link still points at a .md file -> {href}")
+            elif target not in pages:
+                fails.append(f"{p.name}: dead wiki link [{label}] -> {href}")
+        for _, slug in re.findall(r"\[\[([^\]|]+)\|([^\]]+)\]\]", md):
+            if slug not in pages and slug != "Home":
+                fails.append(f"{p.name}: dead sidebar link -> {slug}")
+        if "](docs/" in md or "](../" in md:
+            fails.append(f"{p.name}: unresolved relative path survived")
+    for required in ("Home", "_Sidebar"):
+        if required not in pages:
+            fails.append(f"missing required page: {required}")
+    return fails
 
 
 def main() -> int:
@@ -108,12 +146,13 @@ def main() -> int:
         slug_of(p): title_of(p.read_text(encoding="utf-8"), slug_of(p)) for p in sources
     }
 
+    broken: list[str] = []
     written = 0
     for path in sources:
         slug = slug_of(path)
         md = path.read_text(encoding="utf-8")
         src_dir = path.relative_to(REPO).as_posix().rsplit("/", 1)[0]
-        body = rewrite(md, src_dir=src_dir, known=known, titles=titles)
+        body = rewrite(md, src_dir=src_dir, known=known, titles=titles, broken=broken)
         body += (
             f"\n\n---\n\n_Generated from "
             f"[`{path.relative_to(REPO).as_posix()}`]"
@@ -157,6 +196,22 @@ def main() -> int:
 
     verb = "would write" if check else "wrote"
     print(f"{verb} {written} pages + Home + _Sidebar to {wiki}")
+
+    if check:
+        if broken:
+            print(f"\n{len(broken)} broken source link(s):")
+            for b in broken[:25]:
+                print(f"  {b}")
+            return 1
+        return 0
+    if fails := broken + verify(wiki):
+        print(f"\n{len(fails)} VERIFICATION FAILURE(S):")
+        for f in fails[:25]:
+            print(f"  {f}")
+        if len(fails) > 25:
+            print(f"  … and {len(fails) - 25} more")
+        return 1
+    print("verified: every internal link resolves to a page")
     return 0
 
 

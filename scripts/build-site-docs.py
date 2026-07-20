@@ -17,6 +17,7 @@ import html as html_mod
 import re
 import shutil
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -80,7 +81,9 @@ def slug_for(rel: str) -> str | None:
     return f"{sub}-{name}" if sub == "features" and "/" not in name else None
 
 
-def rewrite_links(html: str, *, src_dir: str, known: set[str]) -> str:
+def rewrite_links(
+    html: str, *, src_dir: str, known: set[str], broken: list[str] | None = None
+) -> str:
     """Repoint every relative link at either a generated page or GitHub.
 
     The site is FLAT (docs/features/x.md becomes features-x.html), and pages link
@@ -109,7 +112,12 @@ def rewrite_links(html: str, *, src_dir: str, known: set[str]) -> str:
         slug = slug_for(rel)
         if slug and slug in known:
             return f'href="{slug}.html{frag}"'
-        # Not a published page — point at the source on GitHub so it still works.
+        # Not a published page — point at the source on GitHub. But only if it
+        # really exists: otherwise a typo'd link silently becomes a GitHub URL
+        # that 404s, which the output-side check cannot see (it skips absolute
+        # URLs). Record it so the build fails instead.
+        if broken is not None and not (REPO / rel).exists():
+            broken.append(f"{src_dir}: link to missing file {href!r}")
         return f'href="{REPO_URL}/blob/main/{rel}{frag}"'
 
     return re.sub(r'href="([^"#]*)(#[^"]*)?"', fix, html)
@@ -159,6 +167,58 @@ def shell(title: str, body: str, *, depth_note: str = "", source: str = "") -> s
 """
 
 
+class _Struct(HTMLParser):
+    """Minimal well-formedness + link collector for the generated pages."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[str] = []
+        self.bad: list[str] = []
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("br", "img", "meta", "link", "hr", "input"):
+            return
+        self.stack.append(tag)
+        self.hrefs += [v for k, v in attrs if k == "href" and v]
+
+    def handle_endtag(self, tag):
+        if self.stack and self.stack[-1] == tag:
+            self.stack.pop()
+        elif tag in self.stack:
+            self.bad.append(tag)
+            while self.stack and self.stack.pop() != tag:
+                pass
+
+
+def verify(out: Path, expected_pages: int) -> list[str]:
+    """Structural check of the generated site. Always run — publishing broken
+    pages to a public site is worse than failing the build."""
+    fails: list[str] = []
+    pages = sorted(out.glob("*.html"))
+    if len(pages) != expected_pages:
+        fails.append(f"expected {expected_pages} pages, found {len(pages)}")
+
+    for p in pages:
+        s = _Struct()
+        s.feed(p.read_text(encoding="utf-8"))
+        if s.bad:
+            fails.append(f"{p.name}: mismatched tags {sorted(set(s.bad))}")
+        if s.stack:
+            fails.append(f"{p.name}: unclosed tags {s.stack}")
+        for h in s.hrefs:
+            if h.startswith(("http", "#", "mailto:")):
+                continue  # absolute .md links to GitHub are the intended fallback
+            if h.endswith(".md") or ".md#" in h:
+                fails.append(f"{p.name}: unrewritten markdown link {h!r}")
+            elif not (p.parent / h.split("#")[0]).exists():
+                fails.append(f"{p.name}: dead link -> {h}")
+
+    if not (out / "docs.css").is_file():
+        fails.append("docs.css missing")
+    return fails
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__)
@@ -177,13 +237,14 @@ def main() -> int:
     ]
 
     known = {slug for slug, _ in sources}
+    broken: list[str] = []
     entries = []
     for slug, path in sources:
         md = path.read_text(encoding="utf-8")
         title = title_of(md, slug.replace("-", " ").title())
         rel = path.relative_to(REPO).as_posix()
         src_dir = rel.rsplit("/", 1)[0]
-        body = rewrite_links(render(md), src_dir=src_dir, known=known)
+        body = rewrite_links(render(md), src_dir=src_dir, known=known, broken=broken)
         page = shell(title, body, depth_note=summary_of(md), source=rel)
         (out / f"{slug}.html").write_text(page, encoding="utf-8")
         entries.append((slug, title, summary_of(md), slug.startswith("features-")))
@@ -231,6 +292,15 @@ def main() -> int:
 
     print(f"wrote {len(entries) + 1} pages to {out}")
     print(f"  start-here: {len(lead)}   guides: {len(guides)}   features: {len(feats)}")
+
+    if fails := broken + verify(out, len(entries) + 1):
+        print(f"\n{len(fails)} VERIFICATION FAILURE(S):")
+        for f in fails[:25]:
+            print(f"  {f}")
+        if len(fails) > 25:
+            print(f"  … and {len(fails) - 25} more")
+        return 1
+    print("verified: structure, links, and stylesheet all OK")
     return 0
 
 
