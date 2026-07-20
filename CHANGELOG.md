@@ -5,6 +5,27 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.14] — 2026-07-19
+
+### Fixed
+- **`--safe-mode` now actually disables every customization.** The flag existed
+  but only the CLI honoured it, and several channels slipped through even there
+  — a clean boot that still loads your broken thing is worse than none. Safe
+  mode now applies to the **web and desktop** UI too (enforced centrally in
+  `build_agent`, so subagents, dream and the scheduler inherit it), and closes:
+  config overlays (a profile or a repo's `.evi.toml` could re-pin a model,
+  re-point `output_style` at the broken style file, or flip tool toggles — safe
+  mode now means *stock config*), project context re-injected by a later `/cd`,
+  hooks loaded directly by `evi review`/the SDK, user output styles (a
+  `~/.evi/styles/<name>.md` overrides the builtin of the same name), the
+  `remember`/`recall`/`invoke_skill` **tools** (module-level stores survived the
+  prompt-side flags), REPL tab-completion of user commands, and
+  `~/.evi/keybindings.toml`. External MCP servers are no longer spawned by the
+  web server either.
+  Inspection commands (`evi plugin list`, `evi skill list`, `evi config show`)
+  deliberately keep working — in safe mode you need them to find the culprit.
+  See *Troubleshooting → Safe mode* for the full matrix.
+
 ## [1.0.13] — 2026-07-13
 
 ### Added
