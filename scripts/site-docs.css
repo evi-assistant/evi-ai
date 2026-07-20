@@ -1,0 +1,150 @@
+/* Docs pages for evi-ai.dev. Layers on top of the site's styles.css and reuses
+   its tokens (--bg, --panel, --border, --text, --muted, --accent, --accent-2)
+   so the docs never drift from the landing page's look. */
+
+.doc-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 20px 24px;
+}
+
+.doc {
+  color: var(--text);
+  line-height: 1.72;
+  font-size: 16.5px;
+}
+
+.doc h1 {
+  font-size: clamp(30px, 5vw, 40px);
+  letter-spacing: -0.8px;
+  margin: 0 0 18px;
+}
+
+.doc h2 {
+  font-size: clamp(21px, 3vw, 26px);
+  margin: 44px 0 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.doc h3 { font-size: 18.5px; margin: 30px 0 8px; }
+.doc h4 { font-size: 16px; margin: 24px 0 6px; color: var(--muted); }
+
+.doc p { margin: 0 0 16px; }
+.doc ul, .doc ol { margin: 0 0 16px; padding-left: 24px; }
+.doc li { margin: 6px 0; }
+.doc li > ul, .doc li > ol { margin: 6px 0; }
+
+.doc a { color: var(--accent); }
+.doc a:hover { text-decoration: underline; }
+
+.doc code {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5px 6px;
+  font-size: 0.9em;
+  color: var(--accent-2);
+}
+
+.doc pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  overflow-x: auto;         /* long lines scroll here, never the page */
+  margin: 0 0 20px;
+}
+
+.doc pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #cdd9e5;
+  font-size: 14px;
+}
+
+.doc blockquote {
+  margin: 0 0 20px;
+  padding: 12px 18px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-alt);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--muted);
+}
+.doc blockquote p:last-child { margin-bottom: 0; }
+
+/* Tables can be wide — give them their own scroll container. */
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 20px;
+  display: block;
+  overflow-x: auto;
+  font-size: 15px;
+}
+.doc th, .doc td {
+  border: 1px solid var(--border);
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.doc th { background: var(--panel-2); font-weight: 600; }
+
+.doc hr { border: 0; border-top: 1px solid var(--border); margin: 32px 0; }
+.doc img { max-width: 100%; height: auto; }
+
+/* --- index page ---------------------------------------------------------- */
+
+.doc-lede { color: var(--muted); font-size: 17px; margin-bottom: 8px; }
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  margin: 0 0 8px;
+}
+
+.doc-card {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.doc-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+.doc-card h3 { margin: 0 0 6px; font-size: 16.5px; color: var(--text); }
+.doc-card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+/* --- chrome -------------------------------------------------------------- */
+
+.doc-source {
+  display: inline-block;
+  margin: 26px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.doc-source:hover { color: var(--accent); }
+
+.doc-foot {
+  max-width: 860px;
+  margin: 40px auto 0;
+  padding: 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .doc-main { padding-top: 30px; }
+  .doc { font-size: 16px; }
+}
