@@ -135,11 +135,13 @@ def test_safe_mode_skips_output_style(monkeypatch, tmp_path):
     from evi.sdk.builder import build_agent
 
     monkeypatch.delenv("EVI_SAFE_MODE", raising=False)
-    normal = build_agent(); normal.config.llm.output_style = "concise"
+    normal = build_agent()
+    normal.config.llm.output_style = "concise"
     normal.reset()
     assert "STYLE-MARKER" in normal.history[0]["content"]
 
     monkeypatch.setenv("EVI_SAFE_MODE", "1")
-    safe = build_agent(); safe.config.llm.output_style = "concise"
+    safe = build_agent()
+    safe.config.llm.output_style = "concise"
     safe.reset()
     assert "STYLE-MARKER" not in safe.history[0]["content"]
