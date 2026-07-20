@@ -70,6 +70,12 @@ def test_delegate_returns_text():
 def test_delegate_peer_error_passes_through():
     class H(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
+            # Drain the request body before replying. Closing a socket that
+            # still has unread inbound data makes the OS send RST instead of
+            # FIN, and the client sees "Connection reset by peer" rather than
+            # this response — macOS does that promptly, Linux/Windows tolerate
+            # it. That is what made this test fail only on the macOS CI leg.
+            self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
             self.send_response(200)
             self.end_headers()
             self.wfile.write(json.dumps({"error": "model down"}).encode())

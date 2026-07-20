@@ -12,6 +12,8 @@ CLI layer translates them into clean error output.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -48,10 +50,79 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     return proc.stdout
 
 
+# An MSYS2/Cygwin/Git-Bash git on Windows prints POSIX paths instead of native
+# ones, and Path() keeps them verbatim — the result blows up as a subprocess
+# cwd with NotADirectoryError (WinError 267). Users hit this whenever such a
+# git shadows Git for Windows on PATH (devkitPro, Cygwin, an msys2 setup).
+#
+# String rewriting alone CANNOT fix this: msys maps drives through a
+# user-editable mount table, so C:\proj may print as "/c/proj" but
+# C:\Users\me\proj prints as "/home/me/proj". So we rewrite the common drive
+# forms, then VERIFY the result exists and fall back to walking up for .git —
+# which is always native and needs no translation.
+_MSYS_DRIVE = re.compile(r"^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$")
+
+
+def _git_path(raw: str) -> Path:
+    """Rewrite the common msys drive forms; may still be non-native."""
+    raw = raw.strip()
+    if os.name == "nt":
+        m = _MSYS_DRIVE.match(raw)
+        if m:
+            drive, rest = m.group(1), m.group(2) or ""
+            raw = f"{drive.upper()}:/{rest}"
+    # Left alone off Windows: "/c/foo" is a legitimate POSIX path there.
+    return Path(raw)
+
+
+def _walk_up_for_git(start: Path) -> Path | None:
+    """Nearest ancestor containing `.git` — a dir in a clone, a FILE in a worktree."""
+    try:
+        here = start.resolve()
+    except OSError:
+        return None
+    for cand in (here, *here.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
 def repo_root(start: Path | None = None) -> Path:
     """Top-level dir of the git repo containing `start` (default cwd)."""
-    out = _git("rev-parse", "--show-toplevel", cwd=start or Path.cwd())
-    return Path(out.strip())
+    base = Path(start) if start is not None else Path.cwd()
+    out = _git("rev-parse", "--show-toplevel", cwd=base)
+    p = _git_path(out)
+    if p.is_dir():
+        return p
+    # git answered with a path this platform can't use (an msys mount point).
+    found = _walk_up_for_git(base)
+    if found is None:
+        raise WorktreeError(
+            f"git reported the repo root as {out.strip()!r}, which is not a "
+            "usable path here, and no .git was found walking up from "
+            f"{base} — is a POSIX-style git (msys2/Cygwin) shadowing "
+            "Git for Windows on PATH?"
+        )
+    return found
+
+
+def _to_native(raw: str, *, git_prefix: str = "", native_root: Path | None = None) -> Path:
+    """A path from git output, made native.
+
+    Falls back to swapping git's spelling of the repo root for the real one —
+    worktree paths live under the root, so learning that single mapping covers
+    them all without having to model msys's mount table.
+    """
+    p = _git_path(raw)
+    if p.is_dir() or native_root is None or not git_prefix:
+        return p
+    stripped = raw.strip()
+    if stripped == git_prefix:
+        return native_root
+    if stripped.startswith(git_prefix.rstrip("/") + "/"):
+        rest = stripped[len(git_prefix.rstrip("/")) + 1:]
+        return native_root / rest
+    return p
 
 
 # ---- public API ---------------------------------------------------------
@@ -60,13 +131,28 @@ def repo_root(start: Path | None = None) -> Path:
 def list_worktrees(start: Path | None = None) -> list[WorktreeEntry]:
     """Parse `git worktree list --porcelain` into structured entries."""
     raw = _git("worktree", "list", "--porcelain", cwd=start)
+    # Learn how this git spells the repo root vs. what it really is, so
+    # non-native entry paths can be remapped (see _to_native).
+    git_prefix = ""
+    native_root: Path | None = None
+    try:
+        git_prefix = _git(
+            "rev-parse", "--show-toplevel", cwd=start or Path.cwd()
+        ).strip()
+        native_root = repo_root(start)
+    except WorktreeError:
+        pass
     entries: list[WorktreeEntry] = []
     cur_path: Path | None = None
     cur_head = ""
     cur_branch: str | None = None
     for line in raw.splitlines() + [""]:  # trailing blank to flush last entry
         if line.startswith("worktree "):
-            cur_path = Path(line[len("worktree "):].strip())
+            cur_path = _to_native(
+                line[len("worktree "):],
+                git_prefix=git_prefix,
+                native_root=native_root,
+            )
             cur_head = ""
             cur_branch = None
         elif line.startswith("HEAD "):

@@ -81,6 +81,99 @@ def test_create_fails_if_path_exists(repo: Path) -> None:
         create_worktree("dup")
 
 
+# --- MSYS/Cygwin git path normalization -------------------------------------
+#
+# A git that prints POSIX paths on Windows (msys2, Cygwin, Git Bash, devkitPro)
+# used to produce WindowsPath('/c/proj'), which blows up as a subprocess cwd
+# with NotADirectoryError (WinError 267).
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("/c/evi", r"C:\evi"),
+        ("/c/Users/me/proj", r"C:\Users\me\proj"),
+        ("/d/work", r"D:\work"),
+        ("/cygdrive/c/evi", r"C:\evi"),          # Cygwin prefix
+        ("/c", "C:\\"),                          # repo at a drive root
+        ("/c/evi\n", r"C:\evi"),                 # trailing newline from git
+        (r"C:\already\native", r"C:\already\native"),
+        ("C:/forward/slashes", r"C:\forward\slashes"),
+    ],
+)
+def test_git_path_normalizes_msys_on_windows(raw, expected, monkeypatch):
+    from evi import worktree
+
+    monkeypatch.setattr(worktree.os, "name", "nt")
+    assert str(worktree._git_path(raw)) == expected
+
+
+def test_git_path_leaves_posix_alone_off_windows(monkeypatch):
+    from evi import worktree
+
+    monkeypatch.setattr(worktree.os, "name", "posix")
+    # "/c/foo" is a perfectly legitimate path on Linux — must NOT be rewritten.
+    assert str(worktree._git_path("/c/foo")) == "/c/foo"
+    assert str(worktree._git_path("/home/u/proj")) == "/home/u/proj"
+
+
+def test_repo_root_survives_msys_style_git(repo: Path, monkeypatch) -> None:
+    """repo_root must return a usable path even when git speaks MSYS."""
+    from evi import worktree
+
+    real_git = worktree._git
+
+    def fake_git(*args: str, **kw):
+        if args[:2] == ("rev-parse", "--show-toplevel"):
+            # What an msys2 git actually prints for C:\... paths.
+            drive, rest = str(repo)[0], str(repo)[3:].replace("\\", "/")
+            return f"/{drive.lower()}/{rest}\n"
+        return real_git(*args, **kw)
+
+    monkeypatch.setattr(worktree, "_git", fake_git)
+    monkeypatch.setattr(worktree.os, "name", "nt")
+
+    root = worktree.repo_root()
+    assert str(root)[1:3] == ":\\", f"not a native path: {root}"
+    assert root.is_dir(), f"repo_root returned an unusable path: {root}"
+
+
+def test_repo_root_survives_unmappable_msys_mount(repo: Path, monkeypatch) -> None:
+    """The case string-rewriting CANNOT fix.
+
+    msys maps drives through a user-editable mount table, so C:\\Users\\me\\p
+    prints as /home/me/p — there is no drive letter to recover. repo_root must
+    still return a usable path by walking up for .git.
+    """
+    from evi import worktree
+
+    real_git = worktree._git
+
+    def fake_git(*args: str, **kw):
+        if args[:2] == ("rev-parse", "--show-toplevel"):
+            return "/home/someone/totally/unmappable\n"
+        return real_git(*args, **kw)
+
+    monkeypatch.setattr(worktree, "_git", fake_git)
+    monkeypatch.setattr(worktree.os, "name", "nt")
+
+    root = worktree.repo_root()
+    assert root.resolve() == repo.resolve()
+    assert root.is_dir()
+
+
+def test_repo_root_error_names_the_likely_cause(tmp_path: Path, monkeypatch) -> None:
+    from evi import worktree
+
+    monkeypatch.setattr(
+        worktree, "_git", lambda *a, **k: "/home/nobody/nowhere\n"
+    )
+    monkeypatch.setattr(worktree.os, "name", "nt")
+    # tmp_path has no .git anywhere up the tree inside the temp area.
+    with pytest.raises(worktree.WorktreeError, match="shadowing"):
+        worktree.repo_root(tmp_path / "no-repo-here")
+
+
 # --- dirty detection + the CLI confirmation it drives -----------------------
 
 
