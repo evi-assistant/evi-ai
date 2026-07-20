@@ -37,10 +37,18 @@ jobs:
       - name: Build sdist + wheel
         run: python -m build
 
+      - name: Install test + lint deps
+        run: python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index]"
+
+      # Lint gates the publish, mirroring ci.yml's Install -> Ruff -> Pytest order
+      # (lint is cheap, so it fails fast). Without this, ci.yml was the only thing
+      # running ruff, and it does not block release.yml — which is how 1.0.14
+      # published to PyPI with two E702 errors on main.
+      - name: Ruff
+        run: python -m ruff check evi tests scripts
+
       - name: Run the test suite
-        run: |
-          python -m pip install -e ".[dev,web,mcp,scheduler,downloads,web-tools,index]"
-          pytest -q --timeout=30
+        run: pytest -q --timeout=30
 
       # Trusted Publishing also generates PEP 740 (sigstore) attestations for
       # the uploaded files on PyPI by default.
