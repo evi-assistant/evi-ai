@@ -63,16 +63,31 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 _MSYS_DRIVE = re.compile(r"^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$")
 
 
-def _git_path(raw: str) -> Path:
-    """Rewrite the common msys drive forms; may still be non-native."""
+def _on_windows() -> bool:
+    """Indirection so tests can exercise the Windows branch on any platform.
+
+    (Patching os.name directly would also change what pathlib constructs, and
+    instantiating a WindowsPath on Linux raises UnsupportedOperation.)
+    """
+    return os.name == "nt"
+
+
+def _normalize_git_path(raw: str) -> str:
+    """Rewrite the common msys drive forms. Pure string work, testable anywhere."""
     raw = raw.strip()
-    if os.name == "nt":
-        m = _MSYS_DRIVE.match(raw)
-        if m:
-            drive, rest = m.group(1), m.group(2) or ""
-            raw = f"{drive.upper()}:/{rest}"
-    # Left alone off Windows: "/c/foo" is a legitimate POSIX path there.
-    return Path(raw)
+    if not _on_windows():
+        # Left alone off Windows: "/c/foo" is a legitimate POSIX path there.
+        return raw
+    m = _MSYS_DRIVE.match(raw)
+    if not m:
+        return raw
+    drive, rest = m.group(1), m.group(2) or ""
+    return f"{drive.upper()}:/{rest}"
+
+
+def _git_path(raw: str) -> Path:
+    """A path as git printed it; may still be non-native (see _to_native)."""
+    return Path(_normalize_git_path(raw))
 
 
 def _walk_up_for_git(start: Path) -> Path | None:
