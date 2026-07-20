@@ -105,6 +105,18 @@ def _parse_list(lines: list[str], i: int, n: int) -> tuple[str, int]:
     ordered = bool(re.match(r"^\s*\d+\.\s+", first))
     tag = "ol" if ordered else "ul"
     items: list[str] = []
+    # Raw text of the item being built. An item's wrapped lines are collected
+    # here and inlined ONCE, so a **span** (or `code`, or a [link]) split across
+    # a line break still matches — inlining each line separately left the
+    # delimiters orphaned, and stray ** then re-paired across the wrong words.
+    pending: list[str] | None = None
+
+    def flush() -> None:
+        nonlocal pending
+        if pending is not None:
+            items.append("<li>" + _inline(" ".join(pending)) + "</li>")
+            pending = None
+
     while i < n:
         line = lines[i]
         if not line.strip():
@@ -126,22 +138,26 @@ def _parse_list(lines: list[str], i: int, n: int) -> tuple[str, int]:
             break
         m = _ITEM_RE.match(line)
         if cur == indent and m:
-            items.append("<li>" + _inline(m.group(3)) + "</li>")
+            flush()
+            pending = [m.group(3)]
             i += 1
-        elif cur > indent:
-            if m:
-                nested, i = _parse_list(lines, i, n)
-                if items:
-                    items[-1] = items[-1][:-5] + nested + "</li>"
-                else:
-                    items.append("<li>" + nested + "</li>")
+        elif cur > indent and m:
+            flush()  # close the current item before hanging a list off it
+            nested, i = _parse_list(lines, i, n)
+            if items:
+                items[-1] = items[-1][:-5] + nested + "</li>"
             else:
-                # Indented non-item line = continuation of the current item.
-                if items:
-                    items[-1] = items[-1][:-5] + " " + _inline(line.strip()) + "</li>"
-                i += 1
+                items.append("<li>" + nested + "</li>")
+        elif pending is not None and not _is_block_start(line, lines, i, n):
+            # Continuation of the current item — indented, or "lazy" at the
+            # same column as the bullet, which is how most editors wrap. That
+            # case used to fall through and END the list, stranding the rest of
+            # the sentence in a paragraph of its own.
+            pending.append(line.strip())
+            i += 1
         else:
             break
+    flush()
     return f"<{tag}>" + "".join(items) + f"</{tag}>", i
 
 
