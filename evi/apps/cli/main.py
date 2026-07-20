@@ -6168,10 +6168,67 @@ def worktree_create(
     )
 
 
+def _stdin_is_tty() -> bool:
+    """Whether we can actually prompt the user.
+
+    Deliberately NOT evi.tools.ask._interactive: that also requires
+    EVI_INTERACTIVE=1, which the REPL sets for the *model's* benefit. A human
+    typing `evi worktree remove` in a terminal has no such env var, and
+    refusing them a prompt would be exactly backwards.
+    """
+    try:
+        return sys.stdin.isatty()
+    except (ValueError, OSError):
+        return False
+
+
 @worktree_app.command("remove")
-def worktree_remove(branch_or_path: str) -> None:
-    """Remove a worktree (--force; commits are kept on the branch)."""
-    from evi.worktree import WorktreeError, remove_worktree
+def worktree_remove(
+    branch_or_path: str,
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't prompt when dirty."),
+) -> None:
+    """Remove a worktree (force; commits are kept on the branch).
+
+    Commits are safe — they live on the branch in the shared object store. Only
+    UNCOMMITTED work in the worktree is lost, so we confirm just for that case;
+    removing a clean worktree needs no prompt.
+    """
+    from evi.worktree import (
+        WorktreeError,
+        dirty_files,
+        remove_worktree,
+        resolve_worktree_path,
+    )
+
+    if not yes:
+        try:
+            target = resolve_worktree_path(branch_or_path)
+        except WorktreeError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        dirty = dirty_files(target)
+        # None = couldn't determine; treat as "may have work at risk" and ask.
+        if dirty is None or dirty:
+            if dirty:
+                console.print(
+                    f"[yellow]{len(dirty)} uncommitted change(s)[/yellow] in {target}:"
+                )
+                for line in dirty[:10]:
+                    console.print(f"  [dim]{line}[/dim]")
+                if len(dirty) > 10:
+                    console.print(f"  [dim]… and {len(dirty) - 10} more[/dim]")
+            else:
+                console.print(f"[yellow]can't inspect[/yellow] {target}")
+            console.print("[dim]Committed work stays on the branch; this does not.[/dim]")
+            if not _stdin_is_tty():
+                console.print(
+                    "[red]refusing to discard uncommitted work non-interactively[/red] "
+                    "— re-run with --yes if that's what you want"
+                )
+                raise typer.Exit(1)
+            if not typer.confirm("Remove anyway?", default=False):
+                console.print("[dim]not removed[/dim]")
+                raise typer.Exit(1)
 
     try:
         remove_worktree(branch_or_path)

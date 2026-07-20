@@ -116,19 +116,49 @@ def create_worktree(
     return dest
 
 
+def resolve_worktree_path(branch_or_path: str, *, start: Path | None = None) -> Path:
+    """Map a branch name or path to the worktree directory it refers to.
+
+    A bare branch name resolves to `<repo>/.worktrees/<branch with / as __>`;
+    an absolute path is taken as-is.
+    """
+    candidate = Path(branch_or_path)
+    if candidate.is_absolute():
+        return candidate
+    return repo_root(start) / ".worktrees" / branch_or_path.replace("/", "__")
+
+
+def dirty_files(path: Path) -> list[str] | None:
+    """Porcelain status lines for uncommitted work in `path`, newest git first.
+
+    Returns [] when the worktree is clean and None when that can't be
+    determined (missing directory, not a worktree, no git). Callers should
+    treat None as "assume there may be work at risk" — it is the fail-safe
+    reading, since the only use for this is deciding whether to warn.
+    """
+    if not path.is_dir():
+        return None
+    try:
+        out = _git("status", "--porcelain", cwd=path)
+    except WorktreeError:
+        return None
+    return [ln for ln in out.splitlines() if ln.strip()]
+
+
 def remove_worktree(branch_or_path: str, *, start: Path | None = None) -> None:
     """Remove a worktree by branch name or path. Force-removes.
 
     On git ≥ 2.17 this uses `git worktree remove --force`. On older versions
     (which lack that subcommand) we fall back to deleting the directory
     ourselves and running `git worktree prune` to clean the admin entry.
+
+    This always forces: callers that want to protect uncommitted work should
+    check `dirty_files()` and confirm with the user first (the CLI does).
     """
     import shutil as _shutil
 
     root = repo_root(start)
-    candidate = Path(branch_or_path)
-    if not candidate.is_absolute():
-        candidate = root / ".worktrees" / branch_or_path.replace("/", "__")
+    candidate = resolve_worktree_path(branch_or_path, start=start)
 
     try:
         _git("worktree", "remove", "--force", str(candidate), cwd=root)

@@ -79,3 +79,88 @@ def test_create_fails_if_path_exists(repo: Path) -> None:
     create_worktree("dup")
     with pytest.raises(WorktreeError, match="already exists"):
         create_worktree("dup")
+
+
+# --- dirty detection + the CLI confirmation it drives -----------------------
+
+
+def test_resolve_worktree_path(repo: Path) -> None:
+    from evi.worktree import resolve_worktree_path
+
+    assert resolve_worktree_path("topic") == repo / ".worktrees" / "topic"
+    # slashes in a branch name become __ so the path stays one level deep
+    assert resolve_worktree_path("feat/x") == repo / ".worktrees" / "feat__x"
+    # an absolute path is taken as-is
+    assert resolve_worktree_path(str(repo / "elsewhere")) == repo / "elsewhere"
+
+
+def test_dirty_files_clean_and_dirty(repo: Path) -> None:
+    from evi.worktree import create_worktree, dirty_files
+
+    wt = create_worktree("dirt")
+    assert dirty_files(wt) == []            # freshly created -> clean
+
+    (wt / "scratch.txt").write_text("uncommitted\n", encoding="utf-8")
+    dirty = dirty_files(wt)
+    assert dirty and any("scratch.txt" in ln for ln in dirty)
+
+
+def test_dirty_files_undetermined_is_none(tmp_path: Path) -> None:
+    from evi.worktree import dirty_files
+
+    # Missing directory -> None ("can't tell"), which the CLI treats as
+    # "there may be work at risk" and prompts rather than assuming clean.
+    assert dirty_files(tmp_path / "does-not-exist") is None
+
+
+def test_cli_remove_refuses_dirty_worktree_non_interactively(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import typer
+
+    import evi.apps.cli.main as cli
+    from evi.worktree import create_worktree, find_worktree_for
+
+    wt = create_worktree("risky")
+    (wt / "unsaved.txt").write_text("work in progress\n", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: False)
+    with pytest.raises(typer.Exit):
+        cli.worktree_remove("risky", yes=False)
+
+    # Refused, so the worktree and its uncommitted file must still be there.
+    assert find_worktree_for("risky") is not None
+    assert (wt / "unsaved.txt").is_file()
+
+
+def test_cli_remove_clean_worktree_needs_no_prompt(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import evi.apps.cli.main as cli
+    from evi.worktree import create_worktree, find_worktree_for
+
+    create_worktree("tidy")
+    # No TTY and no --yes: a CLEAN worktree must still remove, or the prompt
+    # would fire on routine cleanup and get itself worked around with --yes.
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: False)
+    monkeypatch.setattr(
+        "typer.confirm", lambda *a, **k: pytest.fail("should not prompt when clean")
+    )
+    cli.worktree_remove("tidy", yes=False)
+    assert find_worktree_for("tidy") is None
+
+
+def test_cli_remove_yes_skips_prompt_on_dirty(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import evi.apps.cli.main as cli
+    from evi.worktree import create_worktree, find_worktree_for
+
+    wt = create_worktree("forced")
+    (wt / "unsaved.txt").write_text("bye\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "typer.confirm", lambda *a, **k: pytest.fail("--yes must not prompt")
+    )
+    cli.worktree_remove("forced", yes=True)
+    assert find_worktree_for("forced") is None
