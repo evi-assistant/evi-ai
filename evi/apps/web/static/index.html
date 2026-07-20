@@ -834,6 +834,18 @@ const _loaded = loadTabsState();
 let tabs = _loaded ? _loaded.tabs : [{ id: crypto.randomUUID(), label: 'new chat' }];
 let activeIdx = _loaded ? _loaded.activeIdx : 0;
 let sessionId = tabs[activeIdx].id;
+
+// Switch the active session. Always go through this rather than assigning
+// sessionId directly: the working-folder chip is per-session, and every place
+// that reassigned sessionId used to forget to refresh it, so the chip kept
+// advertising the PREVIOUS session's folder. That is worse than showing
+// nothing — you trust the chip, write a relative path, and the file lands in
+// the server's cwd instead. (loadCwd is a hoisted function declaration, so
+// calling it from earlier in the file is fine.)
+function setSessionId(id) {
+  sessionId = id;
+  if (typeof loadCwd === 'function') loadCwd();
+}
 let goalChipText = null;
 let planArmed = false;
 let autoOn = false;
@@ -1030,7 +1042,7 @@ async function branchFromBubble(idx) {
   const parentLabel = tabs[activeIdx]?.label || 'chat';
   tabs.push({ id: new_session_id, label: parentLabel + ' · branch' });
   activeIdx = tabs.length - 1;
-  sessionId = new_session_id;
+  setSessionId(new_session_id);
   saveTabsState();
   renderTabs();
   await rebuildHistory();
@@ -1748,7 +1760,7 @@ tabsEl.addEventListener('click', e => {
 async function switchTab(i) {
   if (i < 0 || i >= tabs.length || i === activeIdx) return;
   activeIdx = i;
-  sessionId = tabs[i].id;
+  setSessionId(tabs[i].id);
   saveTabsState();
   renderTabs();
   await rebuildHistory();
@@ -1757,7 +1769,7 @@ async function switchTab(i) {
 function newTab() {
   tabs.push({ id: crypto.randomUUID(), label: 'new chat' });
   activeIdx = tabs.length - 1;
-  sessionId = tabs[activeIdx].id;
+  setSessionId(tabs[activeIdx].id);
   saveTabsState();
   renderTabs();
   log.innerHTML = '';
@@ -1778,7 +1790,7 @@ function closeTab(i) {
     // adjust to keep the same logical selection.
     if (i < activeIdx) activeIdx -= 1;
   }
-  sessionId = tabs[activeIdx].id;
+  setSessionId(tabs[activeIdx].id);
   saveTabsState();
   renderTabs();
   log.innerHTML = '';
@@ -2059,7 +2071,7 @@ if (_wantSession) {
   let i = tabs.findIndex(t => t.id === _wantSession);
   if (i < 0) { tabs.push({ id: _wantSession, label: 'resumed' }); i = tabs.length - 1; }
   activeIdx = i;
-  sessionId = tabs[i].id;
+  setSessionId(tabs[i].id);
   saveTabsState();
   renderTabs();
 }
