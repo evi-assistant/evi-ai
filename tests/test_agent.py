@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass
 from typing import Iterator
 
+import pytest
+
 from evi.config import Config
 from evi.llm.agent import Agent, Done, TextDelta, ToolCall, ToolProgress, ToolResult
 from evi.tools.base import Tool
@@ -114,6 +116,43 @@ def test_system_prompt_cli_agent_backend_is_honest() -> None:
     ident = [p for p in sp.split("\n\n") if "eVi" in p and "opus" in p][0]
     assert "running the local open-weight model `opus`" not in ident  # no false claim
     assert "You are NOT" not in ident                                 # doesn't deny being Claude
+
+
+@pytest.mark.parametrize(
+    "backend,model",
+    [
+        ("ollama", "qwen2.5-coder:14b-instruct-q4_K_M"),  # local branch
+        ("claude_agent", "opus"),                          # proprietary branch
+    ],
+)
+def test_identity_is_stated_only_when_asked(backend: str, model: str) -> None:
+    """Both identity branches must tell the model not to volunteer it.
+
+    A 14b model read "if the user asks, tell them X" as a standing order and
+    prefixed every single reply with "I'm running the `opus` model…", including
+    right after being told to stop. The "only when asked" half has to be
+    explicit, not implied by the conditional.
+    """
+    cfg = Config()
+    cfg.llm.backend = backend
+    cfg.llm.model = model
+    sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
+    low = sp.lower()
+    assert "only say this when asked" in low
+    assert "never volunteer it" in low
+    assert "prefix a reply" in low
+
+
+@pytest.mark.parametrize("backend,model", [("ollama", "qwen"), ("claude_agent", "opus")])
+def test_identity_marks_pre_switch_history_as_stale(backend: str, model: str) -> None:
+    """Backends are switchable mid-conversation, so earlier turns can name the
+    old model. Without this the model imitates its own stale transcript."""
+    cfg = Config()
+    cfg.llm.backend = backend
+    cfg.llm.model = model
+    sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
+    assert "naming a different model" in sp
+    assert "stale" in sp
 
 
 def test_refresh_prompt_updates_identity_on_model_switch() -> None:
@@ -625,10 +664,16 @@ def test_token_usage_counts_chars() -> None:
     agent = Agent(client=_FakeClient(script), config=cfg, tools=[])
     agent.history.append({"role": "user", "content": "x" * 400})
     used, ceiling = agent.token_usage()
-    # ~4 chars per token heuristic → 400 chars ≈ 100 tokens (plus the
-    # system prompt baseline).
+    # ~4 chars per token. Derive the expectation from the real history instead
+    # of a magic ceiling: the old `used <= 250` was a de-facto system-prompt
+    # size limit that sat ~2 tokens from saturation, so any legitimate prompt
+    # edit failed a test that is actually about the char->token heuristic.
+    chars = sum(len(str(m.get("content") or "")) for m in agent.history)
     assert ceiling == 1000
-    assert 100 <= used <= 250
+    assert used >= 100  # the 400-char message alone is ~100 tokens
+    assert abs(used - chars / 4) <= max(20, chars * 0.1), (
+        f"token_usage()={used} is not ~chars/4 for {chars} chars of history"
+    )
 
 
 def test_compact_history_no_op_when_short(tmp_path) -> None:

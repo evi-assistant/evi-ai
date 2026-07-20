@@ -464,6 +464,22 @@ class Agent:
             " Do not call tools for greetings, small talk, or anything you can "
             "answer directly — only call a tool when it is actually needed."
         )
+        # Small models read "if the user asks, tell them X" as a standing order
+        # and prefix EVERY reply with it — including after being asked to stop.
+        # Make the "only when asked" half explicit rather than implied. Kept
+        # terse deliberately: this rides on every turn, and a local model's
+        # context is small.
+        _identity_discipline = (
+            " Only say this when asked — never volunteer it or prefix a reply "
+            "with it."
+        )
+        # Backend/model is switchable mid-conversation (picker, /model, `evi
+        # backend use`), so earlier assistant turns can still name the OLD model
+        # and a model that imitates its own transcript keeps quoting it.
+        _identity_staleness = (
+            " Earlier messages naming a different model predate a switch and are"
+            " stale."
+        )
         if model_id and backend_kind in _LOCAL_MODEL_KINDS:
             # Local open-weight models hallucinate "I'm GPT-4" from their training
             # data when asked what they are — anchor their identity hard.
@@ -472,7 +488,7 @@ class Agent:
                 "You are NOT ChatGPT, GPT-4, Claude, or Gemini, and you were not "
                 "built by OpenAI, Anthropic, or Google. If the user asks which "
                 f"model or company you are, tell them you are eVi running `{model_id}` "
-                "locally." + _tool_discipline
+                "locally." + _identity_discipline + _identity_staleness + _tool_discipline
             )
         elif model_id:
             # openai_compat / CLI-agent backends: the model may genuinely BE Claude,
@@ -484,7 +500,8 @@ class Agent:
                 f"powered by the `{model_id}` model through your configured backend. "
                 "Identify yourself as eVi; if the user asks which model powers you, "
                 f"answer honestly that it is `{model_id}` (don't claim to be an "
-                "open-weight or purely local model if you aren't)." + _tool_discipline
+                "open-weight or purely local model if you aren't)."
+                + _identity_discipline + _identity_staleness + _tool_discipline
             )
         # Output style (response persona), if one is selected. Skipped in safe
         # mode: a user file at ~/.evi/styles/<name>.md overrides the built-in of
