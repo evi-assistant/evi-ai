@@ -16,6 +16,10 @@ DANGEROUS = [
     ("git reset --hard HEAD~3", "git-reset-hard"),
     ("git checkout -- .", "git-checkout-discard"),
     ("git clean -fd", "git-clean-force"),
+    ("git worktree remove --force ../wt", "git-worktree-remove-force"),
+    ("git worktree remove -f ../wt", "git-worktree-remove-force"),
+    ("git worktree remove ../wt --force", "git-worktree-remove-force"),
+    ("git worktree remove -ff locked-wt", "git-worktree-remove-force"),
     ("git stash drop", "git-stash-drop"),
     ("git commit --amend -m x", "git-commit-amend"),
     ("git push --force origin main", "git-force-push"),
@@ -63,6 +67,14 @@ BENIGN = [
     "git push origin main",
     "git commit -m 'reword the amend docs'",
     "git clean -n",
+    # Unforced worktree removal is safe — git refuses when the worktree is
+    # dirty, so prompting here would fire on routine cleanup.
+    "git worktree remove ../wt",
+    "git worktree list",
+    "git worktree prune",
+    "git worktree add ../wt feature",
+    "git worktree add --force ../wt feature",   # --force here only reuses a path
+    "git config alias.wtf 'worktree remove --force'",  # defining != running
     "rm -rf ./build",                # scoped relative delete — intentionally allowed
     "rm -rf node_modules",
     "rm -rf dist",

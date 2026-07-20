@@ -67,6 +67,12 @@ _RAW: list[tuple[str, str, bool, str, str]] = [
     ("git-clean-force", "prompt", True,
      "git clean -f deletes untracked files/directories",
      r'''\bgit\s+clean\s+(?:[^;|&\n]*\s)?-[a-z]*f[a-z]*\b'''),
+    ("git-worktree-remove-force", "prompt", True,
+     "git worktree remove --force discards uncommitted work in that worktree",
+     # Only the FORCED variant: plain `git worktree remove` already refuses when
+     # the worktree is dirty, so matching it would false-positive on routine
+     # cleanup. Bounded {0,200} so a long argv can't drive backtracking.
+     r'''\bgit\s+worktree\s+remove\b[^;|&\n]{0,200}?(?<![\w-])(?:--force\b|-f+\b)'''),
     ("git-stash-drop", "prompt", True,
      "git stash drop/clear permanently deletes stashed work",
      r'''\bgit\s+stash\s+(?:drop|clear)\b'''),
