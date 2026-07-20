@@ -22,17 +22,20 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 
 ## 2. Current status
 
-**1.0 shipped (2026-07-01); PyPI now at 1.0.5 (2026-07-11):**
+**1.0 shipped 2026-07-01. Current version: see the stamp at the top of this file** — and `CHANGELOG.md` for what each release contained. Do not restate version numbers below; they rot.
 
 - **Public repo:** `https://github.com/evi-assistant/evi-ai` (transferred from the old private `dmang-dev/evi-ai`). All `[project.urls]` point at the `evi-assistant` org.
-- **PyPI:** `evi-assistant` **v1.0.5** (Development Status **Production/Stable**). The 1.0.1→1.0.5 line is **PyPI + Docker only** — see the CLI-agent backends note below for why.
-- **Desktop:** **v1.0.5**, full Windows/macOS/Linux signed matrix release; the in-app updater serves directly from the public repo (the private release-mirror channel is retired). As of 1.0.5, `release.yml` **auto-invokes** `desktop-release.yml` on every `v*` tag (reusable `workflow_call`), so the frozen sidecar is re-built from the released `evi/` and desktop no longer lags PyPI. (Free on public runners — no Actions spend concern.)
+- **PyPI:** `evi-assistant` (Development Status **Production/Stable**). The 1.0.1→1.0.5 line was **PyPI + Docker only** — see the CLI-agent backends note below for why. From 1.0.6 on, desktop follows every release.
+- **Desktop:** full Windows/macOS/Linux signed matrix; the in-app updater serves directly from the public repo (the private release-mirror channel is retired). Since 1.0.5, `release.yml` **auto-invokes** `desktop-release.yml` on every `v*` tag (reusable `workflow_call`), so the frozen sidecar is re-built from the released `evi/` and desktop no longer lags PyPI. (Free on public runners — no Actions spend concern.)
+- **Sidecar update channel:** installed desktop apps also pull a newer **core** in the background from the fixed-tag `sidecar-latest` release (minisign-signed manifest + sha256, applied on next launch). This means a core-only fix reaches existing installs without a reinstall — but **any `desktop/src-tauri` Rust change still needs a full `v*` release**, because the shell itself must be rebuilt.
 - **Skills:** `evi-skills` catalog is public.
 - **Site:** landing page live at **https://evi-ai.dev** (custom domain; also `evi-assistant.github.io` → 301 to it). Lives in the dedicated **`evi-assistant/evi-assistant.github.io`** org-pages repo; custom domain set via a `CNAME` file (`evi-ai.dev`) + Cloudflare DNS (grey-cloud A/AAAA → GitHub Pages IPs, `www` CNAME). HTTPS enforced, Let's Encrypt cert.
 - **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
-- **PyPI version** is consistent across `pyproject.toml` and `evi/__init__.py` (both `1.0.5`) — the `release.yml` gate requires this. **Desktop version** is now **derived from the release tag** at build time (`scripts/set-desktop-version.py`, run by `desktop-release.yml`), so the four Tauri version files no longer have to be hand-bumped and can't drift from the core.
+- **PyPI version** must match across `pyproject.toml` and `evi/__init__.py` — the `release.yml` gate asserts tag == both. **Desktop version** is **derived from the release tag** at build time (`scripts/set-desktop-version.py`, run by `desktop-release.yml`), so the four Tauri version files are never hand-bumped and can't drift from the core.
 
-**Tests:** **1484 passed, 4 skipped** on the local `.venv` (32 e2e deselected by default via `addopts = -m 'not e2e'`). Live count: `pytest --collect-only -q`. Ruff clean.
+**Tests:** **1646 passed, 4 skipped** on the local `.venv` as of 1.0.15 (32 e2e deselected by default via `addopts = -m 'not e2e'`). Live count: `pytest --collect-only -q` — trust that over this number. Ruff clean.
+
+> ⚠ If `tests/test_worktree.py` fails locally with `NotADirectoryError` (WinError 267), a POSIX-style git (msys2/devkitPro/Cygwin) is shadowing Git for Windows on PATH. 1.0.15 made `repo_root()` resilient to this, so it should no longer bite — but the same PATH shadowing also breaks bare `python`, so invoke `.venv\Scripts\python.exe` explicitly.
 
 > ✅ **Local `.venv` is now Python 3.13.14** (recreated 2026-07-01; full suite green on Windows/3.13). The 3.11 line is retired. `.venv-build` should likewise be recreated with `py -3.13` when next freezing the sidecar.
 
