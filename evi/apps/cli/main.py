@@ -6196,6 +6196,7 @@ def worktree_remove(
     from evi.worktree import (
         WorktreeError,
         dirty_files,
+        orphaned_head,
         remove_worktree,
         resolve_worktree_path,
     )
@@ -6206,9 +6207,16 @@ def worktree_remove(
         except WorktreeError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1)
-        dirty = dirty_files(target)
-        # None = couldn't determine; treat as "may have work at risk" and ask.
-        if dirty is None or dirty:
+        # A directory that is already gone has nothing to lose — only a genuine
+        # inspection failure is worth stopping for. (Conflating the two broke
+        # idempotent teardown scripts, which re-run against a wiped worktree.)
+        missing = not target.exists()
+        dirty = [] if missing else dirty_files(target)
+        # Commits are safe on a branch, but a DETACHED head no branch contains
+        # is real work that removal would strand.
+        orphan = None if missing else orphaned_head(target)
+
+        if dirty is None or dirty or orphan:
             if dirty:
                 console.print(
                     f"[yellow]{len(dirty)} uncommitted change(s)[/yellow] in {target}:"
@@ -6217,12 +6225,20 @@ def worktree_remove(
                     console.print(f"  [dim]{line}[/dim]")
                 if len(dirty) > 10:
                     console.print(f"  [dim]… and {len(dirty) - 10} more[/dim]")
-            else:
+            elif dirty is None:
                 console.print(f"[yellow]can't inspect[/yellow] {target}")
-            console.print("[dim]Committed work stays on the branch; this does not.[/dim]")
+            if orphan:
+                console.print(
+                    f"[yellow]detached HEAD[/yellow] at {orphan} in {target} — "
+                    "no branch contains it, so removing this loses those commits"
+                )
+            if not orphan:
+                console.print(
+                    "[dim]Commits on a branch stay there; this does not.[/dim]"
+                )
             if not _stdin_is_tty():
                 console.print(
-                    "[red]refusing to discard uncommitted work non-interactively[/red] "
+                    "[red]refusing to discard work non-interactively[/red] "
                     "— re-run with --yes if that's what you want"
                 )
                 raise typer.Exit(1)

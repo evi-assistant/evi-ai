@@ -5,6 +5,47 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.15] — 2026-07-20
+
+### Fixed
+- **`evi edit --write` is now checkpointed, so `evi rewind` can undo it.** It
+  wrote your source file directly instead of going through the file tools, so
+  the one command whose whole job is rewriting a file you already have was the
+  one write rewind could not restore.
+- **`evi worktree` no longer breaks under a POSIX-style git on Windows.** An
+  msys2/Cygwin/Git-Bash git prints POSIX paths, so `repo_root()` returned an
+  unusable path and every worktree command died with a bare
+  `NotADirectoryError` (WinError 267). This hit anyone whose PATH puts such a
+  git ahead of Git for Windows. Path handling now verifies what git reports and
+  falls back to locating `.git` directly, which needs no translation; the error
+  message names the likely cause if it still can't resolve. Note that string
+  rewriting alone cannot fix this — msys maps drives through a user-editable
+  mount table, so `C:\proj` may print as `/c/proj` while `C:\Users\me\proj`
+  prints as `/home/me/proj`.
+
+### Added
+- **`evi worktree remove` now confirms before discarding work.** It
+  force-removed silently. Commits *on a branch* stay on that branch, so
+  removing a clean worktree is unchanged and still needs no prompt. You are
+  asked when there is something to lose: uncommitted changes, a **detached
+  HEAD whose commits no branch contains** (removal would strand them), or a
+  worktree eVi cannot inspect. Pass `--yes`/`-y` to skip the prompt; running
+  non-interactively in those cases refuses rather than destroying work
+  unattended. A worktree whose directory is already gone has nothing to lose
+  and is removed without prompting, so idempotent teardown scripts keep
+  working.
+- **Destructive-command guard covers `git worktree remove --force`.** The
+  denylist already prompted on `git clean -f`, `git checkout -- <path>` and
+  `git reset --hard`; this closes the same class. Only the *forced* variant
+  matches, since plain `git worktree remove` already refuses when dirty. As
+  with every rule, a headless run (scheduler, `--yes` automation) denies it
+  outright rather than prompting; `destructive_disable_rules =
+  ["git-worktree-remove-force"]` opts out.
+
+### Internal
+- The release workflow now runs `ruff` before publishing, so a lint failure
+  can no longer reach PyPI. No user-visible effect.
+
 ## [1.0.14] — 2026-07-19
 
 ### Fixed

@@ -246,6 +246,36 @@ def dirty_files(path: Path) -> list[str] | None:
     return [ln for ln in out.splitlines() if ln.strip()]
 
 
+def orphaned_head(path: Path) -> str | None:
+    """Short sha of HEAD when removing this worktree would strand commits.
+
+    A worktree on a branch is safe — its commits live on that branch. One on a
+    DETACHED head whose commit no branch contains is not: delete the directory
+    and those commits are only reachable via the reflog. Returns None when
+    there is nothing to lose or the question can't be answered.
+    """
+    if not path.is_dir():
+        return None
+    try:
+        if _git("rev-parse", "--abbrev-ref", "HEAD", cwd=path).strip() != "HEAD":
+            return None  # on a branch
+        raw = _git("branch", "--contains", "HEAD", cwd=path)
+        # git lists the detached HEAD itself here as a pseudo-entry —
+        # "* (no branch)", or "* (HEAD detached at abc1234)" on some versions.
+        # Those are not branches; anything parenthesised is git talking about
+        # the very worktree we are asking about.
+        real = [
+            ln.lstrip("*+ \t")
+            for ln in raw.splitlines()
+            if ln.strip() and not ln.lstrip("*+ \t").startswith("(")
+        ]
+        if real:
+            return None  # a real branch already contains it
+        return _git("rev-parse", "--short", "HEAD", cwd=path).strip()
+    except WorktreeError:
+        return None
+
+
 def remove_worktree(branch_or_path: str, *, start: Path | None = None) -> None:
     """Remove a worktree by branch name or path. Force-removes.
 

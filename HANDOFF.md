@@ -1,8 +1,8 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-07-20 · PyPI v1.0.14 · desktop v1.0.14 · **PUBLIC**_
+_Last updated: 2026-07-20 · PyPI v1.0.15 · desktop v1.0.15 · **PUBLIC**_
 
-This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at **1.0.5**, and the `evi-skills` catalog is public. As of 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
+This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at the version stamped above, and the `evi-skills` catalog is public. Since 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
 ---
 
@@ -137,7 +137,7 @@ git tag vX.Y.Z
 git push origin main --tags
 ```
 
-> The workflow's tag-vs-version tripwire only checks `pyproject.toml`, **not** `evi/__init__.py` — a forgotten `__init__` bump would ship a mismatched `evi --version` without failing CI.
+> The workflow's tripwire asserts tag == `pyproject.toml` == `evi/__init__.py`, so a forgotten bump in either file fails the release before it publishes. Since 1.0.15 it also runs `ruff` ahead of the publish step, so a lint failure can't reach PyPI either.
 
 ### Cut a desktop release (`desktop-release.yml`)
 

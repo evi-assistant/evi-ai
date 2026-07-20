@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import typer
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git not installed"
@@ -220,6 +221,68 @@ def test_cli_remove_clean_worktree_needs_no_prompt(
     )
     cli.worktree_remove("tidy", yes=False)
     assert find_worktree_for("tidy") is None
+
+
+def test_cli_remove_missing_dir_is_not_work_at_risk(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worktree whose directory is already gone has nothing to lose.
+
+    Conflating "gone" with "couldn't determine" made idempotent teardown
+    scripts fail non-interactively against a wiped worktree, and left the
+    stale admin entry unpruned — which then wedges re-creating that branch.
+    """
+    import shutil as _shutil
+
+    import evi.apps.cli.main as cli
+    from evi.worktree import create_worktree, find_worktree_for
+
+    wt = create_worktree("gone")
+    _shutil.rmtree(wt)  # dir wiped, git admin entry still registered
+
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: False)
+    monkeypatch.setattr(
+        "typer.confirm", lambda *a, **k: pytest.fail("nothing to lose — must not prompt")
+    )
+    cli.worktree_remove("gone", yes=False)
+    assert find_worktree_for("gone") is None
+
+
+def test_cli_remove_prompts_for_orphaned_detached_head(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CLEAN detached worktree can still hold commits no branch contains."""
+    import evi.apps.cli.main as cli
+    from evi.worktree import find_worktree_for, orphaned_head
+
+    # A detached worktree with a commit that lives on no branch.
+    wt = repo / ".worktrees" / "detached"
+    _git("worktree", "add", "--detach", str(wt), cwd=repo)
+    (wt / "note.txt").write_text("valuable\n", encoding="utf-8")
+    _git("add", "note.txt", cwd=wt)
+    _git("commit", "-m", "work only reachable from this detached HEAD", cwd=wt)
+
+    from evi.worktree import dirty_files
+
+    assert dirty_files(wt) == [], "precondition: worktree is clean"
+    assert orphaned_head(wt), "precondition: HEAD is on no branch"
+
+    monkeypatch.setattr(cli, "_stdin_is_tty", lambda: False)
+    with pytest.raises(typer.Exit):
+        cli.worktree_remove(str(wt), yes=False)
+    assert find_worktree_for(None) is None or wt.is_dir()
+    assert (wt / "note.txt").is_file(), "refused, so the commit must survive"
+
+
+def test_orphaned_head_none_when_on_a_branch(repo: Path) -> None:
+    from evi.worktree import create_worktree, orphaned_head
+
+    wt = create_worktree("onbranch")
+    (wt / "f.txt").write_text("x\n", encoding="utf-8")
+    _git("add", "f.txt", cwd=wt)
+    _git("commit", "-m", "committed on a branch", cwd=wt)
+    # Its commits live on the branch, so removal loses nothing.
+    assert orphaned_head(wt) is None
 
 
 def test_cli_remove_yes_skips_prompt_on_dirty(
