@@ -65,9 +65,30 @@ def test_link_wrapped_across_lines():
 def test_nested_list_still_nests():
     md = "- outer\n  - inner one\n  - inner two\n- outer two"
     html = render(md)
-    assert html.count("<ul>") == 2
-    assert "<li>inner one</li>" in html
-    assert html.count("</ul>") == 2
+    # Assert the exact shape: counting tags alone passed even on a variant that
+    # ejected "outer" from the <li> its sublist hangs off and re-emitted it
+    # afterwards, which is why this pins the whole string.
+    assert html == (
+        "<ul><li>outer<ul><li>inner one</li><li>inner two</li></ul></li>"
+        "<li>outer two</li></ul>"
+    ), html
+
+
+def test_list_ends_at_a_table():
+    # _is_block_start's table branch became load-bearing for lists in this
+    # change (it now gates continuation, not just paragraphs) but nothing
+    # covered it.
+    html = render("- item\n| a | b |\n| --- | --- |\n| 1 | 2 |")
+    assert "<table>" in html
+    assert "<li>item</li>" in html
+    assert "<table>" not in html.split("</ul>")[0]
+
+
+def test_list_ends_at_a_horizontal_rule():
+    html = render("- item\n---")
+    assert "<hr>" in html
+    assert html.count("<li>") == 1
+    assert "<hr>" not in html.split("</ul>")[0]
 
 
 def test_indented_continuation_still_joins():

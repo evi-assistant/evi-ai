@@ -5,6 +5,30 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.16] — 2026-07-20
+
+### Fixed
+- **In-app documentation renders wrapped list items correctly.** In Help →
+  Documentation, a bullet whose text wrapped across a line in the source showed
+  literal `**` instead of bold — and where the stray delimiters re-paired, it
+  emphasised the *wrong words* entirely. Anything split across a line break
+  inside a list item was affected: bold, `code`, and links. Lists no longer end
+  early at an unindented continuation line either, which is what stranded the
+  rest of the sentence in a paragraph of its own. Paragraphs were never
+  affected. Only the docs viewer uses this renderer, so nothing else changes.
+
+  Note this reaches you through the **desktop app** (whose sidecar bundles
+  `docs/`) or a source install. The PyPI wheel does not ship `docs/` — a
+  pip-only install shows a link to the online docs instead, so upgrading the
+  package alone changes nothing visible.
+
+### Known limitation
+- A fenced code block indented under a numbered list item still ends the list,
+  so the following items restart at 1. Previously such a block was swallowed
+  into the item and rendered as literal backticks, so neither behaviour is
+  right; consuming indented blocks into list items is a larger change than this
+  fix. `docs/troubleshooting.md` was reflowed to avoid the pattern.
+
 ## [1.0.15] — 2026-07-20
 
 ### Fixed

@@ -56,15 +56,9 @@ eVi can't reach the backend. Check, in order:
    - LM Studio: open the app, Developer tab, **Start Server**.
    - Ollama: `ollama serve` or check `sudo systemctl status ollama`.
    - llama.cpp: `llama-server -m <path>` must be running.
-2. Is `[llm] base_url` correct?
-   ```bash
-   evi config show
-   ```
-3. Can you hit it manually?
-   ```bash
-   curl http://localhost:1234/v1/models   # LM Studio
-   curl http://localhost:11434/api/tags   # Ollama
-   ```
+2. Is `[llm] base_url` correct? Check with `evi config show`.
+3. Can you hit it manually? `curl http://localhost:1234/v1/models` for LM Studio,
+   `curl http://localhost:11434/api/tags` for Ollama.
 4. Are you behind a proxy / VPN that's blocking localhost? Check
    `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`.
 
