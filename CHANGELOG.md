@@ -5,6 +5,34 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.17] — 2026-07-20
+
+### Fixed
+- **The working-folder chip now follows the session you're in.** Switching tabs
+  left it showing the *previous* session's folder, which was worse than showing
+  nothing: it read as though the session had a folder set, so a relative write
+  (`write_file("hello.py")`) landed in the server's own directory instead of the
+  folder named on the chip. Within a running server the folder was stored per
+  session and applied correctly — only the indicator went stale, and that
+  mismatch is what made it look like the working folder was being ignored. Every
+  session switch now refreshes it, and a slow response from an earlier switch can
+  no longer overwrite the current one.
+- **eVi should no longer announce its model on every reply.** It prefixed answers
+  with "I'm running the `X` model…" and kept doing so after being asked to stop.
+  The prompt said *"if the user asks which model you are, tell them X"* — a
+  conditional with no stated negative, which smaller models read as a standing
+  order. It is now told to state the model only when asked, and that an earlier
+  reply naming a different model predates a backend switch, so switching
+  mid-conversation should not leave it quoting the old one. This is prompt
+  guidance, so a small model may still occasionally over-share.
+
+### Known issues
+- **A session's working folder does not survive a restart.** It is held in
+  memory, so closing and reopening the desktop app (or an auto-update restart)
+  revives your conversation but resets the folder to the server's own directory
+  — relative writes then land there until you set it again. Persisting it needs
+  per-session state that does not exist yet; tracked for a later release.
+
 ## [1.0.16] — 2026-07-20
 
 ### Fixed

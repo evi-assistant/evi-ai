@@ -470,15 +470,19 @@ class Agent:
         # terse deliberately: this rides on every turn, and a local model's
         # context is small.
         _identity_discipline = (
-            " Only say this when asked — never volunteer it or prefix a reply "
-            "with it."
+            " Only state the model when asked — never volunteer it or prefix a "
+            "reply with it."
         )
         # Backend/model is switchable mid-conversation (picker, /model, `evi
         # backend use`), so earlier assistant turns can still name the OLD model
         # and a model that imitates its own transcript keeps quoting it.
+        # Scoped to the assistant's OWN replies: talking about other models is
+        # routine here (model picker, six CLI-agent backends, /model), so a blanket
+        # "any earlier mention is stale" would also discredit the user's messages
+        # and compaction summaries.
         _identity_staleness = (
-            " Earlier messages naming a different model predate a switch and are"
-            " stale."
+            " If an earlier reply of yours named a different model, it predates a"
+            " backend switch and is stale."
         )
         if model_id and backend_kind in _LOCAL_MODEL_KINDS:
             # Local open-weight models hallucinate "I'm GPT-4" from their training

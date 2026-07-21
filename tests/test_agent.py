@@ -138,7 +138,7 @@ def test_identity_is_stated_only_when_asked(backend: str, model: str) -> None:
     cfg.llm.model = model
     sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
     low = sp.lower()
-    assert "only say this when asked" in low
+    assert "only state the model when asked" in low
     assert "never volunteer it" in low
     assert "prefix a reply" in low
 
@@ -151,7 +151,7 @@ def test_identity_marks_pre_switch_history_as_stale(backend: str, model: str) ->
     cfg.llm.backend = backend
     cfg.llm.model = model
     sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
-    assert "naming a different model" in sp
+    assert "named a different model" in sp
     assert "stale" in sp
 
 
@@ -671,8 +671,12 @@ def test_token_usage_counts_chars() -> None:
     chars = sum(len(str(m.get("content") or "")) for m in agent.history)
     assert ceiling == 1000
     assert used >= 100  # the 400-char message alone is ~100 tokens
-    assert abs(used - chars / 4) <= max(20, chars * 0.1), (
-        f"token_usage()={used} is not ~chars/4 for {chars} chars of history"
+    # Pin the documented contract exactly. A tolerance band here is worthless:
+    # the first attempt allowed +/-10% of CHARS against a TOKEN-scale value, so
+    # swapping the divisor 4 -> 6 still passed. If the heuristic changes, change
+    # this line deliberately.
+    assert used == chars // 4, (
+        f"token_usage()={used} but {chars} chars // 4 == {chars // 4}"
     )
 
 

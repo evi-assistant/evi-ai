@@ -1825,10 +1825,16 @@ function _shortPath(p) {
 }
 
 async function loadCwd() {
+  // Pin the session this lookup is for. Switching tabs quickly leaves two
+  // responses in flight, and without this the later-arriving one wins — which
+  // would put the previous session's folder back on the chip, the very bug
+  // setSessionId exists to prevent. (Same guard as maybeAutoTitle.)
+  const sid = sessionId;
   try {
-    const r = await fetch('/api/session/cwd?session_id=' + encodeURIComponent(sessionId));
+    const r = await fetch('/api/session/cwd?session_id=' + encodeURIComponent(sid));
     if (!r.ok) return;
     const d = await r.json();
+    if (sid !== sessionId) return;  // a newer switch landed while we waited
     cwdBtnLabel.textContent = _shortPath(d.working_dir);
     cwdBtn.title = 'Working folder: ' + d.working_dir + ' — click to change';
   } catch {}
