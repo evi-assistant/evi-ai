@@ -154,7 +154,12 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
-    "ruff>=0.4",
+    # Pin below 0.16: ruff 0.16.0 (2026-07-27) expanded its default rule set
+    # (import sorting I001 and more), which flags ~670 pre-existing findings
+    # across the tree and turned CI red on untouched code. Adopting 0.16's
+    # defaults is a deliberate formatting sweep, not something an unpinned
+    # linter should force mid-PR. Raise this ceiling when we do that sweep.
+    "ruff>=0.4,<0.16",
 ]
 
 [project.scripts]
