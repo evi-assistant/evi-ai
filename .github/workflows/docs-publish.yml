@@ -15,7 +15,9 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "cookbook/**"
       - "scripts/build-site-docs.py"
+      - "scripts/build-cookbook.py"
       - "scripts/build-wiki.py"
       - "scripts/site-docs.css"
       - "evi/apps/web/mdlite.py"      # the renderer — changes every page
@@ -23,7 +25,9 @@ on:
   pull_request:
     paths:
       - "docs/**"
+      - "cookbook/**"
       - "scripts/build-site-docs.py"
+      - "scripts/build-cookbook.py"
       - "scripts/build-wiki.py"
       - "scripts/site-docs.css"
       - "evi/apps/web/mdlite.py"
@@ -87,6 +91,12 @@ jobs:
 
       - name: Build + verify the site docs
         run: python scripts/build-site-docs.py .site
+
+      - name: Build + verify the cookbook
+        # Writes into the same .site checkout, so the Publish step's `git add -A`
+        # picks up cookbook/ alongside docs/. On a stub (PR / no token) it still
+        # builds and verifies; it just isn't pushed.
+        run: python scripts/build-cookbook.py .site
 
       - name: Publish the site
         if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
