@@ -20,12 +20,30 @@ read matches the eVi you installed. The runnable scripts live in
 - [Build an agent with the SDK](agent-sdk-quickstart.md) — construct an agent in
   a few lines, give it a custom tool, and run a prompt to completion. *(SDK)*
 
+## Give the agent more to work with
+
+- [Package and use a skill](package-and-use-a-skill.md) — write a reusable
+  instruction packet the agent loads on demand. *(CLI + config)*
+- [Give the agent persistent memory](persistent-memory.md) — remember facts
+  across sessions and load per-project context. *(config + CLI)*
+- [Get structured JSON output](structured-json-output.md) — constrain replies to
+  a schema a script can parse. *(SDK + CLI)*
+
 ## Automation
 
 - [Review a pull request in CI](headless-ci-review.md) — run eVi headless in
   GitHub Actions and fail the build on real findings. *(CLI + SDK)*
+- [Automate with hooks](automate-with-hooks.md) — run your own command or
+  webhook on lifecycle events, and veto tool calls. *(config)*
 - [Guard an agent's inputs and outputs](guardrails.md) — layer regex, an
   LLM judge, and an offline classifier over every turn. *(config)*
+
+## Scale it out
+
+- [Fan work out across subagents](multi-agent-with-ultracode.md) — decompose,
+  solve in parallel, verify, and synthesize with ultracode. *(CLI + SDK)*
+- [Delegate to another machine on your LAN](delegate-to-another-machine.md) —
+  keep a small local model and borrow a GPU box for heavy turns. *(config + CLI)*
 
 ## Contributing a recipe
 
