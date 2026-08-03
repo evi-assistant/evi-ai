@@ -166,7 +166,7 @@ dev = [
     # across the tree and turned CI red on untouched code. Adopting 0.16's
     # defaults is a deliberate formatting sweep, not something an unpinned
     # linter should force mid-PR. Raise this ceiling when we do that sweep.
-    "ruff>=0.4,<0.16",
+    "ruff>=0.4,<0.17",
 ]
 
 [project.scripts]
