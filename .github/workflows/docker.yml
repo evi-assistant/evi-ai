@@ -26,6 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # QEMU lets the amd64 runner cross-build the arm64 image. Most deps ship
+      # arm64 wheels (pydantic-core, uvloop, httptools, watchfiles), so this is
+      # wheel-only and doesn't need to compile under emulation.
+      - uses: docker/setup-qemu-action@v3
+
       - uses: docker/setup-buildx-action@v4
 
       # Only log in when we intend to push (tag builds, or dispatch with push=true).
@@ -59,6 +64,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -70,6 +76,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
