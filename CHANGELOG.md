@@ -5,6 +5,23 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.20] — 2026-08-04
+
+### Added
+- **Serve eVi over MCP, from the UI.** Settings → MCP gained a "Serve eVi over
+  MCP" section: start/stop a localhost HTTP MCP server that exposes eVi's curated
+  tools, memory, and prompts, plus a copy-paste stdio config for desktop MCP
+  clients (Claude Desktop, Cursor). This was previously CLI-only (`evi mcp serve`)
+  — now the whole round trip (consume other servers *and* serve eVi itself) is in
+  the panel.
+
+### Changed
+- The published container image (`ghcr.io/evi-assistant/evi-ai`) is now
+  **multi-architecture (linux/amd64 + linux/arm64)** and **public** — so
+  `docker pull ghcr.io/evi-assistant/evi-ai:latest` works with no login and runs
+  natively on Apple Silicon, AWS Graviton, and 64-bit Raspberry Pi. The release's
+  image push also self-heals a transient GHCR error instead of failing the build.
+
 ## [1.0.19] — 2026-08-04
 
 ### Fixed
