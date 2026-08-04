@@ -101,6 +101,10 @@ def save_backends(entries: list[BackendEntry], path: Path | None = None) -> None
             "api_key": e.api_key,
             "enabled": e.enabled,
             "fanout": e.fanout,
+            # Persist the per-backend timeout too — load_backends reads it back
+            # (registry.py:87), so omitting it here silently reset any hand-set
+            # request_timeout to the 120s default on every enabled/fanout toggle.
+            "request_timeout": e.request_timeout,
         }
         for e in entries
     ]

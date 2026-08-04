@@ -28,6 +28,18 @@ def test_load_save_roundtrip(tmp_path):
     assert got[1].kind == "ollama"
 
 
+def test_save_backends_preserves_request_timeout(tmp_path):
+    # save_backends dropped request_timeout on every write, so a hand-set timeout
+    # silently reset to the 120s default on the next enabled/fanout toggle.
+    p = tmp_path / "backends.json"
+    R.save_backends(
+        [R.BackendEntry(name="slow", kind="ollama",
+                        base_url="http://localhost:11434/v1", request_timeout=300.0)],
+        p,
+    )
+    assert R.load_backends(p)[0].request_timeout == 300.0
+
+
 def test_load_missing_and_malformed(tmp_path):
     assert R.load_backends(tmp_path / "nope.json") == []
     bad = tmp_path / "bad.json"

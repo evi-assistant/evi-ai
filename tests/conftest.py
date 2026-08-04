@@ -11,7 +11,16 @@ collect_ignore_glob: list[str] = []
 try:
     import playwright  # noqa: F401
 except ImportError:
-    collect_ignore_glob = ["e2e/*"]
+    collect_ignore_glob += ["e2e/*"]
+
+# Same guard for the native-desktop suite (tests/desktop_e2e/, Selenium +
+# tauri-driver). It's opt-in via the `desktop` marker and Windows-only, but if
+# Selenium isn't installed even collecting it would error, so keep it out of the
+# default unit run. Run it with `pytest tests/desktop_e2e -m desktop`.
+try:
+    import selenium  # noqa: F401
+except ImportError:
+    collect_ignore_glob += ["desktop_e2e/*"]
 
 # Python's http.server calls socket.getfqdn() during server_bind, which does a
 # reverse-DNS lookup that hangs for 30s+ on macOS CI runners — enough to trip
