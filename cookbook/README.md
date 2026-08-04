@@ -28,6 +28,9 @@ read matches the eVi you installed. The runnable scripts live in
   across sessions and load per-project context. *(config + CLI)*
 - [Get structured JSON output](structured-json-output.md) — constrain replies to
   a schema a script can parse. *(SDK + CLI)*
+- [Connect to MCP servers (and expose eVi over MCP)](connect-mcp-servers.md) —
+  borrow another server's tools, or hand eVi's tools and memory to a desktop AI
+  app. *(CLI + config)*
 
 ## Automation
 
