@@ -67,14 +67,13 @@ web = [
     "python-multipart>=0.0.9",
 ]
 mcp = [
-    # Pin below 2.0: the mcp SDK's 2.0.0 (2026-08) is a breaking major —
-    # `Tool.inputSchema` -> `input_schema`, `streamablehttp_client` and
-    # `Server.list_tools` moved/renamed — which breaks evi/mcp/manager.py and
-    # evi/mcp/publish.py (both target the 1.x API). The unpinned `mcp>=1.0`
-    # meant a fresh install (and the weekly CI sweep) silently pulled 2.0 and
-    # broke MCP for users, not just tests. Pin to the working 1.x line; migrate
-    # to the 2.0 API in its own PR, then raise this ceiling.
-    "mcp>=1.0,<2",
+    # eVi's MCP layer (evi/mcp/manager.py + publish.py) is DUAL-COMPATIBLE with
+    # both the 1.x and 2.0 SDK lines — 2.0.0 (2026-07-28) was a breaking major
+    # (`Tool.inputSchema` -> `input_schema`, `streamablehttp_client` renamed,
+    # the low-level Server decorators replaced by add_request_handler). Both
+    # paths are covered by the mcp tests and an end-to-end round-trip. `<3`
+    # bounds the next unknown major; revisit dual-compat when adopting 3.0.
+    "mcp>=1.0,<3",
 ]
 scheduler = [
     "apscheduler>=3.10",

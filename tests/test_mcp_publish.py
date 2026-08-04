@@ -100,7 +100,9 @@ def test_specs_construct_valid_mcp_tools():
     spec = publish.mcp_tool_specs([_fake_tool("b")])[0]
     mt = mcp_types.Tool(**spec)  # must not raise — the inputSchema is reused verbatim
     assert mt.name == "b"
-    assert mt.inputSchema["type"] == "object"
+    # mcp 2.0 renamed the field inputSchema -> input_schema (same wire key).
+    schema = getattr(mt, "input_schema", None) or getattr(mt, "inputSchema", None)
+    assert schema["type"] == "object"
 
 
 # --- dispatch ------------------------------------------------------------
@@ -212,3 +214,65 @@ def test_build_http_app_smoke():
     pytest.importorskip("starlette")
     app = publish.build_http_app(("git",), token="secret")
     assert app is not None
+
+
+# --- end-to-end: a real MCP client drives eVi's server -------------------
+
+
+async def test_served_tools_round_trip():
+    """A real MCP client connects to eVi's server over an in-memory transport,
+    lists tools, and calls one — exercising the actual list_tools / call_tool
+    handlers, not just that build_server constructs. This is the test that would
+    have caught the mcp 2.0 server-API break (the smoke tests above only build).
+
+    Version-adaptive: mcp 1.x and 2.0 expose different in-memory helpers.
+    """
+    pytest.importorskip("mcp")
+    import mcp
+
+    server = publish.build_server(("git",))
+
+    try:  # mcp 1.x — one helper yields a connected client session
+        from mcp.shared.memory import (
+            create_connected_server_and_client_session as _connect,
+        )
+    except ImportError:
+        _connect = None
+
+    if _connect is not None:
+        async with _connect(server) as client:
+            await _assert_round_trip(client)
+        return
+
+    # mcp >= 2.0 — wire raw memory streams + run the server in a task group.
+    import anyio
+    from mcp.shared.memory import create_client_server_memory_streams
+
+    init_opts = server.create_initialization_options()
+    async with create_client_server_memory_streams() as ((c_read, c_write), (s_read, s_write)):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(
+                lambda: server.run(s_read, s_write, init_opts, raise_exceptions=True)
+            )
+            async with mcp.ClientSession(c_read, c_write) as client:
+                await client.initialize()
+                await _assert_round_trip(client)
+            tg.cancel_scope.cancel()
+
+
+async def _assert_round_trip(client) -> None:
+    listed = await client.list_tools()
+    assert listed.tools, "server exposed no tools"
+    for t in listed.tools:
+        schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)
+        assert schema, f"tool {t.name} lost its schema over the wire"
+
+    # Call a tool with no required args and confirm the round-trip returns a
+    # CallToolResult with content (the tool's own success is not under test).
+    def _no_required(t):
+        sch = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None) or {}
+        return not sch.get("required")
+
+    name = next((t.name for t in listed.tools if _no_required(t)), listed.tools[0].name)
+    result = await client.call_tool(name, {})
+    assert isinstance(result.content, list), "call_tool returned no content list"
