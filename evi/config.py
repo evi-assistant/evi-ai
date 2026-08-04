@@ -567,6 +567,10 @@ class Config:
             worktree=WorktreeSettings(**data.get("worktree", {})),
             models=SpecialtyModels(**data.get("models", {})),
             notify=NotifySettings(**data.get("notify", {})),
+            # Without this the [desktop] section was never read back: it stayed
+            # write-only (the UI showed defaults) and any other section's save
+            # rewrote asdict(self), clobbering saved desktop values.
+            desktop=DesktopSettings(**data.get("desktop", {})),
         )
 
     def save(self) -> None:

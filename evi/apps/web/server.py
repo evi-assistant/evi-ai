@@ -1402,7 +1402,12 @@ def create_app() -> FastAPI:
         cfg = Config.load()
         from evi.backends import registry as _reg
         if req.backend is not None:
-            entry = _reg.get_entry(req.backend.strip())
+            # Resolve against effective_backends — which includes the synthetic
+            # entry for the legacy single [llm] backend when no backends.json
+            # exists — not just the file. Otherwise switching a model on the
+            # DEFAULT backend (the picker passes its implicit name) 400s with
+            # "unknown backend", breaking model switching for no-registry users.
+            entry = _reg.get_entry(req.backend.strip(), _reg.effective_backends(cfg))
             if entry is None:
                 raise HTTPException(400, f"unknown backend {req.backend!r}")
             # Materialize the chosen registry entry into [llm] (the active backend).
@@ -1604,6 +1609,12 @@ def create_app() -> FastAPI:
                     sess.agent.client = make_client(cfg.llm)
                 except Exception:  # noqa: BLE001
                     pass
+                # Re-stitch the system prompt so the agent's self-identity
+                # (embedded model id) follows the new model — mirrors
+                # model_picker_set and the /model slash command. Without this a
+                # Settings model change left the live session claiming the old
+                # model until /reload or restart.
+                sess.agent.refresh_prompt()
 
         # Some sections only fully bind at session creation (tool enablement,
         # permission policy). Tell the UI which of those changed so it can hint
@@ -2407,6 +2418,18 @@ def create_app() -> FastAPI:
         # The factory inserts a system message at index 0; replace history
         # outright with our snapshot (the snapshot's index 0 is also system).
         new_session.agent.history = snapshot
+        # Inherit the parent's model/backend/effort + working folder so the
+        # branch continues under the same setup instead of falling back to app
+        # defaults (a branch off a coder model shouldn't silently become the
+        # default chat model).
+        for f in fields(sess.agent.config.llm):
+            setattr(new_session.agent.config.llm, f.name,
+                    getattr(sess.agent.config.llm, f.name))
+        new_session.agent.cwd = getattr(sess.agent, "cwd", "")
+        try:
+            new_session.agent.client = make_client(new_session.agent.config.llm)
+        except Exception:  # noqa: BLE001
+            pass
         return {"new_session_id": new_id, "length": len(snapshot)}
 
     @app.post("/api/session/{session_id}/reroll")
@@ -2416,8 +2439,13 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
-        if not sess.agent.rewind_to_last_user():
-            # Nothing to re-roll (no prior assistant turn).
+        sess.agent.rewind_to_last_user()
+        # rewind_to_last_user() returns the count it popped, which is 0 when the
+        # history ALREADY ends at a user message — e.g. right after editing a
+        # user message truncated its stale reply. That's a valid re-roll target,
+        # not a no-op; only bail when there is genuinely no user turn to answer.
+        _hist = sess.agent.history
+        if len(_hist) <= 1 or _hist[-1].get("role") != "user":
             async def _noop() -> AsyncIterator[dict[str, str]]:
                 yield {"event": "message", "data": json.dumps(
                     {"kind": "Error", "message": "nothing to re-roll"}

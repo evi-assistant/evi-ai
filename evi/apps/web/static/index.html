@@ -756,10 +756,20 @@ async function refreshUsage() {
     const r = await fetch(`/api/session/${sessionId}/usage`);
     if (!r.ok) return;
     const { used, ceiling } = await r.json();
-    if (!ceiling) { chipUsage.style.display = 'none'; return; }
-    const pct = Math.round((used / ceiling) * 100);
     const k = n => Math.round(n / 1000) + 'k';
-    chipUsage.textContent = `${k(used)} / ${k(ceiling)} (${pct}%)`;
+    if (!ceiling) {
+      // Unknown context ceiling: still surface the running token count (keeping
+      // the word "tokens" so the single chip format never diverges — see #29)
+      // instead of hiding the chip after a real turn.
+      if (!used) { chipUsage.style.display = 'none'; return; }
+      chipUsage.textContent = `${used.toLocaleString()} tokens`;
+      chipUsage.style.display = 'inline-block';
+      chipUsage.classList.remove('active');
+      chipUsage.style.color = 'var(--dim)';
+      return;
+    }
+    const pct = Math.round((used / ceiling) * 100);
+    chipUsage.textContent = `${k(used)} / ${k(ceiling)} tokens (${pct}%)`;
     chipUsage.style.display = 'inline-block';
     chipUsage.classList.toggle('active', pct >= 70);
     chipUsage.style.color = pct >= 85 ? 'var(--err)' : (pct >= 70 ? 'var(--tool)' : 'var(--dim)');
@@ -865,13 +875,16 @@ refreshUsage();
 // first bubble we ever create is index 1.
 let nextHistoryIndex = 1;
 
-function addBubble(cls) {
+function addBubble(cls, { history = true } = {}) {
   const div = document.createElement('div');
   div.className = `msg ${cls}`;
   // Only user/assistant/tool bubbles map to real history entries; the
   // other classes (system, thinking, upload-chip, error) live outside the
-  // history-edit model.
-  if (cls === 'user' || cls === 'assistant' || cls === 'tool') {
+  // history-edit model. Pass {history:false} for a UI-only artifact that must
+  // NOT claim a history index (e.g. the transient tool-progress bubble) —
+  // otherwise the server/client indices drift and edit/branch/delete would
+  // target the wrong message.
+  if (history && (cls === 'user' || cls === 'assistant' || cls === 'tool')) {
     div.dataset.index = String(nextHistoryIndex);
     nextHistoryIndex += 1;
     attachMessageActions(div, cls);
@@ -890,7 +903,7 @@ function attachMessageActions(bubble, cls) {
     { label: '✏️', title: 'Edit', action: () => editBubble(bubble) },
   ];
   if (cls === 'assistant') {
-    buttons.push({ label: '🔄', title: 'Re-roll', action: () => rerollFromBubble() });
+    buttons.push({ label: '🔄', title: 'Re-roll', cls: 'reroll-btn', action: () => rerollFromBubble() });
   }
   buttons.push({ label: '🌿', title: 'Branch', action: () => branchFromBubble(idx) });
   buttons.push({ label: '🗑', title: 'Delete from here', action: () => truncateFromBubble(idx) });
@@ -898,10 +911,23 @@ function attachMessageActions(bubble, cls) {
     const btn = document.createElement('button');
     btn.textContent = b.label;
     btn.title = b.title;
+    if (b.cls) btn.classList.add(b.cls);
     btn.onclick = e => { e.stopPropagation(); b.action(); };
     actions.appendChild(btn);
   }
   bubble.appendChild(actions);
+}
+
+// Re-roll only ever regenerates the LATEST turn (the server rewinds to the last
+// user message), so show the 🔄 button on the last assistant bubble only — on
+// older bubbles it silently re-rolled a different turn.
+function updateRerollButtons() {
+  const assistants = log.querySelectorAll('.msg.assistant');
+  const last = assistants[assistants.length - 1] || null;
+  log.querySelectorAll('.reroll-btn').forEach(btn => {
+    const bubble = btn.closest('.msg.assistant');
+    btn.style.display = (last && bubble === last) ? '' : 'none';
+  });
 }
 
 async function rebuildHistory() {
@@ -925,8 +951,12 @@ async function rebuildHistory() {
       const bubble = addBubble(cls);
       if (cls === 'tool') {
         bubble.textContent = `← ${m.name || ''}: ${m.content || ''}`;
+        // textContent= wiped the toolbar addBubble appended — re-attach it,
+        // else tool bubbles lose Edit/Branch/Delete after any rebuild.
+        attachMessageActions(bubble, 'tool');
       } else if (cls === 'assistant') {
         // Assistant messages get full markdown + syntax highlighting.
+        // renderMarkdownInto re-attaches its own toolbar after setting innerHTML.
         renderMarkdownInto(bubble, m.content || '');
         if (m.tool_calls) {
           const note = document.createElement('div');
@@ -937,8 +967,11 @@ async function rebuildHistory() {
       } else {
         // User messages stay as plain text — they're what you typed.
         bubble.textContent = m.content || '';
+        attachMessageActions(bubble, cls);  // textContent= wiped the toolbar
       }
     }
+    updateRerollButtons();  // only the last assistant turn may re-roll
+    refreshUsage();  // the newly-shown session's context usage (was stale)
   } catch (err) { console.error('history rebuild failed', err); }
 }
 
@@ -1079,6 +1112,9 @@ function renderToolResult(bubble, name, output, citations) {
       : output.slice(0, TOOL_PREVIEW_CHARS) + '…';
   }
   paint();
+  // innerHTML='' above wiped the toolbar addBubble appended — re-attach it so
+  // streamed tool-result bubbles keep Edit/Branch/Delete like every other row.
+  attachMessageActions(bubble, 'tool');
   if (isLong) {
     const toggle = document.createElement('button');
     toggle.className = 'show-toggle';
@@ -1177,9 +1213,9 @@ function askPermission({ decision_id, tool_name, args, category }) {
       <div class="perm-card">
         <h3>Permission required</h3>
         <p>The agent wants to run:</p>
-        <p><span class="perm-tool">${tool_name}</span>
-           <span style="color:var(--dim)">(${category})</span></p>
-        <div class="perm-args">${args.replace(/</g,'&lt;')}</div>
+        <p><span class="perm-tool">${escapeHtml(String(tool_name || ''))}</span>
+           <span style="color:var(--dim)">(${escapeHtml(String(category || ''))})</span></p>
+        <div class="perm-args">${escapeHtml(String(args || ''))}</div>
         <div class="perm-actions">
           <button class="deny">Deny</button>
           <button class="approve">Approve</button>
@@ -1606,20 +1642,30 @@ async function handleEvent(ev, assistant) {
     // Stream completed sentences into the browser's TTS queue.
     maybeSpeak(assistant);
   } else if (ev.kind === 'ToolCall') {
-    const b = addBubble('tool');
-    b.textContent = `→ ${ev.name}(${ev.arguments})`;
+    // The tool call belongs to the CURRENT assistant history row (an assistant
+    // message can carry text + tool_calls). Render it as a note inside that
+    // bubble — mirroring rebuildHistory — instead of a separate history bubble.
+    // A separate bubble claimed a history index the server never stores, so
+    // every later bubble's data-index drifted and edit/branch/delete hit the
+    // wrong message. Ensuring one assistant bubble per row keeps them aligned.
+    if (!assistant) assistant = addBubble('assistant');
+    const note = document.createElement('div');
+    note.style.cssText = 'color:var(--dim);font-size:11px;margin-top:4px';
+    note.textContent = `→ ${ev.name}(${ev.arguments})`;
+    assistant.appendChild(note);
     workStatus.setPhase(`running ${ev.name}…`);
-    assistant = null;  // next TextDelta starts a fresh bubble
   } else if (ev.kind === 'ToolProgress') {
     // A single self-updating "running" bubble so a slow tool shows live
-    // status instead of an apparent hang. Cleared when results arrive.
+    // status instead of an apparent hang. UI-only artifact (history:false) —
+    // it's removed when results arrive, so it must never claim a history index.
     let p = document.getElementById('tool-progress');
-    if (!p) { p = addBubble('tool'); p.id = 'tool-progress'; }
+    if (!p) { p = addBubble('tool', { history: false }); p.id = 'tool-progress'; }
     p.textContent = `… ${ev.names.join(', ')} running (${Math.round(ev.elapsed)}s)`;
     workStatus.setPhase(`running ${ev.names.join(', ')}…`);
   } else if (ev.kind === 'ToolResult') {
     const pp = document.getElementById('tool-progress');
     if (pp) pp.remove();
+    assistant = null;  // the assistant row that issued the call(s) is complete
     const b = addBubble('tool');
     renderToolResult(b, ev.name, ev.output, ev.citations || []);
     maybeRenderImages(b, ev.output);
@@ -1628,12 +1674,23 @@ async function handleEvent(ev, assistant) {
     await postDecision(ev.decision_id, approved);
   } else if (ev.kind === 'RouteInfo') {
     const lbl = document.getElementById('model-btn-label');
-    if (lbl) lbl.textContent = (ev.route && ev.route !== 'default') ? (ev.model + ' (' + ev.route + ')') : ev.model;
+    if (lbl) {
+      if (ev.route && ev.route !== 'default') {
+        // A routed turn used a different model than the picker's active one —
+        // annotate it explicitly for this turn.
+        lbl.textContent = ev.model + ' (' + ev.route + ')';
+      } else {
+        // The default route fires on EVERY turn; re-render the footer from
+        // pickerState instead of overwriting the label with a bare id, so we
+        // don't drop the effort/fast suffix, capability chips, cloud flag, and
+        // truncation each turn.
+        renderFooter();
+      }
+    }
   } else if (ev.kind === 'UsageStats') {
-    // Real numbers from the backend — overwrite the approximate chip.
-    const ceiling = pickerState && pickerState.active ? null : null; // keep ceiling untouched
-    chipUsage.textContent = `${ev.total_tokens.toLocaleString()} tokens (prompt ${ev.prompt_tokens.toLocaleString()})`;
-    chipUsage.style.display = 'inline-block';
+    // The usage chip (used / ceiling tokens, colour-coded) is owned SOLELY by
+    // refreshUsage() so its format never diverges (#29) — here just feed the
+    // live work indicator; refreshUsage settles the chip at turn end.
     workStatus.setTokens(ev.total_tokens);
   } else if (ev.kind === 'Guardrail') {
     const bubble = addBubble('system');
@@ -1650,6 +1707,9 @@ async function handleEvent(ev, assistant) {
       assistant.appendChild(el);
     }
   } else if (ev.kind === 'Done') {
+    // The turn's final assistant bubble is now the newest — move the re-roll
+    // affordance onto it (and off any earlier ones).
+    updateRerollButtons();
     // Flush any trailing partial sentence to the TTS queue.
     flushSpeak(assistant);
     // Completion notification — only when this tab is in the background, so it
@@ -1935,6 +1995,14 @@ function renderFooter() {
   modelBtn.title = names.length ? 'Capabilities: ' + names.join(', ') : 'Switch model (Ctrl+I)';
 }
 
+// The backend that should serve `id`: prefer the currently-active backend when
+// it offers the model, else the model's first source. Shared by the picker rows
+// and the 1-9 keyboard shortcut so both switch to the same backend.
+function _backendForModel(id) {
+  const src = (pickerState.sources || {})[id] || [];
+  return src.includes(pickerState.active_backend) ? pickerState.active_backend : (src[0] || '');
+}
+
 function renderPicker() {
   const { active, models, effort, effort_levels, fast_mode } = pickerState;
   const rows = [];
@@ -1950,8 +2018,7 @@ function renderPicker() {
     const capSpan = chips ? ` <span class="caps" title="capabilities">${chips}</span>` : '';
     // Source backend tag(s) — which configured backend serves this model.
     const srcList = sources[id] || [];
-    const srcBackend = srcList.includes(pickerState.active_backend)
-      ? pickerState.active_backend : (srcList[0] || '');
+    const srcBackend = _backendForModel(id);
     const srcSpan = srcList.length
       ? ` <span class="src" title="backend: ${escapeAttr(srcList.join(', '))}">${escapeHtml(srcList.join('/'))}</span>`
       : '';
@@ -1998,15 +2065,13 @@ async function applyPicker(patch) {
       body: JSON.stringify(patch),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    pickerState.active = data.active;
-    if (data.active_backend) pickerState.active_backend = data.active_backend;
-    pickerState.fast_model = data.fast_model;
-    pickerState.effort = data.effort;
-    pickerState.fast_mode = data.fast_mode;
-    renderFooter();
-    renderPicker();
-    if (data.active) meta.textContent = 'model=' + data.active;  // keep the header in sync
+    // Re-fetch the FULL snapshot rather than copying a subset of the POST
+    // response: that response omits active_capabilities/api (and models/sources),
+    // so patching a few fields left the footer capability chips + cloud flag —
+    // and the picker's model list — showing the previously-active model.
+    await loadPicker();   // GET → replaces pickerState wholesale → renderFooter()
+    renderPicker();       // refresh the open overlay too
+    if (pickerState.active) meta.textContent = 'model=' + pickerState.active;
   } catch (err) {
     console.error('picker apply failed', err);
   }
@@ -2060,7 +2125,10 @@ window.addEventListener('keydown', e => {
   if (pickerOverlay.classList.contains('active') && /^[1-9]$/.test(e.key)) {
     const n = parseInt(e.key, 10);
     const id = pickerState.models[n - 1];
-    if (id) applyPicker({ model: id });
+    // Pass the model's source backend too (as clicking the row does) — without
+    // it, picking a model served only by a different backend left the active
+    // backend pointing at a model it can't serve, with no client rebuild.
+    if (id) applyPicker({ model: id, backend: _backendForModel(id) || undefined });
   }
 });
 
@@ -2274,6 +2342,7 @@ resetBtn.addEventListener('click', async () => {
   });
   log.innerHTML = '';
   nextHistoryIndex = 1;
+  refreshUsage();  // the cleared session's context is back to ~0 — don't show the old count
   // Reset the current tab's label too — it'll get re-named on the next user msg.
   if (tabs[activeIdx]) setTabLabel('new chat');
 });
@@ -2332,8 +2401,9 @@ resetBtn.addEventListener('click', async () => {
 
   // ---- settings schema (declarative → generic renderer, stays DRY) ----
   const TOOL_KEYS = ['fs','code','shell','gmail','outlook','image','memory','subagent',
-    'mcp','skills','web','voice','computer','transcripts','pdf','sqlite','index','git','ocr','calendar'];
-  const RISKY = new Set(['shell','computer','web']);
+    'mcp','skills','web','voice','computer','transcripts','pdf','sqlite','index','git','ocr','calendar',
+    'federation','ask','vision'];
+  const RISKY = new Set(['shell','computer','web','federation']);
   const SCHEMA = [
     { id:'general', title:'General', blurb:'Appearance and reporting.', fields:[
       { type:'client-select', key:'theme', label:'Theme', options:['system','dark','light'],
@@ -2350,11 +2420,15 @@ resetBtn.addEventListener('click', async () => {
         help:'Opt-in tool-call counters/durations. Needs the [otel] extra + an endpoint.' },
       { type:'text', section:'telemetry', key:'otlp_endpoint', label:'OTLP endpoint',
         help:'Base OTLP/HTTP URL, e.g. http://localhost:4318. Blank = nothing is exported.' },
+      { type:'select', section:'telemetry', key:'backend', label:'Crash-report backend', options:['sentry','none'],
+        help:'Which SDK sends crash reports when a DSN is set.' },
+      { type:'text', section:'telemetry', key:'service_name', label:'Telemetry service name',
+        help:'Service-name tag on exported traces / reports.' },
     ]},
     { id:'model', title:'Model & Backend', blurb:'Where eVi sends your messages.', fields:[
       { type:'select', section:'llm', key:'backend', label:'Backend',
-        options:['lmstudio','ollama','llamacpp','openai_compat'],
-        help:'Switching rebuilds the live connection.' },
+        options:['lmstudio','ollama','llamacpp','openai_compat','claude_agent','codex','gemini','copilot','amp'],
+        help:'Switching rebuilds the live connection. The claude_agent/codex/gemini/copilot/amp kinds drive a local CLI-agent (subscription auth) instead of an HTTP endpoint.' },
       { type:'text', section:'llm', key:'base_url', label:'Base URL' },
       { type:'model', section:'llm', key:'model', label:'Model',
         help:'Detected on the backend; pick Custom… to type one.' },
@@ -2375,6 +2449,10 @@ resetBtn.addEventListener('click', async () => {
         help:'Smaller model used when fast mode is on; pick Custom… to type one.' },
       { type:'lines', section:'llm', key:'fallback_models', label:'Fallback models',
         help:'On a retryable backend error, retry the turn against each of these model ids in order (one per line).' },
+      { type:'bool', section:'llm', key:'router_enabled', label:'Multi-model routing',
+        help:'Match each turn against ~/.evi/routes.json (Settings → Routes & Recipes) and swap the model for that turn.' },
+      { type:'model', section:'llm', key:'router_model', label:'Router classifier model',
+        help:'Optional tiny model to pick a route when no keyword rule matches. Blank = keyword-only routing.' },
     ]},
     { id:'tools', title:'Tools', blurb:'Capabilities eVi can use.', applies:'new-chat',
       fields: TOOL_KEYS.map(k => ({ type:'bool', section:'tools', key:k, label:k, risky:RISKY.has(k) }))
@@ -2383,6 +2461,12 @@ resetBtn.addEventListener('click', async () => {
             help:'Run run_python under an OS sandbox (read-only FS, no network) where available (bwrap / sandbox-exec).' },
           { type:'lines', section:'tools', key:'mcp_allow', label:'MCP server allowlist',
             help:'If non-empty, only these mcp.json server names load (one per line). Empty = all enabled servers.' },
+          { type:'bool', section:'tools', key:'tool_search', label:'Tool search at scale',
+            help:'When the enabled toolset exceeds the threshold below, defer the long tail behind a search_tools meta-tool instead of sending every schema each turn (keeps context small with many MCP tools).' },
+          { type:'int', section:'tools', key:'tool_search_threshold', label:'Tool-search threshold',
+            help:'Enabled-tool count above which tool search kicks in (when the toggle above is on).' },
+          { type:'int', section:'tools', key:'mcp_max_output_chars', label:'Max MCP output chars',
+            help:'Truncate a single MCP tool result to this many characters before handing it to the model. 0 = no cap.' },
         ]) },
     { id:'editing', title:'Editing & data', blurb:'Code-edit assists and stored-transcript retention.', fields:[
       { type:'bool', section:'tools', key:'format_on_edit', label:'Format on edit',
@@ -2391,6 +2475,8 @@ resetBtn.addEventListener('click', async () => {
         help:'Run the linter after a write and fold any diagnostics into the tool result (cheap LSP-lite feedback).' },
       { type:'int', section:'tools', key:'cleanup_period_days', label:'Transcript retention (days)',
         help:'Delete stored sessions older than N days on startup. 0 = keep forever.' },
+      { type:'text', section:'worktree', key:'base_ref', label:'Worktree base ref',
+        help:'Branch/commit new `evi worktree` trees fork from when --base is omitted (e.g. main). Blank = HEAD.' },
     ]},
     { id:'permissions', title:'Permissions', blurb:'How tool calls are approved.',
       applies:'new-chat', fields:[
@@ -2404,17 +2490,66 @@ resetBtn.addEventListener('click', async () => {
           help:'Auto-approve file tools whose path is under one of these dirs (one per line).' },
         { type:'lines', section:'auto', key:'trusted_domains', label:'Trusted domains',
           help:'Auto-approve web fetches to these hosts (one per line, e.g. docs.python.org).' },
+        { type:'bool', section:'auto', key:'block_destructive', label:'Destructive-command guard',
+          help:'Force a confirmation (or deny when headless) for curated destructive shell commands — rm -rf ~, git reset --hard, force-push, disk format, secret exfil, IaC destroy. Overrides yolo/accept_edits. On by default.' },
+        { type:'lines', section:'auto', key:'destructive_allow', label:'Guard exemptions (globs)',
+          help:'fnmatch globs matched against the whole command that EXEMPT it from the guard, e.g. *--force-with-lease*.' },
+        { type:'lines', section:'auto', key:'destructive_disable_rules', label:'Disabled guard rules',
+          help:'Builtin rule ids to silence without disabling the whole guard, e.g. git-commit-amend, system-power.' },
+        { type:'lines', section:'auto', key:'hard_deny', label:'Always-deny rules',
+          help:'Evaluated before everything (even yolo): <tool-glob> [arg-glob], e.g. "shell rm -rf*", "fs *.pem".' },
+        { type:'lines', section:'auto', key:'protected_paths', label:'Protected paths',
+          help:'Force a prompt even under accept_edits/trusted_dirs (fnmatch on path + basename), e.g. .env, *.pem, id_rsa.' },
       ] },
     { id:'context', title:'Context', blurb:'When eVi compacts long conversations.', fields:[
       { type:'int', section:'llm', key:'compact_after_messages', label:'Compact after N messages', help:'0 disables.' },
       { type:'int', section:'llm', key:'compact_keep_recent', label:'Keep recent turns' },
       { type:'int', section:'llm', key:'compact_when_pct', label:'Compact at % of context' },
     ]},
+    { id:'sampling', title:'Sampling & advanced', blurb:'Fine-grained generation knobs — most only take effect when they deviate from the default.', fields:[
+      { type:'number', section:'llm', key:'top_p', label:'Top-p', step:0.05, min:0, max:1 },
+      { type:'number', section:'llm', key:'presence_penalty', label:'Presence penalty', step:0.1, min:-2, max:2 },
+      { type:'number', section:'llm', key:'frequency_penalty', label:'Frequency penalty', step:0.1, min:-2, max:2 },
+      { type:'int', section:'llm', key:'seed', label:'Seed', help:'0 = unset; non-zero seeds the backend RNG for reproducible runs.' },
+      { type:'lines', section:'llm', key:'stop_sequences', label:'Stop sequences', help:'Hard-stop generation tokens (one per line). Empty = no override.' },
+      { type:'bool', section:'llm', key:'parallel_tool_calls', label:'Parallel tool calls', help:'Off = the model may request only one tool per turn.' },
+      { type:'int', section:'llm', key:'max_completion_tokens', label:'Max completion tokens', help:'For reasoning models that reject max_tokens. 0 = unset (send max_tokens instead).' },
+      { type:'text', section:'llm', key:'logit_bias', label:'Logit bias (JSON)', help:'Token-id → bias map as JSON, e.g. {"123": -100}. Values clamp to [-100,100]. Blank = none.' },
+      { type:'bool', section:'llm', key:'cache_prompt', label:'Cache prompt (KV reuse)', help:'llama.cpp / vLLM prefix-cache hint; other backends ignore it.' },
+      { type:'bool', section:'llm', key:'logprobs', label:'Log probabilities', help:'Ask the backend for per-token logprobs and show a confidence summary.' },
+      { type:'int', section:'llm', key:'top_logprobs', label:'Top-N logprobs', help:'0-20 most-likely alternates per position (needs Log probabilities on).' },
+      { type:'number', section:'llm', key:'request_timeout', label:'Request timeout (s)', step:5, min:0 },
+      { type:'text', section:'llm', key:'embed_model', label:'Embedding model', help:'Used for semantic file search / index.' },
+      { type:'int', section:'llm', key:'embed_dimensions', label:'Embedding dimensions' },
+    ]},
+    { id:'specialty', title:'Specialty models', blurb:'Optional small per-task models — OCR / vision / speech / guard — distinct from the main chat model. Blank = use the main model / default engine.', fields:[
+      { type:'text', section:'models', key:'ocr', label:'OCR model', help:'Chat-VLM id served over the image schema (e.g. glm-ocr on Ollama).' },
+      { type:'text', section:'models', key:'ocr_base_url', label:'OCR base URL', help:'Point OCR at a separate server. Blank = the [llm] backend.' },
+      { type:'text', section:'models', key:'ocr_backend', label:'OCR backend kind' },
+      { type:'text', section:'models', key:'vision', label:'Vision model', help:'VLM for describe_image (e.g. moondream).' },
+      { type:'text', section:'models', key:'vision_base_url', label:'Vision base URL' },
+      { type:'text', section:'models', key:'vision_backend', label:'Vision backend kind' },
+      { type:'text', section:'models', key:'stt', label:'Speech-to-text model', help:'faster-whisper model id (e.g. large-v3-turbo).' },
+      { type:'text', section:'models', key:'tts', label:'Text-to-speech voice / model' },
+      { type:'text', section:'models', key:'guard', label:'Safety-guard model', help:'Llama Guard / ShieldGemma for the [[guard]] guardrail (e.g. llama-guard3).' },
+      { type:'text', section:'models', key:'guard_base_url', label:'Guard base URL' },
+      { type:'text', section:'models', key:'guard_backend', label:'Guard backend kind' },
+      { type:'text', section:'models', key:'diarize', label:'Diarization model' },
+      { type:'text', section:'models', key:'doc_layout', label:'Doc-layout model' },
+    ]},
     { id:'integrations', title:'Integrations', blurb:'Optional external services.', fields:[
       { type:'text', section:'comfy', key:'base_url', label:'ComfyUI URL' },
       { type:'text', section:'obsidian', key:'vault_path', label:'Obsidian vault path' },
       { type:'text', section:'google', key:'client_secrets_path', label:'Google client secrets (path)' },
       { type:'text', section:'microsoft', key:'client_id', label:'Microsoft client ID' },
+      { type:'text', section:'microsoft', key:'tenant_id', label:'Microsoft tenant ID', help:'AAD tenant (default: common).' },
+      { type:'lines', section:'microsoft', key:'scopes', label:'Microsoft scopes', help:'Graph scopes (one per line), e.g. Mail.Read, User.Read.' },
+      { type:'lines', section:'google', key:'scopes', label:'Google scopes', help:'OAuth scopes (one per line).' },
+      { type:'text', section:'obsidian', key:'subdir', label:'Obsidian subfolder', help:'Vault subfolder eVi writes to (default: eVi).' },
+      { type:'text', section:'comfy', key:'default_checkpoint', label:'ComfyUI checkpoint' },
+      { type:'int', section:'comfy', key:'default_steps', label:'ComfyUI steps' },
+      { type:'int', section:'comfy', key:'default_width', label:'ComfyUI width' },
+      { type:'int', section:'comfy', key:'default_height', label:'ComfyUI height' },
       { type:'select', section:'tools', key:'search_backend', label:'Web search backend',
         options:['ddg','searxng','ollama'],
         help:'ddg: DuckDuckGo, keyless · searxng: self-hosted (set the URL below) · ollama: needs OLLAMA_API_KEY.' },
@@ -2448,11 +2583,29 @@ resetBtn.addEventListener('click', async () => {
       { type:'text', section:'notify', key:'url', label:'ntfy / webhook URL',
         help:'Optional. POST completion to an ntfy topic or webhook so a remote/headless turn can reach your phone.' },
     ]},
+    { id:'statusline', title:'Status line', blurb:'Customizable chat-REPL status line (off by default).', fields:[
+      { type:'bool', section:'statusline', key:'enabled', label:'Enable status line' },
+      { type:'text', section:'statusline', key:'format', label:'Format',
+        help:'Tokens: {model} {used} {ceiling} {pct} {branch} {goal} {effort} {fast}.' },
+      { type:'text', section:'statusline', key:'command', label:'Command (optional)',
+        help:'Shell command fed the state as JSON on stdin; its stdout overrides Format.' },
+    ]},
     { id:'multiagent', title:'Multi-agent', blurb:'How ultracode / workflows spread work across backends.', fields:[
       { type:'bool', section:'ultracode', key:'fanout', label:'Spread fan-out across flagged backends',
         help:'Run ultracode SOLVER angles across every backend ticked "fan-out" in Model & Backend (multi-provider). Without this, the per-backend fan-out flags do nothing.' },
       { type:'bool', section:'ultracode', key:'cheap_fanout', label:'Cheap fan-out (use the fast model)',
         help:'Run the solve stage on the [llm] fast model instead of fanning out across backends.' },
+      { type:'int', section:'ultracode', key:'breadth', label:'Solver breadth',
+        help:'Parallel solver angles per ultracode run (1 disables fan-out).' },
+      { type:'int', section:'ultracode', key:'rounds', label:'Verify rounds',
+        help:'Adversarial verify → refine cycles (0 skips critique).' },
+      { type:'text', section:'ultracode', key:'mode', label:'Default mode',
+        help:'Default task framing for ultracode runs (e.g. code).' },
+      { type:'lines', section:'ultracode', key:'angles', label:'Solver angles',
+        help:'Specific angle names from ultracode.SOLVER_ANGLES (one per line). Empty = the first N by breadth.' },
+      { type:'int', section:'ultracode', key:'max_workers', label:'Max parallel workers' },
+      { type:'bool', section:'ultracode', key:'auto_tune', label:'Auto-tune for small models',
+        help:'Downshift breadth/rounds for tiny / short-context models.' },
     ]},
     { id:'desktop', title:'Desktop', blurb:'Settings for the desktop app.', desktopOnly:true, fields:[
       { type:'bool', section:'desktop', key:'sidecar_auto_update', label:'Automatically update the core',
@@ -3726,6 +3879,10 @@ resetBtn.addEventListener('click', async () => {
       cfg = data.config; pending = {};
       if (typeof loadPicker === 'function') loadPicker();
       if (typeof loadCwd === 'function') loadCwd();
+      // A model/backend change from Settings must update the header model chip
+      // too — the footer picker path does this, so the two stay consistent.
+      if ((data.touched || []).includes('llm') && typeof refreshHeaderModel === 'function')
+        refreshHeaderModel();
       statusEl.textContent = (data.deferred && data.deferred.length)
         ? 'Saved — tool/permission changes apply to new chats.' : 'Saved.';
       saveBtn.disabled = true;
@@ -3796,7 +3953,7 @@ resetBtn.addEventListener('click', async () => {
     // Live agent-watch: re-render the session list as turns start/finish.
     let dispatchES = null;
     try {
-      dispatchES = new EventSource('/api/dispatch/stream');
+      dispatchES = new EventSource('/api/dispatch/stream?' + authQuery());
       dispatchES.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data);

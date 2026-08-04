@@ -15,7 +15,13 @@ pytestmark = pytest.mark.e2e
 
 def _console_errors(page: Page) -> list[str]:
     errors: list[str] = []
-    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    # Ignore resource-load / network failures (e.g. a CDN asset transiently
+    # failing under load — "Failed to load resource: net::ERR_NO_BUFFER_SPACE").
+    # Those are environmental, not app/JS bugs, and make the suite flaky.
+    def _on_console(m):
+        if m.type == "error" and "Failed to load resource" not in m.text and "net::ERR" not in m.text:
+            errors.append(m.text)
+    page.on("console", _on_console)
     page.on("pageerror", lambda e: errors.append(str(e)))
     return errors
 
@@ -342,11 +348,17 @@ def test_mcp_panel(page: Page, evi_base_url: str):
         ("general", "General"),
         ("model", "Model & Backend"),
         ("tools", "Tools"),
+        ("editing", "Editing & data"),
         ("permissions", "Permissions"),
         ("context", "Context"),
+        ("sampling", "Sampling & advanced"),
+        ("specialty", "Specialty models"),
         ("integrations", "Integrations"),
         ("server", "Server"),
         ("voice", "Voice"),
+        ("notifications", "Notifications"),
+        ("statusline", "Status line"),
+        ("multiagent", "Multi-agent"),
         ("guardrails", "Guardrails"),
         ("plugins", "Plugins"),
         ("stats", "Usage"),

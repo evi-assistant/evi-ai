@@ -47,7 +47,14 @@ def _make_fake_llm_app():
     from starlette.routing import Route
 
     async def models(_request):
-        return JSONResponse({"object": "list", "data": [{"id": "fake", "object": "model"}]})
+        # Two models with DIFFERENT capability profiles so model-switch tests can
+        # assert the footer/picker updates: `fake` has no capability chips;
+        # `fake-o1` resolves to reasoning+tools via evi.capabilities (name
+        # heuristic), so switching between them must change the footer chips.
+        return JSONResponse({"object": "list", "data": [
+            {"id": "fake", "object": "model"},
+            {"id": "fake-o1", "object": "model"},
+        ]})
 
     async def chat(request):
         body = await request.json()
