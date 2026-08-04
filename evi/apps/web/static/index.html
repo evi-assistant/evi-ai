@@ -1531,7 +1531,9 @@ async function sendMessage(text, images) {
   }
   // If the user is talking, stop the TTS — they want our attention.
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  addBubble('user').textContent = text;
+  const userBubble = addBubble('user');
+  userBubble.textContent = text;
+  attachMessageActions(userBubble, 'user');  // textContent above wiped the toolbar
   let assistant = null;  // built lazily on first TextDelta
   send.disabled = true;
   workStatus.start();

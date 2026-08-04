@@ -47,6 +47,19 @@ def test_reroll_button_only_on_last_assistant(page: Page, evi_base_url: str):
     assert result["inLast"], "the visible re-roll button is not in the last assistant bubble"
 
 
+def test_sent_user_bubble_has_toolbar(page: Page, evi_base_url: str):
+    # The LIVE send path (not a rebuild): `addBubble('user').textContent = text`
+    # wiped the toolbar addBubble had just appended, so a just-sent message had no
+    # Edit/Branch/Delete until a history rebuild. Found by dogfooding 1.0.18.
+    page.goto(evi_base_url)
+    _send(page, "hello there")
+    has_actions = page.evaluate(
+        "() => { const u = document.querySelector('.msg.user');"
+        "        return !!(u && u.querySelector('.msg-actions')); }"
+    )
+    assert has_actions, "a just-sent user bubble is missing its action toolbar"
+
+
 def test_user_bubble_keeps_toolbar_after_rebuild(page: Page, evi_base_url: str):
     page.goto(evi_base_url)
     _send(page, "hello")
