@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.19] — 2026-08-04
+
+### Fixed
+- **Edit / Branch / Delete are back on a message the moment you send it.** The
+  toolbar was attached and then immediately wiped when the just-sent message's
+  text was set, so you couldn't act on your own message until the conversation
+  was rebuilt (a tab switch, reload, or edit elsewhere). Found by dogfooding
+  1.0.18; a leftover of that release's toolbar fix, which only covered the
+  rebuild path. An audit of every message-bubble creation confirms this was the
+  last place the toolbar could be lost.
+
 ## [1.0.18] — 2026-08-04
 
 An end-to-end audit of the desktop UI — fixing a cluster of model-switch and
