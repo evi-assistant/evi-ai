@@ -47,7 +47,15 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.event_name == 'push' }}
 
+      # GHCR intermittently 403s on a blob HEAD during push — a transient
+      # blob-mount quirk of buildx + the GHA cache EXPORT, not a permission
+      # problem (packages: write is set, and the same push succeeds on re-run).
+      # So try once with the full cache; if that flakes, retry WITHOUT the cache
+      # export (the usual 403 trigger) so a release self-heals instead of
+      # red-failing. Keep the two `with:` blocks in sync.
       - name: Build (and push on tags / opt-in dispatch)
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -56,3 +64,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push (retry without cache export)
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          # No cache-to on the retry: exporting the mode=max cache is the usual
+          # trigger for the blob-HEAD 403, so the retry skips it to get the
+          # image pushed.
