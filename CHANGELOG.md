@@ -5,6 +5,48 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.18] — 2026-08-04
+
+An end-to-end audit of the desktop UI — fixing a cluster of model-switch and
+state-sync bugs and closing every settings-parity gap, with new automated test
+layers (including native-desktop and real two-model-switch coverage) so they
+can't quietly come back.
+
+### Fixed
+- **Switching models now updates the whole footer, every time.** The capability
+  chips (👁 vision, 🧠 reasoning, …) went stale after a switch — they kept
+  describing the *previous* model until you reopened the picker — and a per-turn
+  routing event quietly wiped the effort/fast/chip suffixes off the label on
+  every reply. Both are fixed; the footer always reflects the active model.
+- **Switching a model on the default backend no longer fails.** With no named
+  backend registry configured, picking a model returned a "400 unknown backend"
+  and the switch silently didn't take.
+- **Editing or deleting a message now targets the right one.** On turns that ran
+  a tool, the per-message index drifted, so Edit / Branch / Delete could act on a
+  *different* message than the one you clicked.
+- **The model identity follows a Settings change.** Changing the model in
+  Settings → Model & Backend didn't re-stitch the system prompt, so the agent
+  kept describing itself as the old model until a reload.
+- **Desktop settings persist again.** The `[desktop]` config section was
+  write-only — it reverted to defaults on reload and was overwritten whenever any
+  other section was saved.
+- **The context-usage chip refreshes when you switch, close, reset, or branch a
+  tab** (it had been showing the previous session's token count), and per-message
+  Re-roll now appears only on the latest turn (it always regenerated the last
+  turn regardless of which bubble you clicked). Also: message action toolbars
+  survive a history rebuild; branch inherits the parent's model + working folder;
+  the permission dialog escapes HTML; a hand-set backend timeout is no longer
+  dropped on save; and the dispatch live feed carries the auth token.
+
+### Added
+- **Every configurable setting is now reachable from the UI.** New **Sampling &
+  advanced** (top-p, penalties, seed, stop sequences, logit bias, request
+  timeout, …), **Specialty models** (per-task OCR / vision / speech / guard
+  models), and **Status line** sections, plus controls for federation,
+  multi-model routing, the destructive-command guard, tool-search, and the
+  remaining per-integration knobs (ComfyUI, Google/Microsoft scopes, telemetry,
+  worktree base ref).
+
 ## [1.0.17] — 2026-07-20
 
 ### Fixed
