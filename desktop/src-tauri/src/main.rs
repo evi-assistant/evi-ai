@@ -741,3 +741,51 @@ fn main() {
         }
     });
 }
+
+#[cfg(test)]
+mod deep_link_tests {
+    // `deep_link_to_path` is private, but a child module can reach its
+    // ancestor's private items. It mirrors `evi.deeplinks.to_web_path`
+    // (tests/test_deeplinks.py), so these guard the shell/Python parity that a
+    // desktop `evi://` deep link depends on.
+    use super::deep_link_to_path;
+
+    #[test]
+    fn session_link_maps_to_query() {
+        assert_eq!(
+            deep_link_to_path("evi://session/abc123").as_deref(),
+            Some("/?session=abc123")
+        );
+    }
+
+    #[test]
+    fn workflow_link_maps_to_query() {
+        assert_eq!(
+            deep_link_to_path("evi://workflow/nightly").as_deref(),
+            Some("/?workflow=nightly")
+        );
+    }
+
+    #[test]
+    fn empty_value_falls_back_to_root() {
+        // `evi://session/` with no id must NOT emit a dangling "/?session=".
+        assert_eq!(deep_link_to_path("evi://session/").as_deref(), Some("/"));
+        assert_eq!(deep_link_to_path("evi://session").as_deref(), Some("/"));
+        assert_eq!(deep_link_to_path("evi://workflow/").as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn new_and_unknown_routes_fall_back_to_root() {
+        // `evi://new` (parity with the Python "new" arm) and any unknown host.
+        assert_eq!(deep_link_to_path("evi://new").as_deref(), Some("/"));
+        assert_eq!(deep_link_to_path("evi://bogus/x").as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn non_evi_scheme_and_garbage_are_rejected() {
+        assert_eq!(deep_link_to_path("http://example.com/session/x"), None);
+        assert_eq!(deep_link_to_path("https://evi/session/x"), None);
+        assert_eq!(deep_link_to_path("not a url"), None);
+        assert_eq!(deep_link_to_path(""), None);
+    }
+}
