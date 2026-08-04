@@ -239,6 +239,10 @@ _HOT_SECTIONS = (
     "web", "google", "microsoft", "obsidian",
 )
 
+# Holds the single in-process HTTP MCP server the UI can start/stop (eVi serving
+# ITSELF as an MCP server). {server, thread, port, categories, token_set}.
+_mcp_serve: dict[str, Any] = {}
+
 # Multi-user (opt-in): the authenticated user for the in-flight request, set by
 # the auth middleware. None = single-user / open access (the default). Read in
 # the request task to scope sessions + data dirs per user.
@@ -2142,6 +2146,96 @@ def create_app() -> FastAPI:
         if not set_enabled(name, bool(req.get("on", True))):
             raise HTTPException(404, f"no such server: {name}")
         return {"ok": True}
+
+    # --- serve: run eVi AS an MCP server (the inverse of the panel above) ----
+    # One in-process HTTP MCP server the user can start/stop from the UI so
+    # other agents can reach eVi's curated tools/memory/prompts. stdio serving
+    # stays a CLI concern (a desktop client spawns it); the UI hands out a
+    # copy-paste config for that via /api/mcp/serve/config.
+    @app.get("/api/mcp/serve")
+    def mcp_serve_status() -> dict[str, Any]:
+        from evi.mcp import publish
+
+        th = _mcp_serve.get("thread")
+        running = bool(th and th.is_alive())
+        port = _mcp_serve.get("port", 0) if running else 0
+        return {
+            "running": running,
+            "port": port,
+            "url": (f"http://127.0.0.1:{port}/mcp" if running else ""),
+            "categories": _mcp_serve.get("categories", []) if running else [],
+            "token_set": _mcp_serve.get("token_set", False) if running else False,
+            "default_categories": list(publish.DEFAULT_CATEGORIES),
+        }
+
+    @app.post("/api/mcp/serve")
+    def mcp_serve_start(req: dict[str, Any]) -> dict[str, Any]:
+        """Start a localhost HTTP MCP server exposing eVi's curated surface.
+        Body: {categories?: [str], token?: str, port?: int}. Bound to 127.0.0.1
+        (a token is optional for localhost; required if you later expose it)."""
+        import socket as _socket
+        import threading as _threading
+
+        if _mcp_serve.get("thread") and _mcp_serve["thread"].is_alive():
+            raise HTTPException(409, "already serving — stop it first")
+        try:
+            import uvicorn
+
+            from evi.mcp import publish
+        except ImportError as exc:
+            raise HTTPException(400, f"MCP serve needs the [mcp] + web extras: {exc}") from exc
+
+        body = req or {}
+        cats = tuple(c for c in (body.get("categories") or publish.DEFAULT_CATEGORIES) if c)
+        token = str(body.get("token") or "").strip()
+        port = int(body.get("port") or 0)
+        if not port:
+            s = _socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+            s.close()
+        try:
+            http_app = publish.build_http_app(cats, None, token)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"could not build MCP server: {exc}") from exc
+        server = uvicorn.Server(uvicorn.Config(http_app, host="127.0.0.1", port=port,
+                                               log_level="warning"))
+
+        def _run() -> None:
+            try:
+                server.run()  # uvicorn skips signal handlers off the main thread
+            except Exception:  # noqa: BLE001
+                pass
+
+        th = _threading.Thread(target=_run, name="mcp-serve", daemon=True)
+        th.start()
+        _mcp_serve.update({"server": server, "thread": th, "port": port,
+                           "categories": list(cats), "token_set": bool(token)})
+        return {"ok": True, "port": port, "url": f"http://127.0.0.1:{port}/mcp",
+                "categories": list(cats), "token_set": bool(token)}
+
+    @app.post("/api/mcp/serve/stop")
+    def mcp_serve_stop() -> dict[str, Any]:
+        server = _mcp_serve.get("server")
+        if server is not None:
+            server.should_exit = True  # uvicorn polls this and unwinds the loop
+        _mcp_serve.update({"server": None, "thread": None, "port": 0})
+        return {"ok": True}
+
+    @app.get("/api/mcp/serve/config")
+    def mcp_serve_config(categories: str = "") -> dict[str, Any]:
+        """The stdio client-config snippet a desktop MCP client (Claude Desktop,
+        Cursor) pastes to spawn eVi as an MCP server (mirrors `evi mcp serve-config`)."""
+        import sys as _sys
+
+        from evi.mcp import publish
+
+        cats = categories.strip() or ",".join(publish.DEFAULT_CATEGORIES)
+        snippet = {"mcpServers": {"evi": {
+            "command": _sys.executable,
+            "args": ["-m", "evi", "mcp", "serve", "--categories", cats],
+        }}}
+        return {"snippet": snippet, "categories": cats}
 
     @app.get("/api/docs")
     def docs_list() -> dict[str, Any]:

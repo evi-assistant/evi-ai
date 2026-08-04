@@ -3686,12 +3686,47 @@ resetBtn.addEventListener('click', async () => {
         '<p class="dim" style="font-size:11px;margin-top:6px">Env vars (API keys etc.) aren\'t set ' +
         'here — use <code>evi mcp add --env KEY=VALUE</code> or edit <code>~/.evi/mcp.json</code>. ' +
         'Verify a server with <code>evi mcp list-tools</code>.</p>';
+      html += '<hr style="border:none;border-top:1px solid var(--border,#2b333d);margin:18px 0">' +
+        '<p class="sec-blurb" style="margin-top:0"><b>Serve eVi over MCP</b> — let other apps ' +
+        '(Claude Desktop, Cursor, …) use eVi\'s curated tools, memory &amp; prompts.</p>' +
+        '<div id="mcp-serve-box"><p class="dim" style="font-size:12px">Loading…</p></div>';
       box.innerHTML = html;
       const nameEl = box.querySelector('#mcp-name'), cmdEl = box.querySelector('#mcp-command'),
             argsEl = box.querySelector('#mcp-args');
       nameEl.setAttribute(PH, 'name (e.g. filesystem)');
       cmdEl.setAttribute(PH, 'command (npx, uvx, …)');
       argsEl.setAttribute(PH, 'args, e.g. -y @modelcontextprotocol/server-filesystem C:/Users');
+
+      const renderServe = () => {
+        fetch('/api/mcp/serve').then(r => r.json()).then(sv => {
+          const sb = document.getElementById('mcp-serve-box');
+          if (!sb) return;
+          let h = '';
+          if (sv.running) {
+            h += '<div class="set-about-row"><span class="k">HTTP server</span><span>' +
+              '<span style="color:#4caf50">running</span> · <code>' + esc(sv.url) + '</code>' +
+              (sv.token_set ? ' · <span class="dim">token required</span>' : '') + '</span></div>';
+            h += '<div class="set-about-row"><span class="k">Exposed</span><span>' +
+              esc((sv.categories || []).join(', ')) + '</span></div>';
+            h += '<button class="set-action-btn" id="mcp-serve-stop">Stop serving</button>';
+          } else {
+            h += '<div class="set-about-row"><span class="k">HTTP server</span><span class="dim">stopped</span></div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px">' +
+              '<input id="mcp-serve-cats" type="text" value="' + esc((sv.default_categories || []).join(',')) +
+              '" style="flex:2;min-width:150px;padding:7px;border-radius:7px;border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+              '<input id="mcp-serve-token" type="text" style="flex:1;min-width:110px;padding:7px;border-radius:7px;border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
+              '<button class="set-action-btn" id="mcp-serve-start">Start HTTP server</button></div>' +
+              '<p class="dim" style="font-size:11px;margin-top:4px">Bound to localhost. Categories to expose (comma-separated); token optional for localhost.</p>';
+          }
+          h += '<div style="margin-top:10px"><button class="set-action-btn" id="mcp-serve-cfg">Show desktop (stdio) config</button>' +
+            '<pre id="mcp-serve-snippet" style="display:none;white-space:pre-wrap;background:var(--panel,#1a2027);' +
+            'border:1px solid var(--border,#2b333d);border-radius:6px;padding:8px;font-size:11px;margin-top:6px"></pre></div>';
+          sb.innerHTML = h;
+          const c = sb.querySelector('#mcp-serve-cats'); if (c) c.setAttribute(PH, 'memory,index,calendar,git');
+          const tk = sb.querySelector('#mcp-serve-token'); if (tk) tk.setAttribute(PH, 'optional bearer token');
+        }).catch(() => {});
+      };
+      renderServe();
 
       box.onclick = async (ev) => {
         const t = ev.target;
@@ -3718,6 +3753,27 @@ resetBtn.addEventListener('click', async () => {
               args: argsEl.value });
             setTimeout(renderSection, 400);
           } catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'mcp-serve-start') {
+          t.disabled = true;
+          try {
+            const cats = (box.querySelector('#mcp-serve-cats')?.value || '')
+              .split(',').map(x => x.trim()).filter(Boolean);
+            const token = box.querySelector('#mcp-serve-token')?.value || '';
+            const d = await post('/api/mcp/serve', { categories: cats, token });
+            status('Serving at ' + d.url, true); renderServe();
+          } catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'mcp-serve-stop') {
+          t.disabled = true;
+          try { await post('/api/mcp/serve/stop', {}); status('Stopped serving', true); renderServe(); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (t.id === 'mcp-serve-cfg') {
+          try {
+            const cats = (box.querySelector('#mcp-serve-cats')?.value || '').trim();
+            const d = await fetch('/api/mcp/serve/config' +
+              (cats ? '?categories=' + encodeURIComponent(cats) : '')).then(r => r.json());
+            const pre = box.querySelector('#mcp-serve-snippet');
+            if (pre) { pre.textContent = JSON.stringify(d.snippet, null, 2); pre.style.display = 'block'; }
+          } catch (e) { status('Error: ' + e.message, false); }
         }
       };
     }).catch(() => { box.innerHTML = '<p class="sec-blurb">Could not load MCP servers.</p>'; });
