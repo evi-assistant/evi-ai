@@ -81,10 +81,10 @@ the main conversation focused.
 
 | Tool         | What it does                                                |
 |--------------|-------------------------------------------------------------|
-| `web_search` | DuckDuckGo search via `duckduckgo_search`. Returns JSON `[{title, url, snippet}, …]`. |
+| `web_search` | DuckDuckGo search via `ddgs`. Returns JSON `[{title, url, snippet}, …]`. |
 | `web_fetch`  | Download a URL (http/https only) and return extracted text. 1 MB raw cap, 16 KB output cap. |
 
-Requires `pip install 'evi-assistant[web-tools]'` (gets `duckduckgo_search` and
+Requires `pip install 'evi-assistant[web-tools]'` (gets `ddgs` and
 `beautifulsoup4`).
 
 ## `voice` — TTS + STT (default OFF)

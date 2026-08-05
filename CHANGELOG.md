@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.21] — 2026-08-04
+
+### Fixed
+- **Web search works again.** `web_search`'s default DuckDuckGo backend used the
+  **deprecated `duckduckgo_search`** package, which DuckDuckGo now throttles to
+  empty results — so searches silently returned nothing. Migrated to its
+  maintained successor **`ddgs`** (same keyless DuckDuckGo, identical result
+  shape). The `[web-tools]` extra now installs `ddgs`; `_search_ddg` prefers it
+  and falls back to the legacy package so installs that haven't reinstalled the
+  extra keep working. `evi doctor` checks for `ddgs`.
+
 ## [1.0.20] — 2026-08-04
 
 ### Added

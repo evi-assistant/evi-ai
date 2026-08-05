@@ -28,9 +28,9 @@ def _install_fake_ddgs(monkeypatch: pytest.MonkeyPatch, results: list[dict]) -> 
         def text(self, query: str, max_results: int = 5) -> Iterator[dict]:
             yield from results[:max_results]
 
-    module = types.ModuleType("duckduckgo_search")
+    module = types.ModuleType("ddgs")
     module.DDGS = _DDGS  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "duckduckgo_search", module)
+    monkeypatch.setitem(sys.modules, "ddgs", module)
 
 
 def test_web_search_returns_json_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,9 +52,12 @@ def test_web_search_rejects_empty_query() -> None:
 
 
 def test_web_search_handles_missing_dep(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Block both the preferred (ddgs) and legacy (duckduckgo_search) packages so
+    # _search_ddg exhausts its fallback ladder and returns the install hint.
+    monkeypatch.setitem(sys.modules, "ddgs", None)
     monkeypatch.setitem(sys.modules, "duckduckgo_search", None)
     out = REGISTRY["web_search"].call(json.dumps({"query": "x"}))
-    assert "duckduckgo_search not installed" in out
+    assert "ddgs not installed" in out
 
 
 # ---- web_fetch ----------------------------------------------------------

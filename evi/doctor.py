@@ -36,7 +36,7 @@ _OPTIONAL_DEPS: list[tuple[str, str, str]] = [
     ("caldav", "calendar", "CalDAV calendars"),
     ("fitz", "pdf", "PDF text extraction"),
     ("numpy", "index", "semantic file search"),
-    ("duckduckgo_search", "web-tools", "web search"),
+    ("ddgs", "web-tools", "web search"),
     ("bs4", "web-tools", "web fetch / HTML parsing"),
     ("pyautogui", "computer", "computer-use control"),
     ("huggingface_hub", "downloads", "model downloads"),

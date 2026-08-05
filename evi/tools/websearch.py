@@ -1,13 +1,13 @@
 """Web search + fetch tools.
 
-`web_search` queries DuckDuckGo (no API key) via the `duckduckgo_search`
+`web_search` queries DuckDuckGo (no API key) via the `ddgs`
 library when present. `web_fetch` downloads a URL and extracts the main
 readable text using `beautifulsoup4` if available; otherwise it returns a
 naïvely stripped version.
 
-Both deps are optional — installing `evi[web]` (note: distinct from the
-web-server extras) gets you the full experience. Without them, the tools
-return clear error strings rather than crashing the agent.
+Both deps are optional — installing `evi[web-tools]` (ddgs + beautifulsoup4;
+distinct from the `web` server extra) gets you the full experience. Without
+them, the tools return clear error strings rather than crashing the agent.
 """
 
 from __future__ import annotations
@@ -56,16 +56,25 @@ def web_search(query: str, limit: int = 5) -> str:
 
 
 def _search_ddg(query: str, limit: int) -> str:
+    # `ddgs` is the maintained successor to `duckduckgo_search` (the old name
+    # was deprecated and DuckDuckGo now throttles it to empty results). Prefer
+    # ddgs; fall back to the legacy package so pre-migration installs that
+    # haven't reinstalled the [web-tools] extra keep working (in degraded form)
+    # rather than hard-failing. Both expose DDGS().text(query, max_results=…)
+    # returning dicts keyed title/href/body.
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        return (
-            "ERROR: duckduckgo_search not installed — "
-            "install with: pip install 'evi-assistant[web-tools]'"
-        )
+        try:
+            from duckduckgo_search import DDGS  # legacy fallback (deprecated)
+        except ImportError:
+            return (
+                "ERROR: ddgs not installed — "
+                "install with: pip install 'evi-assistant[web-tools]'"
+            )
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=limit))
+        with DDGS() as engine:
+            results = list(engine.text(query, max_results=limit))
     except Exception as exc:
         return f"ERROR: search failed: {type(exc).__name__}: {exc}"
     cleaned = [
