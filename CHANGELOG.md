@@ -5,6 +5,23 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.23] — 2026-08-06
+
+### Added
+- **The model now knows what eVi can actually do.** The system prompt gained a
+  capability-grounding block: an honest statement that eVi has real local tools
+  plus a *live* list of the capabilities that are currently OFF (image gen, web
+  search, OCR, PDF, SQLite, git, voice, calendar, MCP, computer, index). This
+  stops the model from answering "how does image generation work in eVi?" from
+  its training data and falsely claiming eVi can't do it — instead it names the
+  feature and how to enable it (Settings → Tools; image gen also needs ComfyUI
+  running). Fixes the confusing "eVi uses DALL-E/MidJourney" hallucination.
+- **Today's date + a staleness note in the prompt.** Local models have no clock
+  (and eVi ships a scheduler), so the prompt now anchors "Today is <date>" —
+  computed once per session for KV-cache stability — plus a dateless "training
+  data may be stale, prefer web search for recent things" note. No hardcoded
+  knowledge-cutoff date, since eVi is model-pluggable.
+
 ## [1.0.22] — 2026-08-06
 
 ### Fixed

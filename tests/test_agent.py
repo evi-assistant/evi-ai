@@ -155,6 +155,58 @@ def test_identity_marks_pre_switch_history_as_stale(backend: str, model: str) ->
     assert "stale" in sp
 
 
+def test_capability_grounding_lists_off_tools_and_forbids_denial() -> None:
+    """Grounds the model in eVi's REAL capabilities so it stops hallucinating
+    "eVi can't generate images", and names the capabilities that are OFF this
+    session (with how to enable them). `off` is computed live from [tools]."""
+    cfg = Config()
+    cfg.tools.image = False   # off  -> must be listed
+    cfg.tools.vision = True   # on   -> must NOT be in the OFF list
+    sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
+    low = sp.lower()
+    # honesty directive rides on every turn
+    assert "never tell the user evi lacks a feature it has" in low
+    assert "don't just refuse" in low
+    # the OFF capability is named, with its enable path
+    assert "off this session" in low
+    assert "image generation" in low
+    # an ON capability (vision) is not listed as OFF
+    off_segment = sp.split("OFF this session", 1)[1]
+    assert "describing images" not in off_segment
+
+
+def test_capability_grounding_omits_off_list_when_all_enabled() -> None:
+    """With every user-facing capability on, the honesty directive stays but the
+    OFF list is dropped — no dangling "… are OFF: ." with an empty tail."""
+    cfg = Config()
+    for cat in (
+        "image", "web", "ocr", "pdf", "sqlite", "git", "voice",
+        "vision", "calendar", "mcp", "computer", "index",
+    ):
+        setattr(cfg.tools, cat, True)
+    sp = Agent(client=_FakeClient([]), config=cfg, tools=[])._compose_system_prompt()
+    assert "real, local tools" in sp          # directive present
+    assert "OFF this session" not in sp        # no off-list when nothing is off
+
+
+def test_system_prompt_injects_session_date_and_cutoff_note() -> None:
+    """Local models have no clock — inject today's date + a DATELESS 'training
+    may be stale, prefer web search' note (no hardcoded cutoff, since eVi is
+    model-pluggable). The date is fixed at construction so it stays stable
+    across recomposition (KV-cache prefix reuse on local backends)."""
+    import re
+
+    agent = Agent(client=_FakeClient([]), config=Config(), tools=[])
+    sp = agent._compose_system_prompt()
+    assert "Today is" in sp
+    assert re.search(r"\d{4}-\d{2}-\d{2}", sp)          # an ISO date is present
+    low = sp.lower()
+    assert "training data may be out of date" in low
+    assert "web search" in low
+    # stable across a refresh — same session date, no per-turn churn
+    assert agent._session_date in agent._compose_system_prompt()
+
+
 def test_refresh_prompt_updates_identity_on_model_switch() -> None:
     # A mid-session model switch (picker / backend-use / /model) must re-stitch the
     # frozen system prompt, or the identity keeps naming the old model.

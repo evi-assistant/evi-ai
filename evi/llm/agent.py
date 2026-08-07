@@ -392,6 +392,28 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+# User-facing capabilities worth naming when the model is asked "what can you
+# do?" — maps a [tools] category flag to a plain-language name (with the key
+# precondition where an external helper is involved). Internal / niche
+# categories (fs, code, memory, skills, subagent, federation, ask,
+# transcripts) are deliberately omitted: they aren't what a user means by
+# "a capability", and every entry here rides on the prompt each turn.
+_GROUNDING_CAPABILITIES: dict[str, str] = {
+    "image": "image generation (local, via ComfyUI)",
+    "web": "web search + page fetch",
+    "ocr": "OCR — read text from images",
+    "pdf": "reading PDFs",
+    "sqlite": "querying SQLite databases",
+    "git": "inspecting git repositories",
+    "voice": "voice — transcribe audio / speak replies",
+    "vision": "describing images",
+    "calendar": "reading your calendar",
+    "mcp": "tools from external MCP servers",
+    "computer": "on-screen computer control",
+    "index": "semantic search over your files",
+}
+
+
 class Agent:
     """Stateful chat session against a tool-capable LLM.
 
@@ -439,6 +461,12 @@ class Agent:
         self.plan_mode_once: bool = False
         self.plan_mode: bool = False  # persistent plan/read-only mode (/plan on)
         self._base_system_prompt = system_prompt
+        # Computed ONCE per session (not per turn): local models have no clock,
+        # but a date that changed every turn would needlessly bust the KV-cache
+        # prefix local backends reuse. refresh_prompt() keeps this stable date.
+        from datetime import datetime as _dt
+
+        self._session_date = _dt.now().strftime("%A, %Y-%m-%d")
         self.history: list[dict[str, Any]] = [
             {"role": "system", "content": self._compose_system_prompt()}
         ]
@@ -507,6 +535,21 @@ class Agent:
                 "open-weight or purely local model if you aren't)."
                 + _identity_discipline + _identity_staleness + _tool_discipline
             )
+        # Session date + a dateless staleness note. Local models have no clock
+        # (they invent "today"), and eVi ships a scheduler that rides this same
+        # prompt, so an anchored date is load-bearing. No hardcoded cutoff — eVi
+        # is model-pluggable (arbitrary local weights + 6 CLI backends) and can't
+        # know each model's real cutoff, so cutoff is phrased as behavior.
+        parts.append(
+            f"Today is {self._session_date}. Your training data may be out of "
+            "date; for current events, prices, or recent releases prefer web "
+            "search (when it's enabled) over answering from memory, and say so "
+            "when you're unsure."
+        )
+        # eVi's real capabilities + which are currently off, so the model answers
+        # "what can you do?" honestly instead of hallucinating that eVi can't do
+        # something it can (and points the user at how to enable an off feature).
+        parts.append(self._capability_grounding())
         # Output style (response persona), if one is selected. Skipped in safe
         # mode: a user file at ~/.evi/styles/<name>.md overrides the built-in of
         # the same name, so a broken one must not survive a clean boot. (This is
@@ -532,6 +575,36 @@ class Agent:
         if self.project is not None:
             parts.append(self.project.format_for_prompt())
         return "\n\n".join(parts)
+
+    def _capability_grounding(self) -> str:
+        """A short, honest statement of eVi's real capabilities + which are OFF.
+
+        Fixes a common failure where the model, asked "what can you do?" or "can
+        you generate images?", answers from its training data and denies a
+        feature eVi actually has. `off` is computed live from [tools] so the list
+        always matches the session; when a capability is off, the model is told
+        to point the user at how to enable it rather than refusing.
+        """
+        tools_cfg = getattr(self.config, "tools", None)
+        off = [
+            label
+            for cat, label in _GROUNDING_CAPABILITIES.items()
+            if tools_cfg is not None and not getattr(tools_cfg, cat, False)
+        ]
+        text = (
+            "eVi is a local-first assistant with real, local tools — not just a "
+            "chat model. When asked what you can do, answer from eVi's actual "
+            "capabilities; never tell the user eVi lacks a feature it has. If a "
+            "request needs a capability that's off (or an external helper like "
+            "ComfyUI for image generation that isn't running), tell the user what "
+            "to enable in Settings → Tools or start — don't just refuse."
+        )
+        if off:
+            text += (
+                " Capabilities eVi supports but that are OFF this session (enable "
+                "in Settings → Tools): " + ", ".join(off) + "."
+            )
+        return text
 
     # --- goal + plan-mode hooks (consumed by the REPL / programmatic use) -
 
