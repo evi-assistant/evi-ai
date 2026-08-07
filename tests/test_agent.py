@@ -587,8 +587,9 @@ def test_chat_attaches_images_to_user_content_for_vlm(tmp_path) -> None:
 
 
 def test_chat_falls_back_when_model_not_vision(tmp_path) -> None:
-    """A non-vision model gets the image paths as plain text instead of
-    multipart content."""
+    """A non-vision model gets a TEXT description of the image folded in (via the
+    vision/OCR fallback) instead of multipart content. With no vision model or
+    OCR configured, that degrades to a helpful note naming the image."""
     img = tmp_path / "frame.png"
     img.write_bytes(b"\x89PNG-data")
 
@@ -606,10 +607,40 @@ def test_chat_falls_back_when_model_not_vision(tmp_path) -> None:
     list(agent.chat("what's this?", images=[str(img)]))
 
     last_user = next(m for m in captured["messages"] if m["role"] == "user")
-    # Falls back to text — path mentioned, no multipart structure.
+    # Folded to text — a string, not multipart image content.
     assert isinstance(last_user["content"], str)
-    assert str(img) in last_user["content"]
-    assert "attached files" in last_user["content"]
+    # Image referenced by name; with no vision model / OCR in the test env, the
+    # graceful note tells the user how to enable it.
+    assert "frame.png" in last_user["content"]
+    assert "vision model" in last_user["content"]
+
+
+def test_chat_folds_vision_description_for_non_vlm(tmp_path, monkeypatch) -> None:
+    """When a vision/OCR fallback IS available, its description is folded into the
+    user turn so a text-only model can still 'see' a pasted image."""
+    img = tmp_path / "frame.png"
+    img.write_bytes(b"\x89PNG-data")
+    monkeypatch.setattr(
+        "evi.llm.agent.describe_for_fallback",
+        lambda paths, **k: "[attached image frame.png]\na red bicycle on a beach",
+    )
+    captured: dict = {}
+
+    class _CapturingCompletions:
+        def create(self, **kwargs):
+            captured["messages"] = kwargs.get("messages")
+            return iter([_text_chunk("ok", finish="stop")])
+
+    client = type("C", (), {"chat": type("X", (), {"completions": _CapturingCompletions()})()})()
+    cfg = Config()
+    cfg.llm.model = "qwen2.5-7b-instruct"  # not a VLM
+    agent = Agent(client=client, config=cfg, tools=[])
+    list(agent.chat("what's this?", images=[str(img)]))
+
+    last_user = next(m for m in captured["messages"] if m["role"] == "user")
+    assert isinstance(last_user["content"], str)
+    assert "what's this?" in last_user["content"]         # original prompt kept
+    assert "a red bicycle on a beach" in last_user["content"]  # description folded in
 
 
 def test_compact_history_collapses_middle(tmp_path) -> None:

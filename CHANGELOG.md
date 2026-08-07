@@ -5,6 +5,22 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.24] — 2026-08-06
+
+### Added
+- **Paste an image straight into the chat.** The composer now accepts a
+  clipboard paste (Ctrl/⌘-V) of an image — a screenshot, a copied picture —
+  and attaches it just like the 📎 button and drag-drop, without saving a file
+  first.
+- **Attached images work on text-only models.** When the active chat model
+  can't see (most local models), eVi now auto-runs the vision specialty
+  (`describe_image` → your `[models] vision` VLM, e.g. llava) and — when the
+  image is text-heavy — OCR, and folds the description + extracted text into the
+  turn. So a pasted screenshot is understood regardless of which chat model is
+  selected, instead of being silently dropped. This is the visual analogue of
+  the existing audio-transcribe fallback; it degrades to a helpful "set a vision
+  model / install Tesseract" note when neither is configured.
+
 ## [1.0.23] — 2026-08-06
 
 ### Added

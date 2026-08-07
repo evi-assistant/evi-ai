@@ -38,7 +38,7 @@ from evi.audio_input import (
     transcribe_for_fallback,
 )
 from evi.reasoning import reasoning_extra_body
-from evi.vision import build_image_content, model_supports_vision
+from evi.vision import build_image_content, describe_for_fallback, model_supports_vision
 
 
 # Signature: (tool_name, args_json, category) -> bool. True = approve.
@@ -1120,12 +1120,13 @@ class Agent:
                 bits.append(f"+{len(images)} image")
             transcript_summary = f"{composed}\n\n[{', '.join(bits)} attachment(s)]"
         elif images:
-            # No vision support — surface paths so the agent can decide.
-            joined = ", ".join(images)
-            composed = (
-                f"{composed}\n\n[attached files (no vision in current "
-                f"model): {joined}]"
-            )
+            # Non-vision main model: describe the image(s) locally via the vision
+            # specialty (+ OCR when text-heavy) and fold that into the text, so a
+            # pasted screenshot still "works" on a text-only model — the visual
+            # analogue of the audio-transcribe fallback above. If nothing could
+            # be produced (no vision model / OCR), surface the paths as before.
+            described = describe_for_fallback(images)
+            composed = f"{composed}\n\n{described}" if composed else described
             user_content = composed
             transcript_summary = composed
         else:

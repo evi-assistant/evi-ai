@@ -99,3 +99,62 @@ def build_image_content(text: str, image_paths: Iterable[str | Path]) -> list[di
             continue
         parts.append({"type": "image_url", "image_url": {"url": url}})
     return parts
+
+
+# Minimum OCR characters before we treat an image as "text-heavy" and fold in
+# the extracted text — a photo yields empty/garbage, a screenshot or document
+# yields real substance. Kept low so a short label (a sign, a code) still counts.
+_OCR_MIN_CHARS = 8
+
+
+def describe_for_fallback(image_paths: Iterable[str | Path], *, ocr: bool = True) -> str:
+    """Describe attached images as text for a NON-vision chat model.
+
+    The visual analogue of ``audio_input.transcribe_for_fallback``: when the
+    active chat model can't see, run the vision specialty (``describe_image`` ->
+    the ``[models] vision`` VLM) so "what is this?" still works, and — when the
+    image holds real text — also OCR it (``ocr_image``) and fold the extracted
+    text in. Never raises: vision/OCR being unconfigured must not break a turn.
+
+    Returns a text block, or "" if nothing at all could be produced (so the
+    caller can decide whether to still surface the raw paths).
+    """
+    blocks: list[str] = []
+    for raw in image_paths:
+        p = Path(raw).expanduser()
+        if not p.is_file():
+            blocks.append(f"[image {raw}: file not found]")
+            continue
+        found: list[str] = []
+        # 1) General description via the vision specialty model.
+        try:
+            from evi.tools.vision_tool import describe_image
+
+            desc = describe_image(str(p))
+            if desc and not desc.startswith("ERROR"):
+                found.append(desc.strip())
+        except Exception:  # noqa: BLE001  (missing dep / backend error)
+            pass
+        # 2) OCR — only included when it actually finds substantive text, so a
+        #    plain photo doesn't get a garbage "Text:" block appended.
+        if ocr:
+            try:
+                from evi.tools.ocr import ocr_image
+
+                text = ocr_image(str(p))
+                if (
+                    text
+                    and not text.startswith("ERROR")
+                    and len(text.strip()) >= _OCR_MIN_CHARS
+                ):
+                    found.append("Text found in the image:\n" + text.strip())
+            except Exception:  # noqa: BLE001
+                pass
+        if found:
+            blocks.append(f"[attached image {p.name}]\n" + "\n\n".join(found))
+        else:
+            blocks.append(
+                f"[attached image {p.name}: couldn't analyze it — set a vision "
+                "model ([models] vision, e.g. llava) or install Tesseract for OCR]"
+            )
+    return "\n\n".join(blocks)

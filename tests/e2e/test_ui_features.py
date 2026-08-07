@@ -386,6 +386,35 @@ def test_every_settings_section_renders(page: Page, evi_base_url: str, section, 
 # ---- /reset clears the visible transcript --------------------------------
 
 
+def test_paste_image_attaches(page: Page, evi_base_url: str):
+    """Pasting an image from the clipboard into the composer attaches it — the
+    same path as the 📎 button and drag-drop — so a screenshot can go straight
+    into chat without saving a file first. (The vision/OCR fallback that then
+    describes it for a non-VLM model is covered by unit tests.)"""
+    page.goto(evi_base_url)
+    # Build a PNG on a canvas and dispatch a synthetic clipboard paste with it.
+    page.evaluate(
+        """async () => {
+          const c = document.createElement('canvas'); c.width = 200; c.height = 80;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 200, 80);
+          ctx.fillStyle = '#000'; ctx.font = '24px sans-serif'; ctx.fillText('hi', 10, 44);
+          const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+          const file = new File([blob], 'clip.png', { type: 'image/png' });
+          const dt = new DataTransfer(); dt.items.add(file);
+          const ev = new ClipboardEvent('paste',
+            { clipboardData: dt, bubbles: true, cancelable: true });
+          document.getElementById('input').dispatchEvent(ev);
+        }"""
+    )
+    # The upload chip confirms the paste was accepted + uploaded (real round-trip
+    # through /api/upload); the synthesized "pasted-*.png" name shows it came
+    # from the clipboard, not a file picker.
+    chip = page.locator("#log .msg.upload-chip")
+    expect(chip).to_contain_text("image attached", timeout=10_000)
+    expect(chip).to_contain_text("pasted-", timeout=10_000)
+
+
 def test_reset_slash_clears_visible_transcript(page: Page, evi_base_url: str):
     """`/reset` wipes the session's server-side history AND clears the on-screen
     transcript, leaving only the confirmation — so the screen matches the

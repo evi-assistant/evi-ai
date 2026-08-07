@@ -2202,6 +2202,26 @@ window.addEventListener('drop', e => {
   }
 });
 
+// Paste an image straight from the clipboard (a screenshot, a copied picture)
+// into the composer → attach it, exactly like the 📎 button and drag-drop.
+// Text pastes fall through untouched. Clipboard images arrive as nameless
+// blobs, so synthesize a stable filename for the upload + chip.
+input.addEventListener('paste', e => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const it of items) {
+    if (it.kind === 'file' && it.type.startsWith('image/')) {
+      const blob = it.getAsFile();
+      if (!blob) continue;
+      e.preventDefault();
+      const ext = (it.type.split('/')[1] || 'png')
+        .replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+      handleAttachment(new File([blob], `pasted-${Date.now()}.${ext}`, { type: it.type }));
+      return;
+    }
+  }
+  // No image on the clipboard → let the normal text paste happen.
+});
+
 let attachedIsImage = false;
 
 async function handleAttachment(file) {
