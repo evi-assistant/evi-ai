@@ -787,6 +787,7 @@ def create_app() -> FastAPI:
                 session_id=session_id,
                 enable_project=False,
                 enable_hooks=False,
+                frontend="web",  # desktop app shares this surface — both have the Settings GUI
             )
             # Revive history from disk if this session was seen before (e.g. the
             # desktop app was closed + reopened). The composed system prompt at

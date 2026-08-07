@@ -436,6 +436,7 @@ class Agent:
         transcripts: TranscriptStore | None = None,
         session_id: str | None = None,
         guardrails: "Guardrails | None" = None,
+        frontend: str = "cli",
     ) -> None:
         self.client = client
         self.config = config
@@ -451,6 +452,10 @@ class Agent:
         self.permission_batch_callback = permission_batch_callback
         self.transcripts = transcripts
         self.guardrails = guardrails
+        # Which surface the user is on ("cli" | "web"; the desktop app is "web").
+        # Only affects prose that names WHERE to change a setting — a terminal
+        # user edits config, not a Settings GUI.
+        self.frontend = (frontend or "cli").strip().lower()
         self.session_id = session_id or _generate_session_id()
         # Categories that never prompt. Populated from config.auto.auto_approve.
         self.auto_approve_categories: set[str] = set(
@@ -591,18 +596,22 @@ class Agent:
             for cat, label in _GROUNDING_CAPABILITIES.items()
             if tools_cfg is not None and not getattr(tools_cfg, cat, False)
         ]
+        # Where the user turns features on differs by surface: a GUI user opens
+        # Settings; a terminal user runs `evi config`. Naming the wrong one sends
+        # a third of users to a place that doesn't exist for them.
+        where = "Settings → Tools" if self.frontend != "cli" else "`evi config` (the Tools settings)"
         text = (
             "eVi is a local-first assistant with real, local tools — not just a "
             "chat model. When asked what you can do, answer from eVi's actual "
             "capabilities; never tell the user eVi lacks a feature it has. If a "
             "request needs a capability that's off (or an external helper like "
-            "ComfyUI for image generation that isn't running), tell the user what "
-            "to enable in Settings → Tools or start — don't just refuse."
+            f"ComfyUI for image generation that isn't running), tell the user what "
+            f"to enable in {where} or start — don't just refuse."
         )
         if off:
             text += (
-                " Capabilities eVi supports but that are OFF this session (enable "
-                "in Settings → Tools): " + ", ".join(off) + "."
+                f" Capabilities eVi supports but that are OFF this session (enable "
+                f"in {where}): " + ", ".join(off) + "."
             )
         return text
 

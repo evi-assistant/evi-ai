@@ -75,6 +75,7 @@ def build_agent(
     permission_batch_callback: "BatchPermissionCallback | None" = None,
     transcripts: "TranscriptStore | None" = None,
     session_id: str | None = None,
+    frontend: str = "cli",
 ):
     """Assemble an :class:`~evi.llm.agent.Agent` from config with batteries.
 
@@ -206,6 +207,7 @@ def build_agent(
         transcripts=transcripts,
         session_id=session_id,
         guardrails=guardrails,
+        frontend=frontend,
         **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
     # Tool-search-at-scale (opt-in): with many tools, defer the long tail behind

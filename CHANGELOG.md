@@ -5,6 +5,19 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.25] — 2026-08-06
+
+### Changed
+- **The prompt's "how to enable this" advice now matches your surface.** The
+  capability-grounding block used to always say "Settings → Tools", which is
+  wrong for terminal users. The Agent now knows whether it's running under the
+  CLI or the web/desktop app and tells CLI users to run `evi config` instead.
+- **Clearer error when image generation can't reach ComfyUI.** `generate_image`
+  now returns an actionable "ComfyUI isn't reachable at &lt;url&gt; — start it
+  (`python main.py`), or update the ComfyUI URL in settings" instead of a raw
+  `ConnectError`, so the model can tell you exactly what to do. (The OCR tool's
+  Tesseract-missing error already did this.)
+
 ## [1.0.24] — 2026-08-06
 
 ### Added

@@ -195,8 +195,20 @@ def generate_image(
     client_id = uuid.uuid4().hex
 
     with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-        prompt_id = _submit(client, comfy.base_url, workflow, client_id)
-        entry = _poll_history(client, comfy.base_url, prompt_id)
+        try:
+            prompt_id = _submit(client, comfy.base_url, workflow, client_id)
+            entry = _poll_history(client, comfy.base_url, prompt_id)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            # The single most common failure — ComfyUI simply isn't up. Return an
+            # actionable message (not a raw ConnectError) so the model can tell
+            # the user how to fix it instead of "something went wrong".
+            return (
+                f"ERROR: ComfyUI isn't reachable at {comfy.base_url}. Image "
+                "generation runs through a local ComfyUI server — start ComfyUI "
+                "(run `python main.py` in your ComfyUI folder), then try again. "
+                "If it's listening somewhere else, update the ComfyUI URL in eVi's "
+                "settings."
+            )
         refs = _collect_image_refs(entry)
         if not refs:
             return f"ERROR: ComfyUI returned no images for prompt_id={prompt_id}"

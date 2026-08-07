@@ -141,3 +141,21 @@ def test_generate_image_registered_with_image_category() -> None:
     schema = t.openai_schema()["function"]
     assert "prompt" in schema["parameters"]["required"]
     assert schema["parameters"]["properties"]["negative_prompt"]["default"] == ""
+
+
+def test_generate_image_comfy_down_returns_actionable_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When ComfyUI isn't reachable, generate_image returns an ACTIONABLE message
+    (start ComfyUI / check the URL) instead of a raw ConnectError, so the model
+    can tell the user how to fix it."""
+    monkeypatch.setattr(image_comfy, "IMAGE_DIR", tmp_path)
+
+    def _boom(*a, **k):
+        raise httpx.ConnectError("Connection refused")
+
+    monkeypatch.setattr(image_comfy, "_submit", _boom)
+    out = image_comfy.generate_image("a red bicycle")
+    assert out.startswith("ERROR:")
+    assert "ComfyUI isn't reachable" in out
+    assert "start ComfyUI" in out

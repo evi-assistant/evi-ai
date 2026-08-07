@@ -189,6 +189,28 @@ def test_capability_grounding_omits_off_list_when_all_enabled() -> None:
     assert "OFF this session" not in sp        # no off-list when nothing is off
 
 
+def test_capability_grounding_enable_hint_is_frontend_aware() -> None:
+    """Where to enable a feature differs by surface: a GUI user opens Settings,
+    a terminal user runs `evi config`. Naming the wrong one misdirects a third
+    of users (the shared prompt spans CLI/web/desktop)."""
+    cfg = Config()
+    cfg.tools.image = False  # keep the off-list + enable-hint rendered
+
+    web = Agent(
+        client=_FakeClient([]), config=cfg, tools=[], frontend="web"
+    )._compose_system_prompt()
+    cli = Agent(
+        client=_FakeClient([]), config=cfg, tools=[], frontend="cli"
+    )._compose_system_prompt()
+
+    # web/desktop -> the Settings GUI
+    assert "Settings → Tools" in web
+    assert "evi config" not in web
+    # cli -> the config command, never a GUI that doesn't exist for terminal users
+    assert "evi config" in cli
+    assert "Settings → Tools" not in cli
+
+
 def test_system_prompt_injects_session_date_and_cutoff_note() -> None:
     """Local models have no clock — inject today's date + a DATELESS 'training
     may be stale, prefer web search' note (no hardcoded cutoff, since eVi is
