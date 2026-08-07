@@ -43,7 +43,14 @@
       // no-cors: resolves on ANY response (server is up), rejects on a
       // connection error (server not up yet).
       fetch(base + "api/health", { mode: "no-cors", cache: "no-store" })
-        .then(function () { window.location.replace(base); })
+        .then(function () {
+          // Redirect with a per-launch cache-buster so the WebView2 cache can
+          // never serve a stale index.html after the sidecar auto-updates — the
+          // whole UI's JS is inlined there, so a cached page = a cached UI, and
+          // the user would otherwise have to hit Ctrl+R to see an update. The
+          // sidecar serves `/` regardless of query string; the app ignores it.
+          window.location.replace(base + "?_ui=" + Date.now());
+        })
         .catch(function () {
           if (tries === 15) {
             document.getElementById("hint").innerHTML =

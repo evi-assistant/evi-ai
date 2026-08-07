@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.28] — 2026-08-06
+
+### Changed
+- **The desktop app auto-refreshes its UI after a sidecar update — no more
+  manual Ctrl+R.** The loading shell now redirects into the sidecar UI with a
+  per-launch cache-buster, so WebView2 can't serve a stale cached page after the
+  core auto-updates (it complements the `no-cache` headers added in 1.0.26 and
+  removes any reliance on cache heuristics). Desktop-shell change only — the
+  Python core (`evi/`) is unchanged from 1.0.27; the PyPI wheel is a version-bump
+  no-op that carries the desktop rebuild.
+
 ## [1.0.27] — 2026-08-06
 
 ### Fixed
