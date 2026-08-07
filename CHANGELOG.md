@@ -5,6 +5,17 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.22] — 2026-08-06
+
+### Fixed
+- **`/reset` now clears the on-screen chat in the web/desktop UI.** Previously
+  `/reset` wiped the model's memory server-side but left the old messages
+  visible, so the transcript showed turns the model had already forgotten. The
+  reset acknowledgement now carries a `clear_transcript` signal and the UI
+  empties the visible chat, leaving just the confirmation — the screen matches
+  the model's actual context. (New chat still starts a *fresh* session; `/reset`
+  keeps the current one but empties it. The CLI REPL is unchanged.)
+
 ## [1.0.21] — 2026-08-04
 
 ### Fixed

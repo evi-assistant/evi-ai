@@ -381,3 +381,44 @@ def test_every_settings_section_renders(page: Page, evi_base_url: str, section, 
     expect(page.locator("#settings-nav button", has_text=title)).to_be_visible()
     expect(page.locator("#settings-content")).to_be_visible()
     assert errors == [], f"console errors on settings/{section}: {errors}"
+
+
+# ---- /reset clears the visible transcript --------------------------------
+
+
+def test_reset_slash_clears_visible_transcript(page: Page, evi_base_url: str):
+    """`/reset` wipes the session's server-side history AND clears the on-screen
+    transcript, leaving only the confirmation — so the screen matches the
+    model's actual context.
+
+    Regression: the transcript used to linger after `/reset`, so the user saw
+    user/assistant bubbles for messages the model had already forgotten. The
+    server now sets `clear_transcript` on the reset ack and the UI empties #log
+    (distinct from New chat, which starts a *new* session; /reset keeps this
+    one but empties it).
+    """
+    page.goto(evi_base_url)
+
+    # Build a transcript: one real turn (the fake backend streams a reply) so
+    # there are user + assistant bubbles that must be cleared.
+    page.fill("#input", "hello there")
+    page.click("#send")
+    expect(page.locator("#log .msg.assistant").last).to_contain_text(
+        "fake backend", timeout=20_000
+    )
+    assert page.locator("#log .msg.user").count() >= 1
+
+    # /reset — a handled slash (no LLM turn) that wipes history + asks the UI
+    # to clear the transcript.
+    page.fill("#input", "/reset")
+    page.press("#input", "Enter")
+
+    # The confirmation lands...
+    expect(page.locator("#log .msg.system").last).to_contain_text(
+        "history cleared", timeout=10_000
+    )
+    # ...and it is the ONLY bubble left: the prior user/assistant transcript and
+    # the '/reset' echo were both cleared.
+    expect(page.locator("#log .msg")).to_have_count(1, timeout=10_000)
+    assert page.locator("#log .msg.user").count() == 0
+    assert page.locator("#log .msg.assistant").count() == 0

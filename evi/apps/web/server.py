@@ -409,6 +409,11 @@ class _SlashOutcome:
     handled: bool                 # True = no LLM call needed; emit `text` + Done
     text: str = ""
     expand_to: str | None = None  # If set, replace the user's message with this
+    # True = the command wiped the session's history (e.g. /reset), so the web
+    # UI should clear the visible transcript too — otherwise the screen keeps
+    # showing messages the model has actually forgotten. (The CLI REPL redraws
+    # from scratch, so this flag only matters to the web/desktop frontend.)
+    clear_transcript: bool = False
 
 
 def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutcome:
@@ -445,7 +450,7 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
 
     if name == "reset":
         agent.reset()
-        return _SlashOutcome(handled=True, text="history cleared.")
+        return _SlashOutcome(handled=True, text="history cleared.", clear_transcript=True)
 
     if name == "tools":
         if not agent.tools:
@@ -2598,7 +2603,8 @@ def create_app() -> FastAPI:
             if outcome.handled:
                 async def _ack() -> AsyncIterator[dict[str, str]]:
                     yield {"event": "message", "data": json.dumps(
-                        {"kind": "SystemMessage", "text": outcome.text}
+                        {"kind": "SystemMessage", "text": outcome.text,
+                         "clear_transcript": outcome.clear_transcript}
                     )}
                     yield {"event": "message", "data": json.dumps(
                         {"kind": "Done", "reason": "slash"}

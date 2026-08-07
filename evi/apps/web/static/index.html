@@ -1744,6 +1744,13 @@ async function handleEvent(ev, assistant) {
       }
     }
   } else if (ev.kind === 'SystemMessage') {
+    // A history-wiping slash command (e.g. /reset) asks us to clear the visible
+    // transcript so the screen matches the model's actual context — otherwise
+    // old bubbles linger for messages the model has already forgotten. Clear
+    // first (drops the stale transcript + the '/reset' echo), then leave the
+    // confirmation bubble as the fresh slate. (New chat starts a NEW session;
+    // /reset keeps this one but empties it.)
+    if (ev.clear_transcript) log.innerHTML = '';
     const b = addBubble('system');
     renderMarkdownInto(b, ev.text);
     trackChipState(ev.text);
