@@ -115,6 +115,38 @@ def test_settings_voice_section(page: Page, evi_base_url: str):
     expect(content.locator("select")).to_contain_text("coqui")
 
 
+def test_tool_availability_badge(page: Page, evi_base_url: str):
+    """Settings → Tools renders a 'needs setup' badge for exactly the tool
+    categories the server reports as missing a dependency, plus a legend."""
+    page.goto(evi_base_url)
+    page.evaluate("window.eviUI.openSettings('tools')")
+    expect(page.locator("#settings-overlay")).to_be_visible()
+    content = page.locator("#settings-content")
+    # The legend always explains the badge (rendered unconditionally for tools).
+    expect(content).to_contain_text("needs setup", timeout=10000)
+    expect(content).to_contain_text("hover it for how to enable")
+    # The set of badged categories must match the server's availability map
+    # exactly — proving the server→frontend wiring, independent of which deps
+    # happen to be installed in this environment.
+    result = page.evaluate(
+        """async () => {
+          const cfg = await (await fetch('/api/config')).json();
+          const availKeys = Object.keys(cfg.availability || {}).sort();
+          const badged = [...document.querySelectorAll('.set-field.inline label')]
+            .filter(l => l.querySelector('.set-unavail'))
+            // the sibling toggle's aria-label is exactly the category key
+            .map(l => l.nextElementSibling.getAttribute('aria-label'))
+            .sort();
+          // Each badged tool must carry a non-empty tooltip (reason + how-to).
+          const tips = [...document.querySelectorAll('.set-field.inline .set-unavail')]
+            .map(b => (b.title || '').length);
+          return { availKeys, badged, minTip: tips.length ? Math.min(...tips) : 1 };
+        }"""
+    )
+    assert result["availKeys"] == result["badged"], result
+    assert result["minTip"] > 0, "every badge must have a tooltip"
+
+
 def test_guardrails_editor(page: Page, evi_base_url: str):
     """Settings → Guardrails loads the editor, saves valid TOML, rejects bad."""
     page.goto(evi_base_url)

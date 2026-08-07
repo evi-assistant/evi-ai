@@ -1600,7 +1600,16 @@ def create_app() -> FastAPI:
     @app.get("/api/config")
     def config_get() -> dict[str, Any]:
         """Full config snapshot for the settings screen (secrets masked)."""
-        return _config_snapshot(Config.load())
+        snap = _config_snapshot(Config.load())
+        # Per-tool-category install availability (for the "needs setup" badge in
+        # Settings → Tools). Only categories whose dependency/binary is missing
+        # appear; it's a static probe, distinct from the risk ⚠ and config.
+        try:
+            from evi.tools.availability import tool_availability
+            snap["availability"] = tool_availability()
+        except Exception:  # noqa: BLE001 — never let the probe break settings
+            snap["availability"] = {}
+        return snap
 
     @app.post("/api/config")
     def config_set(patch: dict[str, Any]) -> dict[str, Any]:

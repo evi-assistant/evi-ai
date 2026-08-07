@@ -500,6 +500,14 @@
   }
   .set-check { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--fg); cursor: pointer; }
   .set-danger-label { color: var(--err); }
+  /* "needs setup" availability chip — muted, deliberately NOT red like the risk
+     ⚠, because it means "dependency missing in this install", not "dangerous". */
+  .set-unavail {
+    margin-left: 8px; font-size: 10px; font-weight: 600; letter-spacing: .03em;
+    text-transform: uppercase; padding: 1px 6px; border-radius: 6px;
+    color: var(--dim); border: 1px solid var(--border); cursor: help;
+    vertical-align: middle; white-space: nowrap;
+  }
   .settings-foot {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 12px 18px; border-top: 1px solid var(--border);
@@ -2748,7 +2756,9 @@ resetBtn.addEventListener('click', async () => {
       const lg = document.createElement('p'); lg.className = 'sec-blurb';
       lg.innerHTML = '<span class="set-danger-label">⚠</span> marks tools that can act ' +
         'outside eVi’s sandbox — run commands, control your screen, or reach the network. ' +
-        'Enable with care. (It flags <em>risk</em>, not availability — hover any ⚠ for the specific reason.)';
+        'Enable with care. (It flags <em>risk</em>, not availability — hover any ⚠ for the specific reason.)<br>' +
+        '<span class="set-unavail">needs setup</span> means the tool’s dependency isn’t installed in ' +
+        'this build — hover it for how to enable.';
       contentEl.appendChild(lg);
     }
     if (sec.custom === 'about') return renderAbout();
@@ -2987,6 +2997,18 @@ resetBtn.addEventListener('click', async () => {
         // Hover explains WHY it's flagged (risk, not availability) — the icon
         // had no explanation before, so users read it as "not installed".
         label.title = f.riskyWhy || 'Caution: this tool can act outside eVi’s sandbox — enable with care.';
+      }
+      // Availability badge (distinct from the risk ⚠): a muted "needs setup"
+      // chip when the tool's dependency/binary is missing in THIS install.
+      // cfg.availability only contains categories that are UNAVAILABLE.
+      const avail = (f.section === 'tools' && cfg && cfg.availability) ? cfg.availability[f.key] : null;
+      if (avail && avail.available === false) {
+        const badge = document.createElement('span');
+        badge.className = 'set-unavail';
+        badge.textContent = 'needs setup';
+        badge.title = (avail.reason || 'Not available in this install.') +
+          (avail.how_to_enable ? '\n' + avail.how_to_enable : '');
+        label.appendChild(badge);
       }
       const tog = document.createElement('button');
       tog.type = 'button';

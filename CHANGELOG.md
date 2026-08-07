@@ -5,7 +5,19 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
-## [1.0.31] — 2026-08-07
+## [1.0.32] — 2026-08-07
+
+### Added
+- **A "needs setup" badge in Settings → Tools** shows when a tool won't work in
+  this install because its dependency or binary is missing — e.g. `computer`
+  (pyautogui), `voice` (speech-to-text), `calendar`, or `ocr` (the tesseract
+  binary). Hover it for the specific reason and how to enable it; in the desktop
+  app the hint says the tool isn't bundled rather than suggesting a pip install.
+  It's a **static install check** (deliberately separate from the ⚠ *risk* icon,
+  and from live-service state like ComfyUI running), driven by a side-effect-free
+  probe delivered on `/api/config`. This closes the gap where enabling a tool
+  whose dependency isn't present (like web search before 1.0.31) failed silently
+  at call time with no forewarning.
 
 ### Fixed
 - **Web search now works in the desktop app.** In the frozen desktop build,
