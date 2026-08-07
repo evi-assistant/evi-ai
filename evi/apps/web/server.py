@@ -665,6 +665,10 @@ def create_app() -> FastAPI:
             path in _PUBLIC_PATHS
             or path.startswith("/static/")
             or path.startswith("/images/")
+            # Attachment previews: the unguessable session UUID in the path is
+            # the capability (same rationale as /images), so <img> tags can load
+            # without carrying the web auth token.
+            or path.startswith("/uploads/")
             # Routine webhooks authenticate via the unguessable path token
             # (external callers don't have the web auth token). Validated in
             # the handler via secrets.compare_digest.
@@ -2463,6 +2467,26 @@ def create_app() -> FastAPI:
         # so the response stays small. The agent still has them in memory.
         # NB: the system message at index 0 is kept so `index` stays aligned
         # with the agent's history (edit/branch use it); the client skips it.
+        # Uploaded files for this session, so we can re-attach image previews to
+        # the user messages that reference them — the attach-time thumbnail is a
+        # transient blob, lost when the browser rebuilds history on a tab switch.
+        # Stateless (no per-message tracking): a user message "owns" any uploaded
+        # image whose filename appears in its (folded) text, so this also works
+        # for a session revived from its transcript.
+        from urllib.parse import quote
+
+        udir = UPLOADS_DIR / session_id
+        upload_imgs = (
+            [
+                p.name
+                for p in udir.iterdir()
+                if p.is_file()
+                and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+            ]
+            if udir.is_dir()
+            else []
+        )
+
         cleaned: list[dict] = []
         for i, msg in enumerate(sess.agent.history):
             content = msg.get("content")
@@ -2471,13 +2495,20 @@ def create_app() -> FastAPI:
                     part.get("text", "") for part in content
                     if isinstance(part, dict) and part.get("type") == "text"
                 )
-            cleaned.append({
+            entry: dict = {
                 "index": i,
                 "role": msg.get("role"),
                 "content": content,
                 "tool_calls": msg.get("tool_calls"),
                 "name": msg.get("name"),
-            })
+            }
+            if msg.get("role") == "user" and upload_imgs and isinstance(content, str):
+                imgs = [
+                    f"/uploads/{session_id}/{quote(n)}" for n in upload_imgs if n in content
+                ]
+                if imgs:
+                    entry["images"] = imgs
+            cleaned.append(entry)
         return {"messages": cleaned}
 
     @app.post("/api/session/{session_id}/title")
@@ -2765,6 +2796,20 @@ def create_app() -> FastAPI:
         if "/" in name or "\\" in name or ".." in name:
             raise HTTPException(400, "invalid image name")
         path = IMAGE_DIR / name
+        if not path.is_file():
+            raise HTTPException(404, "not found")
+        return FileResponse(path)
+
+    @app.get("/uploads/{session_id}/{name}")
+    def uploaded_file(session_id: str, name: str) -> FileResponse:
+        # Serve a user-attached upload so the browser can re-render its preview
+        # after a history rebuild (tab switch) — the attach-time thumbnail is an
+        # ephemeral blob otherwise lost. The unguessable session UUID in the path
+        # is the capability, same idea as /images's random names.
+        for part in (session_id, name):
+            if "/" in part or "\\" in part or ".." in part:
+                raise HTTPException(400, "invalid path")
+        path = UPLOADS_DIR / session_id / name
         if not path.is_file():
             raise HTTPException(404, "not found")
         return FileResponse(path)

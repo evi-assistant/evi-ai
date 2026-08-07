@@ -5,7 +5,25 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
-## [1.0.29] — 2026-08-06
+## [1.0.30] — 2026-08-07
+
+### Fixed
+- **A single null-content message no longer wedges a whole chat session.**
+  Ollama's OpenAI-compatible endpoint rejects any message whose `content` is
+  JSON `null` with `invalid message content type: <nil>` — and because that
+  message stays in history and is re-sent on every turn, one such message made
+  *every* subsequent turn 400 (the session got permanently stuck; it often
+  surfaced right after a tool call such as `web_search`). eVi now sanitizes the
+  history it sends so no message ever leaves with null content (coerced to an
+  empty string; strings and multimodal lists are untouched, and the stored
+  history is not mutated). This also un-sticks an already-wedged session on the
+  next turn. Tool results that come back empty are hardened at the source too.
+
+### Added
+- **Attached-image previews survive switching chats and reviving a session.**
+  An image you paste/attach now re-renders in the transcript when you switch
+  away and back (or reopen the session later), served from a new
+  `/uploads/<session>/<name>` route, instead of vanishing on the next render.
 
 ### Fixed
 - **No more redundant/failed `describe_image` call after a pasted image is

@@ -13,8 +13,44 @@ from typing import Iterator
 import pytest
 
 from evi.config import Config
-from evi.llm.agent import Agent, Done, TextDelta, ToolCall, ToolProgress, ToolResult
+from evi.llm.agent import (
+    Agent,
+    Done,
+    TextDelta,
+    ToolCall,
+    ToolProgress,
+    ToolResult,
+    _sanitized_messages,
+)
 from evi.tools.base import Tool
+
+
+def test_sanitized_messages_coerces_null_content() -> None:
+    # A null `content` on ANY message (tool result, user, plain assistant)
+    # makes Ollama 400 with "invalid message content type: <nil>", which then
+    # poisons the whole session. _sanitized_messages coerces None -> "" for the
+    # send-only copy while leaving string / multimodal-list content untouched.
+    history = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": None},                       # poison
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "x"}]},  # poison + keys kept
+        {"role": "tool", "tool_call_id": "x", "name": "t", "content": None},  # poison
+        {"role": "user", "content": "plain string stays"},
+        {"role": "user", "content": [{"type": "text", "text": "list stays"}]},
+    ]
+    out = _sanitized_messages(history)
+
+    assert [m.get("content") for m in out] == [
+        "sys", "", "", "", "plain string stays",
+        [{"type": "text", "text": "list stays"}],
+    ]
+    # never None anywhere
+    assert all(m.get("content") is not None for m in out)
+    # other keys are preserved on the coerced message
+    assert out[2]["tool_calls"] == [{"id": "x"}]
+    assert out[3]["name"] == "t"
+    # the input history is NOT mutated (send-only copy)
+    assert history[1]["content"] is None
 
 
 # ---- fake OpenAI stream primitives --------------------------------------
@@ -331,6 +367,15 @@ def test_tool_call_dispatch() -> None:
     # history: system, user, assistant(tool_calls), tool, assistant(final)
     roles = [m["role"] for m in agent.history]
     assert roles == ["system", "user", "assistant", "tool", "assistant"]
+
+    # The tool-calls-only assistant message MUST carry a string `content` (""),
+    # never an absent/null key. Ollama's OpenAI-compat endpoint rejects a missing
+    # content as "invalid message content type: <nil>", which then poisons the
+    # session — every later turn re-sends the message and 400s.
+    tool_call_msg = agent.history[2]
+    assert "tool_calls" in tool_call_msg
+    assert tool_call_msg.get("content") == ""
+    assert isinstance(tool_call_msg["content"], str)
 
 
 def test_memory_injected_into_system_prompt(tmp_path) -> None:

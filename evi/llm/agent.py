@@ -150,6 +150,28 @@ def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
     return []
 
 
+def _sanitized_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a copy of ``history`` safe to send to any OpenAI-compat backend.
+
+    Ollama's endpoint rejects a message whose ``content`` is JSON null with
+    ``invalid message content type: <nil>`` — and a SINGLE such message
+    poisons the whole session: it sits in ``history`` and every later turn
+    re-sends it, so the chat 400s on every turn until the session is reset.
+    A null can arrive from many places (a tool that returned ``None``, an MCP
+    result, a revived transcript entry, a plain assistant/user turn), so we
+    guard at the one choke point where the full history is sent rather than at
+    each source. OpenAI tolerates null content; Ollama does not. Coerce any
+    ``None`` content to ``""`` and leave string / multimodal-list content as-is.
+    This copy is send-only — it never mutates the stored history.
+    """
+    out: list[dict[str, Any]] = []
+    for m in history:
+        if m.get("content") is None:
+            m = {**m, "content": ""}
+        out.append(m)
+    return out
+
+
 def _approx_tokens(messages: list[dict[str, Any]]) -> int:
     """Rough token count without a tokenizer.
 
@@ -1406,7 +1428,10 @@ class Agent:
             try:
                 create_kwargs: dict[str, Any] = {
                     "model": active_model,
-                    "messages": self.history,
+                    # Send-only sanitize: never let a null-content message reach
+                    # the backend (Ollama 400s on <nil> and it poisons the whole
+                    # session). Stored history is untouched. See _sanitized_messages.
+                    "messages": _sanitized_messages(self.history),
                     "tools": tool_schemas,
                     "temperature": self.config.llm.temperature,
                     "stream": True,
@@ -1665,9 +1690,13 @@ class Agent:
             if hold_text and text_buf:
                 yield TextDelta("".join(text_buf))
 
-            assistant_msg: dict[str, Any] = {"role": "assistant"}
-            if text_buf:
-                assistant_msg["content"] = "".join(text_buf)
+            # ALWAYS set `content` (empty string on a tool-calls-only turn).
+            # Ollama's OpenAI-compat endpoint rejects an assistant message with
+            # absent/null content — "invalid message content type: <nil>" — which
+            # then POISONS the session: that message sits in history and every
+            # later turn re-sends it and 400s, wedging the chat. OpenAI tolerates
+            # null content on a tool-call message; Ollama requires a string.
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(text_buf)}
             if tool_buf:
                 assistant_msg["tool_calls"] = [
                     {
@@ -1825,7 +1854,9 @@ class Agent:
                         "role": "tool",
                         "tool_call_id": call["id"],
                         "name": fname,
-                        "content": out_obj.text,
+                        # A tool that returned None must not write a null-content
+                        # message — Ollama rejects it and it poisons the session.
+                        "content": out_obj.text if out_obj.text is not None else "",
                     }
                 )
                 self._log_to_transcript("tool", out_obj.text, tool_name=fname)

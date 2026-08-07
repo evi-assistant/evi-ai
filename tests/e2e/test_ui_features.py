@@ -418,6 +418,42 @@ def test_paste_image_attaches(page: Page, evi_base_url: str):
     expect(page.locator("#input")).to_have_value("What's in this image?")
 
 
+def test_attached_image_preview_survives_rebuild(page: Page, evi_base_url: str):
+    """A pasted image's preview persists across a history rebuild (what a tab
+    switch does): uploads are served from /uploads/, and session_history
+    re-attaches an upload to the message whose text references its filename, so
+    rebuildHistory() can re-render it (the attach-time thumbnail is a transient
+    blob otherwise lost)."""
+    page.goto(evi_base_url)
+    # Paste an image, then send it (the composer prefills "What's in this image?").
+    page.evaluate(
+        """async () => {
+          const c = document.createElement('canvas'); c.width = 200; c.height = 80;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 200, 80);
+          ctx.fillStyle = '#000'; ctx.font = '24px sans-serif'; ctx.fillText('hi', 10, 44);
+          const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+          const dt = new DataTransfer(); dt.items.add(new File([blob], 'clip.png', { type: 'image/png' }));
+          document.getElementById('input').dispatchEvent(new ClipboardEvent('paste',
+            { clipboardData: dt, bubbles: true, cancelable: true }));
+        }"""
+    )
+    expect(page.locator("#log .msg.upload-chip")).to_contain_text("image attached", timeout=10_000)
+    page.click("#send")
+    expect(page.locator("#log .msg.assistant").last).to_be_visible(timeout=20_000)
+
+    # Rebuild history (exactly what switching away + back does) and confirm the
+    # preview is restored from /uploads/ — and actually loads (not a broken 404).
+    page.evaluate("rebuildHistory()")
+    page.wait_for_function(
+        """() => {
+          const i = document.querySelector('#log .msg.user img[src*="/uploads/"]');
+          return i && i.complete && i.naturalWidth > 0;
+        }""",
+        timeout=10_000,
+    )
+
+
 def test_reset_slash_clears_visible_transcript(page: Page, evi_base_url: str):
     """`/reset` wipes the session's server-side history AND clears the on-screen
     transcript, leaving only the confirmation — so the screen matches the
