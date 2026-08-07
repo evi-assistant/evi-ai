@@ -5,6 +5,20 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.26] — 2026-08-06
+
+### Fixed
+- **UI updates from the sidecar channel now actually reach the desktop app.**
+  `index.html` (and `/static/*`) were served with `ETag`/`Last-Modified` but no
+  `Cache-Control`, so the WebView2/browser heuristically cached the page — and
+  because the entire single-file UI's JS is inlined in `index.html`, a cached
+  page meant a cached UI. A feature shipped via the sidecar update (e.g. the
+  1.0.24 clipboard-paste support) could stay invisible in an already-updated
+  app for days. These now send `Cache-Control: no-cache`, forcing a conditional
+  revalidation on every load (the `ETag` still yields a cheap 304 when nothing
+  changed). **If the app looks stale after an update, View → Reload (Ctrl/⌘-R)
+  forces a refresh.**
+
 ## [1.0.25] — 2026-08-06
 
 ### Changed

@@ -809,7 +809,15 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        # `no-cache` = the WebView/browser MUST revalidate index.html on every
+        # load (ETag still yields a cheap 304 when unchanged). Without it, a UI
+        # update shipped via the sidecar channel is masked for days by a stale
+        # cached copy — the whole app's JS is inlined in this one file, so a
+        # cached index.html means a cached UI. This is what made a just-shipped
+        # feature (e.g. clipboard paste) appear "not there" in an updated app.
+        return FileResponse(
+            STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
@@ -2762,7 +2770,15 @@ def create_app() -> FastAPI:
         return FileResponse(path)
 
     if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        # Same revalidate-on-every-load policy as the index route, so a sidecar
+        # UI update reaches the WebView instead of hiding behind a stale cache.
+        class _NoCacheStatic(StaticFiles):
+            async def get_response(self, path: str, scope: Any):
+                resp = await super().get_response(path, scope)
+                resp.headers["Cache-Control"] = "no-cache"
+                return resp
+
+        app.mount("/static", _NoCacheStatic(directory=str(STATIC_DIR)), name="static")
 
     return app
 
