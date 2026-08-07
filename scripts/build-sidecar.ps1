@@ -16,8 +16,11 @@ $root = (Resolve-Path "$here\..").Path
 # the isolated venv once with: py -3.13 -m venv .venv-build
 $py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 
-# Practical tier: bundle web + pdf + index. STT + computer-use stay opt-in
-# via a system Python. OCR works via a bundled tesseract binary.
+# Practical tier: bundle web + web-tools + pdf + index. STT + computer-use stay
+# opt-in via a system Python. OCR works via a bundled tesseract binary.
+# NOTE: `web` (fastapi/uvicorn — the server) and `web-tools` (ddgs/beautifulsoup4
+# — web_search/web_fetch) are DISTINCT extras; both are needed or web search
+# fails in the frozen app with "ddgs not installed".
 Write-Host ">> ensuring practical extras are installed in the build venv"
 # `claude-agent` installs the Claude Agent SDK so the `claude_agent` backend works
 # in the frozen sidecar. We collect only its PYTHON modules below — NOT its
@@ -25,13 +28,13 @@ Write-Host ">> ensuring practical extras are installed in the build venv"
 # bundler and is useless in a cross-OS bundle anyway). The SDK falls back to the
 # system `claude` on PATH when its bundled copy is absent, which is what
 # `claude_agent` needs regardless.
-& $py -m pip install -q -e "$root[web,pdf,index,claude-agent]"
+& $py -m pip install -q -e "$root[web,web-tools,pdf,index,claude-agent]"
 
 # --onedir (NOT --onefile): a folder with evi-server.exe + _internal/. It
 # launches near-instantly (no per-launch self-extraction), at the cost of
 # being a directory. Tauri bundles the whole folder via bundle.resources;
 # main.rs resolves evi-server.exe from the resource dir.
-Write-Host ">> PyInstaller build (--onedir; web + pdf + index)"
+Write-Host ">> PyInstaller build (--onedir; web + web-tools + pdf + index)"
 & $py -m PyInstaller `
     --onedir `
     --noconfirm `
@@ -42,6 +45,9 @@ Write-Host ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-submodules fastapi `
     --collect-all pymupdf `
     --collect-all numpy `
+    --collect-all ddgs `
+    --collect-all bs4 `
+    --collect-all soupsieve `
     --collect-submodules claude_agent_sdk `
     --collect-submodules mcp `
     --add-data "$root\docs;docs" `

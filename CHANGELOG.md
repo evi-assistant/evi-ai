@@ -5,6 +5,26 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.31] — 2026-08-07
+
+### Fixed
+- **Web search now works in the desktop app.** In the frozen desktop build,
+  `web_search` failed with `ERROR: ddgs not installed` no matter how the web
+  tool was toggled: the sidecar bundled the `web` extra (the server) but not
+  the distinct `web-tools` extra (`ddgs` + `beautifulsoup4`), and because both
+  are imported lazily they were invisible to PyInstaller's static analysis and
+  dropped from the bundle. The build now installs `web-tools` and force-collects
+  `ddgs`/`bs4`/`soupsieve`, and `evi-server --check` (run in CI right after the
+  build) now verifies them — so this can't silently regress again. Dev
+  installs were never affected.
+
+### Changed
+- **The ⚠ on a tool in Settings → Tools now explains itself.** Hovering a
+  flagged tool shows the specific reason (e.g. shell "runs shell commands…",
+  web "reaches the internet…"), and a legend under the Tools header clarifies
+  that ⚠ marks tools that can act **outside eVi's sandbox** — it flags *risk*,
+  **not** availability (it was easy to misread as "not installed").
+
 ## [1.0.30] — 2026-08-07
 
 ### Fixed

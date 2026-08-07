@@ -23,10 +23,13 @@ elif [ -x "$root/.venv-build/bin/python" ]; then py="$root/.venv-build/bin/pytho
 elif [ -x "$root/.venv/bin/python" ]; then py="$root/.venv/bin/python"
 else py="python3"; fi
 
-# Practical tier: bundle web + pdf + index. STT (faster-whisper/PortAudio)
-# and computer-use stay opt-in via a system Python — they're large and
-# native-dep-heavy. OCR works via a bundled `tesseract` binary (see
+# Practical tier: bundle web + web-tools + pdf + index. STT (faster-whisper/
+# PortAudio) and computer-use stay opt-in via a system Python — they're large
+# and native-dep-heavy. OCR works via a bundled `tesseract` binary (see
 # docs/desktop-bundling.md), not a Python dep.
+# NOTE: `web` (fastapi/uvicorn — the server) and `web-tools` (ddgs/beautifulsoup4
+# — web_search/web_fetch) are DISTINCT extras; both are needed or web search
+# fails in the frozen app with "ddgs not installed".
 echo ">> ensuring practical extras are installed in the build venv"
 # `claude-agent` installs the Claude Agent SDK so the `claude_agent` backend works
 # in the frozen sidecar. We collect only its PYTHON modules below — NOT its
@@ -34,7 +37,7 @@ echo ">> ensuring practical extras are installed in the build venv"
 # and is useless in a cross-OS bundle anyway). The SDK falls back to the system
 # `claude` on PATH when its bundled copy is absent, which is what `claude_agent`
 # needs regardless.
-"$py" -m pip install -q -e "$root[web,pdf,index,claude-agent]"
+"$py" -m pip install -q -e "$root[web,web-tools,pdf,index,claude-agent]"
 
 # --onedir (NOT --onefile): a folder with the evi-server binary + _internal/.
 # It launches near-instantly (no per-launch self-extraction). Tauri bundles
@@ -51,6 +54,9 @@ echo ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-submodules fastapi \
     --collect-all pymupdf \
     --collect-all numpy \
+    --collect-all ddgs \
+    --collect-all bs4 \
+    --collect-all soupsieve \
     --collect-submodules claude_agent_sdk \
     --collect-submodules mcp \
     --add-data "$root/docs:docs" \

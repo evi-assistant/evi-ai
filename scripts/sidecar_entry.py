@@ -37,10 +37,18 @@ def _selfcheck() -> int:
     # registered at server import time).
     from evi.apps.web.server import app  # noqa: F401
 
-    # Lazy heavy deps the practical tier bundles.
+    # Lazy heavy deps the practical tier bundles. ddgs + bs4 (web_search /
+    # web_fetch) are imported lazily inside evi/tools/websearch.py, so a normal
+    # startup never touches them — which is exactly how they silently fell out
+    # of the bundle once (the [web-tools] extra wasn't installed at freeze time,
+    # and the lazy imports are invisible to PyInstaller). Checking them here
+    # makes `evi-server --check` (run in CI right after the build) fail loudly
+    # if web search deps ever go missing again.
     checks = {
         "fitz (pymupdf / read_pdf)": "fitz",
         "numpy (index / embeddings)": "numpy",
+        "ddgs (web_search)": "ddgs",
+        "bs4 (web_fetch text extraction)": "bs4",
         "python_multipart (upload / transcribe forms)": "python_multipart",
         "uvicorn http protocol": "uvicorn.protocols.http.auto",
         "uvicorn websockets protocol": "uvicorn.protocols.websockets.auto",
