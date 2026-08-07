@@ -151,7 +151,17 @@ def describe_for_fallback(image_paths: Iterable[str | Path], *, ocr: bool = True
             except Exception:  # noqa: BLE001
                 pass
         if found:
-            blocks.append(f"[attached image {p.name}]\n" + "\n\n".join(found))
+            # Present it as authoritative + tell the model NOT to re-run
+            # describe_image: a small model otherwise "helpfully" calls the tool
+            # anyway (often with a hallucinated path) and produces a noisy failed
+            # tool call before falling back to this description.
+            blocks.append(
+                f"[The user attached an image ({p.name}). You cannot open images "
+                "yourself, so it has ALREADY been analyzed for you — the result "
+                "is below. Answer the user directly from it; do NOT call "
+                "describe_image, ocr_image, or any file tool on this image.]\n"
+                + "\n\n".join(found)
+            )
         else:
             # Auto-analysis failed (e.g. the vision model was momentarily
             # unavailable). Give the model the FULL path + an explicit retry

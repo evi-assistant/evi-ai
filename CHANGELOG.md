@@ -5,6 +5,18 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.29] — 2026-08-06
+
+### Fixed
+- **No more redundant/failed `describe_image` call after a pasted image is
+  auto-described.** On a text-only chat model, eVi already folds a vision/OCR
+  description of an attached image into the turn — but a small model would
+  often *also* call `describe_image` (frequently with a hallucinated path),
+  producing a noisy failed tool call before recovering. The folded description
+  is now presented authoritatively with an explicit "this image has already
+  been analyzed — don't call describe_image on it" instruction, so the model
+  answers directly.
+
 ## [1.0.28] — 2026-08-06
 
 ### Changed

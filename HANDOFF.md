@@ -1,6 +1,6 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-08-06 · PyPI v1.0.28 · desktop v1.0.28 · **PUBLIC**_
+_Last updated: 2026-08-06 · PyPI v1.0.29 · desktop v1.0.29 · **PUBLIC**_
 
 This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at the version stamped above, and the `evi-skills` catalog is public. Since 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
@@ -33,7 +33,7 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 - **No breaking API changes from 0.40.0** — 1.0.0 marks stability + public repo + a coordinated launch across the package, desktop app, and skills catalog.
 - **PyPI version** must match across `pyproject.toml` and `evi/__init__.py` — the `release.yml` gate asserts tag == both. **Desktop version** is **derived from the release tag** at build time (`scripts/set-desktop-version.py`, run by `desktop-release.yml`), so the four Tauri version files are never hand-bumped and can't drift from the core.
 
-**Tests:** **1700 passed, 3 skipped** on the local `.venv` as of 1.0.25 (104 e2e+desktop deselected by default via `addopts = -m 'not e2e and not desktop'`). Live count: `pytest --collect-only -q` — trust that over this number. Ruff clean. **Test layers:** unit; UI e2e (`tests/e2e`, `-m e2e`, Playwright + a fake-backend + real-Ollama fixtures — **64 pass** incl. a real 2-model switch); CLI e2e (`tests/cli_e2e`); and **NEW native-desktop** (`tests/desktop_e2e`, `-m desktop`, Windows-only — drives the real `evi-desktop.exe` via tauri-driver + msedgedriver; needs `.webdrivers/msedgedriver.exe` matching the WebView2 runtime). Rust: `cargo test` in `desktop/src-tauri` (10, test-only, no release).
+**Tests:** **1702 passed, 3 skipped** on the local `.venv` as of 1.0.29 (104 e2e+desktop deselected by default via `addopts = -m 'not e2e and not desktop'`). Live count: `pytest --collect-only -q` — trust that over this number. Ruff clean. **Test layers:** unit; UI e2e (`tests/e2e`, `-m e2e`, Playwright + a fake-backend + real-Ollama fixtures — **64 pass** incl. a real 2-model switch); CLI e2e (`tests/cli_e2e`); and **NEW native-desktop** (`tests/desktop_e2e`, `-m desktop`, Windows-only — drives the real `evi-desktop.exe` via tauri-driver + msedgedriver; needs `.webdrivers/msedgedriver.exe` matching the WebView2 runtime). Rust: `cargo test` in `desktop/src-tauri` (10, test-only, no release).
 
 > ⚠ If `tests/test_worktree.py` fails locally with `NotADirectoryError` (WinError 267), a POSIX-style git (msys2/devkitPro/Cygwin) is shadowing Git for Windows on PATH. 1.0.15 made `repo_root()` resilient to this, so it should no longer bite — but the same PATH shadowing also breaks bare `python`, so invoke `.venv\Scripts\python.exe` explicitly.
 
