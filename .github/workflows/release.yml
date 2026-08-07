@@ -16,9 +16,9 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -67,7 +67,7 @@ jobs:
       - name: Sign artifacts (sigstore)
         # Pin to a published release tag — this action does not maintain a
         # floating `@v3` major tag, so `@v3` fails to resolve (broke 0.32.0).
-        uses: sigstore/gh-action-sigstore-python@v3.4.0
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
         with:
           inputs: ./dist/*.tar.gz ./dist/*.whl
 
