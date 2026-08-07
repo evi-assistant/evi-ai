@@ -124,8 +124,12 @@ def test_describe_for_fallback_note_when_nothing_available(tmp_path, monkeypatch
         "evi.tools.ocr.ocr_image", lambda path, *a, **k: "ERROR: tesseract not found"
     )
     out = describe_for_fallback([p])
-    assert "couldn't analyze" in out
+    assert "couldn't auto-analyze" in out
     assert "vision model" in out
+    # The note carries the FULL path + a retry hint so the model can recover via
+    # describe_image (a bare filename would fail — uploads live in a subdir).
+    assert str(p) in out
+    assert "describe_image" in out
 
 
 def test_describe_for_fallback_missing_file(tmp_path) -> None:
@@ -143,4 +147,4 @@ def test_describe_for_fallback_never_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("evi.tools.vision_tool.describe_image", boom)
     monkeypatch.setattr("evi.tools.ocr.ocr_image", boom)
     out = describe_for_fallback([p])  # must not raise
-    assert "couldn't analyze" in out
+    assert "couldn't auto-analyze" in out

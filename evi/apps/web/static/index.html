@@ -187,7 +187,9 @@
 
   /* Upload chip */
   .upload-chip {
-    align-self: flex-start; padding: 4px 8px;
+    /* Right-aligned with the user's messages — an attachment is something the
+       user is sending, so it reads as "yours", not an assistant/system note. */
+    align-self: flex-end; padding: 4px 8px;
     background: #1f2530; border: 1px solid var(--border);
     border-radius: 4px; font-size: 12px; color: var(--dim);
   }
@@ -844,6 +846,11 @@ const _loaded = loadTabsState();
 let tabs = _loaded ? _loaded.tabs : [{ id: crypto.randomUUID(), label: 'new chat' }];
 let activeIdx = _loaded ? _loaded.activeIdx : 0;
 let sessionId = tabs[activeIdx].id;
+// A pending file attachment is per-composer, not global to the app — declared
+// here (early) so switching sessions/tabs can clear it (see setSessionId), so a
+// picture staged in one chat never leaks into a message sent from another.
+let attachedFile = null;
+let attachedIsImage = false;
 
 // Switch the active session. Always go through this rather than assigning
 // sessionId directly: the working-folder chip is per-session, and every place
@@ -854,6 +861,10 @@ let sessionId = tabs[activeIdx].id;
 // calling it from earlier in the file is fine.)
 function setSessionId(id) {
   sessionId = id;
+  // Drop any file staged but not yet sent — it belonged to the chat we're
+  // leaving, and must not ride along on the next message in this one.
+  attachedFile = null;
+  attachedIsImage = false;
   if (typeof loadCwd === 'function') loadCwd();
 }
 let goalChipText = null;
@@ -2175,7 +2186,6 @@ checkBackend();
 const attachBtn = document.getElementById('attach');
 const fileInput = document.getElementById('file-input');
 const dropOverlay = document.getElementById('drop-overlay');
-let attachedFile = null;
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
@@ -2222,8 +2232,6 @@ input.addEventListener('paste', e => {
   // No image on the clipboard → let the normal text paste happen.
 });
 
-let attachedIsImage = false;
-
 async function handleAttachment(file) {
   const chip = addBubble('upload-chip');
   const mime = file.type || '';
@@ -2261,6 +2269,14 @@ async function handleAttachment(file) {
     const data = await r.json();
     attachedFile = data.path;
     attachedIsImage = mime.startsWith('image/');
+    // Surface the default prompt in the composer so it's VISIBLE and editable,
+    // instead of being silently substituted at send time (users were surprised
+    // to see "What's in this image?" they never typed). Only when empty, so a
+    // question they already typed is never clobbered.
+    if (attachedIsImage && !input.value.trim()) {
+      input.value = "What's in this image?";
+      input.focus();
+    }
     const sizeStr = data.size.toLocaleString();
     if (attachedIsImage) {
       // Inline thumbnail for instant feedback that the right file came up.

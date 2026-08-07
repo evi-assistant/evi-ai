@@ -5,6 +5,26 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.27] — 2026-08-06
+
+### Fixed
+- **Pasted/attached images are more robust on text-only models.** If the vision
+  fallback can't describe an image (e.g. the local VLM was momentarily busy),
+  its note now includes the image's **full path** plus an explicit retry hint,
+  so the model can recover by calling `describe_image` on the right path —
+  previously it only had the bare filename and failed with "no such file".
+- **A staged attachment no longer leaks between chats.** Attaching a picture and
+  then switching tabs / starting a new chat used to carry that image onto the
+  next message you sent elsewhere; the pending attachment is now cleared on any
+  session switch.
+
+### Changed
+- **The default image question is now visible before you send it.** When you
+  attach an image with an empty composer, eVi fills in "What's in this image?"
+  in the input box (editable) instead of silently substituting it at send time.
+- **An attached image now sits on the right**, aligned with your own messages,
+  rather than on the left like an assistant/system note.
+
 ## [1.0.26] — 2026-08-06
 
 ### Fixed

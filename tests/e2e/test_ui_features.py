@@ -413,6 +413,9 @@ def test_paste_image_attaches(page: Page, evi_base_url: str):
     chip = page.locator("#log .msg.upload-chip")
     expect(chip).to_contain_text("image attached", timeout=10_000)
     expect(chip).to_contain_text("pasted-", timeout=10_000)
+    # The default question is surfaced in the composer (visible + editable),
+    # not silently substituted at send time.
+    expect(page.locator("#input")).to_have_value("What's in this image?")
 
 
 def test_reset_slash_clears_visible_transcript(page: Page, evi_base_url: str):

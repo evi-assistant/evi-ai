@@ -153,8 +153,14 @@ def describe_for_fallback(image_paths: Iterable[str | Path], *, ocr: bool = True
         if found:
             blocks.append(f"[attached image {p.name}]\n" + "\n\n".join(found))
         else:
+            # Auto-analysis failed (e.g. the vision model was momentarily
+            # unavailable). Give the model the FULL path + an explicit retry
+            # path so it can recover with `describe_image` — a bare filename
+            # would fail with "no such file" (uploads live in a session subdir).
             blocks.append(
-                f"[attached image {p.name}: couldn't analyze it — set a vision "
-                "model ([models] vision, e.g. llava) or install Tesseract for OCR]"
+                f"[attached image at {p} — couldn't auto-analyze it just now. To "
+                f'try again, call describe_image with this exact path: "{p}". '
+                "(Otherwise set a [models] vision model, e.g. llava, or install "
+                "Tesseract for OCR.)]"
             )
     return "\n\n".join(blocks)
