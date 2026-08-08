@@ -147,6 +147,40 @@ def test_tool_availability_badge(page: Page, evi_base_url: str):
     assert result["minTip"] > 0, "every badge must have a tooltip"
 
 
+def test_session_messaging_dispatch(page: Page, evi_base_url: str):
+    """Session messaging (Ph 95): the Dispatch panel offers a Message action for
+    OTHER sessions (never the active one), and composing + sending delivers the
+    text into the target session's inbox."""
+    page.goto(evi_base_url)
+    # Create + name two sessions server-side (the active tab is one of them).
+    ids = page.evaluate(
+        """async () => {
+          const A = sessionId;
+          const B = 'e2e' + Math.random().toString(16).slice(2, 10);
+          const J = (u, b) => fetch(u, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(b)}).then(r=>r.json());
+          await J(`/api/session/${A}/name`, {name:'MsgA'});
+          await J(`/api/session/${B}/name`, {name:'MsgB'});
+          return { A, B };
+        }"""
+    )
+    page.evaluate("document.getElementById('dispatch-btn').click()")
+    # The active session must NOT expose a Message button (can't message itself);
+    # the other session must. (Target by id — the e2e server is shared, so other
+    # tests' sessions may also be listed.)
+    expect(page.locator(f'.dispatch-overlay [data-msg="{ids["A"]}"]')).to_have_count(0)
+    b_msg = page.locator(f'.dispatch-overlay [data-msg="{ids["B"]}"]')
+    expect(b_msg).to_be_visible(timeout=5000)
+    b_msg.click()
+    page.locator("#dispatch-msg-text").fill("migration done")
+    page.locator("[data-send]").click()
+    expect(page.locator("#dispatch-result")).to_contain_text("delivered", timeout=5000)
+    # It actually landed in the target session's inbox.
+    texts = page.evaluate(
+        f"""async () => (await (await fetch('/api/session/{ids['B']}/channel')).json()).messages.map(m=>m.text)"""
+    )
+    assert "migration done" in texts
+
+
 def test_guardrails_editor(page: Page, evi_base_url: str):
     """Settings → Guardrails loads the editor, saves valid TOML, rejects bad."""
     page.goto(evi_base_url)

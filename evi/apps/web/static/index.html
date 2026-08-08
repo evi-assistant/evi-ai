@@ -1643,6 +1643,7 @@ async function maybeAutoTitle() {
       tabs[idx].label = title.slice(0, 60);
       saveTabsState();
       renderTabs();
+      postSessionName(sid, tabs[idx].label);
     }
   } catch { /* best-effort; keep the first-message label */ }
 }
@@ -1899,11 +1900,24 @@ function closeTab(i) {
   rebuildHistory();
 }
 
+// Mirror a session's display name to the SERVER so other sessions can address
+// it by name (Ph 95 session messaging). Best-effort; labels stay client-first.
+async function postSessionName(id, name) {
+  if (!id || !name) return;
+  try {
+    await fetch(`/api/session/${encodeURIComponent(id)}/name`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  } catch { /* best-effort */ }
+}
+
 function setTabLabel(label) {
   if (!tabs[activeIdx]) return;
   tabs[activeIdx].label = label.slice(0, 60);
   saveTabsState();
   renderTabs();
+  postSessionName(tabs[activeIdx].id, tabs[activeIdx].label);
 }
 
 renderTabs();
@@ -1989,6 +2003,30 @@ async function pollFederation() {
 }
 setInterval(pollFederation, 3000);
 pollFederation();
+
+// Live receive (Ph 95): surface inter-session (and Ph-83 channel) messages that
+// arrive in the ACTIVE session as they land. The note is also injected into the
+// session's history, so a tab switch / reload shows it via rebuildHistory — we
+// reseed the cursor whenever the active session changes, so we never render the
+// same message twice.
+let _inboxSeenId = null, _inboxSeen = 0;
+async function pollInbox() {
+  const sid = sessionId;
+  if (!sid) return;
+  try {
+    const r = await fetch(`/api/session/${encodeURIComponent(sid)}/channel`);
+    if (!r.ok) return;
+    const msgs = ((await r.json()).messages) || [];
+    if (sid !== _inboxSeenId) { _inboxSeenId = sid; _inboxSeen = msgs.length; return; }
+    for (let i = _inboxSeen; i < msgs.length; i++) {
+      const m = msgs[i] || {};
+      const who = String(m.source || '').replace(/^session:/, '') || 'a session';
+      renderMarkdownInto(addBubble('system'), `📨 **Message from ${who}:** ${m.text || ''}`);
+    }
+    _inboxSeen = msgs.length;
+  } catch {}
+}
+setInterval(pollInbox, 3000);
 
 let pickerState = {
   active: '', fast_model: '', models: [],
@@ -4089,9 +4127,13 @@ resetBtn.addEventListener('click', async () => {
       const pend = s.pending ? ` · ${s.pending} pending` : '';
       const chan = s.channels ? ` · ${s.channels} channel` : '';
       const busy = s.busy ? '<span class="d-busy" title="working">●</span> ' : '';
-      const label = (tabs.find(t => t.id === s.id) || {}).label || s.id.slice(0, 8);
-      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${busy}${escapeHtml(label)}</div>`
+      // Prefer this browser's local tab label, then the server-stored name
+      // (so sessions opened in other tabs still resolve), then the short id.
+      const label = (tabs.find(t => t.id === s.id) || {}).label || s.name || s.id.slice(0, 8);
+      const self = s.id === sessionId;
+      return `<div class="dispatch-row"><div class="grow"><div class="d-title">${busy}${escapeHtml(label)}${self ? ' <span class="d-sub">(this tab)</span>' : ''}</div>`
         + `<div class="d-sub">${escapeHtml(s.mode)} · ${s.messages} msgs${ctx}${pend}${chan}</div></div>`
+        + (self ? '' : `<button data-msg="${escapeHtml(s.id)}">Message</button>`)
         + `<button data-open="${escapeHtml(s.id)}">Open</button></div>`;
     }).join('') || '<div class="dispatch-empty">No active sessions.</div>';
     const wfRows = (data.workflows || []).map(w => {
@@ -4127,6 +4169,38 @@ resetBtn.addEventListener('click', async () => {
       if (e.target === ov || e.target.hasAttribute('data-close')) { closeDispatch(); return; }
       const openId = e.target.getAttribute('data-open');
       if (openId) { closeDispatch(); openSessionById(openId); return; }
+      // Compose a message to another session (reveal an inline textarea + Send).
+      const msgId = e.target.getAttribute('data-msg');
+      if (msgId) {
+        const name = (tabs.find(t => t.id === msgId) || {}).label || msgId.slice(0, 8);
+        const out = document.getElementById('dispatch-result');
+        out.innerHTML = `<h3>Message “${escapeHtml(name)}”</h3>`
+          + `<textarea id="dispatch-msg-text" rows="2" placeholder="Plain-text message to this session…" style="width:100%;box-sizing:border-box"></textarea>`
+          + `<div style="margin-top:6px"><button data-send="${escapeHtml(msgId)}">Send</button></div>`;
+        const ta = document.getElementById('dispatch-msg-text'); if (ta) ta.focus();
+        return;
+      }
+      const sendId = e.target.getAttribute('data-send');
+      if (sendId) {
+        const ta = document.getElementById('dispatch-msg-text');
+        const text = ((ta && ta.value) || '').trim();
+        if (!text) { if (ta) ta.focus(); return; }
+        e.target.disabled = true; e.target.textContent = 'Sending…';
+        const out = document.getElementById('dispatch-result');
+        try {
+          const r = await fetch(`/api/session/${encodeURIComponent(sendId)}/message`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          });
+          const d = await r.json().catch(() => ({}));
+          out.innerHTML = r.ok
+            ? `<div class="dispatch-empty">✓ delivered${d.delivered === false ? ' (duplicate skipped)' : ''}.</div>`
+            : `<div class="dispatch-empty">error: ${escapeHtml(d.detail || 'failed')}</div>`;
+        } catch (err) {
+          out.innerHTML = `<div class="dispatch-empty">error: ${escapeHtml(String(err))}</div>`;
+        }
+        return;
+      }
       const runName = e.target.getAttribute('data-run');
       if (runName) {
         e.target.disabled = true; e.target.textContent = 'Running…';

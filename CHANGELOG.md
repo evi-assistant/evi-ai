@@ -5,7 +5,33 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
-## [1.0.32] — 2026-08-07
+## [1.0.33] — 2026-08-07
+
+### Added
+- **Session messaging — message your other live sessions.** One live session can
+  now send a lightweight plain-text message to another of your open sessions
+  (the common desktop case: several chat tabs). Two tools are available in every
+  web/desktop session — `list_sessions` (your other live sessions) and
+  `send_to_session(target, text)` (deliver a note by name or id) — and the
+  **Dispatch** panel (🗂) gains a **Message** button per session to compose one by
+  hand. A delivered message lands in the target's history (seen on its next turn)
+  and appears live as a `📨` note. It is **plain text** — it never approves a
+  permission, changes config, or runs a command in the target; any tool the
+  receiving session then runs still goes through that session's own permission
+  prompt. Scoped to your own sessions in the one running app. It's eVi's local,
+  cross-platform take on Claude Code cross-session messaging (and, unlike that,
+  it works on Windows too).
+
+### Security
+- **Federation LAN fail-safe.** An eVi serving federation while bound to the
+  network (`bind_lan`, or `--host 0.0.0.0`) *without* `[web] auth_token` set was
+  open — anyone on the LAN could delegate tasks. eVi now refuses federation/A2A
+  requests from non-loopback clients when no auth token is set (loopback/local
+  requests are unaffected). Set `[web] auth_token` to accept remote peers.
+
+### Docs
+- README now carries **Docker (GHCR) pull-count badges** (ghcr-badge; pkgbadge
+  documented as a self-host option), and the agents docs cover session messaging.
 
 ### Added
 - **A "needs setup" badge in Settings → Tools** shows when a tool won't work in

@@ -157,6 +157,38 @@ auto-approve list (`permission_callback` returns `False`), so a remote task can'
 trigger surprises like shell or network tools. A peer-side error comes back as a
 JSON `error`, surfaced to the caller as `ERROR: peer <name>: …`.
 
+**Fail-safe (LAN):** an eVi serving federation (`serve = true`) while bound to the
+network (`bind_lan = true`, or `evi web --host 0.0.0.0`) **without** `[web]
+auth_token` set would be open — anyone on the LAN could delegate tasks. eVi now
+**refuses federation/A2A requests from non-loopback clients when no auth token is
+set** (loopback/local requests are unaffected). Set `[web] auth_token` to accept
+remote peers.
+
+### Session messaging
+
+Distinct from federation (which delegates a task to another *machine*), **session
+messaging** lets one of your **live sessions message another** — the common
+desktop case of several chat tabs open at once. When one session learns something
+another needs ("schema migration finished, rebasing is safe now"), it hands the
+note across instead of you copy-pasting between tabs.
+
+Two tools are available in every web/desktop session:
+
+- **`list_sessions`** — your other live sessions (id, name, busy, mode).
+- **`send_to_session(target, text)`** — deliver a short plain-text message to one
+  of them, addressed by name or id.
+
+Delivery reuses the channel inbox: the message lands in the target session's
+history (so it's seen on that session's next turn) and shows live as a `📨` note
+if that tab is open. A message is **plain text** — it never approves a permission,
+changes config, or runs a command in the target; any tool the receiving agent then
+runs still goes through that session's own permission prompt. It's scoped to **your
+own sessions** in the one running app, so tabs can only reach your other tabs.
+
+From the UI, open **Dispatch** (🗂) and click **Message** on any other session to
+compose one by hand. This is eVi's local, cross-platform analogue of Claude Code's
+cross-session messaging (and, unlike that, it works on Windows too).
+
 ## Setup
 
 ### Subagents (config: `~/.evi/config.toml`, section `[tools]`)

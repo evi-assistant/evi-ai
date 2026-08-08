@@ -2,8 +2,21 @@
 
 [![PyPI](https://img.shields.io/pypi/v/evi-assistant.svg)](https://pypi.org/project/evi-assistant/)
 [![Downloads](https://static.pepy.tech/badge/evi-assistant)](https://pepy.tech/project/evi-assistant)
+[![Docker (GHCR)](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/evi-assistant/evi-ai/pkgs/container/evi-ai)
+[![GHCR pulls](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fghcr-badge.elias.eu.org%2Fapi%2Fevi-assistant%2Fevi-ai&query=%24.downloadCount&label=ghcr%20pulls&logo=docker&color=2496ED)](https://github.com/evi-assistant/evi-ai/pkgs/container/evi-ai)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<!--
+  Docker pull-count badges. GHCR does not expose pulls via the GitHub API, so both
+  of these read the number off the GHCR package page:
+    • ghcr-badge (used above) — public hosted instance, no setup:
+      https://ghcr-badge.elias.eu.org  →  /api/evi-assistant/evi-ai  (JSON) or /shield/... (SVG)
+    • pkgbadge (https://github.com/will-luck/pkgbadge) — SELF-HOST only (image
+      ghcr.io/will-luck/pkgbadge, port 8080, PKGBADGE_PACKAGES=evi-assistant/evi-ai).
+      Once hosted, swap in:
+      [![GHCR pulls](https://img.shields.io/endpoint?url=https://YOUR-HOST/evi-assistant/evi-ai/pulls.json)](https://github.com/evi-assistant/evi-ai/pkgs/container/evi-ai)
+-->
+
 
 **eVi 1.0 — shipped and public.** Local-first personal assistant. Chat with a model on **your** hardware,
 let it use tools, generate images, automate scheduled tasks, drive your

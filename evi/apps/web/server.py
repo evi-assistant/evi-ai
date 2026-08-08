@@ -359,6 +359,7 @@ class WebSession:
     mode: str = "chat"  # Chat / Cowork / Code — gates the agent's tool set
     channel_log: list[dict[str, str]] = field(default_factory=list)  # pushed-in alerts (Ph 83)
     busy: bool = False  # a turn is mid-flight — surfaced by the dispatch live-watch
+    title: str = ""  # server-stored session name, for addressing in session messaging (Ph 95)
 
 
 # ---- federation activity (inbound peer requests) -------------------------
@@ -384,6 +385,170 @@ def _fed_begin(source: str, task: str) -> dict[str, Any]:
 def _fed_end(entry: dict[str, Any], status: str) -> None:
     entry["status"] = status
     _FED_ACTIVE["n"] = max(0, _FED_ACTIVE["n"] - 1)
+
+
+def _is_loopback_host(host: str) -> bool:
+    import ipaddress
+    h = (host or "").strip().lower()
+    if h in ("127.0.0.1", "::1", "localhost", "") or h.startswith("127."):
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        # Not a real IP — e.g. the in-process TestClient's synthetic "testclient"
+        # host. A request off a real socket always carries an IP, so only a
+        # parseable non-loopback IP is a genuine remote peer; treat the rest local.
+        return True
+
+
+def _federation_lan_guard(request: "Request", cfg: Any) -> None:
+    """Fail-safe: refuse a federation/A2A request from a NON-loopback client
+    when no auth token is set. The bind-to-LAN decision lives in the desktop
+    shell (main.rs) or a manual `evi web --host 0.0.0.0`, so a config-side check
+    can't catch every path — but an OPEN server (`[web] auth_token` empty) reachable
+    on the LAN would let anyone delegate tasks. We gate at the request instead:
+    loopback (local testing) is always allowed; a remote peer must have a token
+    configured (auth_middleware then enforces it). This closes the open-on-LAN
+    hole regardless of how the host was bound."""
+    client_host = request.client.host if request.client else ""
+    if _is_loopback_host(client_host):
+        return
+    if not str(getattr(cfg.web, "auth_token", "") or "").strip():
+        raise HTTPException(
+            403,
+            "federation refused: this eVi is serving on the network without an "
+            "auth token, so remote delegation is disabled. Set [web] auth_token "
+            "to accept peers (local/loopback requests are unaffected).",
+        )
+
+
+# ---- intra-instance session messaging (Phase 95) -------------------------
+# Let one live web session send a lightweight PLAIN-TEXT message to another of
+# YOUR live sessions in the same sidecar (the common desktop case: several chat
+# tabs). Delivery reuses the Phase-83 channel mechanism: the note lands in the
+# target's history (seen on its next turn) + channel_log (the UI inbox). A
+# message is plain text — it never approves a permission, changes config, or runs
+# a command in the target; any tool the receiving agent then runs still goes
+# through that session's own permission prompt. Scoped to one user's bucket, so
+# tabs can only reach tabs (never another user's sessions).
+
+_MSG_LOG_CAP = 100  # keep the per-session inbox bounded
+
+
+def _deliver_note(sess: "WebSession", source: str, text: str) -> bool:
+    """Append a pushed-in message to a session's history + channel_log. Dedupes
+    an identical (source, text) repeat of the most recent entry (loop guard) and
+    caps the log. Returns True if delivered, False if deduped."""
+    source = (str(source or "channel").strip() or "channel")[:64]
+    text = str(text or "")
+    last = sess.channel_log[-1] if sess.channel_log else None
+    if last is not None and last.get("source") == source and last.get("text") == text:
+        return False  # identical repeat — drop (loop / double-send guard)
+    # Framed clearly as a peer message so the receiving model treats it as
+    # information from another session, NOT an instruction from the user. (Any
+    # tool it then runs still goes through this session's own permission prompt.)
+    who = source[len("session:"):] if source.startswith("session:") else source
+    sess.agent.history.append(
+        {"role": "system", "content": f'📨 Message from session "{who}": {text}'}
+    )
+    sess.channel_log.append({"source": source, "text": text, "ran": False})
+    if len(sess.channel_log) > _MSG_LOG_CAP:
+        del sess.channel_log[: len(sess.channel_log) - _MSG_LOG_CAP]
+    return True
+
+
+def _resolve_target(bucket: "dict[str, WebSession]", self_id: str, target: str):
+    """Resolve a target session within `bucket` (excluding self) by exact id,
+    else exact case-insensitive title. Returns (id, WebSession), a list of
+    candidate labels on ambiguity, or None when nothing matches."""
+    target = str(target or "").strip()
+    if not target:
+        return None
+    if target != self_id and target in bucket:
+        return (target, bucket[target])
+    matches = [
+        (sid, s) for sid, s in bucket.items()
+        if sid != self_id and (s.title or "").strip().lower() == target.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return [f"{s.title or sid[:8]} ({sid[:8]})" for sid, s in matches]
+    return None
+
+
+def _make_session_tools(bucket: "dict[str, WebSession]", self_id: str) -> list:
+    """Build the per-session list_sessions + send_to_session tools, closing over
+    the caller's session bucket + own id (the worker thread can't rely on the
+    request ContextVar — same reason _make_permission_callback captures them)."""
+    from evi.tools.base import Tool
+
+    def list_sessions() -> str:
+        out = []
+        for sid, s in bucket.items():
+            if sid == self_id:
+                continue
+            out.append({
+                "id": sid,
+                "name": s.title or sid[:8],
+                "busy": bool(s.busy),
+                "mode": s.mode,
+                "messages": max(0, len(getattr(s.agent, "history", [])) - 1),
+            })
+        return json.dumps(out)
+
+    def send_to_session(target: str, text: str) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return "ERROR: text is required"
+        tgt = _resolve_target(bucket, self_id, target)
+        if tgt is None:
+            return (f"ERROR: no other live session named '{target}'. "
+                    "Call list_sessions to see reachable sessions.")
+        if isinstance(tgt, list):
+            return "ERROR: ambiguous target — matches: " + "; ".join(tgt) + ". Use the exact id."
+        tsid, tsess = tgt
+        me = bucket.get(self_id)
+        sender = (me.title if me and me.title else self_id[:8])
+        delivered = _deliver_note(tsess, f"session:{sender}", text)
+        who = tsess.title or tsid[:8]
+        return (f"delivered to session '{who}'." if delivered
+                else f"(duplicate message to '{who}' skipped)")
+
+    return [
+        Tool(
+            name="list_sessions",
+            description=(
+                "List your OTHER live chat sessions (open tabs) that you can message. "
+                "Returns each one's id, name, whether it's busy, its mode, and message "
+                "count. Call this before send_to_session to get a target name or id."
+            ),
+            parameters={"type": "object", "properties": {}},
+            func=list_sessions,
+            category="session",
+        ),
+        Tool(
+            name="send_to_session",
+            description=(
+                "Send a short PLAIN-TEXT message to one of your other live sessions "
+                "(address it by the name or id from list_sessions). Use it to hand a "
+                "finding, status, or decision to a session working on something related "
+                "— e.g. 'schema migration finished, rebasing is safe now'. The message "
+                "is delivered as a note the other session sees on its next turn; it does "
+                "NOT run commands or approve anything there."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "target session name or id (from list_sessions)"},
+                    "text": {"type": "string", "description": "the plain-text message to deliver"},
+                },
+                "required": ["target", "text"],
+            },
+            func=send_to_session,
+            category="session",
+        ),
+    ]
 
 
 # ---- event serialization -------------------------------------------------
@@ -808,6 +973,15 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
             sess = WebSession(agent=agent)
+            # Session messaging (Ph 95): give the agent tools to list + message
+            # your OTHER live tabs. Injected directly (not via [tools] toggles),
+            # and auto-approved — safe local ops that shouldn't prompt. Guarded
+            # so lightweight test doubles (no real .tools dict) still work.
+            if isinstance(getattr(agent, "tools", None), dict):
+                for _t in _make_session_tools(bucket, session_id):
+                    agent.tools[_t.name] = _t
+                if isinstance(getattr(agent, "auto_approve_categories", None), set):
+                    agent.auto_approve_categories.add("session")
             bucket[session_id] = sess
         return sess
 
@@ -1153,6 +1327,34 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         return {"messages": sess.channel_log if sess is not None else []}
 
+    @app.post("/api/session/{session_id}/message")
+    def session_message(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        """Deliver a plain-text message into one of the user's OWN live sessions
+        (Ph 95) — the Dispatch panel's "Message" compose. Same delivery as the
+        send_to_session tool. 404 if the target session isn't live."""
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        text = str(req.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "text is required")
+        source = (str(req.get("from") or "you").strip() or "you")[:64]
+        sess = _my_sessions().get(session_id)
+        if sess is None:
+            raise HTTPException(404, "no such live session")
+        delivered = _deliver_note(sess, source, text)
+        return {"ok": True, "delivered": delivered, "unread": len(sess.channel_log)}
+
+    @app.post("/api/session/{session_id}/name")
+    def session_set_name(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        """Store a human name for a session so other sessions can address it by
+        name (Ph 95). The web UI posts the tab's label here."""
+        if not isinstance(req, dict):
+            raise HTTPException(400, "expected an object body")
+        name = str(req.get("name") or "").strip()[:80]
+        sess = get_session(session_id)
+        sess.title = name
+        return {"ok": True, "name": sess.title}
+
     @app.post("/api/session/{session_id}/handoff")
     def handoff_session(session_id: str, request: Request) -> dict[str, Any]:
         """Hand a session off to another device (Phase 87).
@@ -1191,6 +1393,7 @@ def create_app() -> FastAPI:
             sess_list.append(
                 {
                     "id": sid,
+                    "name": s.title,  # server-stored session name (Ph 95 messaging)
                     "mode": s.mode,
                     "messages": len(getattr(s.agent, "history", [])),
                     "used": used,
@@ -1290,7 +1493,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "outputs": outputs}
 
     @app.post("/api/federate")
-    def federate(req: dict[str, Any]) -> dict[str, Any]:
+    def federate(req: dict[str, Any], request: Request) -> dict[str, Any]:
         """Run a task delegated by a trusted peer eVi (federation). Off unless
         `[federation] serve = true`. Runs non-interactively — tools not already
         auto-approved are denied, so a remote task can't trigger surprises."""
@@ -1299,6 +1502,7 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 403, "federation serving is disabled (set [federation] serve = true)"
             )
+        _federation_lan_guard(request, cfg)
         if not isinstance(req, dict):
             raise HTTPException(400, "expected an object body")
         task = str(req.get("task") or "").strip()
@@ -1343,6 +1547,7 @@ def create_app() -> FastAPI:
         cfg = Config.load()
         if not cfg.federation.a2a:
             raise HTTPException(403, "A2A serving is disabled (set [federation] a2a = true)")
+        _federation_lan_guard(request, cfg)
         from evi import a2a as a2a_mod
         from evi.headless import run_headless
         from evi.sdk.builder import build_agent
