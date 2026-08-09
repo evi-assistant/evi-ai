@@ -3692,6 +3692,41 @@ def peer_scan(
     console.print("\n[dim]add one:[/dim] [cyan]evi peer add <name> <url>[/cyan]")
 
 
+@peer_app.command("doctor")
+def peer_doctor(
+    timeout: float = typer.Option(20.0, "--timeout", help="Per-peer delegation timeout (seconds)."),
+    fast: bool = typer.Option(False, "--fast", help="Skip the real delegation probe (reachability/auth only)."),
+) -> None:
+    """Preflight the federation setup: this node's serving posture + each peer's
+    reachability, auth, and a real test delegation, with fix-it guidance."""
+    from evi import federation
+
+    cfg = Config.load()
+    with console.status("running federation preflight…", spinner="dots"):
+        checks = federation.federation_preflight(
+            serve=bool(getattr(cfg.federation, "serve", False)),
+            auth_token=getattr(cfg.web, "auth_token", "") or "",
+            delegate_timeout=timeout,
+            probe_delegation=not fast,
+        )
+    from rich.markup import escape as _esc  # detail/hint carry [web]/[federation] literals
+
+    icon = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "fail": "[red]✗[/red]"}
+    for c in checks:
+        console.print(f"  {icon.get(c['status'], '?')} [bold]{_esc(c['name'])}[/bold] — {_esc(c['detail'])}")
+        if c.get("hint") and c["status"] != "ok":
+            console.print(f"      [dim]{_esc(c['hint'])}[/dim]")
+    n_fail = sum(1 for c in checks if c["status"] == "fail")
+    n_warn = sum(1 for c in checks if c["status"] == "warn")
+    if n_fail:
+        tail = f", [yellow]{n_warn} warning(s)[/yellow]" if n_warn else ""
+        console.print(f"\n[red]{n_fail} problem(s)[/red]{tail} — see the hints above.")
+    elif n_warn:
+        console.print(f"\n[yellow]{n_warn} warning(s)[/yellow] — federation should work; review the notes.")
+    else:
+        console.print("\n[green]all checks passed — federation is ready.[/green]")
+
+
 @app.command()
 def ultracode(
     task: str = typer.Argument(..., help="The task to run through the exhaustive pipeline."),
@@ -4875,7 +4910,14 @@ def web(host: str = "127.0.0.1", port: int = 8000) -> None:
     try:
         import uvicorn
     except ImportError:
-        console.print("[red]uvicorn not installed[/red] — run: pip install 'evi-assistant[web]'")
+        # NB: escape the [web] bracket — Rich would otherwise parse it as a style
+        # tag and strip it, leaving a misleading `pip install 'evi-assistant'`.
+        console.print(
+            "[red]The web UI needs the 'web' extra (FastAPI + uvicorn), which isn't installed.[/red]\n"
+            "  Install it:  [cyan]pip install 'evi-assistant\\[web]'[/cyan]\n"
+            "  [dim](the \\[web] suffix is required — a plain `pip install evi-assistant` "
+            "does NOT include the web server)[/dim]"
+        )
         raise typer.Exit(1)
     cfg = Config.load()
     if cfg.web.auth_token:

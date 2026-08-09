@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -312,3 +313,135 @@ def scan_network(
             if info is not None:
                 found.append(info)
     return sorted(found, key=lambda d: d["host"])
+
+
+# --- federation preflight --------------------------------------------------
+#
+# One actionable checklist for "is my federation set up right?", reused by the
+# `evi peer doctor` CLI and the Peers panel's "Run preflight" button. Each check
+# is {name, status: ok|warn|fail, detail, hint}. It covers THIS node's serving
+# posture (serve / LAN-vs-loopback / the auth-token fail-safe) and, per configured
+# peer, reachability + a REAL time-boxed delegation that distinguishes the common
+# failure modes (serve off, missing/mismatched token, slow peer).
+
+
+def _pf(name: str, status: str, detail: str, hint: str = "") -> dict:
+    return {"name": name, "status": status, "detail": detail, "hint": hint}
+
+
+def _probe_delegation(peer: Peer, timeout: float) -> dict:
+    """Run a trivial real delegation and classify the outcome for the preflight.
+    Reads the HTTP error BODY (which `delegate` discards) so we can tell a
+    fail-safe 403 from a serve-off 403 from a 401. Returns a check dict."""
+    label = f"peer '{peer.name}': delegation"
+    body = json.dumps(
+        {"task": "Reply with exactly one word: ok", "source": socket.gethostname()}
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json", "User-Agent": "evi-preflight"}
+    if peer.token:
+        headers["Authorization"] = f"Bearer {peer.token}"
+    req = urllib.request.Request(
+        f"{peer.url}/api/federate", data=body, method="POST", headers=headers
+    )
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        dt = time.monotonic() - t0
+        if isinstance(data, dict) and data.get("error"):
+            return _pf(label, "fail", f"the peer ran the task but returned an error: {data['error']}")
+        text = str((data or {}).get("text", "")).strip().replace("\n", " ")
+        return _pf(label, "ok", f"works ({dt:.0f}s) — peer replied: {text[:50] or '(empty)'}")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = str(json.loads(exc.read().decode("utf-8", errors="replace")).get("detail", ""))
+        except Exception:  # noqa: BLE001
+            pass
+        low = detail.lower()
+        if exc.code == 401:
+            return _pf(label, "fail", "auth rejected (HTTP 401) — this peer entry's token doesn't match the peer's.",
+                       "Set this peer's token to the peer's [web] auth_token ('Set token' in the Peers panel).")
+        if exc.code == 403 and "auth token" in low:
+            return _pf(label, "fail", "the peer serves on the LAN without an auth token, so it refuses remote tasks.",
+                       "On the peer: set [web] auth_token (evi web token rotate), then put the same token on this peer entry.")
+        if exc.code == 403 and "serving is disabled" in low:
+            return _pf(label, "fail", "the peer has [federation] serve turned off.",
+                       "On the peer: Settings -> Peers -> enable 'answer federation requests' (or [federation] serve = true).")
+        return _pf(label, "fail", f"HTTP {exc.code}" + (f": {detail}" if detail else ""))
+    except (TimeoutError, socket.timeout):
+        return _pf(label, "warn", f"reachable + authed, but the task didn't finish in {int(timeout)}s (slow peer).",
+                   "The peer is likely CPU-bound: give it more cores/a GPU, use a smaller model, or raise the delegation timeout.")
+    except (urllib.error.URLError, OSError) as exc:
+        # A URLError wrapping a timeout also lands here.
+        if "timed out" in str(exc).lower() or (time.monotonic() - t0) >= timeout - 0.5:
+            return _pf(label, "warn", f"reachable, but the task didn't finish in {int(timeout)}s (slow peer).",
+                       "The peer is likely CPU-bound: give it more cores/a GPU, use a smaller model, or raise the delegation timeout.")
+        return _pf(label, "fail", f"could not reach the peer: {exc}")
+    except json.JSONDecodeError:
+        return _pf(label, "fail", "the peer returned a non-JSON response.")
+
+
+def federation_preflight(
+    *,
+    serve: bool,
+    auth_token: str = "",
+    port: int = DEFAULT_PEER_PORT,
+    delegate_timeout: float = 20.0,
+    peers: "list[Peer] | None" = None,
+    probe_delegation: bool = True,
+) -> list[dict]:
+    """Run a federation setup preflight; return a list of checks
+    ``[{name, status, detail, hint}]`` (status is ok|warn|fail). Covers THIS
+    node's serving posture and each configured peer's reachability + a real
+    (time-boxed) delegation. Never raises. Reused by CLI + API."""
+    checks: list[dict] = []
+    token_set = bool((auth_token or "").strip())
+
+    # --- this node, as a peer others delegate to ---
+    ss = self_serving_status(port, serve=serve)
+    st = ss["status"]
+    if not serve:
+        checks.append(_pf("this node: serving", "warn",
+                          "[federation] serve is off — peers can't delegate tasks to you.",
+                          "Enable Settings -> Peers -> 'answer federation requests' to BE a peer. "
+                          "(Not needed just to delegate TO peers.)"))
+    elif st == "lan":
+        checks.append(_pf("this node: serving", "ok",
+                          f"reachable by peers on the LAN at {ss['lan_ip']}:{port}."))
+    elif st == "loopback":
+        checks.append(_pf("this node: serving", "warn",
+                          "serving, but bound to loopback (127.0.0.1) only — the LAN can't reach you.",
+                          "Enable LAN access (bind_lan) and relaunch, or run: evi web --host 0.0.0.0"))
+    else:  # down
+        checks.append(_pf("this node: serving", "fail",
+                          "[federation] serve is on but nothing is listening on the port.",
+                          "Start eVi / check the port and firewall."))
+
+    if serve and st == "lan" and not token_set:
+        checks.append(_pf("this node: auth token", "fail",
+                          "serving on the LAN WITHOUT a [web] auth_token — the fail-safe refuses ALL remote peers.",
+                          "Set [web] auth_token (evi web token rotate) and share it with peers that delegate to you."))
+    elif serve and st in ("lan", "loopback"):
+        checks.append(_pf("this node: auth token",
+                          "ok" if token_set else "warn",
+                          "auth token is set." if token_set
+                          else "no auth token (fine while loopback-only; required once LAN-bound)."))
+
+    # --- each configured peer, as a delegation target ---
+    peer_list = peers if peers is not None else load_peers()
+    if not peer_list:
+        checks.append(_pf("peers", "warn", "no peers configured.",
+                          "Add one in Settings -> Peers, or scan the local network."))
+    for p in peer_list:
+        label = f"peer '{p.name}'"
+        info = check_peer(p)
+        if not info.get("reachable"):
+            checks.append(_pf(label, "fail", f"unreachable at {p.url}.",
+                              "Peer off / eVi not running / not bound to the LAN / firewall blocking the port."))
+            continue
+        meta = f"eVi {info.get('version', '')}" + (f" · {info['model']}" if info.get("model") else "")
+        checks.append(_pf(label, "ok", f"reachable — {meta}."))
+        if probe_delegation:
+            checks.append(_probe_delegation(p, delegate_timeout))
+    return checks

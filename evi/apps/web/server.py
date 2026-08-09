@@ -2273,6 +2273,25 @@ def create_app() -> FastAPI:
             raise HTTPException(404, f"no such peer: {name}")
         return {"ok": True}
 
+    @app.post("/api/peers/preflight")
+    def peers_preflight(req: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run the federation preflight (this node's serving posture + each peer's
+        reachability/auth/test-delegation) and return {checks:[{name,status,detail,
+        hint}], summary:{ok,warn,fail}}. Can take up to ~timeout per peer."""
+        from evi import federation
+
+        body = req if isinstance(req, dict) else {}
+        cfg = Config.load()
+        timeout = float(body.get("timeout") or 20.0)
+        checks = federation.federation_preflight(
+            serve=bool(getattr(cfg.federation, "serve", False)),
+            auth_token=getattr(cfg.web, "auth_token", "") or "",
+            delegate_timeout=timeout,
+            probe_delegation=not bool(body.get("fast")),
+        )
+        summary = {s: sum(1 for c in checks if c["status"] == s) for s in ("ok", "warn", "fail")}
+        return {"checks": checks, "summary": summary}
+
     @app.post("/api/peers/scan")
     def peers_scan(req: dict[str, Any] | None = None) -> dict[str, Any]:
         """Sweep the local /24 (or explicit {hosts}) for eVi instances on

@@ -302,10 +302,21 @@ evi peer add <name> <url> [--token …] [--overwrite]
 evi peer remove <name>
 evi peer scan [--port N]           # sweep the local /24 for running eVi instances
 evi peer run <name> "<task>"       # delegate a task to a peer and print its answer
+evi peer doctor [--fast]           # PREFLIGHT: serving/token posture + per-peer reachability,
+                                   #   auth, and a real test delegation, with fix-it hints
 ```
 
 The `delegate_peer(peer, task)` tool does the same from inside a chat when the
 `federation` tool toggle is on.
+
+**`evi peer doctor`** (and the **Run federation preflight** button in the Peers
+panel) is the fastest way to find out why federation isn't working. It checks:
+whether this node is serving and reachable on the LAN (vs loopback-only); whether
+`[web] auth_token` is set when LAN-bound (required, or the fail-safe refuses all
+peers); and, for each configured peer, reachability, whether its token is accepted,
+and whether a real test delegation completes — telling apart the common failures
+(peer's `serve` off, missing/mismatched token, or simply a too-slow peer) with the
+exact fix for each.
 
 ### Web / Desktop — the Peers panel
 

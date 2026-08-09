@@ -5,6 +5,24 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.35] — 2026-08-09
+
+### Added
+- **Federation preflight.** `evi peer doctor` (CLI) and a **Run federation
+  preflight** button in Settings → Peers run a one-click checklist that explains
+  why federation isn't working: this node's serving / LAN-bind posture; whether
+  `[web] auth_token` is set (required once LAN-bound — the 1.0.33 fail-safe);
+  and, per configured peer, reachability + whether its token is accepted + a real
+  test delegation. It tells apart the common failures — the peer's `serve` is off,
+  a missing/mismatched token, or simply a too-slow peer — with the exact fix for
+  each.
+
+### Fixed
+- **Clearer `evi web` error when the web server isn't installed.** The hint's
+  `[web]` was being swallowed by Rich's markup parser, leaving a misleading
+  `pip install 'evi-assistant'`; it now renders correctly and explains that the
+  **`[web]` extra** (FastAPI + uvicorn) is what's required.
+
 ## [1.0.34] — 2026-08-08
 
 ### Fixed
