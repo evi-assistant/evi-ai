@@ -5,6 +5,14 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.38] — 2026-08-09
+
+### Fixed
+- **Peers panel:** the *Be a peer* loopback banner ("Reachable on this machine
+  only") no longer tells you to "Set an access token" when one is already set —
+  once a token is configured it just says to turn on LAN access and relaunch.
+  Cosmetic follow-up to the 1.0.37 federation UX overhaul.
+
 ## [1.0.37] — 2026-08-09
 
 ### Changed

@@ -3649,7 +3649,10 @@ resetBtn.addEventListener('click', async () => {
       if (st === 'loopback') return { tone:'warn', title:'Reachable on this machine only',
         msg: d.bind_lan
           ? 'LAN access is on but not applied yet — relaunch the app so eVi binds to the network.'
-          : 'Peers can’t reach you. Set an access token, turn on “LAN access” below, then relaunch the app.' };
+          : ('Peers can’t reach you. ' + (tok
+              ? 'Turn on “LAN access” below'
+              : 'Set an access token and turn on “LAN access” below') +
+             ', then relaunch the app.') };
       if (st === 'down') return { tone:'bad', title:'Nothing is listening',
         msg:'Serving is on but no server is answering on port ' + port + '.' };
       return { tone:'good', title:'Reachable by peers', lanUrl:url,
