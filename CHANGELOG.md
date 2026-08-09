@@ -5,6 +5,18 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.42] — 2026-08-09
+
+### Changed
+- **Settings — clearer "unsaved changes" cue.** Editing a setting now shows a
+  prominent amber **"● Unsaved changes — click Save to apply"** (was a quiet grey
+  "Unsaved changes"), and the save status goes green on success / red on failure.
+  Closes a real gap found while dogfooding the health banners: the fields *and* the
+  banners reflect *saved* config, so a set-but-unsaved value silently did nothing
+  and the banner wouldn't move — now it's obvious you still need to Save. The
+  Specialty explainer also notes that changes take effect on Save and the banner
+  then reports each model's backend reachability.
+
 ## [1.0.41] — 2026-08-09
 
 ### Fixed

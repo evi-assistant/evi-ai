@@ -2757,7 +2757,11 @@ resetBtn.addEventListener('click', async () => {
   function markDirty() {
     const dirty = Object.keys(pending).length > 0;
     saveBtn.disabled = !dirty;
-    statusEl.textContent = dirty ? 'Unsaved changes' : '';
+    // Prominent cue: fields AND the health banners reflect SAVED config, so an edit
+    // does nothing — and the banner won't move — until you Save. That silent gap is
+    // what made a set-but-unsaved model look like it "didn't take".
+    statusEl.textContent = dirty ? '● Unsaved changes — click Save to apply' : '';
+    statusEl.style.color = dirty ? '#e0a52e' : '';
   }
 
   async function loadConfig() {
@@ -2799,7 +2803,7 @@ resetBtn.addEventListener('click', async () => {
     guardrails: `A fully-local content filter between you and the model: <code>[[rule]]</code> regex, <code>[[judge]]</code> LLM-graded, and <code>[[classifier]]</code> offline-ML rules, applied to your input <i>before</i> it reaches the LLM and to the reply <i>after</i> it streams. Off until you edit <code>~/.evi/guardrails.toml</code> to set <code>enabled = true</code> with at least one rule; <b>Save</b> validates the TOML server-side and won’t write a broken file. Gotcha: output rules run <i>post-stream</i> — they scrub the stored transcript and flag the turn, but can’t un-show text already on screen. The judge and classifier layers also <b>fail open</b>: a missing or erroring grader skips that rule rather than blocking the turn. Treat it as hygiene and shared-machine policy, not a hard security boundary.`,
     context: `Controls automatic <b>compaction</b> — when a conversation grows too large, eVi summarises its oldest turns into one note so the exchange still fits the model’s window. Compaction fires after <code>Compact after N messages</code> <i>or</i> once usage passes <code>Compact at % of context</code>; set both to <code>0</code> to turn it off entirely (<code>Keep recent turns</code> is internally floored at 2). Tighten these for small-window local models, relax them for large-context ones. Gotchas: the percent trigger only means anything if the model’s context window is set correctly in the Model panel, and compaction is <b>lossy</b> — summarised turns lose detail from the live context, though full transcripts stay on disk if transcripts are enabled. The summary is produced by your <i>same</i> backend in a one-shot call; if that call fails, history is left untouched rather than dropped.`,
     sampling: `Low-level generation parameters passed to your backend per request — sampling shape (<code>top-p</code>, presence / frequency penalties), determinism (<code>seed</code>, <code>stop sequences</code>), and plumbing (<code>request timeout</code>, the <code>embedding model</code> used for semantic file search). Most are pure overrides: leave a field at its default and eVi doesn’t send it at all, so it can’t change anything. Reach for one only for a specific need — a fixed <code>seed</code> for reproducible runs, <code>Max completion tokens</code> for reasoning models that reject <code>max_tokens</code>, or <code>logit bias</code> to push tokens up or down. Main gotcha: these are <b>backend-specific and silently ignored</b> where unsupported — <code>cache_prompt</code> is a llama.cpp / vLLM hint, <code>logit_bias</code> / <code>logprobs</code> need an OpenAI-schema server, and <b>CLI-agent backends</b> (claude / codex / gemini) honour almost none of them.`,
-    specialty: `Optional small models that run <i>instead of</i> your main chat model for specific jobs — <code>OCR</code> and <code>vision</code> (chat-VLMs served over the OpenAI image schema), <code>speech-to-text</code> (a faster-whisper model, not an HTTP backend), and a <code>safety-guard</code> model for the guardrail. Leave any field <b>blank to fall back</b> to the main model or default engine; a blank <code>base URL</code> reuses your main <code>[llm]</code> backend. Set one to route a task to a cheaper or specialised local model, or to point a task at a separate server. Gotcha: the id you enter must actually be <b>served by the backend it points at</b> — a typo or an unloaded model only fails when that task runs — and speech-to-text additionally needs the <code>faster-whisper</code> extra installed.`,
+    specialty: `Optional small models that run <i>instead of</i> your main chat model for specific jobs — <code>OCR</code> and <code>vision</code> (chat-VLMs served over the OpenAI image schema), <code>speech-to-text</code> (a faster-whisper model, not an HTTP backend), and a <code>safety-guard</code> model for the guardrail. Leave any field <b>blank to fall back</b> to the main model or default engine; a blank <code>base URL</code> reuses your main <code>[llm]</code> backend. Set one to route a task to a cheaper or specialised local model, or to point a task at a separate server. Gotcha: the id you enter must actually be <b>served by the backend it points at</b> — a typo or an unloaded model only fails when that task runs — and speech-to-text additionally needs the <code>faster-whisper</code> extra installed. Changes here only take effect once you <b>click Save</b>; the banner below then reports whether each configured model’s backend is actually reachable.`,
     integrations: `Optional external services eVi can reach out to: a local <code>ComfyUI</code> server for image generation, an Obsidian vault, Google / Microsoft accounts for mail and calendar, and the web-search backend. Change these to point at a self-hosted ComfyUI or SearXNG instance, or to supply OAuth client credentials. The <code>SearXNG URL</code> is only consulted when the search backend is set to <code>searxng</code> — the other backends ignore it. <b>Gotcha:</b> the ComfyUI and SearXNG URLs get a live reachability check, but the Google / Microsoft fields only record credential paths — filling them in does not sign you in or cache a token, so there is no liveness signal for email here.`,
     editing: `Controls two edit-time assists and how long stored transcripts are kept. <b>Format on edit</b> and <b>Check on edit</b> run an already-installed formatter (ruff/black/prettier/gofmt/rustfmt) or linter after each write — both are silent no-ops if the tool isn’t on <code>PATH</code>, so turning them on does nothing until you install one. <b>Transcript retention</b> deletes stored sessions older than N days at startup (<code>0</code> = keep forever), so a change only takes effect on the next launch, not immediately. <b>Worktree base ref</b> only applies when you run <code>evi worktree</code> without <code>--base</code> — blank means fork from <code>HEAD</code>.`,
     plugins: `Lists installed plugins and the marketplace you install them from. Each plugin lives in the plugins dir with a manifest; <code>index_urls</code> sets which marketplaces the search pulls from. <b>Gotcha:</b> a plugin whose manifest is broken or missing is silently dropped from the installed list rather than flagged — so if one you installed vanished, its manifest is the first thing to check. The health signal below surfaces exactly those failed-to-load plugins by name.`,
@@ -4437,7 +4441,7 @@ resetBtn.addEventListener('click', async () => {
 
   async function save() {
     if (!Object.keys(pending).length) return;
-    saveBtn.disabled = true; statusEl.textContent = 'Saving…';
+    saveBtn.disabled = true; statusEl.textContent = 'Saving…'; statusEl.style.color = '';
     try {
       const r = await fetch('/api/config', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending),
@@ -4453,10 +4457,11 @@ resetBtn.addEventListener('click', async () => {
         refreshHeaderModel();
       statusEl.textContent = (data.deferred && data.deferred.length)
         ? 'Saved — tool/permission changes apply to new chats.' : 'Saved.';
+      statusEl.style.color = '#4caf50';
       saveBtn.disabled = true;
       renderSection();
     } catch (e) {
-      statusEl.textContent = 'Save failed: ' + e.message; saveBtn.disabled = false;
+      statusEl.textContent = 'Save failed: ' + e.message; statusEl.style.color = '#e05252'; saveBtn.disabled = false;
     }
   }
 
