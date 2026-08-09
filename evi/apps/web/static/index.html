@@ -2784,6 +2784,136 @@ resetBtn.addEventListener('click', async () => {
     });
   }
 
+  // ---- Settings section explainers + live health banners (declarative) ----
+  // SECTION_EXPLAINERS[id] = HTML body for a collapsible "How this works" panel.
+  // SECTION_HEALTH[id] = async () => ({tone,title,msg,cta}|null) — a live banner
+  // computed from real runtime state (backend reachable, tokens, availability…),
+  // mirroring the federation Peers posture banner. Both are optional per section
+  // and render for custom sections too (injected before the custom dispatch).
+  const SECTION_EXPLAINERS = {
+    general: `Controls appearance (theme, and the output-style response persona) and all opt-in reporting — crash reports plus OpenTelemetry traces and metrics, and the endpoints they ship to. Change it to switch light/dark or to wire eVi into your monitoring. Reporting is <b>off and inert by default</b>: crash reports send only when a <code>dsn</code> is set, and OTel exports only with an OTLP endpoint <i>and</i> the <code>[otel]</code> extra installed — a blank endpoint exports nothing. Theme also lives under View → Toggle Theme.`,
+    model: `Picks where eVi sends your messages — backend kind, Base URL, model, API key — plus the generation defaults (temperature, context size, reasoning effort, fast mode, fallbacks, routing). Change it to point at a different local server or cloud endpoint, swap models, or dial thinking up or down. <b>Switching backend rebuilds the live connection.</b> The <code>claude_agent</code>/<code>codex</code>/<code>gemini</code>/<code>copilot</code>/<code>amp</code> kinds drive a local CLI on subscription auth — they ignore Base URL and need their command on PATH, not a running server. Local backends ignore the API key; <code>reasoning_effort=off</code> fully disables extended thinking.`,
+    tools: `Toggles which capability categories eVi may use — filesystem, code, shell, web, image, memory, MCP, git, sqlite, pdf, ocr, vision and more — plus the code sandbox, MCP allowlist, and tool-search threshold. Change it to grant or revoke a capability or to trim the toolset. <b>These apply to new chats only</b> — an open session keeps the tools it started with. The <b>⚠ marks risk</b> (a tool that acts outside eVi’s sandbox, like <code>shell</code> or <code>computer</code>), <i>not</i> unavailability — a tool that cannot run is instead missing an install dependency, shown in its own help.`,
+    permissions: `Resolves every tool call to <b>allow</b> / <b>deny</b> / <b>ask</b> before it runs, in a fixed order: <code>hard_deny</code> (beats everything, even yolo), then <code>mode</code>, then first-match <code>rules</code>, then trusted dirs/domains, otherwise ask. Loosen it with trusted directories, trusted domains, or auto-approved categories; tighten it with <code>deny</code> rules, <code>hard_deny</code>, and <code>protected_paths</code>. Gotcha: <code>yolo</code> short-circuits <i>before</i> rules, so an ordinary <code>deny</code> rule won’t protect you there — only <code>hard_deny</code> and the destructive-command guard still fire. Changes here apply to new chats, not the turn you’re in.`,
+    server: `Gates who can reach the web UI and API. <b>Access token</b>: blank leaves localhost open; set it and the web UI requires that token. <b>Multi-user logins</b>: each person signs in with their own token from <code>~/.evi/users.json</code> on a shared workspace. <b>A2A interop</b> exposes <code>POST /a2a</code> so any standards-compliant external agent — not just trusted eVi peers — can delegate a task here. Gotcha: turning on A2A or multi-user (or binding to the LAN) while the access token is blank leaves an unauthenticated surface reachable off-box — set a token first.`,
+    guardrails: `A fully-local content filter between you and the model: <code>[[rule]]</code> regex, <code>[[judge]]</code> LLM-graded, and <code>[[classifier]]</code> offline-ML rules, applied to your input <i>before</i> it reaches the LLM and to the reply <i>after</i> it streams. Off until you edit <code>~/.evi/guardrails.toml</code> to set <code>enabled = true</code> with at least one rule; <b>Save</b> validates the TOML server-side and won’t write a broken file. Gotcha: output rules run <i>post-stream</i> — they scrub the stored transcript and flag the turn, but can’t un-show text already on screen. The judge and classifier layers also <b>fail open</b>: a missing or erroring grader skips that rule rather than blocking the turn. Treat it as hygiene and shared-machine policy, not a hard security boundary.`,
+    context: `Controls automatic <b>compaction</b> — when a conversation grows too large, eVi summarises its oldest turns into one note so the exchange still fits the model’s window. Compaction fires after <code>Compact after N messages</code> <i>or</i> once usage passes <code>Compact at % of context</code>; set both to <code>0</code> to turn it off entirely (<code>Keep recent turns</code> is internally floored at 2). Tighten these for small-window local models, relax them for large-context ones. Gotchas: the percent trigger only means anything if the model’s context window is set correctly in the Model panel, and compaction is <b>lossy</b> — summarised turns lose detail from the live context, though full transcripts stay on disk if transcripts are enabled. The summary is produced by your <i>same</i> backend in a one-shot call; if that call fails, history is left untouched rather than dropped.`,
+    sampling: `Low-level generation parameters passed to your backend per request — sampling shape (<code>top-p</code>, presence / frequency penalties), determinism (<code>seed</code>, <code>stop sequences</code>), and plumbing (<code>request timeout</code>, the <code>embedding model</code> used for semantic file search). Most are pure overrides: leave a field at its default and eVi doesn’t send it at all, so it can’t change anything. Reach for one only for a specific need — a fixed <code>seed</code> for reproducible runs, <code>Max completion tokens</code> for reasoning models that reject <code>max_tokens</code>, or <code>logit bias</code> to push tokens up or down. Main gotcha: these are <b>backend-specific and silently ignored</b> where unsupported — <code>cache_prompt</code> is a llama.cpp / vLLM hint, <code>logit_bias</code> / <code>logprobs</code> need an OpenAI-schema server, and <b>CLI-agent backends</b> (claude / codex / gemini) honour almost none of them.`,
+    specialty: `Optional small models that run <i>instead of</i> your main chat model for specific jobs — <code>OCR</code> and <code>vision</code> (chat-VLMs served over the OpenAI image schema), <code>speech-to-text</code> (a faster-whisper model, not an HTTP backend), and a <code>safety-guard</code> model for the guardrail. Leave any field <b>blank to fall back</b> to the main model or default engine; a blank <code>base URL</code> reuses your main <code>[llm]</code> backend. Set one to route a task to a cheaper or specialised local model, or to point a task at a separate server. Gotcha: the id you enter must actually be <b>served by the backend it points at</b> — a typo or an unloaded model only fails when that task runs — and speech-to-text additionally needs the <code>faster-whisper</code> extra installed.`,
+    integrations: `Optional external services eVi can reach out to: a local <code>ComfyUI</code> server for image generation, an Obsidian vault, Google / Microsoft accounts for mail and calendar, and the web-search backend. Change these to point at a self-hosted ComfyUI or SearXNG instance, or to supply OAuth client credentials. The <code>SearXNG URL</code> is only consulted when the search backend is set to <code>searxng</code> — the other backends ignore it. <b>Gotcha:</b> the ComfyUI and SearXNG URLs get a live reachability check, but the Google / Microsoft fields only record credential paths — filling them in does not sign you in or cache a token, so there is no liveness signal for email here.`,
+    editing: `Controls two edit-time assists and how long stored transcripts are kept. <b>Format on edit</b> and <b>Check on edit</b> run an already-installed formatter (ruff/black/prettier/gofmt/rustfmt) or linter after each write — both are silent no-ops if the tool isn’t on <code>PATH</code>, so turning them on does nothing until you install one. <b>Transcript retention</b> deletes stored sessions older than N days at startup (<code>0</code> = keep forever), so a change only takes effect on the next launch, not immediately. <b>Worktree base ref</b> only applies when you run <code>evi worktree</code> without <code>--base</code> — blank means fork from <code>HEAD</code>.`,
+    plugins: `Lists installed plugins and the marketplace you install them from. Each plugin lives in the plugins dir with a manifest; <code>index_urls</code> sets which marketplaces the search pulls from. <b>Gotcha:</b> a plugin whose manifest is broken or missing is silently dropped from the installed list rather than flagged — so if one you installed vanished, its manifest is the first thing to check. The health signal below surfaces exactly those failed-to-load plugins by name.`,
+    voice: `Picks the text-to-speech engine eVi uses to read replies aloud (the REPL <code>/speak</code> toggle, <code>evi voice</code>, and the streaming AutoSpeaker) plus its model, clone sample, and language. <b>system</b> is the zero-dependency OS voice; <b>coqui</b> and <b>f5</b> clone a voice from a reference WAV, <b>piper</b> gives light local neural voices — the three neural engines are separate installs that only load when selected. Switch engines for nicer or cloned speech, and set <b>Model id / path</b> to a voice <code>.onnx</code> for Piper (required) or an XTTS model id for Coqui. A missing engine dependency fails open with an install hint rather than crashing, and this panel controls TTS only — mic transcription is the separate <code>stt</code> extra.`,
+    notifications: `Fires a ping when the assistant finishes a turn, so you can start a long or headless run and walk away. <b>Sound</b> plays a beep, <b>Desktop toast</b> raises a native OS notification, and <b>ntfy / webhook URL</b> POSTs the completion to an ntfy topic or webhook so a remote or headless turn can still reach your phone. Turn these on for long local runs or when you’re away from the tab. Nothing fires unless <b>Completion notifications</b> is enabled, and on Windows the native toast is limited — the webhook is the dependable path to a phone or a headless box.`,
+    statusline: `Configures the one-line status readout in the interactive terminal REPL — it is off by default and has no effect in the web or desktop chat. <b>Format</b> is a template of tokens (<code>{model}</code> <code>{pct}</code> <code>{branch}</code> <code>{goal}</code> <code>{effort}</code> <code>{fast}</code> and friends) rendered after each turn. Enable it and edit Format to keep context usage, branch, or effort in view while working in the REPL. If you set <b>Command</b>, eVi runs that shell command with the state as JSON on stdin and uses its stdout instead — so a command completely overrides Format.`,
+    multiagent: `Controls how the ultracode pipeline (<code>decompose &rarr; fan-out solvers &rarr; adversarial verify &rarr; synthesize</code>) spreads work and how deep it goes. <b>Solver breadth</b> sets parallel angles (<code>1</code> disables fan-out), <b>Verify rounds</b> sets the adversarial critique&rarr;refine cycles (<code>0</code> skips the critic), and <b>Spread fan-out across flagged backends</b> runs those angles on every backend you ticked <i>fan-out</i> in Model &amp; Backend — without that tick, multi-provider fan-out does nothing. <b>Cheap fan-out</b> is the alternative: it runs the solve stage on the <code>[llm]</code> fast model instead of fanning out across backends. Note that <b>Auto-tune</b> quietly lowers breadth and rounds for tiny or short-context models, and with a single local backend breadth buys diverse-angle quality rather than wall-clock speed (inference serializes).`,
+    stats: `A read-only view of local usage computed entirely from your on-disk transcripts — session and message counts, an approximate token total, a date span, plus role, top-tool, and busiest-day breakdowns over a range you pick. Nothing here is configurable and nothing leaves the machine; it is the same data as <code>evi stats</code>. It only has data when transcript recording is on (<code>tools.transcripts</code>) — with it off the panel shows <i>No transcripts yet</i>. Token counts are approximate (a rough character-based estimate, not billed usage).`,
+  };
+  const SECTION_HEALTH = {
+    // Phase 1 — no new server endpoints. Client-computable from cfg or the
+    // existing /api/backend/status probe. renderSection() re-runs on save, so
+    // these refresh automatically after a config change.
+    model: async () => {
+      const d = await fetch('/api/backend/status').then(r => r.json()).catch(() => null);
+      if (!d || !d.configured) return null;
+      if (d.configured.reachable)
+        return { tone:'good', title:'Backend reachable', msg:'The configured backend responded — your messages route there.' };
+      return { tone:'bad', title:'Backend not answering',
+        msg:'Nothing answered at the configured backend — start its server (or CLI), or switch backends below.' };
+    },
+    tools: async () => {
+      let av = cfg && cfg.availability;
+      if (!av) { const d = await fetch('/api/config').then(r => r.json()).catch(() => ({})); av = d.availability || {}; }
+      const missing = Object.keys(av).filter(k => av[k] && av[k].available === false);
+      if (!missing.length)
+        return { tone:'good', title:'All tools available', msg:'Every gated tool has its dependency installed and is ready to enable.' };
+      return { tone:'warn', title:'Some tools need setup',
+        msg: missing.length + (missing.length === 1 ? ' category needs' : ' categories need') +
+          ' a dependency: ' + missing.join(', ') + ' — open each tool’s help for the command.' };
+    },
+    server: async () => {
+      const web = (cfg && cfg.web) || {}, fed = (cfg && cfg.federation) || {};
+      const hasToken = String(web.auth_token || '') !== '';
+      const openSurface = fed.a2a === true || web.multi_user === true || fed.bind_lan === true;
+      if (!hasToken && openSurface)
+        return { tone:'bad', title:'Open surface, no token',
+          msg:'An externally reachable endpoint (A2A, multi-user, or LAN binding) is on with no access token — anyone who can reach it can drive eVi.' };
+      if (hasToken)
+        return { tone:'good', title:'Access token set', msg:'The web UI and API require your token before responding.' };
+      return { tone:'off', title:'Localhost only', msg:'No token set, but nothing beyond localhost is reachable — fine on a single-user machine.' };
+    },
+    permissions: async () => {
+      const a = (cfg && cfg.auto) || {};
+      const yolo = a.mode === 'yolo', guardOff = a.block_destructive === false;
+      if (yolo && guardOff) return { tone:'bad', title:'Everything allowed, no guard', msg:'Yolo runs every tool without asking and the destructive-command guard is disabled — nothing is gated.' };
+      if (yolo) return { tone:'bad', title:'Yolo mode active', msg:'Every tool call runs without prompting; only hard-deny rules and the destructive guard still block.' };
+      if (guardOff) return { tone:'warn', title:'Destructive guard off', msg:'Curated destructive shell commands (rm -rf ~, git reset --hard, force-push) no longer force a confirmation.' };
+      if (a.mode === 'accept_edits') return { tone:'info', title:'Edits auto-approved', msg:'File edits apply without prompting; other tool categories still follow your rules.' };
+      if (a.mode === 'plan') return { tone:'info', title:'Plan mode: tools off', msg:'All tool calls are denied — the model can reason but not act.' };
+      return { tone:'good', title:'Standard permissions', msg:'Non-approved tools prompt before running and the destructive-command guard is on.' };
+    },
+  };
+  const _healthTone = (t) => ({
+    good: { c:'#4caf50', bg:'rgba(76,175,80,.09)', ic:'✓' },
+    warn: { c:'#e0a52e', bg:'rgba(224,165,46,.09)', ic:'⚠' },
+    bad:  { c:'#e05252', bg:'rgba(224,82,82,.09)', ic:'✕' },
+    info: { c:'#4a9eff', bg:'rgba(74,158,255,.09)', ic:'ⓘ' },
+    off:  { c:'var(--dim,#8a94a0)', bg:'transparent', ic:'○' },
+  }[t] || { c:'var(--dim,#8a94a0)', bg:'transparent', ic:'○' });
+  function healthBannerHtml(st) {
+    if (!st) return '';
+    const tn = _healthTone(st.tone);
+    let cta = '';
+    if (st.cta && st.cta.label) {
+      cta = '<button class="set-action-btn" data-health-cta="' + escapeAttr(st.cta.action || '') +
+        '" style="margin-top:7px">' + escapeHtml(st.cta.label) + '</button>';
+    }
+    return '<div class="sec-health" style="display:flex;gap:9px;align-items:flex-start;border:1px solid ' +
+      tn.c + ';background:' + tn.bg + ';border-radius:9px;padding:9px 11px;margin:2px 0 12px">' +
+      '<span style="color:' + tn.c + ';font-weight:700;font-size:14px;line-height:1.35">' + tn.ic + '</span>' +
+      '<div style="flex:1;min-width:0"><b style="color:' + tn.c + '">' + escapeHtml(st.title) + '</b>' +
+      '<div class="dim" style="font-size:12.5px;margin-top:2px;line-height:1.45">' + escapeHtml(st.msg) + '</div>' +
+      cta + '</div></div>';
+  }
+  async function refreshSectionHealth(id, mount) {
+    if (!SECTION_HEALTH[id] || !mount) return;
+    try { mount.innerHTML = healthBannerHtml(await SECTION_HEALTH[id]()); }
+    catch (e) { mount.innerHTML = ''; }
+  }
+  // Explainer <details> + a health-banner mount for a section, if either is defined.
+  function renderSectionAids(sec) {
+    if (SECTION_EXPLAINERS[sec.id]) {
+      const d = document.createElement('details'); d.className = 'sec-help'; d.style.margin = '2px 0 8px';
+      d.innerHTML = '<summary style="cursor:pointer;color:var(--accent,#4a9eff);font-size:13px">How this works</summary>' +
+        '<div class="dim" style="font-size:12.5px;line-height:1.5;margin:6px 0 2px;padding-left:2px">' +
+        SECTION_EXPLAINERS[sec.id] + '</div>';
+      contentEl.appendChild(d);
+    }
+    if (SECTION_HEALTH[sec.id]) {
+      const mount = document.createElement('div');
+      mount.className = 'sec-health-mount'; mount.id = 'health-' + sec.id;
+      mount.innerHTML = '<div class="dim" style="font-size:12px;margin:2px 0 8px">Checking…</div>';
+      contentEl.appendChild(mount);
+      refreshSectionHealth(sec.id, mount);
+    }
+  }
+  if (!window.__healthCtaBound) {
+    window.__healthCtaBound = true;
+    document.addEventListener('click', (ev) => {
+      const t = ev.target.closest && ev.target.closest('[data-health-cta]');
+      if (!t) return;
+      const act = t.getAttribute('data-health-cta') || '';
+      if (act.indexOf('goto:') === 0) {
+        const sec = SCHEMA.find(s => s.id === act.slice(5));
+        const btn = sec && [...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === sec.title);
+        if (btn) btn.click();
+      } else if (act === 'reload') {
+        const m = t.closest('.sec-health-mount');
+        if (m) refreshSectionHealth(m.id.replace('health-', ''), m);
+      }
+    });
+  }
+
   function renderSection() {
     const sec = SCHEMA.find(s => s.id === activeSection);
     contentEl.innerHTML = '';
@@ -2805,6 +2935,7 @@ resetBtn.addEventListener('click', async () => {
         'this build — hover it for how to enable.';
       contentEl.appendChild(lg);
     }
+    renderSectionAids(sec);
     if (sec.custom === 'about') return renderAbout();
     if (sec.custom === 'guardrails') return renderGuardrails();
     if (sec.custom === 'plugins') return renderPlugins();

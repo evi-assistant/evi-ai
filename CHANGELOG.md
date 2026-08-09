@@ -5,6 +5,28 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.39] — 2026-08-09
+
+### Added
+- **Settings — "How this works" explainers + live health banners (part 1).**
+  Every Settings section now has a collapsible **How this works** panel (what it
+  controls, when you'd change it, and the main gotcha), carrying the clarity of
+  the federation Peers overhaul across the whole app. Sections with real runtime
+  state also get a **live status banner** in the same ✓/⚠/✕ language as the Peers
+  posture banner, refreshed automatically when you save:
+  - **Model & Backend** — is the active backend actually answering? (red when
+    nothing responds at the configured Base URL / CLI).
+  - **Tools** — which capability categories are missing an install dependency.
+  - **Server** — flags an open external surface (A2A / multi-user / LAN binding
+    on while the access token is blank).
+  - **Permissions** — flags reduced safety (yolo mode, or the destructive-command
+    guard turned off).
+
+  Built on a small declarative extension to the settings renderer
+  (`SECTION_EXPLAINERS` + `SECTION_HEALTH`), so the remaining connectivity/
+  availability banners (Integrations, Voice, Specialty, Guardrails, Plugins) can
+  land next without further plumbing.
+
 ## [1.0.38] — 2026-08-09
 
 ### Fixed
