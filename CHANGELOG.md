@@ -5,6 +5,26 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.34] — 2026-08-08
+
+### Fixed
+- **The access-token sign-in field no longer clears while you type or paste.**
+  While signed out, background polls each returned 401 and re-showed the sign-in
+  overlay every few seconds, wiping whatever you were entering. It now only
+  resets the field on first show.
+- **A just-entered token can't be wiped by a stale in-flight 401** — sign-out only
+  fires when the token that was actually rejected is still the current one, so a
+  poll that started before you signed in can't clobber your new token.
+
+### Added
+- **Peers panel: set/change a peer's token in the UI.** A per-peer "Set token" /
+  "Change token" button, and the Scan/Discover "Add" now prompts for a token — so a
+  LAN peer that requires auth (per the 1.0.33 fail-safe) can be configured entirely
+  in the UI instead of only via the CLI.
+- **Developer Tools reachable with F12.** The desktop "Toggle Developer Tools
+  (Console)" menu item is now bound to **F12** (was Ctrl+Shift+I) to match what
+  people reach for.
+
 ## [1.0.33] — 2026-08-07
 
 ### Added

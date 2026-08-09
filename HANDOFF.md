@@ -1,6 +1,6 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-08-07 · PyPI v1.0.33 · desktop v1.0.33 · **PUBLIC**_
+_Last updated: 2026-08-08 · PyPI v1.0.34 · desktop v1.0.34 · **PUBLIC**_
 
 This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at the version stamped above, and the `evi-skills` catalog is public. Since 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 

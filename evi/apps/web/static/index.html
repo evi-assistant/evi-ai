@@ -659,17 +659,18 @@ window.fetch = async function(input, init) {
   // Only attach the token to same-origin requests so we don't leak it to
   // CDNs or external APIs.
   const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(location.origin);
-  if (sameOrigin) {
-    const tok = getAuthToken();
-    if (tok) {
-      init = init || {};
-      const h = new Headers(init.headers || {});
-      if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tok);
-      init.headers = h;
-    }
+  const tokUsed = sameOrigin ? getAuthToken() : '';
+  if (sameOrigin && tokUsed) {
+    init = init || {};
+    const h = new Headers(init.headers || {});
+    if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tokUsed);
+    init.headers = h;
   }
   const resp = await _origFetch(input, init);
-  if (resp.status === 401 && sameOrigin) {
+  // Only sign out if the token that was actually REJECTED is still the current
+  // one — a stale in-flight 401 (from a request that started before you signed
+  // in) must not wipe the token you just entered.
+  if (resp.status === 401 && sameOrigin && getAuthToken() === tokUsed) {
     clearAuthToken();
     showAuthOverlay('Session expired. Please sign in again.');
   }
@@ -686,11 +687,16 @@ function authQuery() {
 function showAuthOverlay(msg) {
   const ov = document.getElementById('auth-overlay');
   if (!ov) return;
+  // Only reset + focus the field the FIRST time the overlay appears. Background
+  // polls (federation/inbox/model-picker) each 401 while signed out and re-call
+  // this every few seconds — clearing/refocusing on every call wiped whatever
+  // you were pasting/typing (the "token field keeps clearing" bug).
+  const firstShow = !ov.classList.contains('shown');
   ov.classList.add('shown');
   const err = document.getElementById('auth-err');
   if (err) err.textContent = msg || '';
   const input = document.getElementById('auth-token');
-  if (input) { input.value = ''; input.focus(); }
+  if (input && firstShow) { input.value = ''; input.focus(); }
 }
 function hideAuthOverlay() {
   const ov = document.getElementById('auth-overlay');
@@ -3656,6 +3662,8 @@ resetBtn.addEventListener('click', async () => {
             '<div><b>' + esc(p.name) + '</b> <span class="dim">' + esc(p.url) + '</span>' +
             (p.has_token ? ' <span class="dim" style="font-size:11px">(token set)</span>' : '') +
             '</div><div class="dim" style="font-size:12px">' + meta + '</div></div>' +
+            '<button class="set-action-btn" data-peer-token="' + esc(p.name) + '" data-peer-url="' + esc(p.url) + '">' +
+            (p.has_token ? 'Change token' : 'Set token') + '</button>' +
             '<button class="set-action-btn" data-peer-remove="' + esc(p.name) + '">Remove</button></div>';
         }
         html += '</div>';
@@ -3705,14 +3713,29 @@ resetBtn.addEventListener('click', async () => {
         if (!(t instanceof HTMLElement)) return;
         const rm = t.getAttribute('data-peer-remove');
         const addUrl = t.getAttribute('data-peer-add-url');
+        const setTok = t.getAttribute('data-peer-token');
         if (rm) {
           t.disabled = true;
           try { await post('/api/peers/remove', { name: rm }); setTimeout(renderSection, 400); }
           catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
-        } else if (addUrl) {
+        } else if (setTok) {
+          // Set/change/clear a peer's web token (upserts via POST /api/peers).
+          const val = prompt('Web token for "' + setTok + '" (blank to clear it):', '');
+          if (val === null) return;  // cancelled
           t.disabled = true;
+          try { await post('/api/peers', { name: setTok, url: t.getAttribute('data-peer-url'), token: val });
+            status('Token ' + (val ? 'set' : 'cleared') + ' for ' + setTok, true); setTimeout(renderSection, 500); }
+          catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (addUrl) {
           const nm = t.getAttribute('data-peer-add-name') || addUrl.replace(/^https?:\/\//, '').replace(/[:.]/g, '-');
-          try { await post('/api/peers', { name: nm, url: addUrl }); status('Added ' + nm + ' — set its token if it needs auth', true); setTimeout(renderSection, 800); }
+          // A LAN peer that serves with a web auth token needs it here too, or
+          // delegation is refused — so offer to set it right when adding.
+          const tok = prompt('Web token for "' + nm + '" (leave blank if the peer has no auth):', '');
+          if (tok === null) return;  // cancelled
+          t.disabled = true;
+          try { await post('/api/peers', { name: nm, url: addUrl, token: tok });
+            status(tok ? ('Added ' + nm + ' with token') : ('Added ' + nm + ' (no token yet)'), true);
+            setTimeout(renderSection, 800); }
           catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
         } else if (t.id === 'pr-add') {
           if (!nameEl.value.trim() || !urlEl.value.trim()) {

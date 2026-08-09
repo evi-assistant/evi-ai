@@ -446,8 +446,8 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
     let zoom_out = MenuItemBuilder::with_id("zoom_out", "Zoom Out").build(app)?;
     let zoom_reset = MenuItemBuilder::with_id("zoom_reset", "Reset Zoom").build(app)?;
     let toggle_theme = MenuItemBuilder::with_id("toggle_theme", "Toggle Theme").build(app)?;
-    let devtools = MenuItemBuilder::with_id("toggle_devtools", "Toggle Developer Tools")
-        .accelerator("CmdOrCtrl+Shift+I")
+    let devtools = MenuItemBuilder::with_id("toggle_devtools", "Toggle Developer Tools (Console)")
+        .accelerator("F12")
         .build(app)?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&reload)

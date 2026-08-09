@@ -1,3 +1,3 @@
 """eVi — local-first personal AI assistant core library."""
 
-__version__ = "1.0.33"
+__version__ = "1.0.34"
