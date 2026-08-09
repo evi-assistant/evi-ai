@@ -5,6 +5,32 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.37] — 2026-08-09
+
+### Changed
+- **Federation Peers panel — full UX overhaul.** Settings → Peers is
+  reorganized around the two federation roles, with proactive, in-place guidance
+  instead of a flat list you had to diagnose yourself:
+  - A **How federation works** explainer at the top finally spells out **the two
+    tokens** that trip everyone up — the machine that *serves* sets one **access
+    token** (`[web] auth_token`, same field as Settings → Server), and every
+    machine that *delegates to it* must store that **same** token in its peer
+    entry. They must match, or the request is refused (401); a machine serving on
+    the LAN with no token is blocked entirely by the fail-safe.
+  - **Be a peer** now leads with a **live posture banner** computed from the real
+    serving state (`/api/peers` gained `self_status` + `auth_token_set`), so it
+    flags — at a glance, without running a preflight — *serving on the LAN without
+    an access token* (the fail-safe is blocking every peer; one-click **Set access
+    token** fixes it), *reachable on this machine only* (loopback → turn on LAN
+    access + relaunch), or *reachable by peers at `<ip>:8473`* (with a **Copy
+    address** button to share). You can set this machine's access token **inline**
+    (keeping the current web session alive), and enabling LAN access with no token
+    first confirms.
+  - **Peers you delegate to** rows now show each peer's token state (with an amber
+    "no token — delegation refused if this peer requires auth" warning) and an
+    actionable unreachable hint ("is the machine on, eVi running, and its port
+    open in the firewall?").
+
 ## [1.0.36] — 2026-08-09
 
 ### Changed

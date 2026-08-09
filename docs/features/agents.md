@@ -320,23 +320,53 @@ exact fix for each.
 
 ### Web / Desktop — the Peers panel
 
-**Settings → Peers** manages federation without the CLI:
+**Settings → Peers** manages federation without the CLI. The panel is split into
+the two federation roles, with a **How federation works** explainer at the top
+that spells out the point everyone trips over — **the two tokens**: the machine
+that *serves* sets one **access token** (`[web] auth_token`, same as Settings →
+Server), and every machine that *delegates to it* stores that **same** token in
+its peer entry. They must match, or the request is refused (401); a machine
+serving on the LAN with no token is blocked entirely by the fail-safe.
+
+**Peers you delegate to** (the *use-peers* side):
 
 - lists configured peers with a live status dot (green = reachable, with the
-  peer's eVi version + active model from its `/api/health`; red = unreachable —
-  machine off or `evi web` not running);
-- shows whether **this** instance is serving federation requests
-  (`[federation] serve`);
-- an add-peer form (name / URL / optional token) and per-peer **Remove**;
+  peer's eVi version + active model from its `/api/health`; red = unreachable,
+  with a "machine on? eVi running? port open in the firewall?" hint). Reachable
+  peers also show whether a token is set — an amber "no token" note warns that
+  delegation is refused if the peer requires auth;
+- per-peer **Set / Change token** and **Remove**;
+- an add-peer form (name / URL / optional token);
 - **Scan local network** — probes your /24 for eVi instances on port 8473
   (raw-socket connect, then an `/api/health` fingerprint so a random web server
   isn't mistaken for a peer; ~2 s). Hits show host, version, and model, with a
-  one-click **Add**; already-configured peers are marked.
+  one-click **Add** (which prompts for the peer's token); already-configured
+  peers are marked.
 
-Backed by `GET /api/peers`, `POST /api/peers[/remove]`, and
-`POST /api/peers/scan` (`{port?, hosts?}`). Note: discovery requires the peer
-to listen beyond loopback — start it with `evi web --host 0.0.0.0` and allow
-the port through its firewall.
+**Be a peer** (the *serve* side) leads with a **live posture banner** computed
+from `self_status` + `auth_token_set` (no preflight click needed), which shows
+one of:
+
+- ✕ **serving on the LAN without an access token** — the fail-safe is blocking
+  every incoming delegation; a one-click **Set access token** fixes it;
+- ⚠ **reachable on this machine only** (loopback) — turn on LAN access and
+  relaunch;
+- ✓ **reachable by peers at `<lan-ip>:8473`** — with a **Copy address** button
+  to share;
+- ○ **not serving**.
+
+Below it: the **Answer requests** (`[federation] serve`) and **LAN access**
+(`[federation] bind_lan`) toggles — enabling LAN access with no token first
+confirms — and an **Access token** row that sets `[web] auth_token` inline
+(keeping the current web session alive). **Troubleshoot** runs the full
+[`peer doctor` preflight](#cli--federation--peers) with a real test delegation.
+
+Backed by `GET /api/peers` (now also returning `auth_token_set` and
+`self_status`), `POST /api/peers[/remove]`, `POST /api/peers/scan`
+(`{port?, hosts?}`), `POST /api/peers/preflight`, and `POST /api/config` (for
+the access token). Note: discovery and serving require the peer to listen beyond
+loopback — start it with `evi web --host 0.0.0.0` (or enable LAN access on the
+desktop app) and allow the port through its firewall.
 
 ### Web / desktop — Dispatch view
 

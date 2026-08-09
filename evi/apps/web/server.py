@@ -2212,13 +2212,22 @@ def create_app() -> FastAPI:
             statuses = list(pool.map(
                 lambda p: federation.check_peer(p, timeout=2.0), peers
             ))
+        cfg = Config.load()
+        serving = cfg.federation.serve
+        # Real serving posture (lan/loopback/off/down) + LAN ip — powers the
+        # panel's proactive warnings without needing a full preflight.
+        self_status = federation.self_serving_status(
+            federation.DEFAULT_PEER_PORT, serve=serving
+        )
         return {
             "peers": [
                 {"name": p.name, "url": p.url, "has_token": bool(p.token), **st}
                 for p, st in zip(peers, statuses)
             ],
-            "serving": Config.load().federation.serve,
-            "bind_lan": Config.load().federation.bind_lan,
+            "serving": serving,
+            "bind_lan": cfg.federation.bind_lan,
+            "auth_token_set": bool((cfg.web.auth_token or "").strip()),
+            "self_status": self_status,
         }
 
     @app.post("/api/peers/serve")

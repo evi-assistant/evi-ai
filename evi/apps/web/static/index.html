@@ -3628,50 +3628,114 @@ resetBtn.addEventListener('click', async () => {
       const el = document.getElementById('pr-status');
       if (el) { el.textContent = msg; el.style.color = ok ? '#4caf50' : '#e05252'; }
     };
+    // Section heading with a dim "— why" tail.
+    const head = (t, why) => '<div style="font-weight:600;margin:18px 0 6px;font-size:14px">' +
+      esc(t) + (why ? ' <span class="dim" style="font-weight:400;font-size:12px">— ' + esc(why) + '</span>' : '') + '</div>';
+    // Compute this machine's "as a peer" posture from serving + real reachability
+    // (self_status) + whether an access token is set. Drives the live banner so
+    // the user sees the LAN-without-token / loopback / reachable state at a glance
+    // instead of having to run a full preflight.
+    const servePosture = (d) => {
+      const ss = d.self_status || {};
+      const st = ss.status || (d.serving ? 'down' : 'off');
+      const tok = !!d.auth_token_set, port = ss.port || 8473;
+      const url = 'http://' + (ss.lan_ip || '<this-machine-ip>') + ':' + port;
+      if (!d.serving) return { tone:'off', title:'Not serving',
+        msg:'Other machines can’t delegate work here. Turn on “Answer requests” below to become a peer.' };
+      if (!tok && (st === 'lan' || d.bind_lan)) return { tone:'bad',
+        title:'Serving on your network without an access token',
+        msg:'eVi’s safety cutoff is blocking every incoming delegation until you set one — an open server on the LAN would let anyone run tasks here.',
+        cta:{ label:'Set access token', act:'set-serve-token' } };
+      if (st === 'loopback') return { tone:'warn', title:'Reachable on this machine only',
+        msg: d.bind_lan
+          ? 'LAN access is on but not applied yet — relaunch the app so eVi binds to the network.'
+          : 'Peers can’t reach you. Set an access token, turn on “LAN access” below, then relaunch the app.' };
+      if (st === 'down') return { tone:'bad', title:'Nothing is listening',
+        msg:'Serving is on but no server is answering on port ' + port + '.' };
+      return { tone:'good', title:'Reachable by peers', lanUrl:url,
+        msg:'Peers can delegate to this machine at ' + url + '. On the other machine, add this peer and paste this machine’s access token.' };
+    };
+    const serveBannerHtml = (d) => {
+      const p = servePosture(d);
+      const tones = {
+        good:{ c:'#4caf50', bg:'rgba(76,175,80,.09)', ic:'✓' },
+        warn:{ c:'#e0a52e', bg:'rgba(224,165,46,.09)', ic:'⚠' },
+        bad:{ c:'#e05252', bg:'rgba(224,82,82,.09)', ic:'✕' },
+        off:{ c:'var(--dim,#8a94a0)', bg:'transparent', ic:'○' },
+      };
+      const tn = tones[p.tone] || tones.off;
+      let inner = '<span style="color:' + tn.c + ';font-weight:700;font-size:15px;line-height:1.35">' + tn.ic + '</span>' +
+        '<div style="flex:1;min-width:0"><b style="color:' + tn.c + '">' + esc(p.title) + '</b>' +
+        '<div class="dim" style="font-size:12.5px;margin-top:2px;line-height:1.45">' + esc(p.msg) + '</div>';
+      if (p.cta) inner += '<button class="set-action-btn" data-fed-act="' + p.cta.act + '" style="margin-top:8px">' + esc(p.cta.label) + '</button>';
+      if (p.tone === 'good' && p.lanUrl) inner += '<button class="set-action-btn" data-fed-act="copy-addr" data-addr="' + esc(p.lanUrl) + '" style="margin-top:8px">Copy address</button>';
+      inner += '</div>';
+      return '<div id="fed-serve-banner" style="display:flex;gap:9px;align-items:flex-start;border:1px solid ' +
+        tn.c + ';background:' + tn.bg + ';border-radius:9px;padding:10px 12px;margin:6px 0 10px">' + inner + '</div>';
+    };
+    // Re-fetch and swap just the serve banner + token state in place (keeps the
+    // peer list and scroll intact) after a serve/LAN/token change.
+    const refreshServeBanner = async () => {
+      try {
+        const d = await fetch('/api/peers').then(r => r.json());
+        const b = box.querySelector('#fed-serve-banner');
+        if (b) b.outerHTML = serveBannerHtml(d);
+        const ts = box.querySelector('#fed-token-state');
+        if (ts) { ts.textContent = d.auth_token_set ? 'set' : 'not set';
+          ts.style.color = d.auth_token_set ? '#4caf50' : 'var(--dim,#8a94a0)'; }
+        const sb = box.querySelector('#fed-set-token-btn');
+        if (sb) sb.textContent = d.auth_token_set ? 'Rotate token' : 'Set token';
+      } catch (e) { /* leave stale banner on transient error */ }
+    };
     fetch('/api/peers').then(r => r.json()).then(d => {
       const peers = d.peers || [];
-      let html = '<div class="set-about-row"><span class="k">Serving</span><span>' +
-        '<label style="cursor:pointer"><input type="checkbox" id="pr-serve"' +
-        (d.serving ? ' checked' : '') + '> answer federation requests from peers</label>' +
-        '<span class="dim" style="font-size:12px;display:block">' +
-        'On = this eVi runs tasks delegated by trusted peers (POST /api/federate).</span>' +
-        '</span></div>' +
-        '<div class="set-about-row"><span class="k">LAN access</span><span>' +
-        '<label style="cursor:pointer"><input type="checkbox" id="pr-lan"' +
-        (d.bind_lan ? ' checked' : '') + '> serve on the network so other machines can reach this peer</label>' +
-        '<span class="dim" style="font-size:12px;display:block">' +
-        'Desktop only; binds 0.0.0.0 on next launch (else loopback-only). ' +
-        '⚠ exposes the server to your LAN — set a web auth token.</span>' +
-        '</span></div>' +
-        '<div id="pr-status" class="sec-blurb" style="min-height:1.1em"></div>' +
-        '<div style="margin:6px 0 4px"><button class="set-action-btn" id="pr-preflight">Run federation preflight</button>' +
-        '<span class="dim" style="font-size:12px;margin-left:8px">checks serving, tokens &amp; each peer (incl. a test delegation)</span>' +
-        '<div id="pr-preflight-results" style="margin-top:8px"></div></div>';
+      // Intro + the explainer that finally makes the two-token model clear.
+      let html = '<p class="sec-blurb" style="margin-top:0">Federation lets your eVi machines share work — ' +
+        'send a heavy task to another machine, or let others send tasks here.</p>' +
+        '<details class="fed-help" style="margin:4px 0 6px"><summary style="cursor:pointer;color:var(--accent,#4a9eff);font-size:13px">How federation works</summary>' +
+        '<div class="dim" style="font-size:12.5px;line-height:1.5;margin:6px 0 2px;padding-left:2px">' +
+        '<b>Two roles.</b> <b>Use peers</b> — send work to another machine (add it under “Peers you delegate to”). ' +
+        '<b>Be a peer</b> — let other machines send work here (turn on serving + LAN access + set an access token).<br><br>' +
+        '<b>The two tokens (this trips everyone up).</b> The machine that <i>serves</i> sets one <b>access token</b> ' +
+        '(Settings → Server → Access token, same field as “Be a peer” below). Every machine that <i>delegates to it</i> ' +
+        'stores that <b>same</b> token in its peer entry. They must match, or the request is refused (401). A machine serving on the ' +
+        'LAN with <b>no</b> token is blocked entirely by eVi’s safety cutoff.<br><br>' +
+        '<b>Firewall.</b> To be reached, the serving machine must serve on the network (LAN access) and have its port ' +
+        '(8473 desktop, 8000 <code>evi web</code>) open in its firewall. Use <b>Troubleshoot</b> below to pinpoint what’s wrong.' +
+        '</div></details>' +
+        '<div id="pr-status" class="sec-blurb" style="min-height:1.1em"></div>';
+
+      // ---- Section 1: Peers you delegate to (use peers) ----
+      html += head('Peers you delegate to', 'machines this one can offload work to');
       if (!peers.length) {
-        html += '<p class="dim" style="font-size:12px">No peers configured — add one ' +
-          'below or scan the local network.</p>';
+        html += '<p class="dim" style="font-size:12px">No peers yet — add one below or scan the local network.</p>';
       } else {
-        html += '<div style="margin-top:8px">';
+        html += '<div style="margin-top:2px">';
         for (const p of peers) {
           const dot = p.reachable
             ? '<span style="color:#4caf50" title="reachable">●</span>'
             : '<span style="color:#e05252" title="unreachable">●</span>';
-          const meta = p.reachable
-            ? ('eVi ' + esc(p.version) + (p.model ? ' · ' + esc(p.model) : ''))
-            : 'unreachable (machine off, or evi web not running?)';
+          let meta;
+          if (p.reachable) {
+            meta = 'eVi ' + esc(p.version) + (p.model ? ' · ' + esc(p.model) : '') +
+              (p.has_token
+                ? ' · <span style="color:#4caf50">token set</span>'
+                : ' · <span style="color:#e0a52e">no token — delegation is refused if this peer requires auth</span>');
+          } else {
+            meta = '<span style="color:#e05252">unreachable</span> — is the machine on, eVi running, and its port open in the firewall?';
+          }
           html += '<div class="peer-row" style="display:flex;align-items:center;gap:10px;' +
             'padding:8px 0;border-bottom:1px solid var(--border,#2b333d)">' +
             dot + '<div style="flex:1;min-width:0">' +
-            '<div><b>' + esc(p.name) + '</b> <span class="dim">' + esc(p.url) + '</span>' +
-            (p.has_token ? ' <span class="dim" style="font-size:11px">(token set)</span>' : '') +
-            '</div><div class="dim" style="font-size:12px">' + meta + '</div></div>' +
+            '<div><b>' + esc(p.name) + '</b> <span class="dim">' + esc(p.url) + '</span></div>' +
+            '<div class="dim" style="font-size:12px">' + meta + '</div></div>' +
             '<button class="set-action-btn" data-peer-token="' + esc(p.name) + '" data-peer-url="' + esc(p.url) + '">' +
             (p.has_token ? 'Change token' : 'Set token') + '</button>' +
             '<button class="set-action-btn" data-peer-remove="' + esc(p.name) + '">Remove</button></div>';
         }
         html += '</div>';
       }
-      html += '<p class="sec-blurb" style="margin-top:16px">Add a peer</p>' +
+      html += '<p class="sec-blurb" style="margin-top:14px">Add a peer</p>' +
         '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
         '<input id="pr-name" type="text" style="flex:1;min-width:80px;padding:7px;border-radius:7px;' +
         'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
@@ -3679,34 +3743,72 @@ resetBtn.addEventListener('click', async () => {
         'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
         '<input id="pr-token" type="password" style="flex:2;min-width:120px;padding:7px;border-radius:7px;' +
         'border:1px solid var(--border,#2b333d);background:var(--panel,#1a2027);color:var(--fg)">' +
-        '<button class="set-action-btn" id="pr-add">Add peer</button></div>';
-      html += '<p class="sec-blurb" style="margin-top:16px">Discover</p>' +
+        '<button class="set-action-btn" id="pr-add">Add peer</button></div>' +
+        '<p class="dim" style="font-size:11.5px;margin:4px 0 0">Token = the <i>peer’s</i> access token (leave blank if it has none). ' +
+        'It must match what that machine set under Settings → Server.</p>';
+      html += '<p class="sec-blurb" style="margin-top:14px">Discover</p>' +
         '<div style="display:flex;gap:8px;align-items:center">' +
         '<button class="set-action-btn" id="pr-scan">Scan local network</button>' +
         '<span class="dim" style="font-size:12px">probes your /24 for eVi instances on port 8473 (~2 s)</span>' +
         '</div><div id="pr-scan-results" style="margin-top:8px"></div>';
+
+      // ---- Section 2: Be a peer (serve side) ----
+      html += head('Be a peer', 'let other machines delegate work to this one') +
+        serveBannerHtml(d) +
+        '<div class="set-about-row"><span class="k">Answer requests</span><span>' +
+        '<label style="cursor:pointer"><input type="checkbox" id="pr-serve"' +
+        (d.serving ? ' checked' : '') + '> run tasks delegated by trusted peers</label></span></div>' +
+        '<div class="set-about-row"><span class="k">LAN access</span><span>' +
+        '<label style="cursor:pointer"><input type="checkbox" id="pr-lan"' +
+        (d.bind_lan ? ' checked' : '') + '> serve on the network (else loopback-only)</label>' +
+        '<span class="dim" style="font-size:12px;display:block">Desktop only; binds 0.0.0.0 on next launch. Relaunch to apply.</span>' +
+        '</span></div>' +
+        '<div class="set-about-row"><span class="k">Access token</span><span>' +
+        '<span id="fed-token-state" style="color:' + (d.auth_token_set ? '#4caf50' : 'var(--dim,#8a94a0)') + '">' +
+        (d.auth_token_set ? 'set' : 'not set') + '</span> ' +
+        '<button class="set-action-btn" id="fed-set-token-btn" data-fed-act="set-serve-token" style="margin-left:8px">' +
+        (d.auth_token_set ? 'Rotate token' : 'Set token') + '</button>' +
+        '<span class="dim" style="font-size:12px;display:block;margin-top:3px">Same token as Settings → Server. It gates this web UI ' +
+        'and authenticates peers — each machine that delegates here must store this exact value.</span>' +
+        '</span></div>';
+
+      // ---- Section 3: Troubleshoot (deep preflight) ----
+      html += head('Troubleshoot', 'deep check of serving, tokens & every peer') +
+        '<button class="set-action-btn" id="pr-preflight">Run federation preflight</button>' +
+        '<span class="dim" style="font-size:12px;margin-left:8px">tests each peer with a real delegation (a slow peer can take ~20s)</span>' +
+        '<div id="pr-preflight-results" style="margin-top:8px"></div>';
+
       box.innerHTML = html;
       const nameEl = box.querySelector('#pr-name'), urlEl = box.querySelector('#pr-url'),
             tokenEl = box.querySelector('#pr-token');
       nameEl.setAttribute(PH, 'name (e.g. gpu)');
       urlEl.setAttribute(PH, 'http://gpu-box:8473');
-      tokenEl.setAttribute(PH, 'peer web token (optional)');
+      tokenEl.setAttribute(PH, 'peer access token (optional)');
 
       const serveEl = box.querySelector('#pr-serve');
       if (serveEl) serveEl.onchange = async () => {
         serveEl.disabled = true;
         try {
           const d3 = await post('/api/peers/serve', { enabled: serveEl.checked });
-          status(d3.serving ? 'Serving ON — this eVi now answers peers' : 'Serving off', true);
+          status(d3.serving ? 'Serving on — this eVi now answers peers' : 'Serving off', true);
+          await refreshServeBanner();
         } catch (e) { serveEl.checked = !serveEl.checked; status('Error: ' + e.message, false); }
         serveEl.disabled = false;
       };
       const lanEl = box.querySelector('#pr-lan');
       if (lanEl) lanEl.onchange = async () => {
+        // Warn if turning LAN access on with no access token — the safety cutoff
+        // will block every peer until one is set.
+        if (lanEl.checked && !d.auth_token_set) {
+          if (!confirm('You haven’t set an access token. Serving on the LAN without one is blocked by eVi’s safety cutoff — no peer will be able to delegate here until you set a token (Access token → Set token below).\n\nTurn on LAN access anyway?')) {
+            lanEl.checked = false; return;
+          }
+        }
         lanEl.disabled = true;
         try {
           const d4 = await post('/api/peers/bind-lan', { enabled: lanEl.checked });
-          status(d4.bind_lan ? 'LAN access ON — restart the desktop app to apply' : 'LAN access off (loopback)', true);
+          status(d4.bind_lan ? 'LAN access on — relaunch the desktop app to apply' : 'LAN access off (loopback)', true);
+          await refreshServeBanner();
         } catch (e) { lanEl.checked = !lanEl.checked; status('Error: ' + e.message, false); }
         lanEl.disabled = false;
       };
@@ -3717,13 +3819,32 @@ resetBtn.addEventListener('click', async () => {
         const rm = t.getAttribute('data-peer-remove');
         const addUrl = t.getAttribute('data-peer-add-url');
         const setTok = t.getAttribute('data-peer-token');
+        const fedAct = t.getAttribute('data-fed-act');
         if (rm) {
           t.disabled = true;
           try { await post('/api/peers/remove', { name: rm }); setTimeout(renderSection, 400); }
           catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
+        } else if (fedAct === 'set-serve-token') {
+          // This machine's own [web] auth_token — same field as Settings → Server.
+          // Setting it also gates this web UI, so keep the current session alive by
+          // caching the value locally (the fetch wrapper reads it back).
+          const val = prompt('Access token for THIS machine (blank to clear).\n\nThis also becomes this web UI’s login token, and the value peers must store to delegate here:', '');
+          if (val === null) return;
+          t.disabled = true;
+          try {
+            await post('/api/config', { web: { auth_token: val } });
+            try { if (val) localStorage.setItem('evi.authToken', val); else localStorage.removeItem('evi.authToken'); } catch (e2) {}
+            status(val ? 'Access token set — peers must use this exact value' : 'Access token cleared', true);
+            await refreshServeBanner();
+          } catch (e) { status('Error: ' + e.message, false); }
+          t.disabled = false;
+        } else if (fedAct === 'copy-addr') {
+          const addr = t.getAttribute('data-addr') || '';
+          try { await navigator.clipboard.writeText(addr); status('Copied ' + addr, true); }
+          catch (e) { status('Copy this address: ' + addr, true); }
         } else if (setTok) {
-          // Set/change/clear a peer's web token (upserts via POST /api/peers).
-          const val = prompt('Web token for "' + setTok + '" (blank to clear it):', '');
+          // Set/change/clear a peer's access token (upserts via POST /api/peers).
+          const val = prompt('Access token for "' + setTok + '" (blank to clear it):', '');
           if (val === null) return;  // cancelled
           t.disabled = true;
           try { await post('/api/peers', { name: setTok, url: t.getAttribute('data-peer-url'), token: val });
@@ -3731,9 +3852,9 @@ resetBtn.addEventListener('click', async () => {
           catch (e) { t.disabled = false; status('Error: ' + e.message, false); }
         } else if (addUrl) {
           const nm = t.getAttribute('data-peer-add-name') || addUrl.replace(/^https?:\/\//, '').replace(/[:.]/g, '-');
-          // A LAN peer that serves with a web auth token needs it here too, or
+          // A LAN peer that serves with an access token needs it here too, or
           // delegation is refused — so offer to set it right when adding.
-          const tok = prompt('Web token for "' + nm + '" (leave blank if the peer has no auth):', '');
+          const tok = prompt('Access token for "' + nm + '" (leave blank if the peer has no auth):', '');
           if (tok === null) return;  // cancelled
           t.disabled = true;
           try { await post('/api/peers', { name: nm, url: addUrl, token: tok });

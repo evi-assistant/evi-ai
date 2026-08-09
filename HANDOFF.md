@@ -1,6 +1,6 @@
 # eVi — Project Handoff & Migration Notes
 
-_Last updated: 2026-08-09 · PyPI v1.0.36 · desktop v1.0.36 · **PUBLIC**_
+_Last updated: 2026-08-09 · PyPI v1.0.37 · desktop v1.0.37 · **PUBLIC**_
 
 This is the working-state handoff for eVi. The 1.0 public launch is done: the repo is public under the `evi-assistant` org, the PyPI package `evi-assistant` and the desktop app are both at the version stamped above, and the `evi-skills` catalog is public. Since 1.0.5 the desktop channel **auto-follows** the core (every PyPI `v*` release also cuts the matching `desktop-v*` build), so the two no longer drift. Read **Current status**, **Open items**, and **Gotchas** first, then follow **Migration** if you're moving to another machine.
 
@@ -18,7 +18,7 @@ A local-first personal AI assistant: **one shared Python core (`evi/`) behind th
 
 - **Local LLM backends:** LM Studio (`:1234`, default), Ollama (`:11434`), llama.cpp (`:8080`, auto-discovers ports 8080–8090), or any OpenAI-compatible endpoint.
 - **Distribution:** PyPI dist name is **`evi-assistant`**; the import package and CLI command both stay **`evi`**. Install with `pip install evi-assistant`, then `import evi` / run `evi`.
-- **License:** MIT. **Python floor:** 3.13 (`requires-python = ">=3.13"`).
+- **License:** MIT. **Python floor:** 3.12 (`requires-python = ">=3.12"`; lowered from 3.13 in 1.0.36 — installs on Ubuntu 24.04 LTS. The `[ast]` extra still needs 3.13, marker-gated).
 
 ## 2. Current status
 
