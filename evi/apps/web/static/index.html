@@ -2877,9 +2877,9 @@ resetBtn.addEventListener('click', async () => {
       if (d.available)
         return { tone:'good', title:'Voice engine ready', msg:'The selected engine (' + (d.detail || d.engine) + ') is installed, so spoken replies will work.' };
       if (d.engine === 'system')
-        return { tone:'warn', title:'No system voice found', msg:'No platform text-to-speech was detected — ' + (d.how_to_enable || 'install one or pick a neural engine') + '.' };
+        return { tone:'warn', title:'No system voice found', msg:'No platform text-to-speech was detected — ' + (d.how_to_enable || 'install one or pick a neural engine').replace(/\.$/, '') + '.' };
       return { tone:'warn', title:'Engine not installed',
-        msg:'The ' + d.engine + ' engine isn’t installed — ' + (d.how_to_enable || 'install it') + ', or switch back to the zero-dep system voice.',
+        msg:'The ' + d.engine + ' engine isn’t installed — ' + (d.how_to_enable || 'install it').replace(/\.$/, '') + ', or switch back to the zero-dep system voice.',
         cta:{ label:'Use system voice', action:'set-voice-system' } };
     },
     specialty: async () => {

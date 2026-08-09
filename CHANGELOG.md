@@ -5,6 +5,15 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.41] — 2026-08-09
+
+### Fixed
+- **Settings → Voice banner:** the "no system voice" / "engine not installed"
+  messages no longer render a double period (e.g. "…neural engine..") — the
+  client now strips a trailing period from the server's install hint before
+  appending its own. Found while dogfooding the 1.0.40 banners on Linux (no
+  espeak-ng installed).
+
 ## [1.0.40] — 2026-08-09
 
 ### Added
