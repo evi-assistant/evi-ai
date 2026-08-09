@@ -19,10 +19,11 @@ jobs:
       # 3-OS matrix runs on PRs, the weekly schedule, and manual dispatch.
       # macOS bills at ~10×, so full-matrix-on-every-push was the bulk of our
       # Actions minutes — this keeps coverage where it matters (PRs + weekly)
-      # at a fraction of the cost. (Python is 3.13-only since the 0.35.0 floor.)
+      # at a fraction of the cost. We test the 3.12 floor AND 3.13 so the
+      # supported range (>=3.12, incl. Ubuntu 24.04 LTS) stays green.
       matrix:
         os: ${{ (github.event_name == 'push') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
-        python: ["3.13"]
+        python: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v6

@@ -5,7 +5,18 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
-## [1.0.35] — 2026-08-09
+## [1.0.36] — 2026-08-09
+
+### Changed
+- **Lowered the minimum Python from 3.13 to 3.12.** eVi uses no Python
+  3.13-only language or stdlib features (audited across the whole package), and
+  the full test suite passes on 3.12 — so it now installs on **Ubuntu 24.04 LTS**
+  (Python 3.12, supported to 2029) and other 3.12 environments, instead of
+  silently capping at the last 3.12-compatible release (0.34.1) with no
+  explanation. CI now runs the suite on **3.12 and 3.13**. The optional `[ast]`
+  extra (the Rust `fast-walk` accelerator) still needs 3.13, but it's now
+  marker-gated so it no longer breaks a `pip install 'evi-assistant[ast]'` on
+  3.12 — eVi falls back to stdlib `ast.walk` there.
 
 ### Added
 - **Federation preflight.** `evi peer doctor` (CLI) and a **Run federation

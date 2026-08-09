@@ -7,9 +7,9 @@ build-backend = "setuptools.build_meta"
 # import package and the CLI command both stay `evi` — install with
 # `pip install evi-assistant`, then run `evi` and `import evi` as usual.
 name = "evi-assistant"
-version = "1.0.35"
+version = "1.0.36"
 description = "Local-first personal AI assistant — CLI, web, and desktop frontends over a shared agent core."
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["ai", "assistant", "llm", "agent", "local", "ollama", "lm-studio"]
@@ -22,6 +22,7 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat",
@@ -112,8 +113,10 @@ rerank = [
 ast = [
     # Reflex fast-walk: Rust ast.walk accelerator for python_symbols / code
     # analysis. Prebuilt wheels, Python 3.13+. Optional — evi/pyanalyze.py
-    # falls back to stdlib ast.walk when absent.
-    "fast-walk>=0.2",
+    # falls back to stdlib ast.walk when absent. Marker-gated to 3.13+ so this
+    # extra doesn't hard-fail `pip install evi-assistant[ast]` on 3.12 (the core
+    # package supports 3.12; the stdlib fallback covers it there).
+    "fast-walk>=0.2; python_version >= '3.13'",
 ]
 diarize = [
     # Speaker diarization ("who spoke when") on the STT pipeline. Heavy (torch);
@@ -197,4 +200,4 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py312"
