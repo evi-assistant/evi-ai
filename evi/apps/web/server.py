@@ -1126,6 +1126,129 @@ def create_app() -> FastAPI:
                 "message": f"Can't auto-start {kind}. For LM Studio: open it, load a "
                            "model, then Developer → Start Server (port 1234)."}
 
+    _integ_cache: dict[str, Any] = {"at": 0.0, "data": None}
+    _integ_lock = threading.Lock()
+
+    @app.get("/api/integrations/status")
+    def integrations_status() -> dict[str, Any]:
+        """Live reachability for the Settings → Integrations banner: ComfyUI and
+        (only when selected) SearXNG. Email OAuth has no backing token store, so
+        it is intentionally NOT probed — filling the credential paths in doesn't
+        sign you in, so there's nothing to report."""
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        import httpx
+
+        now = time.monotonic()
+        with _integ_lock:
+            c = _integ_cache["data"]
+            if c is not None and now - _integ_cache["at"] < 3.0:
+                return c
+        cfg = Config.load()
+        comfy_url = (cfg.comfy.base_url or "").rstrip("/")
+        searxng_active = cfg.tools.search_backend == "searxng"
+        searxng_url = (cfg.tools.searxng_url or "").rstrip("/")
+
+        def _reach(url: str, path: str) -> bool:
+            try:
+                r = httpx.get(url + path, timeout=httpx.Timeout(1.5, connect=0.5))
+                return r.status_code == 200
+            except Exception:  # noqa: BLE001 — unreachable is the answer, not an error
+                return False
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_comfy = ex.submit(_reach, comfy_url, "/system_stats") if comfy_url else None
+            f_searx = (ex.submit(_reach, searxng_url, "/")
+                       if (searxng_active and searxng_url) else None)
+            comfy_reach = f_comfy.result() if f_comfy else False
+            searx_reach = f_searx.result() if f_searx else False
+        data: dict[str, Any] = {
+            "comfy": {"configured_url": comfy_url, "reachable": comfy_reach},
+            "searxng": {"active": searxng_active, "url": searxng_url, "reachable": searx_reach},
+        }
+        with _integ_lock:
+            _integ_cache["at"] = time.monotonic()
+            _integ_cache["data"] = data
+        return data
+
+    _spec_cache: dict[str, Any] = {"at": 0.0, "data": None}
+    _spec_lock = threading.Lock()
+
+    @app.get("/api/specialty/status")
+    def specialty_status() -> dict[str, Any]:
+        """Reachability of the configured specialty-model backends (OCR / vision /
+        guard, all served over the OpenAI schema) + the STT dependency. Powers the
+        Settings → Specialty models and Guardrails (guard-model) banners."""
+        import importlib.util
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        now = time.monotonic()
+        with _spec_lock:
+            c = _spec_cache["data"]
+            if c is not None and now - _spec_cache["at"] < 3.0:
+                return c
+        cfg = Config.load()
+        tasks = ("ocr", "vision", "guard")
+
+        def _slice(task: str) -> dict[str, Any]:
+            mid = (getattr(cfg.models, task, "") or "").strip()
+            if not mid:
+                return {"set": False}
+            base = (getattr(cfg.models, task + "_base_url", "") or "").strip() or cfg.llm.base_url
+            return {"set": True, "model": mid, "base_url": base,
+                    "reachable": bool(_probe_backend(base))}
+
+        with ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+            slices: dict[str, Any] = dict(zip(tasks, ex.map(_slice, tasks)))
+        stt_id = (getattr(cfg.models, "stt", "") or "").strip()
+        try:
+            stt_dep = importlib.util.find_spec("faster_whisper") is not None
+        except Exception:  # noqa: BLE001
+            stt_dep = False
+        slices["stt"] = {"set": bool(stt_id), "model": stt_id, "dep_ok": stt_dep}
+        with _spec_lock:
+            _spec_cache["at"] = time.monotonic()
+            _spec_cache["data"] = slices
+        return slices
+
+    @app.get("/api/voice/status")
+    def voice_status() -> dict[str, Any]:
+        """Is the SELECTED TTS engine actually installed? (Settings → Voice.)
+        Side-effect-free: find_spec / shutil.which only, never imports the engine."""
+        import importlib.util
+        import shutil
+
+        from evi import voice as _voice
+
+        def _have(name: str) -> bool:
+            try:
+                return importlib.util.find_spec(name) is not None
+            except Exception:  # noqa: BLE001
+                return False
+
+        cfg = Config.load()
+        engine = (cfg.voice.engine or "system").strip().lower()
+        if engine == "system":
+            be = _voice.detect_backend()
+            ok = be != "none"
+            return {"engine": engine, "available": ok, "detail": be,
+                    "how_to_enable": "" if ok else "Install espeak-ng (Linux) or pick a neural engine."}
+        # Each neural engine gates differently — TWO are CLI binaries, not modules.
+        if engine == "coqui":
+            ok, hint = _have("TTS"), "pip install TTS"
+        elif engine == "kokoro":
+            ok, hint = (_have("kokoro") or _have("kokoro_onnx")), "pip install kokoro-onnx"
+        elif engine == "f5":
+            ok, hint = (shutil.which("f5-tts_infer-cli") is not None), "pip install f5-tts"
+        elif engine == "piper":
+            ok, hint = (shutil.which("piper") is not None), "install the piper binary (or pip install piper-tts)"
+        else:
+            ok, hint = True, ""  # unknown engine — don't cry wolf
+        return {"engine": engine, "available": ok, "detail": engine,
+                "how_to_enable": "" if ok else hint}
+
     @app.post("/api/backend/open-download")
     def backend_open_download(req: BackendActionRequest) -> dict[str, object]:
         """Open the backend's download page in the system browser."""
@@ -1949,6 +2072,9 @@ def create_app() -> FastAPI:
                  "mcp": p.mcp, "agents": p.agents}
                 for p in installed
             ],
+            # Plugin dirs whose manifest failed to parse — surfaced so a broken
+            # plugin doesn't just silently vanish from the list.
+            "failed": plugins.list_plugin_errors(),
             "marketplace": [
                 {"name": e.name, "description": e.description, "author": e.author,
                  "source": e.source, "tags": e.tags,

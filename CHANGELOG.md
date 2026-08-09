@@ -5,6 +5,27 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.40] — 2026-08-09
+
+### Added
+- **Settings health banners (part 2) — live connectivity & availability.**
+  Completes the settings overhaul with the banners that need a live probe, each
+  refreshed automatically on save:
+  - **Integrations** — ComfyUI (`/system_stats`) and, when selected, SearXNG
+    reachability. Email OAuth has no token store, so it is intentionally not
+    probed. (`GET /api/integrations/status`)
+  - **Voice** — is the selected TTS engine actually installed? System-voice
+    detection, or the correct module/CLI-binary per neural engine (Coqui = `TTS`
+    module; F5 / Piper = their CLI binaries; Kokoro = `kokoro`/`kokoro_onnx`).
+    (`GET /api/voice/status`)
+  - **Specialty models** — reachability of each configured OCR / vision / guard
+    backend, plus the speech-to-text dependency. (`GET /api/specialty/status`)
+  - **Guardrails** — warns when the filter is on but the configured guard model
+    isn't answering (it would fail open and silently skip).
+  - **Plugins** — surfaces plugins that failed to load (unreadable manifest),
+    which `list_plugins` used to silently drop. (`GET /api/plugins` now returns a
+    `failed` array; new `plugins.list_plugin_errors`.)
+
 ## [1.0.39] — 2026-08-09
 
 ### Added

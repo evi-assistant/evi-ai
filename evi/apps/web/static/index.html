@@ -2852,6 +2852,76 @@ resetBtn.addEventListener('click', async () => {
       if (a.mode === 'plan') return { tone:'info', title:'Plan mode: tools off', msg:'All tool calls are denied — the model can reason but not act.' };
       return { tone:'good', title:'Standard permissions', msg:'Non-approved tools prompt before running and the destructive-command guard is on.' };
     },
+    // Phase 2 — endpoint-backed probes (integrations/voice/specialty reachability,
+    // guardrails guard-model, plugin load errors).
+    integrations: async () => {
+      const d = await fetch('/api/integrations/status').then(r => r.json()).catch(() => null);
+      if (!d) return null;
+      const c = d.comfy || {}, sx = d.searxng || {};
+      if (sx.active && !sx.url)
+        return { tone:'warn', title:'SearXNG URL missing', msg:'Search backend is set to searxng but no instance URL is configured, so web search will fail.' };
+      if (sx.active && sx.url && !sx.reachable)
+        return { tone:'bad', title:'SearXNG unreachable', msg:'The configured SearXNG instance isn’t responding — web search will fail until it’s back up.' };
+      if (c.configured_url && !c.reachable)
+        return { tone:'bad', title:'ComfyUI unreachable', msg:'Nothing is responding at the ComfyUI URL — start ComfyUI (default :8188) or correct the address.' };
+      const up = [];
+      if (c.reachable) up.push('ComfyUI');
+      if (sx.active && sx.reachable) up.push('SearXNG');
+      if (up.length)
+        return { tone:'good', title:up.join(' + ') + ' reachable', msg:'The configured ' + up.join(' and ') + ' service' + (up.length > 1 ? 's are' : ' is') + ' up.' };
+      return null;  // nothing configured to probe
+    },
+    voice: async () => {
+      const d = await fetch('/api/voice/status').then(r => r.json()).catch(() => null);
+      if (!d) return null;
+      if (d.available)
+        return { tone:'good', title:'Voice engine ready', msg:'The selected engine (' + (d.detail || d.engine) + ') is installed, so spoken replies will work.' };
+      if (d.engine === 'system')
+        return { tone:'warn', title:'No system voice found', msg:'No platform text-to-speech was detected — ' + (d.how_to_enable || 'install one or pick a neural engine') + '.' };
+      return { tone:'warn', title:'Engine not installed',
+        msg:'The ' + d.engine + ' engine isn’t installed — ' + (d.how_to_enable || 'install it') + ', or switch back to the zero-dep system voice.',
+        cta:{ label:'Use system voice', action:'set-voice-system' } };
+    },
+    specialty: async () => {
+      const d = await fetch('/api/specialty/status').then(r => r.json()).catch(() => null);
+      if (!d) return null;
+      const set = ['ocr', 'vision', 'guard'].filter(k => d[k] && d[k].set);
+      const sttSet = d.stt && d.stt.set;
+      if (!set.length && !sttSet)
+        return { tone:'off', title:'No specialty models set', msg:'Every task uses your main chat model — there’s nothing extra to run or reach.' };
+      const unreach = set.filter(k => !d[k].reachable);
+      if (unreach.length)
+        return { tone:'bad', title:'Specialty backend unreachable',
+          msg:'The ' + unreach.join(', ') + ' model’s server isn’t responding — that task errors or falls back to the main model until it’s up.',
+          cta:{ label:'Open Model panel', action:'goto:model' } };
+      if (sttSet && d.stt.dep_ok === false)
+        return { tone:'warn', title:'Speech-to-text dep missing', msg:'A speech-to-text model is set but faster-whisper isn’t installed — transcription stays unavailable.' };
+      return { tone:'good', title:'Specialty models reachable', msg:'The server behind each specialty model you’ve set is responding.' };
+    },
+    guardrails: async () => {
+      const [g, sp] = await Promise.all([
+        fetch('/api/guardrails').then(r => r.json()).catch(() => null),
+        fetch('/api/specialty/status').then(r => r.json()).catch(() => null),
+      ]);
+      if (!g) return null;
+      if (!g.enabled)
+        return { tone:'off', title:'Guardrails off', msg:'No content filter is active — the default; add a rule and set enabled = true to turn it on.' };
+      if (sp && sp.guard && sp.guard.set && sp.guard.reachable === false)
+        return { tone:'warn', title:'Guard model unreachable',
+          msg:'Guardrails are on but the configured guard model isn’t answering, so those rules fail open and silently skip.',
+          cta:{ label:'Open Specialty models', action:'goto:specialty' } };
+      return { tone:'good', title:'Guardrails active', msg:'The local content filter is on and your rules are loaded.' };
+    },
+    plugins: async () => {
+      const d = await fetch('/api/plugins').then(r => r.json()).catch(() => null);
+      if (!d) return null;
+      const failed = d.failed || [], installed = d.installed || [];
+      if (failed.length)
+        return { tone:'warn', title:'Plugin failed to load', msg:failed.length + ' plugin' + (failed.length > 1 ? 's' : '') + ' have an unreadable manifest and were skipped: ' + failed.map(f => f.name).join(', ') + '.' };
+      if (!installed.length)
+        return { tone:'off', title:'No plugins installed', msg:'Nothing installed yet — use the marketplace above to add one.' };
+      return { tone:'good', title:'Plugins loaded', msg:'All ' + installed.length + ' installed plugin' + (installed.length > 1 ? 's' : '') + ' parsed their manifest and are active.' };
+    },
   };
   const _healthTone = (t) => ({
     good: { c:'#4caf50', bg:'rgba(76,175,80,.09)', ic:'✓' },
@@ -2907,6 +2977,11 @@ resetBtn.addEventListener('click', async () => {
         const sec = SCHEMA.find(s => s.id === act.slice(5));
         const btn = sec && [...document.querySelectorAll('button')].find(b => (b.textContent || '').trim() === sec.title);
         if (btn) btn.click();
+      } else if (act === 'set-voice-system') {
+        fetch('/api/config', { method:'POST', headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ voice:{ engine:'system' } }) })
+          .then(r => r.json()).then(data => { if (data && data.config) cfg = data.config; renderSection(); })
+          .catch(() => {});
       } else if (act === 'reload') {
         const m = t.closest('.sec-health-mount');
         if (m) refreshSectionHealth(m.id.replace('health-', ''), m);

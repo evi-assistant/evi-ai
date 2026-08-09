@@ -406,6 +406,22 @@ def list_plugins(root: Path | None = None) -> list[Plugin]:
     return out
 
 
+def list_plugin_errors(root: Path | None = None) -> list[dict[str, str]]:
+    """Plugin dirs whose manifest can't be read — the ones ``list_plugins``
+    silently skips (its ``except PluginError: continue``). Returns
+    ``[{name, error}]`` so the UI can surface a plugin that failed to load
+    instead of it just vanishing from the list."""
+    d = _plugins_dir(root)
+    out: list[dict[str, str]] = []
+    if d.is_dir():
+        for pd in sorted(p for p in d.iterdir() if p.is_dir()):
+            try:
+                _read_manifest(pd)
+            except PluginError as exc:
+                out.append({"name": pd.name, "error": str(exc)})
+    return out
+
+
 def remove(name: str, root: Path | None = None) -> bool:
     dest = _plugins_dir(root) / _slug(name)
     if not dest.is_dir():
