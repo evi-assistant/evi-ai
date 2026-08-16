@@ -4773,17 +4773,73 @@ resetBtn.addEventListener('click', async () => {
     openDialog('Updates', '<p class="sec-blurb">⟳ Checking for updates…</p>');
     try {
       const res = await invoke('check_for_update_cmd');
-      if (res && res.available) {
-        dlgContent.innerHTML =
-          `<p><b>Update available — ${escapeHtml(res.version || '')}</b></p>` +
-          `<p class="sec-blurb">⤓ Downloading in the background${res.current ? ' (you have ' + escapeHtml(res.current) + ')' : ''} — eVi will restart automatically when it’s ready.</p>`;
-      } else {
-        dlgContent.innerHTML =
-          `<p>✓ You’re up to date${res && res.current ? ' (v' + escapeHtml(res.current) + ')' : ''}.</p>`;
-      }
+      if (res && res.available) { showUpdatePrompt(res.version, res.current); return; }
+      // No full-app update — but the sidecar channel may have a newer core staged
+      // (e.g. the user picked "Later" earlier). Offer to apply it here too, so
+      // "Check for Updates" is never misleadingly "up to date" while a core waits.
+      let staged = null;
+      try { staged = await invoke('staged_update_cmd'); } catch (e) {}
+      let running = '';
+      try { running = (await (await fetch('/api/health', { cache: 'no-store' })).json()).version || ''; } catch (e) {}
+      if (staged && staged !== running) { showStagedPrompt(staged); return; }
+      dlgContent.innerHTML =
+        `<p>✓ You’re up to date${running ? ' (v' + escapeHtml(running) + ')' : ''}.</p>`;
     } catch (e) {
       dlgContent.innerHTML = '<p class="sec-blurb">⚠ Update check failed: ' + escapeHtml(String(e)) + '</p>';
     }
+  }
+
+  // Confirm dialog for a full-app update — nothing installs until the user
+  // clicks "Update & Restart". Shown by Help → Check for Updates and by the
+  // launch-time auto-check (via pollUpdatePrompts).
+  function showUpdatePrompt(version, current) {
+    _promptShown = true; // stop the background poll; don't raise a second prompt
+    openDialog('Update available', '');
+    dlgContent.innerHTML =
+      `<p><b>eVi ${escapeHtml(version || '')} is available.</b></p>` +
+      `<p class="sec-blurb">${current ? 'You have v' + escapeHtml(current) + '. ' : ''}` +
+      `eVi will download it and restart. Your chats are saved.</p>` +
+      `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">` +
+      `<button class="set-action-btn" id="upd-cancel">Not now</button>` +
+      `<button class="set-action-btn" id="upd-ok" style="background:var(--accent);color:#fff;border-color:var(--accent)">Update &amp; Restart</button>` +
+      `</div>`;
+    document.getElementById('upd-cancel').onclick = () => {
+      invoke('dismiss_update_cmd').catch(() => {});
+      closeDialog();
+    };
+    document.getElementById('upd-ok').onclick = () => {
+      dlgContent.innerHTML =
+        `<p class="sec-blurb">⤓ Downloading eVi ${escapeHtml(version || '')} — the app will restart automatically when it’s ready.</p>`;
+      pollUpdate();
+      invoke('install_update_cmd').then(installing => {
+        // false = the release was yanked/replaced between the offer and now, so
+        // nothing installs — clear the "Downloading…" message instead of hanging.
+        if (!installing) dlgContent.innerHTML = '<p>✓ You’re up to date — that update is no longer available.</p>';
+      }).catch(e => {
+        dlgContent.innerHTML = '<p class="sec-blurb">⚠ Update failed: ' + escapeHtml(String(e)) + '</p>';
+      });
+    };
+  }
+
+  // Prompt shown when the sidecar channel has staged a newer *core* — a plain
+  // restart (not a full reinstall) picks it up. Fixes the "About still shows the
+  // old version until I completely exit and reopen" gap: closing the window only
+  // hides eVi to the tray, so the old core keeps running until a real relaunch.
+  function showStagedPrompt(version) {
+    _promptShown = true; // stop the background poll; don't raise a second prompt
+    openDialog('Core update ready', '');
+    dlgContent.innerHTML =
+      `<p><b>A core update (eVi ${escapeHtml(version || '')}) is ready.</b></p>` +
+      `<p class="sec-blurb">Restart eVi to start using it. Your chats are saved.</p>` +
+      `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">` +
+      `<button class="set-action-btn" id="stg-later">Later</button>` +
+      `<button class="set-action-btn" id="stg-now" style="background:var(--accent);color:#fff;border-color:var(--accent)">Restart now</button>` +
+      `</div>`;
+    document.getElementById('stg-later').onclick = closeDialog;
+    document.getElementById('stg-now').onclick = () => {
+      dlgContent.innerHTML = '<p class="sec-blurb">↻ Restarting eVi…</p>';
+      invoke('restart_app_cmd').catch(() => {});
+    };
   }
   function openLogs() {
     if (isDesktop()) invoke('open_logs_cmd').catch(() => {});
@@ -4826,8 +4882,44 @@ resetBtn.addEventListener('click', async () => {
     }
   }
   function onUpdateStarted() { pollUpdate(); }
-  // Catch an auto-update that began before the page finished loading.
-  if (isDesktop()) setTimeout(pollUpdate, 1500);
+
+  // ---- update prompts (ask before upgrading) ------------------------
+  // Poll the shell for (a) a full-app update the launch check found, and (b) a
+  // newer core staged by the sidecar channel. Each raises a confirm prompt once;
+  // nothing installs or restarts without the user's click.
+  // A single gate: once ANY update prompt is raised we stop polling and never
+  // raise a second one — so a late staged-core poll can't clobber an in-progress
+  // download dialog, and a full-app + core release (which sets both offers) shows
+  // just one prompt. The launch checks land within ~1–2 min, so polling is
+  // bounded rather than running for the life of the (tray-resident) process.
+  let _promptShown = false;
+  let _pollAttempts = 0;
+  async function pollUpdatePrompts() {
+    if (!isDesktop() || _promptShown) return;
+    _pollAttempts++;
+    let shown = false;
+    try {
+      // Never overwrite a dialog the user already has open (ours or About/Docs/…).
+      if (!dlgOverlay.classList.contains('shown')) {
+        const a = await invoke('update_available_cmd');
+        if (a && a.version) {
+          showUpdatePrompt(a.version, a.current); shown = true;
+        } else {
+          const sv = await invoke('staged_update_cmd');
+          if (sv) {
+            let running = '';
+            try { running = (await (await fetch('/api/health', { cache: 'no-store' })).json()).version || ''; } catch (e) {}
+            if (sv !== running) { showStagedPrompt(sv); shown = true; }
+          }
+        }
+      }
+    } catch (e) {}
+    if (!shown && _pollAttempts < 40) setTimeout(pollUpdatePrompts, 8000);
+  }
+
+  // Catch an auto-update that began before the page finished loading, and start
+  // polling for update offers.
+  if (isDesktop()) { setTimeout(pollUpdate, 1500); setTimeout(pollUpdatePrompts, 3000); }
   function openShortcuts() {
     const rows = [
       ['Enter', 'Send message'], ['Shift+Enter', 'New line'], ['Ctrl+,', 'Settings'],

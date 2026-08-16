@@ -8,6 +8,11 @@ fn main() {
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[
                 "check_for_update_cmd",
+                "install_update_cmd",
+                "restart_app_cmd",
+                "update_available_cmd",
+                "dismiss_update_cmd",
+                "staged_update_cmd",
                 "open_logs_cmd",
                 "open_external_cmd",
                 "update_status_cmd",

@@ -5,6 +5,24 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.47] — 2026-08-16
+
+### Added
+- **Desktop — a confirmation prompt before every app upgrade.** The auto-updater
+  no longer installs silently: when a newer version is found (on launch or via
+  Help → Check for Updates) eVi shows an "Update available" dialog with
+  **Update & Restart** / **Not now**. Nothing downloads or restarts without your OK.
+
+### Fixed
+- **Desktop — the version now refreshes right after a core update.** The sidecar
+  update channel stages a newer core for the next launch, but closing eVi only
+  hides it to the tray (keeping the old core process warm), so Help → About kept
+  showing the previous version until a full manual quit + relaunch. eVi now
+  surfaces a **"Core update ready — Restart now"** prompt that does a clean restart
+  and boots the new core immediately. Belt-and-suspenders: a freshly-installed
+  bundled core is never shadowed by an older staged one (version-guarded in
+  `staged_sidecar`), so a full app update always takes effect.
+
 ## [1.0.46] — 2026-08-09
 
 ### Fixed

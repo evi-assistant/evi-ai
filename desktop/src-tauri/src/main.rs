@@ -163,8 +163,11 @@ fn sidecar_path(app: &tauri::App) -> Option<PathBuf> {
     let bin = if cfg!(windows) { "evi-server.exe" } else { "evi-server" };
 
     // Prefer a sidecar staged by the update channel (a newer core, downloaded +
-    // verified on a previous run) over the one bundled in the app.
-    if let Some(p) = evi_home().and_then(|h| sidecar_update::staged_sidecar(&h)) {
+    // verified on a previous run) over the one bundled in the app — but only when
+    // it's actually newer than this bundle, so a full-app update's fresh bundled
+    // core is never shadowed by a stale staged one.
+    let bundled_version = app.package_info().version.to_string();
+    if let Some(p) = evi_home().and_then(|h| sidecar_update::staged_sidecar(&h, &bundled_version)) {
         return Some(p);
     }
 
@@ -247,8 +250,17 @@ fn spawn_update_check(handle: tauri::AppHandle) {
         };
         match updater.check().await {
             Ok(Some(update)) => {
-                eprintln!("evi: update {} available — downloading…", update.version);
-                install_and_restart(handle.clone(), update).await;
+                // Don't auto-install. Record the offer; the webview polls
+                // `update_available_cmd`, prompts (OK/Cancel), and only installs
+                // on the user's explicit OK via `install_update_cmd`.
+                eprintln!("evi: update {} available — prompting", update.version);
+                let current = handle.package_info().version.to_string();
+                if let Some(st) = handle.try_state::<AvailableState>() {
+                    *st.0.lock().unwrap() = Some(AvailableUpdate {
+                        version: update.version.clone(),
+                        current,
+                    });
+                }
             }
             Ok(None) => eprintln!("evi: already up to date"),
             Err(e) => eprintln!("evi: update check failed: {e}"),
@@ -256,23 +268,27 @@ fn spawn_update_check(handle: tauri::AppHandle) {
     });
 }
 
-/// Stop the sidecar, then download + install an update and relaunch. Shared by
-/// the launch-time auto-check and Help → Check for Updates. The sidecar MUST
-/// die first: the NSIS updater overwrites its onedir files (e.g.
-/// _internal/VCRUNTIME140.dll), which Windows keeps locked while evi-server
-/// runs — otherwise the installer fails with "Error opening file for writing".
+/// Download + install an update and relaunch. Shared by the launch-time
+/// auto-check and Help → Check for Updates.
+///
+/// The sidecar MUST die before the install step: the NSIS updater overwrites its
+/// onedir files (e.g. _internal/VCRUNTIME140.dll), which Windows keeps locked
+/// while evi-server runs — otherwise the installer fails with "Error opening file
+/// for writing". But we kill it in the *download-finished* callback (right before
+/// install), NOT before the download — so a failed download (the common failure:
+/// network drop) leaves the backend fully alive. If the install itself then fails
+/// after the kill, we relaunch to recover the now-dead backend rather than leave
+/// the window pointed at a dead server.
 async fn install_and_restart(handle: tauri::AppHandle, update: tauri_plugin_updater::Update) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     let version = update.version.clone();
-    // Announce the (silent) update so the webview can show a progress toast.
     set_update(&handle, "downloading", &version);
     if let Some(w) = handle.get_webview_window("main") {
         let _ = w.eval(
             "window.eviUI && window.eviUI.onUpdateStarted && window.eviUI.onUpdateStarted()",
         );
-    }
-    if let Some(mut child) = handle.state::<ServerHandle>().0.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
     }
     let h = handle.clone();
     let on_chunk = move |chunk: usize, total: Option<u64>| {
@@ -284,7 +300,20 @@ async fn install_and_restart(handle: tauri::AppHandle, update: tauri_plugin_upda
             }
         }
     };
-    match update.download_and_install(on_chunk, || {}).await {
+    // Kill the sidecar only once the download has finished, immediately before
+    // the install overwrites its (locked) files. `killed` records that so the
+    // error branch knows whether the backend is dead and needs a relaunch.
+    let killed = Arc::new(AtomicBool::new(false));
+    let kill_handle = handle.clone();
+    let killed_flag = killed.clone();
+    let on_download_finished = move || {
+        if let Some(mut child) = kill_handle.state::<ServerHandle>().0.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        killed_flag.store(true, Ordering::SeqCst);
+    };
+    match update.download_and_install(on_chunk, on_download_finished).await {
         Ok(_) => {
             set_update(&handle, "installing", &version);
             eprintln!("evi: update installed — restarting");
@@ -293,6 +322,11 @@ async fn install_and_restart(handle: tauri::AppHandle, update: tauri_plugin_upda
         Err(e) => {
             set_update(&handle, "error", &version);
             eprintln!("evi: update install failed: {e}");
+            // If we already killed the sidecar (failure happened during install,
+            // not download), the backend is dead — relaunch to bring it back.
+            if killed.load(Ordering::SeqCst) {
+                handle.restart();
+            }
         }
     }
 }
@@ -307,6 +341,23 @@ struct UpdateProgress {
 }
 
 struct UpdateState(std::sync::Mutex<UpdateProgress>);
+
+/// A full-app update the launch-time check found but has NOT installed. The
+/// webview polls `update_available_cmd`, shows an OK/Cancel prompt, and only on
+/// the user's OK does `install_update_cmd` proceed — no more silent auto-install.
+#[derive(Default, Clone, serde::Serialize)]
+struct AvailableUpdate {
+    version: String,
+    current: String,
+}
+struct AvailableState(std::sync::Mutex<Option<AvailableUpdate>>);
+
+/// A newer *core* (sidecar) that the sidecar update channel has staged, pending
+/// a restart to take effect. The webview polls `staged_update_cmd` and offers a
+/// one-click "Restart now", so the running version actually advances instead of
+/// silently lagging until the user happens to fully quit (closing the window
+/// only hides to tray, keeping the old sidecar warm).
+struct StagedState(std::sync::Mutex<Option<String>>);
 
 fn set_update(handle: &tauri::AppHandle, phase: &str, version: &str) {
     if let Some(st) = handle.try_state::<UpdateState>() {
@@ -336,24 +387,78 @@ struct UpdateStatus {
     current: String,
 }
 
-/// Help → Check for Updates. Returns the verdict immediately; when an update
-/// exists the download + install proceeds in the background and the app
-/// relaunches when it lands. The EVI_AUTO_UPDATE opt-out does not gate this —
-/// the user asked explicitly.
+/// Help → Check for Updates. Returns the verdict ONLY — nothing installs here.
+/// The webview shows an OK/Cancel prompt when `available`, and installs on OK via
+/// `install_update_cmd`. This keeps the "ask before upgrading" contract for the
+/// explicit-check path too.
 #[tauri::command]
 async fn check_for_update_cmd(app: tauri::AppHandle) -> Result<UpdateStatus, String> {
     use tauri_plugin_updater::UpdaterExt;
     let current = app.package_info().version.to_string();
     let updater = app.updater().map_err(|e| e.to_string())?;
     match updater.check().await {
-        Ok(Some(update)) => {
-            let version = update.version.clone();
-            tauri::async_runtime::spawn(install_and_restart(app.clone(), update));
-            Ok(UpdateStatus { available: true, version, current })
-        }
+        Ok(Some(update)) => Ok(UpdateStatus {
+            available: true,
+            version: update.version.clone(),
+            current,
+        }),
         Ok(None) => Ok(UpdateStatus { available: false, version: String::new(), current }),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The pending full-app update offer (set by the launch-time check), or None.
+/// Polled by the webview to raise the "Update available" prompt.
+#[tauri::command]
+fn update_available_cmd(app: tauri::AppHandle) -> Option<AvailableUpdate> {
+    app.state::<AvailableState>().0.lock().unwrap().clone()
+}
+
+/// User chose "Not now" — clear the offer so the prompt doesn't re-fire this
+/// session (a fresh check on the next launch will re-offer).
+#[tauri::command]
+fn dismiss_update_cmd(app: tauri::AppHandle) {
+    *app.state::<AvailableState>().0.lock().unwrap() = None;
+}
+
+/// The staged newer core awaiting a restart (set by the sidecar channel), or
+/// None. Polled by the webview to raise the "Restart to apply" prompt.
+#[tauri::command]
+fn staged_update_cmd(app: tauri::AppHandle) -> Option<String> {
+    app.state::<StagedState>().0.lock().unwrap().clone()
+}
+
+/// User approved the full-app update (OK on the prompt). Re-check and, if still
+/// available, download + install + restart (with the progress toast). Returns
+/// `true` when an install is under way; `false` when the offer is gone (the
+/// release was yanked/replaced between the offer and the OK) so the webview can
+/// clear its "Downloading…" message instead of hanging on it forever.
+#[tauri::command]
+async fn install_update_cmd(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    *app.state::<AvailableState>().0.lock().unwrap() = None; // consume the offer
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => {
+            install_and_restart(app.clone(), update).await;
+            Ok(true)
+        }
+        Ok(None) => Ok(false), // no longer available
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Full, clean restart used by the "Restart now" prompt after the sidecar
+/// channel stages a newer core. Kills the sidecar first — so the newly-staged
+/// core can boot and its (Windows-locked) files unlock — then relaunches, at
+/// which point `sidecar_path` picks up the new staged version.
+#[tauri::command]
+fn restart_app_cmd(app: tauri::AppHandle) {
+    if let Some(mut child) = app.state::<ServerHandle>().0.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    app.restart();
 }
 
 /// Open the eVi logs folder in the OS file manager (Help → Open Logs Folder).
@@ -595,10 +700,17 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(server)
         .manage(UpdateState(std::sync::Mutex::new(UpdateProgress::default())))
+        .manage(AvailableState(std::sync::Mutex::new(None)))
+        .manage(StagedState(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             check_for_update_cmd,
+            install_update_cmd,
+            restart_app_cmd,
+            update_available_cmd,
+            dismiss_update_cmd,
+            staged_update_cmd,
             open_logs_cmd,
             open_external_cmd,
             update_status_cmd
@@ -717,8 +829,19 @@ fn main() {
                 spawn_update_check(app.handle().clone());
                 // Sidecar update channel: background-check for a newer core and
                 // stage it for next launch (opt out with EVI_SIDECAR_UPDATE=0).
+                // When one is staged, record it so the webview can offer a
+                // one-click "Restart now" instead of the user having to fully quit.
                 if let Some(home) = evi_home() {
-                    sidecar_update::spawn_check(home, app.package_info().version.to_string());
+                    let staged_handle = app.handle().clone();
+                    sidecar_update::spawn_check(
+                        home,
+                        app.package_info().version.to_string(),
+                        move |v| {
+                            if let Some(st) = staged_handle.try_state::<StagedState>() {
+                                *st.0.lock().unwrap() = Some(v);
+                            }
+                        },
+                    );
                 }
             }
             Ok(())

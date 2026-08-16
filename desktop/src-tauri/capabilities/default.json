@@ -12,6 +12,11 @@
   "permissions": [
     "core:default",
     "allow-check-for-update-cmd",
+    "allow-install-update-cmd",
+    "allow-restart-app-cmd",
+    "allow-update-available-cmd",
+    "allow-dismiss-update-cmd",
+    "allow-staged-update-cmd",
     "allow-open-logs-cmd",
     "allow-open-external-cmd",
     "allow-update-status-cmd"

@@ -69,8 +69,17 @@ fn active_version(evi_home: &Path) -> Option<String> {
 
 /// The staged sidecar binary to prefer over the bundled one, if a compatible one
 /// was downloaded on a previous run. `None` → caller uses the bundled sidecar.
-pub fn staged_sidecar(evi_home: &Path) -> Option<PathBuf> {
+///
+/// Guard: only prefer the staged core when it is at least as new as the bundled
+/// one. A full-app update ships a fresh bundled sidecar; without this check a
+/// stale staged version (from the sidecar channel) would shadow it forever — the
+/// app would report the old core version even after a full upgrade until the
+/// channel happened to re-stage. Comparing versions makes a full update win.
+pub fn staged_sidecar(evi_home: &Path, bundled_version: &str) -> Option<PathBuf> {
     let ver = active_version(evi_home)?;
+    if parse_version(&ver) < parse_version(bundled_version) {
+        return None;
+    }
     let p = root(evi_home).join(&ver).join("evi-server").join(sidecar_bin());
     if p.is_file() { Some(p) } else { None }
 }
@@ -84,6 +93,18 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
 
 fn is_newer(candidate: &str, current: &str) -> bool {
     parse_version(candidate) > parse_version(current)
+}
+
+/// The core version actually in effect, matching `staged_sidecar`'s guard: a
+/// staged (`active`) core only wins when it is at least as new as the bundled
+/// one, otherwise the bundle runs. Used so the update check doesn't stage a core
+/// the guard would then reject (which would raise a misleading "Restart now" and
+/// waste a download).
+fn effective_current(active: Option<String>, bundled: &str) -> String {
+    match active {
+        Some(v) if parse_version(&v) >= parse_version(bundled) => v,
+        _ => bundled.to_string(),
+    }
 }
 
 /// Verify the manifest signature over `data` with our embedded public key.
@@ -201,8 +222,11 @@ fn check_and_stage(evi_home: &Path, bundled_version: &str) -> Option<String> {
         // Needs a newer shell than this one — a full app update will bring it.
         return None;
     }
-    // The version currently in effect: a staged one wins over the bundled one.
-    let current = active_version(evi_home).unwrap_or_else(|| bundled_version.to_string());
+    // The version currently in effect: a staged core wins over the bundle only
+    // when it's at least as new (mirrors `staged_sidecar`'s guard). A stale
+    // `active` pointer older than a freshly-updated bundle must NOT be treated as
+    // current, or we'd stage a core the guard rejects.
+    let current = effective_current(active_version(evi_home), bundled_version);
     if !is_newer(&manifest.version, &current) {
         return None;
     }
@@ -280,8 +304,12 @@ fn config_auto_update_enabled(evi_home: &Path) -> bool {
 /// Kick off a background sidecar-update check. Never blocks launch; opt out with
 /// the `EVI_SIDECAR_UPDATE=0` env var (forces off) or the `[desktop]
 /// sidecar_auto_update = false` setting. `bundled_version` is the app/bundled
-/// sidecar version.
-pub fn spawn_check(evi_home: PathBuf, bundled_version: String) {
+/// sidecar version. `on_staged` is called with the version when a newer core is
+/// staged (the shell uses it to offer a one-click "Restart now").
+pub fn spawn_check<F>(evi_home: PathBuf, bundled_version: String, on_staged: F)
+where
+    F: Fn(String) + Send + 'static,
+{
     let env_off = std::env::var("EVI_SIDECAR_UPDATE")
         .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
         .unwrap_or(false);
@@ -291,6 +319,7 @@ pub fn spawn_check(evi_home: PathBuf, bundled_version: String) {
     std::thread::spawn(move || {
         if let Some(v) = check_and_stage(&evi_home, &bundled_version) {
             eprintln!("evi: staged sidecar {v} — active on next launch");
+            on_staged(v);
         }
     });
 }
@@ -332,6 +361,41 @@ mod tests {
     #[test]
     fn bad_signature_rejected() {
         assert!(!verify_signature(b"data", "not a real minisig"));
+    }
+
+    #[test]
+    fn effective_current_prefers_newer_of_active_and_bundled() {
+        // Stale active older than the bundle → bundle is current (guard rejects it).
+        assert_eq!(effective_current(Some("1.0.42".into()), "1.0.46"), "1.0.46");
+        // Active newer than bundle (sidecar channel ahead) → active is current.
+        assert_eq!(effective_current(Some("1.0.48".into()), "1.0.46"), "1.0.48");
+        // Equal → active.
+        assert_eq!(effective_current(Some("1.0.46".into()), "1.0.46"), "1.0.46");
+        // No active pointer → bundle.
+        assert_eq!(effective_current(None, "1.0.46"), "1.0.46");
+    }
+
+    #[test]
+    fn staged_shadow_guard_respects_bundled_version() {
+        let base = std::env::temp_dir().join(format!("evi-stg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let sc = root(&base);
+        let bindir = sc.join("1.0.42").join("evi-server");
+        std::fs::create_dir_all(&bindir).unwrap();
+        std::fs::write(bindir.join(sidecar_bin()), b"x").unwrap(); // fake binary
+        std::fs::write(sc.join("active"), "1.0.42").unwrap();
+
+        // A newer *bundled* core (fresh full-app update) must NOT be shadowed by
+        // the stale staged 1.0.42.
+        assert!(staged_sidecar(&base, "1.0.46").is_none());
+        // Equal or older bundle → the staged core is still preferred.
+        assert!(staged_sidecar(&base, "1.0.42").is_some());
+        assert!(staged_sidecar(&base, "1.0.40").is_some());
+        // No `active` pointer → nothing staged.
+        std::fs::remove_file(sc.join("active")).unwrap();
+        assert!(staged_sidecar(&base, "1.0.0").is_none());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
