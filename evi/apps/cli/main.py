@@ -3520,6 +3520,33 @@ def runtime_stop_cmd() -> None:
     console.print("[yellow]stopped[/yellow] the managed llama-server.")
 
 
+@runtime_app.command("gpu")
+def runtime_gpu_cmd() -> None:
+    """Download the CUDA build (if needed) + run the current model on your GPU."""
+    import time
+
+    from evi.runtime import setup as rt
+
+    if not rt.status().get("gpu_available"):
+        console.print("[yellow]No supported GPU / prebuilt CUDA runtime for this machine.[/yellow]")
+        raise typer.Exit(1)
+    rt.enable_gpu(background=True)
+    last = ""
+    while True:
+        s = rt.status()
+        if s.get("message") and s["message"] != last:
+            console.print("  " + s["message"])
+            last = s["message"]
+        if s.get("error"):
+            console.print(f"[red]failed:[/red] {s['error']}")
+            raise typer.Exit(1)
+        if s.get("done"):
+            break
+        time.sleep(0.8)
+    console.print("[green]✓ running on GPU[/green]" if rt.status().get("on_gpu")
+                  else "[yellow]done — but running on CPU (couldn't offload)[/yellow]")
+
+
 model_app = typer.Typer(
     help="Local model catalog for the managed runtime — list / switch / remove."
 )

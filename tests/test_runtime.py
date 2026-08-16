@@ -92,6 +92,33 @@ def test_recommended_scales_with_memory(monkeypatch):
     assert big["params_b"] >= small["params_b"]  # more memory -> at least as large
 
 
+def test_cuda_build_table():
+    v = rt_bin.LLAMACPP_VERSION  # noqa: F841 — referenced for clarity
+    assert rt_bin._cuda_build_for("12.0") == "13.3"   # Blackwell sm_120 needs >=12.8
+    assert rt_bin._cuda_build_for("12.5") == "13.3"
+    assert rt_bin._cuda_build_for("8.9") == "12.4"    # Ada
+    assert rt_bin._cuda_build_for("6.1") == "12.4"
+    assert rt_bin._cuda_build_for("3.5") is None      # pre-Maxwell, too old
+    assert rt_bin._cuda_build_for(None) is None
+    assert rt_bin._cuda_build_for("garbage") is None
+
+
+def test_gpu_plan_per_platform():
+    assert rt_bin.gpu_plan(system="Darwin", machine="arm64", compute_cap=None) == {"mode": "metal"}
+    p = rt_bin.gpu_plan(system="Windows", machine="AMD64", compute_cap="12.0")
+    assert p["mode"] == "cuda" and p["build"] == "13.3" and len(p["assets"]) == 2
+    assert rt_bin.gpu_plan(system="Windows", machine="AMD64", compute_cap="8.9")["build"] == "12.4"
+    assert rt_bin.gpu_plan(system="Windows", machine="AMD64", compute_cap=None) is None
+    assert rt_bin.gpu_plan(system="Linux", machine="x86_64", compute_cap="8.9") is None
+
+
+def test_gpu_root_under_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(rt_bin, "RUNTIME_DIR", tmp_path)
+    assert rt_bin.gpu_root() == rt_bin.runtime_root() / "gpu"
+    assert rt_bin.gpu_server_path() is None
+    assert rt_bin.gpu_installed() is False
+
+
 def test_ensure_running_noop_when_not_llamacpp(monkeypatch):
     from evi.config import Config
 

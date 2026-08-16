@@ -3118,6 +3118,16 @@ resetBtn.addEventListener('click', async () => {
         '<div class="help">Download and run a model locally — no Ollama, no account. ' +
         '★ best fit for your hardware · ● downloaded · ▶ active.</div>' +
         '<div id="rt-cat-status" class="help" style="min-height:1.1em"></div>';
+      if (d.gpu_available) {
+        if (d.on_gpu) {
+          html += '<div class="help" style="color:#4caf50">⚡ Running on your GPU' +
+            (d.gpu_name ? ' (' + escapeHtml(d.gpu_name) + ')' : '') + '.</div>';
+        } else {
+          html += '<div style="margin:4px 0 8px"><button class="set-action-btn" data-rt-gpu="1">⚡ Use your GPU' +
+            (d.gpu_name ? ' (' + escapeHtml(d.gpu_name) + ')' : '') + '</button>' +
+            '<span class="dim" style="font-size:11px;margin-left:8px">downloads the CUDA build once, then runs models much faster</span></div>';
+        }
+      }
       for (const m of d.models) {
         const active = m.id === d.active_model_id, rec = m.id === d.recommended_id;
         const marks = (m.installed ? '<span style="color:#4caf50">●</span>'
@@ -3142,8 +3152,26 @@ resetBtn.addEventListener('click', async () => {
     box.onclick = async (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
-      const use = t.getAttribute('data-rt-use'), rm = t.getAttribute('data-rt-remove');
+      const use = t.getAttribute('data-rt-use'), rm = t.getAttribute('data-rt-remove'),
+            gpu = t.getAttribute('data-rt-gpu');
       const status = box.querySelector('#rt-cat-status');
+      const pollRuntime = async () => {
+        for (let i = 0; i < 1800; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const s = await fetch('/api/runtime/status').then(r => r.json()).catch(() => null);
+          if (!s) continue;
+          if (status) { status.textContent = s.message || s.stage; status.style.color = s.error ? '#e05252' : ''; }
+          if (s.error || s.done) break;
+        }
+        if (typeof checkBackend === 'function') checkBackend();
+        renderSection();
+      };
+      if (gpu) {
+        t.disabled = true; t.textContent = 'Setting up GPU…';
+        await fetch('/api/runtime/gpu', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+        await pollRuntime();
+        return;
+      }
       if (use) {
         t.disabled = true;
         await fetch('/api/runtime/model/use', { method: 'POST', headers: { 'Content-Type': 'application/json' },

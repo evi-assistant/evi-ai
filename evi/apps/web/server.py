@@ -1282,6 +1282,10 @@ def create_app() -> FastAPI:
             "recommended_id": _cat.recommended_id(),
             "active_model_id": st.get("active_model_id"),
             "server_running": st.get("server_running"),
+            "gpu_available": st.get("gpu_available"),
+            "gpu_installed": st.get("gpu_installed"),
+            "on_gpu": st.get("on_gpu"),
+            "gpu_name": st.get("gpu_name"),
         }
 
     @app.post("/api/runtime/model/use")
@@ -1309,6 +1313,13 @@ def create_app() -> FastAPI:
         if _rt_setup.status().get("active_model_id") == mid:
             raise HTTPException(409, "That model is in use — switch to another first.")
         return {"ok": _cat.remove(entry)}
+
+    @app.post("/api/runtime/gpu")
+    def runtime_gpu() -> dict[str, Any]:
+        """Download the CUDA build (if needed) + re-run the current model on the
+        GPU (with -ngl). Background; poll GET /api/runtime/status."""
+        from evi.runtime import setup as _rt_setup
+        return _rt_setup.enable_gpu(background=True)
 
     @app.post("/api/backend/open-download")
     def backend_open_download(req: BackendActionRequest) -> dict[str, object]:

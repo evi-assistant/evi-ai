@@ -5,6 +5,23 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.45] — 2026-08-09
+
+### Added
+- **GPU acceleration for the managed runtime (Phase 3).** When a supported GPU is
+  detected, Settings → Model & Backend → Local models shows **⚡ Use your GPU
+  (&lt;name&gt;)**, which downloads the right CUDA build once and re-runs your model on
+  the GPU with layer offload (`-ngl`) — a large speedup over CPU.
+  - The CUDA build is chosen from the GPU's compute capability: **Blackwell (RTX
+    50-series, sm_120) gets the CUDA 13.3 build** (the 12.4 build silently ignores
+    it — the exact mismatch validated on an RTX 5070 Ti); older NVIDIA GPUs get 12.4.
+    macOS uses Metal on the base build automatically; Linux (no prebuilt CUDA in this
+    llama.cpp release) stays CPU.
+  - `-ngl` auto-tunes from VRAM (full offload when the model fits, CPU otherwise), and
+    the GPU build is preferred automatically on later starts.
+  - New endpoint `POST /api/runtime/gpu`; CLI `evi runtime gpu`. Runtime status now
+    reports `gpu_available` / `gpu_installed` / `on_gpu` / `gpu_name`.
+
 ## [1.0.44] — 2026-08-09
 
 ### Added
