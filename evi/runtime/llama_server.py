@@ -67,6 +67,14 @@ class ManagedServer:
             kwargs["start_new_session"] = True
         log = open(self.log_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, **kwargs)
+        # Reap-on-parent-death: even if eVi is hard-killed (no atexit), the OS
+        # kills this child too (Windows Job Object). Best-effort, never fatal.
+        try:
+            from evi.runtime import reap
+
+            reap.assign_to_parent_lifetime(self.proc.pid)
+        except Exception:  # noqa: BLE001
+            pass
 
         deadline = time.monotonic() + ready_timeout
         while time.monotonic() < deadline:

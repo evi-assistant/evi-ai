@@ -119,6 +119,14 @@ def test_gpu_root_under_runtime(monkeypatch, tmp_path):
     assert rt_bin.gpu_installed() is False
 
 
+def test_reap_assign_is_safe():
+    from evi.runtime import reap
+
+    # Never raises; returns a bool (False off Windows / for a bogus pid). The
+    # real kill-on-close behaviour is Windows-only and exercised out-of-band.
+    assert isinstance(reap.assign_to_parent_lifetime(0), bool)
+
+
 def test_ensure_running_noop_when_not_llamacpp(monkeypatch):
     from evi.config import Config
 

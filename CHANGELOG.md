@@ -5,6 +5,18 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.46] — 2026-08-09
+
+### Fixed
+- **Managed runtime — no orphaned `llama-server` on a hard exit (Phase 4).** The
+  managed model server is now tied to eVi's process lifetime via a Windows Job
+  Object (kill-on-close), so if the desktop app / sidecar is force-killed (skipping
+  the clean-exit handler) the OS reaps `llama-server` too, instead of leaving it
+  holding VRAM/RAM and the port. Verified by hard-killing the parent and confirming
+  the child dies. macOS/Linux keep the clean-exit handler; a stray server there is
+  reused on next launch via the port check. Completes the managed-runtime series
+  (Phases 1–4).
+
 ## [1.0.45] — 2026-08-09
 
 ### Added
