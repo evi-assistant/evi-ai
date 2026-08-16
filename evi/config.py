@@ -584,6 +584,7 @@ COMMANDS_DIR = HOME / "commands"
 INDICES_DIR = HOME / "indices"
 RECIPES_DIR = HOME / "recipes"
 STYLES_DIR = HOME / "styles"
+RUNTIME_DIR = HOME / "runtime"   # managed llama.cpp runtime (downloaded binaries)
 
 
 def ensure_dirs() -> None:
@@ -596,6 +597,7 @@ def ensure_dirs() -> None:
         SCHEDULED_DIR,
         SCHEDULED_LOG_DIR,
         MODELS_DIR,
+        RUNTIME_DIR,
         PROFILES_DIR,
         COMMANDS_DIR,
         TRANSCRIPTS_DIR,

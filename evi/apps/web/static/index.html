@@ -1343,20 +1343,23 @@ function renderBackendBanner(st) {
       ' is. Point eVi at it:';
     actions = live.map(function (c) { return bkBtn('Use ' + c.kind, 'use', c.kind); }).join('');
   } else {
-    // State C — nothing reachable; first-run setup wizard.
-    const model = st.recommended_model || 'a small model';
-    html = '<b>⚠ No local LLM backend is running.</b> eVi needs a model server to reply. ' +
-      '<span style="opacity:.7">Configured: ' + (cfg.backend || '?') + ' @ ' + (cfg.base_url || '?') + '</span>';
+    // State C — nothing reachable; first-run setup. Recommended path is the
+    // managed llama.cpp runtime: eVi downloads a small CPU runtime + model and
+    // runs it itself — no Ollama, no account, no admin. Ollama is kept as an
+    // alternative for users who prefer it / already have it.
+    html = '<b>⚡ Set up eVi\'s local AI.</b> eVi can download a small model and run it locally — ' +
+      'no Ollama, no account, no admin. ' +
+      '<span style="opacity:.6">(Configured backend ' + (cfg.backend || '?') + ' @ ' +
+      (cfg.base_url || '?') + ' isn\'t running.)</span>';
+    actions = bkBtn('⚡ Set up local AI (recommended)', 'runtime', 'llamacpp');
     if (st.ollama_installed) {
-      actions = bkBtn('⚡ Set up eVi (start + download ' + model + ')', 'auto', 'ollama') +
-                bkBtn('Start only', 'start', 'ollama');
+      actions += bkBtn('Use Ollama instead', 'auto', 'ollama');
     } else if (st.can_auto_install_ollama) {
-      actions = bkBtn('⚡ Set up eVi automatically (install Ollama + ' + model + ')', 'auto', 'ollama') +
-                bkBtn('Download manually', 'download', 'ollama');
+      actions += bkBtn('Install Ollama instead', 'auto', 'ollama');
     } else {
-      actions = bkBtn('Download Ollama', 'download', 'ollama');
+      actions += bkBtn('Download Ollama', 'download', 'ollama');
     }
-    hint = '<div style="margin-top:6px;opacity:.7">Using LM Studio? Open it, load a model, ' +
+    hint = '<div style="margin-top:6px;opacity:.7">Have LM Studio? Open it, load a model, ' +
       'then Developer → Start Server (port 1234), and click Recheck.</div>';
   }
   html += '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
@@ -1446,6 +1449,22 @@ async function autoSetup(st) {
   // 5. Re-check: now the *configured* backend is reachable, so the banner hides.
   await checkBackend();
 }
+// Managed llama.cpp: download a CPU runtime + a small model, start it, point eVi
+// at it — all server-side. Poll /api/runtime/status for progress.
+async function runtimeSetup() {
+  bkProgress('Setting up local AI…', 0);
+  await fetch('/api/runtime/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
+  const LABEL = { runtime: 'Downloading runtime', model: 'Downloading model', starting: 'Starting your model', done: 'Ready' };
+  for (var i = 0; i < 1800; i++) {  // up to ~30 min for a slow connection + big model
+    await new Promise(function (r) { setTimeout(r, 1000); });
+    var st = await fetch('/api/runtime/status').then(function (r) { return r.json(); }).catch(function () { return null; });
+    if (!st) continue;
+    if (st.error) { bkProgress('Setup failed: ' + st.error + ' — you can try Ollama instead, then Recheck.'); return; }
+    bkProgress(st.message || LABEL[st.stage] || st.stage, typeof st.pct === 'number' ? st.pct : undefined);
+    if (st.done) { bkProgress('All set — eVi is ready to chat!', 100); break; }
+  }
+  await checkBackend();  // configured backend now reachable → banner hides
+}
 async function onBackendAction(e) {
   const btn = e.currentTarget;
   const act = btn.getAttribute('data-act');
@@ -1456,6 +1475,9 @@ async function onBackendAction(e) {
     if (act === 'auto') {
       await autoSetup(backendStatus || {});
       return;  // autoSetup ends with checkBackend()
+    } else if (act === 'runtime') {
+      await runtimeSetup();  // ends with checkBackend()
+      return;
     } else if (act === 'start') {
       btn.textContent = 'Starting…';
       await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });

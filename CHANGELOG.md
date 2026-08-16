@@ -5,6 +5,25 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.43] — 2026-08-09
+
+### Added
+- **Zero-config local AI — managed llama.cpp runtime (Phase 1).** A fresh user
+  can reach first chat with no external install. The "no backend" first-run
+  banner's recommended path, **⚡ Set up local AI**, downloads a small CPU
+  `llama-server` runtime + a small starter model (Qwen2.5-1.5B-Instruct), starts
+  and supervises the server, and points eVi at it — **no Ollama, no account, no
+  admin, no manual `pull`**. Ollama remains an alternative for those who prefer it.
+  - The runtime binary + model are downloaded *after* install (the installer
+    stays lean — the same principle that kept eVi from bundling a runtime), and
+    the managed server **auto-relaunches** on later `evi web` / desktop starts.
+  - CPU build by default so it never mismatches a GPU/driver; GPU (CUDA)
+    acquisition + an in-app model catalog/switch are Phases 2–3.
+  - New `evi/runtime/` package (stdlib-only, bundles into the desktop sidecar):
+    runtime acquisition + a `llama-server` supervisor + setup orchestration.
+    Endpoints `POST /api/runtime/setup`, `GET /api/runtime/status`,
+    `POST /api/runtime/stop`; CLI `evi runtime setup/status/stop`.
+
 ## [1.0.42] — 2026-08-09
 
 ### Changed

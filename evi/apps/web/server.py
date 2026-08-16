@@ -1249,6 +1249,26 @@ def create_app() -> FastAPI:
         return {"engine": engine, "available": ok, "detail": engine,
                 "how_to_enable": "" if ok else hint}
 
+    @app.post("/api/runtime/setup")
+    def runtime_setup() -> dict[str, Any]:
+        """Zero-config local AI: download a CPU llama.cpp runtime + a small
+        starter model, start the server, and point [llm] at it — no Ollama, no
+        manual pull. Runs in the background; poll GET /api/runtime/status."""
+        from evi.runtime import setup as _rt_setup
+        return _rt_setup.start(background=True)
+
+    @app.get("/api/runtime/status")
+    def runtime_status() -> dict[str, Any]:
+        """Progress of the managed-runtime setup + whether the server is up."""
+        from evi.runtime import setup as _rt_setup
+        return _rt_setup.status()
+
+    @app.post("/api/runtime/stop")
+    def runtime_stop() -> dict[str, Any]:
+        from evi.runtime import llama_server as _rt_srv
+        _rt_srv.stop_managed()
+        return {"ok": True}
+
     @app.post("/api/backend/open-download")
     def backend_open_download(req: BackendActionRequest) -> dict[str, object]:
         """Open the backend's download page in the system browser."""

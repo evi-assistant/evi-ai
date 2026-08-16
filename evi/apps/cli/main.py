@@ -3463,6 +3463,62 @@ def eval_run(
 backend_app = typer.Typer(help="Model backends — register providers (local + online) to pick from.")
 app.add_typer(backend_app, name="backend")
 
+runtime_app = typer.Typer(
+    help="Managed local runtime — download + run a llama.cpp model, no external install."
+)
+app.add_typer(runtime_app, name="runtime")
+
+
+@runtime_app.command("setup")
+def runtime_setup_cmd() -> None:
+    """Download a CPU llama.cpp runtime + a small model, start it, point eVi at it.
+
+    The runtime, model and config persist; the desktop app / `evi web` re-launch
+    the server automatically on start.
+    """
+    import time
+
+    from evi.runtime import setup as rt
+
+    console.print("[cyan]Setting up local AI[/cyan] — a CPU runtime + a small model…")
+    rt.start(background=True)
+    last = ""
+    while True:
+        s = rt.status()
+        msg = s.get("message") or ""
+        if msg and msg != last:
+            console.print(f"  {msg}")
+            last = msg
+        if s.get("error"):
+            console.print(f"[red]setup failed:[/red] {s['error']}")
+            raise typer.Exit(1)
+        if s.get("done"):
+            break
+        time.sleep(0.8)
+    console.print("[green]✓ Local AI is ready.[/green] eVi now uses the managed llama.cpp runtime.")
+
+
+@runtime_app.command("status")
+def runtime_status_cmd() -> None:
+    """Show the managed-runtime + server state."""
+    from evi.runtime import setup as rt
+
+    s = rt.status()
+    console.print(f"runtime installed: {s.get('runtime_installed')}")
+    console.print(f"model present:     {s.get('model_present')}")
+    console.print(f"server running:    {s.get('server_running')}")
+    stg = s.get("stage")
+    console.print(f"stage:             {stg}" + (f" — {s['message']}" if s.get("message") else ""))
+
+
+@runtime_app.command("stop")
+def runtime_stop_cmd() -> None:
+    """Stop the managed llama-server started by this process."""
+    from evi.runtime import llama_server
+
+    llama_server.stop_managed()
+    console.print("[yellow]stopped[/yellow] the managed llama-server.")
+
 
 @backend_app.command("list")
 def backend_list() -> None:
@@ -4931,6 +4987,21 @@ def web(host: str = "127.0.0.1", port: int = 8000) -> None:
             "[dim](run `evi web token rotate` to require a token)[/dim]"
         )
     console.print(f"[cyan]eVi web →[/cyan] http://{host}:{port}")
+    # If a managed llama.cpp runtime was set up before, re-launch it in the
+    # background so it persists across restarts (no-op unless [llm] is that
+    # runtime and its server isn't already answering). Covers `evi web` and the
+    # desktop sidecar (which runs `evi-server web …`); done here, not in
+    # create_app(), so it never fires on import or under TestClient.
+    import threading as _threading
+
+    def _autostart_runtime() -> None:
+        try:
+            from evi.runtime import setup as _rt_setup
+            _rt_setup.ensure_running()
+        except Exception:  # noqa: BLE001
+            pass
+
+    _threading.Thread(target=_autostart_runtime, daemon=True).start()
     uvicorn.run("evi.apps.web.server:app", host=host, port=port, reload=False)
 
 
