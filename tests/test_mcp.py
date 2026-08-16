@@ -195,7 +195,10 @@ def test_manager_connects_http_transport(monkeypatch) -> None:
         captured["headers"] = headers
         return _FakeStreams(3)
 
-    monkeypatch.setattr(sh, "streamablehttp_client", fake_http)
+    # mcp 2.0 renamed streamablehttp_client -> streamable_http_client; the
+    # manager imports whichever exists, so patch both names.
+    monkeypatch.setattr(sh, "streamable_http_client", fake_http, raising=False)
+    monkeypatch.setattr(sh, "streamablehttp_client", fake_http, raising=False)
     monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
 
     mgr = MCPManager([MCPServer(
