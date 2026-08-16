@@ -75,7 +75,7 @@ mcp = [
     # meant a fresh install (and the weekly CI sweep) silently pulled 2.0 and
     # broke MCP for users, not just tests. Pin to the working 1.x line; migrate
     # to the 2.0 API in its own PR, then raise this ceiling.
-    "mcp>=1.0,<2",
+    "mcp>=1.0,<3",
 ]
 scheduler = [
     "apscheduler>=3.10",
