@@ -5,6 +5,24 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.44] — 2026-08-09
+
+### Added
+- **Local model catalog — managed runtime (Phase 2).** Settings → Model & Backend
+  now has a curated **Local models** list: download, switch, and remove local GGUF
+  models without a terminal — no Ollama, no `pull`. Each shows size + license, with
+  ★ = best fit for your hardware, ● = downloaded, ▶ = active. **Use** downloads
+  (with progress) if needed and switches the managed llama.cpp server to it;
+  **Remove** deletes a downloaded file.
+  - 8 verified models (Qwen2.5 0.5B–14B, Llama-3.2 1B/3B, Qwen2.5-Coder-7B); each
+    HF repo/filename/size was verified against the HuggingFace API and all download
+    anonymously (gated/heavily-restricted models excluded).
+  - Switching = the supervisor restarts `llama-server` on the same port with the new
+    `-m`; the active model is derived from the running server, so it stays correct
+    across restarts.
+  - New endpoints `GET /api/runtime/catalog`, `POST /api/runtime/model/{use,remove}`;
+    CLI `evi model list/use/remove`.
+
 ## [1.0.43] — 2026-08-09
 
 ### Added

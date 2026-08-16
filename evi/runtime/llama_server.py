@@ -89,6 +89,15 @@ class ManagedServer:
                 self.proc.kill()
         self.proc = None
 
+    def swap(self, model_path: Path, *, ngl: int | None = None) -> None:
+        """Load a different model: stop, then restart on the SAME port with a new
+        ``-m``. (llama-server is one-model-per-process, so a switch is a restart.)"""
+        self.stop()
+        self.model_path = Path(model_path)
+        if ngl is not None:
+            self.ngl = ngl
+        self.start()
+
 
 _MANAGED: ManagedServer | None = None
 _LOCK = threading.Lock()
@@ -109,6 +118,23 @@ def start_managed(server_bin, model_path, *, port: int | None = None, ngl: int =
             model_path=Path(model_path),
             port=port or free_port(),
             ngl=ngl,
+        )
+        srv.start()
+        _MANAGED = srv
+        return srv
+
+
+def use_model(server_bin, model_path, *, ngl: int = 0) -> ManagedServer:
+    """Start the managed server on ``model_path`` — or, if one is already up,
+    swap it (same port) to the new model. The single-server invariant holds."""
+    global _MANAGED
+    with _LOCK:
+        if _MANAGED is not None and _MANAGED.proc is not None:
+            _MANAGED.swap(Path(model_path), ngl=ngl)
+            return _MANAGED
+        srv = ManagedServer(
+            server_bin=Path(server_bin), model_path=Path(model_path),
+            port=free_port(), ngl=ngl,
         )
         srv.start()
         _MANAGED = srv

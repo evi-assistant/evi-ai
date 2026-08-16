@@ -3054,6 +3054,7 @@ resetBtn.addEventListener('click', async () => {
   // System stats + hardware-recommended model (Settings → Model & Backend).
   function renderModelExtras() {
     renderBackendsPanel();
+    renderRuntimeCatalog();
     const box = document.createElement('div');
     box.style.marginTop = '20px';
     box.innerHTML = '<div class="sec-blurb">Loading system info…</div>';
@@ -3104,6 +3105,73 @@ resetBtn.addEventListener('click', async () => {
   }
 
   // Backends registry panel (Settings → Model & Backend).
+  // Managed llama.cpp model catalog — download / switch / remove local models
+  // without a terminal (Settings → Model & Backend).
+  function renderRuntimeCatalog() {
+    const box = document.createElement('div');
+    box.style.marginTop = '20px';
+    box.innerHTML = '<div class="sec-blurb">Loading local models…</div>';
+    contentEl.appendChild(box);
+    const render = (d) => {
+      if (!d || !d.models) { box.innerHTML = ''; return; }
+      let html = '<div class="set-group-title">Local models (managed llama.cpp)</div>' +
+        '<div class="help">Download and run a model locally — no Ollama, no account. ' +
+        '★ best fit for your hardware · ● downloaded · ▶ active.</div>' +
+        '<div id="rt-cat-status" class="help" style="min-height:1.1em"></div>';
+      for (const m of d.models) {
+        const active = m.id === d.active_model_id, rec = m.id === d.recommended_id;
+        const marks = (m.installed ? '<span style="color:#4caf50">●</span>'
+          : '<span style="color:var(--dim)">○</span>') +
+          (rec ? ' <span title="recommended for your hardware">★</span>' : '') +
+          (active ? ' <span style="color:#4caf50">▶</span>' : '');
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;' +
+          'border-bottom:1px solid var(--border,#2b333d)">' +
+          '<div style="flex:1;min-width:0"><div>' + marks + ' <b>' + escapeHtml(m.name) + '</b> ' +
+          '<span class="dim" style="font-size:11px">' + m.size_gb + ' GB · ' + escapeHtml(m.license) + '</span></div>' +
+          '<div class="dim" style="font-size:12px">' + escapeHtml(m.note || '') + '</div></div>' +
+          (active ? '<span class="dim" style="font-size:12px;white-space:nowrap">in use</span>'
+            : '<button class="set-action-btn" data-rt-use="' + escapeAttr(m.id) + '">' +
+              (m.installed ? 'Use' : 'Download &amp; use') + '</button>') +
+          (m.installed && !active
+            ? '<button class="set-action-btn" data-rt-remove="' + escapeAttr(m.id) + '">Remove</button>' : '') +
+          '</div>';
+      }
+      box.innerHTML = html;
+    };
+    fetch('/api/runtime/catalog').then(r => r.json()).then(render).catch(() => { box.innerHTML = ''; });
+    box.onclick = async (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      const use = t.getAttribute('data-rt-use'), rm = t.getAttribute('data-rt-remove');
+      const status = box.querySelector('#rt-cat-status');
+      if (use) {
+        t.disabled = true;
+        await fetch('/api/runtime/model/use', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: use }) }).catch(() => {});
+        for (let i = 0; i < 1800; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const s = await fetch('/api/runtime/status').then(r => r.json()).catch(() => null);
+          if (!s) continue;
+          if (status) { status.textContent = s.message || s.stage; status.style.color = s.error ? '#e05252' : ''; }
+          if (s.error || s.done) break;
+        }
+        if (typeof checkBackend === 'function') checkBackend();
+        renderSection();  // refresh installed/active marks + the no-backend banner
+      } else if (rm) {
+        if (!confirm('Delete this downloaded model file?')) return;
+        t.disabled = true;
+        const r = await fetch('/api/runtime/model/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: rm }) });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          if (status) { status.textContent = e.detail || 'remove failed'; status.style.color = '#e05252'; }
+          t.disabled = false; return;
+        }
+        renderSection();
+      }
+    };
+  }
+
   function renderBackendsPanel() {
     const box = document.createElement('div');
     box.style.marginTop = '20px';

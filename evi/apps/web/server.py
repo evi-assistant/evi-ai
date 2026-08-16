@@ -1269,6 +1269,47 @@ def create_app() -> FastAPI:
         _rt_srv.stop_managed()
         return {"ok": True}
 
+    @app.get("/api/runtime/catalog")
+    def runtime_catalog() -> dict[str, Any]:
+        """Curated local models (each flagged `installed`), the hardware-fit
+        recommendation, and which one is currently loaded."""
+        from evi.runtime import catalog as _cat
+        from evi.runtime import setup as _rt_setup
+
+        st = _rt_setup.status()
+        return {
+            "models": [{**m, "installed": _cat.is_installed(m)} for m in _cat.catalog()],
+            "recommended_id": _cat.recommended_id(),
+            "active_model_id": st.get("active_model_id"),
+            "server_running": st.get("server_running"),
+        }
+
+    @app.post("/api/runtime/model/use")
+    def runtime_model_use(req: dict[str, Any]) -> dict[str, Any]:
+        """Download (if needed) + switch the managed server to a catalog model.
+        Runs in the background; poll GET /api/runtime/status for progress."""
+        from evi.runtime import setup as _rt_setup
+
+        mid = str((req or {}).get("id", "")).strip()
+        if not mid:
+            raise HTTPException(400, "expected {id}")
+        return _rt_setup.use_model(mid, background=True)
+
+    @app.post("/api/runtime/model/remove")
+    def runtime_model_remove(req: dict[str, Any]) -> dict[str, Any]:
+        from evi.runtime import catalog as _cat
+        from evi.runtime import setup as _rt_setup
+
+        mid = str((req or {}).get("id", "")).strip()
+        entry = _cat.get(mid)
+        if entry is None:
+            raise HTTPException(404, f"unknown model: {mid}")
+        # The active model's file is mmap'd by the running server (locked on
+        # Windows) — make the user switch away first.
+        if _rt_setup.status().get("active_model_id") == mid:
+            raise HTTPException(409, "That model is in use — switch to another first.")
+        return {"ok": _cat.remove(entry)}
+
     @app.post("/api/backend/open-download")
     def backend_open_download(req: BackendActionRequest) -> dict[str, object]:
         """Open the backend's download page in the system browser."""

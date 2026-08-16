@@ -46,15 +46,50 @@ def test_ensure_runtime_unsupported_raises(monkeypatch, tmp_path):
 def test_setup_status_shape():
     s = rt_setup.status()
     for k in ("stage", "pct", "message", "running", "done", "error",
-              "server_running", "runtime_installed", "model_present", "supported"):
+              "server_running", "runtime_installed", "supported", "active_model_id"):
         assert k in s
 
 
 def test_starter_model_path_under_models_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(rt_setup, "MODELS_DIR", tmp_path)
+    from evi.runtime import catalog as cat
+
+    monkeypatch.setattr(cat, "MODELS_DIR", tmp_path)
     p = rt_setup.starter_model_path()
     assert p.parent.parent == tmp_path
     assert p.name.endswith(".gguf")
+
+
+def test_catalog_entries_wellformed():
+    from evi.runtime import catalog as cat
+
+    models = cat.catalog()
+    assert len(models) >= 6
+    ids = [m["id"] for m in models]
+    assert cat.STARTER_ID in ids
+    assert len(ids) == len(set(ids))  # unique ids
+    for m in models:
+        for k in ("id", "name", "hf_repo", "filename", "quant", "size_gb",
+                  "params_b", "min_ram_gb", "min_vram_gb", "license"):
+            assert k in m, f"{m['id']} missing {k}"
+        assert m["filename"].endswith(".gguf")
+
+
+def test_get_unknown_returns_none():
+    from evi.runtime import catalog as cat
+
+    assert cat.get("nope") is None
+
+
+def test_recommended_scales_with_memory(monkeypatch):
+    from evi.runtime import catalog as cat
+
+    monkeypatch.setattr(cat, "_memory_gb", lambda: (2.0, 0.0))
+    small = cat.get(cat.recommended_id())
+    assert "coding" not in small.get("tags", [])  # never recommend a specialist
+
+    monkeypatch.setattr(cat, "_memory_gb", lambda: (64.0, 0.0))
+    big = cat.get(cat.recommended_id())
+    assert big["params_b"] >= small["params_b"]  # more memory -> at least as large
 
 
 def test_ensure_running_noop_when_not_llamacpp(monkeypatch):

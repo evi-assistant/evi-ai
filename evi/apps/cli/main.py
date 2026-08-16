@@ -3520,6 +3520,75 @@ def runtime_stop_cmd() -> None:
     console.print("[yellow]stopped[/yellow] the managed llama-server.")
 
 
+model_app = typer.Typer(
+    help="Local model catalog for the managed runtime — list / switch / remove."
+)
+app.add_typer(model_app, name="model")
+
+
+@model_app.command("list")
+def model_list_cmd() -> None:
+    """List curated local models  (● installed · ★ recommended · ▶ active)."""
+    from evi.runtime import catalog as cat
+    from evi.runtime import setup as rt
+
+    rec = cat.recommended_id()
+    active = rt.status().get("active_model_id")
+    for m in cat.catalog():
+        marks = ("●" if cat.is_installed(m) else "○")
+        marks += "★" if m["id"] == rec else " "
+        marks += "▶" if m["id"] == active else " "
+        console.print(
+            f"{marks} [b]{m['id']}[/b]  {m['size_gb']} GB  "
+            f"[dim]{m['name']} · {m['license']}[/dim]"
+        )
+
+
+@model_app.command("use")
+def model_use_cmd(
+    model_id: str = typer.Argument(..., help="Catalog id, e.g. qwen2.5-7b-instruct."),
+) -> None:
+    """Download (if needed) + switch the managed runtime to a model."""
+    import time
+
+    from evi.runtime import catalog as cat
+    from evi.runtime import setup as rt
+
+    if cat.get(model_id) is None:
+        console.print(f"[red]unknown model:[/red] {model_id} (see `evi model list`)")
+        raise typer.Exit(1)
+    rt.use_model(model_id, background=True)
+    last = ""
+    while True:
+        s = rt.status()
+        if s.get("message") and s["message"] != last:
+            console.print("  " + s["message"])
+            last = s["message"]
+        if s.get("error"):
+            console.print(f"[red]failed:[/red] {s['error']}")
+            raise typer.Exit(1)
+        if s.get("done"):
+            break
+        time.sleep(0.8)
+    console.print(f"[green]✓ now using[/green] {model_id}")
+
+
+@model_app.command("remove")
+def model_remove_cmd(model_id: str = typer.Argument(...)) -> None:
+    """Delete a downloaded model file (not the active one)."""
+    from evi.runtime import catalog as cat
+    from evi.runtime import setup as rt
+
+    entry = cat.get(model_id)
+    if entry is None:
+        console.print(f"[red]unknown model:[/red] {model_id}")
+        raise typer.Exit(1)
+    if rt.status().get("active_model_id") == model_id:
+        console.print("[yellow]that model is in use — switch to another first[/yellow]")
+        raise typer.Exit(1)
+    console.print("[yellow]removed[/yellow]" if cat.remove(entry) else "not installed")
+
+
 @backend_app.command("list")
 def backend_list() -> None:
     """List configured backends (~/.evi/backends.json) + the active one."""
