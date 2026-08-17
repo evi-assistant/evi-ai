@@ -52,7 +52,7 @@ jobs:
       # failing, so this workflow is safe to merge before the token is set up.
       HAS_TOKEN: ${{ secrets.DOCS_PUBLISH_TOKEN != '' && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Note whether publishing is configured
         run: |
@@ -63,7 +63,7 @@ jobs:
                  "verifying only. Add the secret to enable publishing."
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -73,7 +73,7 @@ jobs:
       # --- site -----------------------------------------------------------
       - name: Check out the site repo
         if: github.event_name != 'pull_request' && env.HAS_TOKEN == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: evi-assistant/evi-assistant.github.io
           token: ${{ secrets.DOCS_PUBLISH_TOKEN }}
