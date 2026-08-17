@@ -66,9 +66,34 @@ def _gpu_info() -> tuple[str | None, float, str | None]:
         return None, 0.0, None
 
 
-def _pick_runtime(entry: dict) -> tuple:
-    """(server_bin, ngl) for this model. Prefer the managed GPU build when it's
+def _external_binary() -> str:
+    """A validated user-provided `llama-server` (config `[runtime].server_path`),
+    or "" if unset/invalid. When set, eVi supervises it and skips the download."""
+    from pathlib import Path as _P
+
+    cfg = Config.load()
+    p = cfg.runtime.server_path
+    if not p:
+        return ""
+    if not _P(p).is_file():
+        # The located binary was moved/deleted — forget it so we fall back to the
+        # managed download cleanly (and the setup card stops promising it).
+        cfg.runtime.server_path = ""
+        cfg.save()
+        return ""
+    return p if llamacpp_runtime.validate_server_binary(p) else ""
+
+
+def _pick_runtime(entry: dict, external: str = "") -> tuple:
+    """(server_bin, ngl) for this model. A user-provided external binary wins
+    (offload if the model fits VRAM); else prefer the managed GPU build when it's
     installed and the model fits VRAM (Windows CUDA), Metal on macOS; else CPU."""
+    from pathlib import Path as _P
+
+    if external:
+        _cc, vram, _name = _gpu_info()
+        fits = bool(vram) and vram >= entry.get("min_vram_gb", 1e9)
+        return _P(external), (99 if fits else 0)
     if platform.system().lower() == "darwin":
         return llamacpp_runtime.ensure_runtime(), 99  # base build is Metal
     _cc, vram, _name = _gpu_info()
@@ -103,6 +128,12 @@ def status() -> dict:
                 active = m["id"]
                 break
     d["active_model_id"] = active
+    from pathlib import Path as _P
+
+    ext = Config.load().runtime.server_path or ""
+    # Only report an external path the card can actually use — a moved/deleted one
+    # must not keep showing "Using your llama.cpp install at …".
+    d["external_path"] = ext if (ext and _P(ext).is_file()) else ""
     # GPU
     cc, vram, name = _gpu_info()
     on_mac = platform.system().lower() == "darwin"
@@ -116,12 +147,17 @@ def status() -> dict:
 def _install_and_run(entry: dict) -> None:
     try:
         ensure_dirs()
-        _set(stage="runtime", pct=0, message="Downloading llama.cpp runtime…",
-             running=True, done=False, error="")
-        # always ensure the CPU build (the universal fallback) is present
-        llamacpp_runtime.ensure_runtime(
-            on_bytes=lambda d, t: _set(pct=_pct(d, t), message=f"Runtime {_mb(d)}/{_mb(t)} MB")
-        )
+        external = _external_binary()  # user's own llama-server → skip the download
+        if not external:
+            _set(stage="runtime", pct=0, message="Downloading llama.cpp runtime…",
+                 running=True, done=False, error="")
+            # always ensure the CPU build (the universal fallback) is present
+            llamacpp_runtime.ensure_runtime(
+                on_bytes=lambda d, t: _set(pct=_pct(d, t), message=f"Runtime {_mb(d)}/{_mb(t)} MB")
+            )
+        else:
+            _set(stage="runtime", pct=0, message="Using your llama.cpp install…",
+                 running=True, done=False, error="")
         if not catalog.is_installed(entry):
             _set(stage="model", pct=0, message=f"Downloading {entry['name']}…")
             catalog.download(
@@ -130,7 +166,7 @@ def _install_and_run(entry: dict) -> None:
                     pct=_pct(d, t), message=f"{entry['name']} {_mb(d)}/{_mb(t)} MB"),
             )
         _set(stage="starting", pct=0, message=f"Starting {entry['name']}…")
-        server_bin, ngl = _pick_runtime(entry)  # GPU if already installed + fits
+        server_bin, ngl = _pick_runtime(entry, external)  # external / GPU / CPU
         srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
         cfg = Config.load()
         cfg.llm.backend = "llamacpp"
@@ -147,6 +183,17 @@ def _kick(fn, background: bool) -> dict:
     with _lock:
         if _state.running:
             return status()
+        # Reset progress synchronously BEFORE returning, so the status() we return
+        # (and the webview's first poll after it) never carries a PRIOR run's
+        # done/error. Without this, a second op after an earlier success reported a
+        # premature "ready", and a stale error made /api/runtime/locate 400 a
+        # perfectly valid binary.
+        _state.stage = "starting"
+        _state.pct = 0
+        _state.message = ""
+        _state.running = True
+        _state.done = False
+        _state.error = ""
     if background:
         threading.Thread(target=fn, daemon=True).start()
     else:
@@ -168,11 +215,25 @@ def use_model(model_id: str, *, background: bool = True) -> dict:
     return _kick(lambda: _install_and_run(entry), background)
 
 
+def locate(path: str, *, model_id: str | None = None, background: bool = True) -> dict:
+    """Point eVi at an EXISTING `llama-server` binary (skip the download), then
+    start it on a model (the given/current one, downloading it if needed). Returns
+    a validation error without touching config if `path` isn't a real llama-server."""
+    if not llamacpp_runtime.validate_server_binary(path):
+        return {**status(), "error": f"Not a runnable llama-server: {path}"}
+    cfg = Config.load()
+    cfg.runtime.server_path = str(path)
+    cfg.save()
+    entry = (catalog.get(model_id) if model_id else None) or _current_entry() or catalog.starter()
+    return _kick(lambda: _install_and_run(entry), background)
+
+
 def _enable_gpu_run() -> None:
     try:
         cc, _vram, _name = _gpu_info()
         on_mac = platform.system().lower() == "darwin"
-        if not on_mac:
+        external = _external_binary()  # their build; we can't fetch a CUDA one for it
+        if not on_mac and not external:
             plan = llamacpp_runtime.gpu_plan(compute_cap=cc)
             if not plan or plan.get("mode") != "cuda":
                 raise RuntimeError("No supported GPU / prebuilt CUDA runtime for this machine.")
@@ -186,7 +247,7 @@ def _enable_gpu_run() -> None:
             catalog.download(entry, on_bytes=lambda d, t: _set(
                 pct=_pct(d, t), message=f"{entry['name']} {_mb(d)}/{_mb(t)} MB"))
         _set(stage="starting", pct=0, message=f"Starting {entry['name']} on your GPU…")
-        server_bin, ngl = _pick_runtime(entry)
+        server_bin, ngl = _pick_runtime(entry, external)
         srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
         cfg = Config.load()
         cfg.llm.backend = "llamacpp"
@@ -216,7 +277,9 @@ def ensure_running() -> bool:
         return False
     if is_openai_server(cfg.llm.base_url, api_key="llamacpp"):
         return True
-    if llamacpp_runtime.server_path() is None:
+    external = _external_binary()
+    # Need SOME server binary — either the user's own or the managed download.
+    if not external and llamacpp_runtime.server_path() is None:
         return False
     entry = next((m for m in catalog.catalog()
                   if m["name"] == cfg.llm.model and catalog.is_installed(m)), None)
@@ -225,7 +288,7 @@ def ensure_running() -> bool:
     if entry is None:
         return False
     try:
-        server_bin, ngl = _pick_runtime(entry)
+        server_bin, ngl = _pick_runtime(entry, external)
         srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
     except Exception:  # noqa: BLE001
         return False

@@ -5,6 +5,23 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.48] — 2026-08-16
+
+### Added
+- **First-run onboarding for local AI.** eVi now guides a not-yet-set-up user to
+  private, on-device AI without Ollama. The **⚡ Set up local AI** card lets you pick a
+  small model and one-click download + start eVi's managed llama.cpp runtime — and it
+  is now offered in *every* not-ready state (previously hidden whenever Ollama happened
+  to be running). You can also **point eVi at an existing llama.cpp install** —
+  auto-detected on PATH / common dirs, or enter a path — via a new `[runtime]
+  server_path` setting; eVi then supervises your own binary and skips the download.
+
+### Fixed
+- **Desktop — a set-up local model now relaunches on app start.** The desktop sidecar
+  never ran the managed-runtime autostart (only the `evi web` CLI did), so a
+  previously-configured llama.cpp model wouldn't come back after a restart and the app
+  booted to a "llamacpp isn't running" banner. The sidecar now relaunches it on startup.
+
 ## [1.0.47] — 2026-08-16
 
 ### Added

@@ -127,6 +127,63 @@ def test_reap_assign_is_safe():
     assert isinstance(reap.assign_to_parent_lifetime(0), bool)
 
 
+# ---- locate-existing-install (external binary) ----------------------------
+
+
+def test_config_has_runtime_section():
+    from evi.config import Config, RuntimeSettings
+
+    c = Config()
+    assert isinstance(c.runtime, RuntimeSettings)
+    assert c.runtime.server_path == ""
+
+
+def test_validate_server_binary_rejects_missing(tmp_path):
+    # A path that isn't a file is rejected without running anything.
+    assert rt_bin.validate_server_binary(tmp_path / "nope-llama-server") is False
+
+
+def test_detect_external_excludes_managed(monkeypatch, tmp_path):
+    import shutil
+
+    monkeypatch.setattr(rt_bin, "RUNTIME_DIR", tmp_path)
+    managed = rt_bin.runtime_root() / rt_bin._server_name()
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_text("x")
+    # Even if eVi's own managed binary is what's on PATH, it's not an "existing
+    # external install" — it must be filtered out of the locate candidates.
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: str(managed))
+    assert str(managed) not in rt_bin.detect_external()
+
+
+def test_pick_runtime_prefers_external(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(rt_setup, "_gpu_info", lambda: (None, 0.0, None))
+    bin_, ngl = rt_setup._pick_runtime({"name": "x", "min_vram_gb": 999},
+                                       external="C:/tools/llama-server.exe")
+    assert bin_ == Path("C:/tools/llama-server.exe")
+    assert ngl == 0  # no GPU detected → CPU offload
+
+
+def test_locate_rejects_invalid_binary():
+    # Validation fails for a non-llama-server path → error, no install kicked off.
+    st = rt_setup.locate("/definitely/not/a/llama-server-xyz", background=False)
+    assert st.get("error")
+
+
+def test_kick_resets_stale_state_before_returning():
+    # A prior run's done/error must NOT leak into the next op's first status()
+    # (that caused a premature "ready" and a spurious 400 on locate).
+    rt_setup._set(error="llama-server exited early", done=True, running=False)
+    try:
+        st = rt_setup._kick(lambda: None, background=False)
+        assert st["error"] == ""
+        assert st["done"] is False
+    finally:
+        rt_setup._set(running=False, done=False, error="", stage="idle", pct=0, message="")
+
+
 def test_ensure_running_noop_when_not_llamacpp(monkeypatch):
     from evi.config import Config
 

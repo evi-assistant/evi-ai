@@ -124,6 +124,23 @@ def main(argv: list[str] | None = None) -> int:
     # Import the app object so the frozen binary carries it explicitly.
     from evi.apps.web.server import app
 
+    # Autostart the managed llama.cpp runtime if the user set it up (backend =
+    # llamacpp + a model installed). The desktop shell spawns THIS entry point,
+    # not `evi web`, so without this a previously-configured local model never
+    # relaunches — the app boots to a "llamacpp isn't running" banner. Blocking
+    # (waits for the model to load), so run it off the main thread; never fatal.
+    def _autostart_runtime() -> None:
+        try:
+            from evi.runtime import setup as _rt_setup
+
+            _rt_setup.ensure_running()
+        except Exception:  # noqa: BLE001
+            pass
+
+    import threading
+
+    threading.Thread(target=_autostart_runtime, daemon=True).start()
+
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 

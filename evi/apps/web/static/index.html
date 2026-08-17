@@ -1337,11 +1337,13 @@ function renderBackendBanner(st) {
     // Offer to switch to a running local backend as a fallback, if there is one.
     if (live.length) actions = live.map(function (c) { return bkBtn('Use ' + c.kind + ' instead', 'use', c.kind); }).join('');
   } else if (live.length) {
-    // State B — a non-configured backend is running; offer to switch to it.
+    // State B — the configured backend is down, but another is running. Offer
+    // eVi's own local AI as the recommended path AND a switch to what's up.
     html = '<b>⚠ eVi is set to ' + (cfg.backend || '?') + ' (' + (cfg.base_url || '?') +
-      '), which isn\'t running</b> — but ' + live.map(function (c) { return c.kind; }).join(', ') +
-      ' is. Point eVi at it:';
-    actions = live.map(function (c) { return bkBtn('Use ' + c.kind, 'use', c.kind); }).join('');
+      '), which isn\'t running.</b> Set up eVi\'s own local AI, or use ' +
+      live.map(function (c) { return c.kind; }).join(', ') + ' which is already running:';
+    actions = (st.runtime_supported ? bkBtn('⚡ Set up local AI', 'runtime', 'llamacpp') : '') +
+      live.map(function (c) { return bkBtn('Use ' + c.kind, 'use', c.kind); }).join('');
   } else {
     // State C — nothing reachable; first-run setup. Recommended path is the
     // managed llama.cpp runtime: eVi downloads a small CPU runtime + model and
@@ -1449,35 +1451,169 @@ async function autoSetup(st) {
   // 5. Re-check: now the *configured* backend is reachable, so the banner hides.
   await checkBackend();
 }
-// Managed llama.cpp: download a CPU runtime + a small model, start it, point eVi
-// at it — all server-side. Poll /api/runtime/status for progress.
-async function runtimeSetup() {
-  bkProgress('Setting up local AI…', 0);
-  await fetch('/api/runtime/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
-  const LABEL = { runtime: 'Downloading runtime', model: 'Downloading model', starting: 'Starting your model', done: 'Ready' };
-  for (var i = 0; i < 1800; i++) {  // up to ~30 min for a slow connection + big model
+// ---- first-run "Set up local AI" card (dialog) ---------------------
+// A guided card: pick a small model, download+start eVi's managed llama.cpp
+// runtime — OR locate an existing llama.cpp install and have eVi supervise it.
+// These live in the global (banner) scope alongside onBackendAction, so they
+// drive the shared dialog by its stable element ids rather than the IIFE-local
+// openDialog()/dlgContent (which aren't visible here).
+const RT_INPUT = 'width:100%;padding:7px 9px;background:var(--panel,#0f172a);' +
+  'color:var(--fg,#e2e8f0);border:1px solid var(--border,#334155);border-radius:6px';
+function _rtDlgContent() { return document.getElementById('dialog-content'); }
+function _rtOpenDialog(title, html) {
+  document.getElementById('dialog-title').textContent = title;
+  _rtDlgContent().innerHTML = html;
+  document.getElementById('dialog-overlay').classList.add('shown');
+}
+async function openLocalAISetup() {
+  _rtOpenDialog('Set up local AI', '<p class="sec-blurb">Loading…</p>');
+  let status = {}, cat = { models: [] };
+  try { status = await fetch('/api/runtime/status').then(r => r.json()); } catch (e) {}
+  try { cat = await fetch('/api/runtime/catalog').then(r => r.json()); } catch (e) {}
+  renderLocalAISetupCard(status, cat);
+}
+function renderLocalAISetupCard(status, cat) {
+  if (!status || !status.supported) {
+    _rtDlgContent().innerHTML = '<p class="sec-blurb">Local AI (llama.cpp) has no prebuilt for this platform. ' +
+      'You can use Ollama or LM Studio instead — see Settings → Model &amp; Backend.</p>';
+    return;
+  }
+  const models = ((cat && cat.models) || []).slice().sort((a, b) => (a.size_gb || 0) - (b.size_gb || 0));
+  // Default the FIRST-RUN pick to the small starter (fast, low-commitment) — the
+  // user can choose a bigger one from the list. If a model is already loaded, keep
+  // that selected. The hardware "recommended" one is just labelled, not forced.
+  const recId = (cat && cat.recommended_id) || '';
+  const defaultId = status.active_model_id || (cat && cat.starter_id) || recId || (models[0] && models[0].id);
+  const installed = !!status.runtime_installed;
+  const running = !!status.server_running;
+  const external = status.external_path || '';
+  const opts = models.map(function (m) {
+    const dot = m.installed ? '● ' : '';
+    const sz = m.size_gb ? (' · ' + m.size_gb + ' GB') : '';
+    const tag = m.id === recId ? ' — recommended for your PC' : '';
+    return '<option value="' + escapeHtml(m.id) + '"' + (m.id === defaultId ? ' selected' : '') + '>' +
+      dot + escapeHtml(m.name) + sz + tag + '</option>';
+  }).join('');
+  const intro = external
+    ? 'Using your llama.cpp install at <code>' + escapeHtml(external) + '</code>. Pick a model and start.'
+    : (installed
+        ? 'eVi’s local runtime is installed. Pick a model and start it — eVi downloads the model if it isn’t here yet.'
+        : 'eVi will download a small llama.cpp runtime (~40 MB) plus the model you pick, then run it locally. No account, no admin, fully private.');
+  const goLabel = running ? '↻ Switch model' : ((installed || external) ? '▶ Start local AI' : '⚡ Download & start');
+  _rtDlgContent().innerHTML =
+    '<p class="sec-blurb">' + intro + '</p>' +
+    '<div style="margin:10px 0"><label class="k" style="display:block;margin-bottom:4px">Model</label>' +
+    '<select id="rt-model" style="' + RT_INPUT + '">' + opts + '</select></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
+      '<button class="set-action-btn" id="rt-go" style="background:var(--accent);color:#fff;border-color:var(--accent)">' + goLabel + '</button>' +
+      '<button class="set-action-btn" id="rt-locate-toggle">Already have llama.cpp?</button>' +
+    '</div>' +
+    '<div id="rt-locate" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--border,#334155)"></div>' +
+    '<div id="rt-progress" style="margin-top:12px"></div>';
+  document.getElementById('rt-go').onclick = function () {
+    _runtimeApplyModel(document.getElementById('rt-model').value);
+  };
+  document.getElementById('rt-locate-toggle').onclick = function () {
+    const box = document.getElementById('rt-locate');
+    if (box.style.display === 'none') { box.style.display = 'block'; _renderLocateBox(box); }
+    else { box.style.display = 'none'; }
+  };
+}
+async function _renderLocateBox(box) {
+  const blurb = '<p class="sec-blurb">Point eVi at an existing <code>llama-server</code> binary — ' +
+    'eVi supervises it and skips the download (great if you already have a GPU build).</p>';
+  box.innerHTML = blurb + '<p class="sec-blurb" style="opacity:.7">Looking for installs…</p>';
+  let found = [];
+  try { found = ((await fetch('/api/runtime/detect').then(r => r.json())) || {}).found || []; } catch (e) {}
+  let html = blurb;
+  if (found.length) {
+    html += '<div style="margin:6px 0">' + found.map(function (p) {
+      return '<div style="display:flex;gap:8px;align-items:center;margin:4px 0">' +
+        '<code style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(p) + '</code>' +
+        '<button class="set-action-btn rt-found">Use</button></div>';
+    }).join('') + '</div>';
+  } else {
+    html += '<p class="sec-blurb" style="opacity:.7">None found automatically — enter a path below.</p>';
+  }
+  html += '<div style="display:flex;gap:8px;margin-top:6px">' +
+    '<input id="rt-path" style="flex:1;' + RT_INPUT + '" placeholder="Path to llama-server (or llama-server.exe)">' +
+    '<button class="set-action-btn" id="rt-path-use">Use</button></div>';
+  box.innerHTML = html;
+  box.querySelectorAll('.rt-found').forEach(function (b, i) {
+    b.onclick = function () { _runtimeLocateStart(found[i]); };  // closure, no attr escaping
+  });
+  document.getElementById('rt-path-use').onclick = function () {
+    const p = (document.getElementById('rt-path').value || '').trim();
+    if (p) _runtimeLocateStart(p);
+  };
+}
+function _rtBtnsDisabled(v) {
+  ['rt-go', 'rt-locate-toggle', 'rt-path-use'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.disabled = v;
+  });
+  document.querySelectorAll('.rt-found').forEach(function (b) { b.disabled = v; });
+}
+function _selectedRtModel() {
+  const el = document.getElementById('rt-model');
+  return el ? el.value : '';
+}
+async function _runtimeApplyModel(id) {
+  _rtBtnsDisabled(true);
+  await fetch('/api/runtime/model/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: id }) }).catch(function () {});
+  _pollRuntimeInto();
+}
+async function _runtimeLocateStart(path) {
+  const prog = document.getElementById('rt-progress');
+  _rtBtnsDisabled(true);
+  const res = await fetch('/api/runtime/locate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path, model_id: _selectedRtModel() }),
+  }).then(function (r) {
+    return r.ok ? r.json() : r.json().then(function (j) { throw new Error(j.detail || ('HTTP ' + r.status)); });
+  }).catch(function (e) {
+    if (prog) prog.innerHTML = '<p class="sec-blurb">⚠ ' + escapeHtml(String((e && e.message) || e)) + '</p>';
+    return null;
+  });
+  if (!res) { _rtBtnsDisabled(false); return; }
+  _pollRuntimeInto();
+}
+async function _pollRuntimeInto() {
+  const prog = document.getElementById('rt-progress');
+  const LABEL = { runtime: 'Preparing runtime', model: 'Downloading model', starting: 'Starting your model', done: 'Ready' };
+  for (var i = 0; i < 1800; i++) {  // up to ~30 min for a big model on a slow line
     await new Promise(function (r) { setTimeout(r, 1000); });
     var st = await fetch('/api/runtime/status').then(function (r) { return r.json(); }).catch(function () { return null; });
     if (!st) continue;
-    if (st.error) { bkProgress('Setup failed: ' + st.error + ' — you can try Ollama instead, then Recheck.'); return; }
-    bkProgress(st.message || LABEL[st.stage] || st.stage, typeof st.pct === 'number' ? st.pct : undefined);
-    if (st.done) { bkProgress('All set — eVi is ready to chat!', 100); break; }
+    // Stop if the dialog was closed (X / backdrop only hide it, so isConnected
+    // alone stays true — also check the overlay is still shown).
+    if (!prog || !prog.isConnected ||
+        !document.getElementById('dialog-overlay').classList.contains('shown')) return;
+    if (st.error) { prog.innerHTML = '<p class="sec-blurb">⚠ Setup failed: ' + escapeHtml(st.error) + '</p>'; _rtBtnsDisabled(false); return; }
+    var pct = (typeof st.pct === 'number') ? Math.max(0, Math.min(100, st.pct)) : null;
+    var bar = pct !== null ? '<div style="height:8px;background:#1f2937;border-radius:4px;overflow:hidden;margin-top:6px">' +
+      '<div style="height:100%;width:' + pct + '%;background:#22d3ee;transition:width .2s"></div></div>' : '';
+    prog.innerHTML = '<div>' + escapeHtml(st.message || LABEL[st.stage] || st.stage || 'Working…') + '</div>' + bar;
+    if (st.done) {
+      prog.innerHTML = '<p class="sec-blurb" style="color:#4caf50">✓ Local AI is ready — close this and start chatting.</p>';
+      await checkBackend();  // configured backend now reachable → banner hides
+      return;
+    }
   }
-  await checkBackend();  // configured backend now reachable → banner hides
+  _rtBtnsDisabled(false);
 }
 async function onBackendAction(e) {
   const btn = e.currentTarget;
   const act = btn.getAttribute('data-act');
   const kind = btn.getAttribute('data-kind') || 'ollama';
   if (act === 'recheck') { btn.textContent = 'Checking…'; await checkBackend(); return; }
+  // Local-AI setup opens a guided card (pick a model / locate an existing
+  // install), so don't disable the button or auto-recheck here.
+  if (act === 'runtime') { openLocalAISetup(); return; }
   btn.disabled = true;
   try {
     if (act === 'auto') {
       await autoSetup(backendStatus || {});
       return;  // autoSetup ends with checkBackend()
-    } else if (act === 'runtime') {
-      await runtimeSetup();  // ends with checkBackend()
-      return;
     } else if (act === 'start') {
       btn.textContent = 'Starting…';
       await fetch('/api/backend/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind }) });

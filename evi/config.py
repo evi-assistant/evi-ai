@@ -498,6 +498,16 @@ class DesktopSettings:
 
 
 @dataclass
+class RuntimeSettings:
+    """Managed llama.cpp runtime. Normally eVi downloads + supervises its own
+    `llama-server` under ~/.evi/runtime. Set `server_path` to point eVi at an
+    EXISTING `llama-server` binary instead (your own install / GPU build) — eVi
+    then supervises that one and skips the download (the "locate existing" path)."""
+
+    server_path: str = ""
+
+
+@dataclass
 class Config:
     llm: LLMSettings = field(default_factory=LLMSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
@@ -517,6 +527,7 @@ class Config:
     models: SpecialtyModels = field(default_factory=SpecialtyModels)
     notify: NotifySettings = field(default_factory=NotifySettings)
     desktop: DesktopSettings = field(default_factory=DesktopSettings)
+    runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -571,6 +582,7 @@ class Config:
             # write-only (the UI showed defaults) and any other section's save
             # rewrote asdict(self), clobbering saved desktop values.
             desktop=DesktopSettings(**data.get("desktop", {})),
+            runtime=RuntimeSettings(**data.get("runtime", {})),
         )
 
     def save(self) -> None:

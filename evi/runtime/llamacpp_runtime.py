@@ -94,6 +94,78 @@ def is_installed() -> bool:
     return server_path() is not None
 
 
+def validate_server_binary(path: str | Path) -> bool:
+    """True if `path` is really a `llama-server` (not just any executable). Used by
+    the 'locate existing install' flow to vet a user-provided binary before it's
+    saved. We check `--help` for the HTTP-server flags that `llama-server`
+    advertises but the OTHER llama.cpp binaries (llama-cli / -quantize) and
+    unrelated tools (python, ls, …) do not — so a mis-pointed path is rejected up
+    front instead of being persisted and only failing later at server start."""
+    p = Path(path)
+    if not p.is_file():
+        return False
+    try:
+        import subprocess
+
+        kwargs: dict = {"capture_output": True, "timeout": 15}
+        if platform.system().lower() == "windows":
+            kwargs["creationflags"] = 0x0800_0000  # CREATE_NO_WINDOW
+        r = subprocess.run([str(p), "--help"], **kwargs)  # noqa: S603
+        blob = ((r.stdout or b"") + (r.stderr or b"")).lower()
+        return b"--port" in blob and b"--host" in blob
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def detect_external() -> list[str]:
+    """Existing `llama-server` binaries already on this machine (PATH + common
+    install dirs), EXCLUDING eVi's own managed copy. Powers the one-click
+    'locate existing install' option — the user confirms one instead of typing a
+    path. Never runs the binary; just checks the filesystem (cheap)."""
+    import shutil
+
+    name = _server_name()
+    managed = str(runtime_root()).lower()
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(cand: Path) -> None:
+        try:
+            resolved = str(cand.resolve())
+        except Exception:  # noqa: BLE001
+            resolved = str(cand)
+        if resolved.lower().startswith(managed):
+            return  # that's eVi's own managed binary, not an "existing" one
+        key = resolved.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(str(cand))
+
+    on_path = shutil.which(name) or shutil.which("llama-server")
+    if on_path and Path(on_path).is_file():
+        add(Path(on_path))
+
+    home = Path.home()
+    for cand in (
+        home / "llama.cpp" / name,
+        home / "llama.cpp" / "build" / "bin" / name,
+        home / ".local" / "bin" / name,
+        Path("/usr/local/bin") / name,
+        Path("/opt/homebrew/bin") / name,
+        Path("/usr/bin") / name,
+        Path("C:/llama.cpp") / name,
+        Path("C:/Program Files/llama.cpp") / name,
+        Path("C:/tools/llama.cpp") / name,
+    ):
+        try:
+            if cand.is_file():
+                add(cand)
+        except Exception:  # noqa: BLE001
+            pass
+    return found
+
+
 def download_file(url: str, dest: Path, on_bytes: ProgressCB | None = None) -> Path:
     """Stream `url` to `dest` (stdlib only). Reports (downloaded, total) bytes.
 

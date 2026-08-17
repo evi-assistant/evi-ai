@@ -1086,6 +1086,16 @@ def create_app() -> FastAPI:
                 _status_cache["can_auto_install"] = False
         data["recommended_model"] = _status_cache["recommended_model"]
         data["can_auto_install_ollama"] = _status_cache["can_auto_install"]
+        # Managed-runtime awareness, so the first-run banner can offer local AI in
+        # EVERY not-ready state (not only when nothing at all is reachable).
+        try:
+            from evi.runtime import llamacpp_runtime as _rt
+
+            data["runtime_supported"] = _rt.supported()
+            data["runtime_installed"] = _rt.is_installed()
+        except Exception:  # noqa: BLE001
+            data["runtime_supported"] = False
+            data["runtime_installed"] = False
         with _status_lock:
             _status_cache["at"] = time.monotonic()
             _status_cache["data"] = data
@@ -1280,6 +1290,7 @@ def create_app() -> FastAPI:
         return {
             "models": [{**m, "installed": _cat.is_installed(m)} for m in _cat.catalog()],
             "recommended_id": _cat.recommended_id(),
+            "starter_id": _cat.starter().get("id"),
             "active_model_id": st.get("active_model_id"),
             "server_running": st.get("server_running"),
             "gpu_available": st.get("gpu_available"),
@@ -1320,6 +1331,33 @@ def create_app() -> FastAPI:
         GPU (with -ngl). Background; poll GET /api/runtime/status."""
         from evi.runtime import setup as _rt_setup
         return _rt_setup.enable_gpu(background=True)
+
+    @app.get("/api/runtime/detect")
+    def runtime_detect() -> dict[str, Any]:
+        """Existing `llama-server` binaries already on this machine (PATH + common
+        install dirs) for the 'locate existing install' option. Filesystem-only."""
+        from evi.runtime import llamacpp_runtime as _rt
+
+        return {"found": _rt.detect_external()}
+
+    @app.post("/api/runtime/locate")
+    def runtime_locate(req: dict[str, Any]) -> dict[str, Any]:
+        """Use an EXISTING llama-server binary (skip the download): validate the
+        path, save it, then start on a model. Background; poll GET
+        /api/runtime/status. 400 if the path isn't a runnable llama-server."""
+        from evi.runtime import setup as _rt_setup
+
+        path = str((req or {}).get("path", "")).strip()
+        model_id = str((req or {}).get("model_id", "")).strip() or None
+        if not path:
+            raise HTTPException(400, "expected {path}")
+        st = _rt_setup.locate(path, model_id=model_id, background=True)
+        # locate() sets this exact prefix ONLY when the binary fails validation (it
+        # returns before kicking the install). Match the prefix precisely so a
+        # background/runtime error is never mistaken for a validation failure.
+        if str(st.get("error", "")).startswith("Not a runnable llama-server"):
+            raise HTTPException(400, st["error"])
+        return st
 
     @app.post("/api/backend/open-download")
     def backend_open_download(req: BackendActionRequest) -> dict[str, object]:
