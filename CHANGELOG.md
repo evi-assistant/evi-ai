@@ -5,6 +5,29 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.51] — 2026-08-25
+
+### Added
+- **Message eVi from your phone (Telegram).** Create a bot with @BotFather, paste
+  the token into Settings → Channels, and eVi answers from your pocket — no mobile
+  app, no public URL, no port forwarding (it long-polls, so nothing is exposed).
+  **Off until you turn it on**, and built to stay safe once it is:
+  - An unknown sender gets a pairing code and **no agent turn runs at all** until
+    you approve them, from this machine, in Settings → Channels or with
+    `evi channel approve <code>`. Finding the bot is not the same as being allowed
+    to use it.
+  - Approved senders get an explicitly chosen toolset (memory + skills by default),
+    **not** yours — enabling shell locally never widens what the bot can do.
+  - Permission prompts are denied rather than left waiting, since nobody is at the
+    desk to answer them.
+
+  New: `evi channel status | approve | revoke | serve`.
+- **Bring your history with you.** `evi sessions import` reads the conversations
+  you already had in Claude Code and Codex — eVi drives those CLIs, so it knows
+  where they keep their logs — and writes them into eVi's own store, where they
+  become searchable, resumable and exportable. Read-only with respect to the
+  source, and it prints what it *would* import until you pass `--write`.
+
 ## [1.0.50] — 2026-08-25
 
 ### Added

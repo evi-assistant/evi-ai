@@ -3171,6 +3171,7 @@ resetBtn.addEventListener('click', async () => {
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
     { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
     { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
+    { id:'channels', title:'Channels', blurb:'Message eVi from your phone via Telegram. Off until you turn it on.', custom:'channels' },
     { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
     { id:'mcp', title:'MCP', blurb:'External MCP servers — extra tools loaded from ~/.evi/mcp.json.', custom:'mcp' },
     { id:'hooks', title:'Hooks', blurb:'Run your own commands or webhooks on tool calls and lifecycle events.', custom:'hooks' },
@@ -3218,7 +3219,7 @@ resetBtn.addEventListener('click', async () => {
   const NAV_GROUPS = [
     ['Assistant', ['model', 'tools', 'editing', 'sampling', 'context', 'specialty', 'multiagent']],
     ['This computer', ['permissions', 'guardrails', 'voice', 'notifications', 'desktop', 'server']],
-    ['Extend', ['integrations', 'plugins', 'mcp', 'hooks', 'automation', 'peers', 'ultracode']],
+    ['Extend', ['integrations', 'channels', 'plugins', 'mcp', 'hooks', 'automation', 'peers', 'ultracode']],
     ['App', ['general', 'statusline', 'stats', 'evals', 'about']],
   ];
   function renderNav() {
@@ -3483,6 +3484,7 @@ resetBtn.addEventListener('click', async () => {
       contentEl.appendChild(lg);
     }
     renderSectionAids(sec);
+    if (sec.custom === 'channels') return renderChannels();
     if (sec.custom === 'about') return renderAbout();
     if (sec.custom === 'guardrails') return renderGuardrails();
     if (sec.custom === 'plugins') return renderPlugins();
@@ -4979,6 +4981,98 @@ resetBtn.addEventListener('click', async () => {
         ans.appendChild(document.createTextNode(d.answer || ''));
       } catch (e) { status('Error: ' + e, false); }
       finally { btn.disabled = false; }
+    };
+  }
+
+  // ---- Channels (Telegram) -------------------------------------------
+  // The pairing queue lives here rather than only in the CLI: someone who gets a
+  // code on their phone shouldn't need a terminal to be let in. Approving is
+  // still a local-machine action — this UI IS the local machine.
+  async function renderChannels() {
+    const box = document.createElement('div');
+    box.innerHTML = '<p class="sec-blurb">Loading…</p>';
+    contentEl.appendChild(box);
+    let st = null;
+    try { st = await fetch('/api/channels/telegram').then(r => r.json()); } catch (e) {}
+    if (!st) { box.innerHTML = '<p class="sec-blurb">Couldn\'t read channel status.</p>'; return; }
+
+    const cfgCh = (cfg && cfg.channels) || {};
+    const tokenSet = st.token_set;
+    const state = !st.enabled ? ['off', 'var(--dim)']
+      : st.running ? ['running', 'var(--user)']
+      : (tokenSet ? ['not running', 'var(--err)'] : ['needs a bot token', 'var(--tool)']);
+
+    box.innerHTML =
+      '<div class="set-about-row"><span class="k">Telegram</span>' +
+        '<span style="color:' + state[1] + '">' + state[0] + '</span></div>' +
+      (st.last_error ? '<div class="sec-blurb" style="color:var(--err)">' + escapeHtml(st.last_error) + '</div>' : '') +
+      '<p class="sec-blurb" style="margin-top:10px">Create a bot with <b>@BotFather</b> on Telegram, paste its token below, ' +
+      'then message your bot. Unknown senders get a pairing code and are ignored until you approve them here.</p>' +
+      '<div style="margin:12px 0"><label class="k" style="display:block;margin-bottom:4px">Bot token</label>' +
+      '<input id="ch-token" type="password" style="' + RT_INPUT + '" placeholder="' +
+        (tokenSet ? '•••••••• (saved)' : '123456:ABC-DEF…') + '"></div>' +
+      '<label style="display:flex;gap:8px;align-items:center;font-size:13px">' +
+      '<input type="checkbox" id="ch-enabled"' + (cfgCh.telegram_enabled ? ' checked' : '') + '> Enable the Telegram channel</label>' +
+      '<p class="sec-blurb" style="margin-top:8px">Approved senders can use: <b>' +
+        escapeHtml((st.tools || []).join(', ') || 'nothing') + '</b>. ' +
+        'This is deliberately narrower than your own toolset — anyone you pair with can use these.</p>' +
+      '<div style="margin-top:10px"><button class="set-action-btn" id="ch-save">Save &amp; apply</button></div>' +
+      '<div id="ch-lists" style="margin-top:16px"></div>';
+
+    const lists = box.querySelector('#ch-lists');
+    const drawLists = function (s) {
+      lists.innerHTML =
+        (s.pending && s.pending.length
+          ? '<div class="k" style="margin-bottom:5px">Waiting for approval</div>' +
+            s.pending.map(function (p) {
+              return '<div class="set-about-row"><span>' + escapeHtml(p.name || '(no name)') +
+                ' <code>' + escapeHtml(p.code) + '</code></span>' +
+                '<button class="set-action-btn ch-ok" data-code="' + escapeAttr(p.code) + '">Approve</button></div>';
+            }).join('')
+          : '') +
+        (s.paired && s.paired.length
+          ? '<div class="k" style="margin:12px 0 5px">Paired</div>' +
+            s.paired.map(function (p) {
+              return '<div class="set-about-row"><span>' + escapeHtml(p.name || p.user_id) + '</span>' +
+                '<button class="set-action-btn ch-no" data-uid="' + escapeAttr(p.user_id) + '">Revoke</button></div>';
+            }).join('')
+          : '<p class="sec-blurb" style="margin-top:10px">Nobody is paired yet.</p>');
+      lists.querySelectorAll('.ch-ok').forEach(function (b) {
+        b.onclick = async function () {
+          await fetch('/api/channels/telegram/approve', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: b.getAttribute('data-code') }) }).catch(function () {});
+          drawLists(await fetch('/api/channels/telegram').then(r => r.json()));
+        };
+      });
+      lists.querySelectorAll('.ch-no').forEach(function (b) {
+        b.onclick = async function () {
+          await fetch('/api/channels/telegram/revoke', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: b.getAttribute('data-uid') }) }).catch(function () {});
+          drawLists(await fetch('/api/channels/telegram').then(r => r.json()));
+        };
+      });
+    };
+    drawLists(st);
+
+    box.querySelector('#ch-save').onclick = async function (e) {
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      const patch = { channels: { telegram_enabled: box.querySelector('#ch-enabled').checked } };
+      const tok = box.querySelector('#ch-token').value.trim();
+      if (tok) patch.channels.telegram_token = tok;      // blank = keep the saved one
+      try {
+        await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                     body: JSON.stringify(patch) });
+        const s2 = await fetch('/api/channels/telegram/restart', { method: 'POST' }).then(r => r.json());
+        cfg.channels = Object.assign({}, cfg.channels, patch.channels);
+        setTimeout(renderSection, 0);
+        drawLists(s2);
+      } catch (err) {
+        btn.textContent = 'Save & apply';
+      }
+      btn.disabled = false;
     };
   }
 

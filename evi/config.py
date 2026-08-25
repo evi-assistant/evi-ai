@@ -498,6 +498,25 @@ class DesktopSettings:
 
 
 @dataclass
+class ChannelSettings:
+    """Inbound chat channels — reach eVi from a phone without a mobile app.
+
+    Off by default and deliberately narrow: a channel drives a tool-capable
+    agent, so an unknown sender is gated by a pairing code (approved locally with
+    `evi channel approve`) and an approved one runs with `telegram_tools`, NOT
+    with whatever the desktop user has enabled. Keep `shell`/`fs`/`computer` out
+    of that list unless you fully trust everyone you pair with.
+    """
+
+    telegram_enabled: bool = False
+    telegram_token: str = ""
+    # Tool CATEGORIES an approved sender may use. Chosen explicitly rather than
+    # inherited, so enabling shell locally never widens the bot.
+    telegram_tools: list[str] = field(default_factory=lambda: ["memory", "skills"])
+    telegram_max_turns: int = 6
+
+
+@dataclass
 class RuntimeSettings:
     """Managed llama.cpp runtime. Normally eVi downloads + supervises its own
     `llama-server` under ~/.evi/runtime. Set `server_path` to point eVi at an
@@ -528,6 +547,7 @@ class Config:
     notify: NotifySettings = field(default_factory=NotifySettings)
     desktop: DesktopSettings = field(default_factory=DesktopSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    channels: ChannelSettings = field(default_factory=ChannelSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -583,6 +603,7 @@ class Config:
             # rewrote asdict(self), clobbering saved desktop values.
             desktop=DesktopSettings(**data.get("desktop", {})),
             runtime=RuntimeSettings(**data.get("runtime", {})),
+            channels=ChannelSettings(**data.get("channels", {})),
         )
 
     def save(self) -> None:

@@ -3463,6 +3463,84 @@ def eval_run(
 backend_app = typer.Typer(help="Model backends — register providers (local + online) to pick from.")
 app.add_typer(backend_app, name="backend")
 
+channel_app = typer.Typer(
+    help="Chat channels — reach eVi from your phone (Telegram). Off by default."
+)
+app.add_typer(channel_app, name="channel")
+
+
+@channel_app.command("status")
+def channel_status_cmd() -> None:
+    """Show whether the channel is on, who's paired, and who's waiting."""
+    from evi.channels import telegram as tg
+
+    st = tg.status()
+    on = "[green]on[/green]" if st["enabled"] else "[dim]off[/dim]"
+    run = "[green]running[/green]" if st["running"] else "[dim]not running[/dim]"
+    console.print(f"Telegram: {on} · {run} · token {'set' if st['token_set'] else '[red]not set[/red]'}")
+    console.print(f"Tools for approved senders: {', '.join(st['tools']) or '(none)'}")
+    if st["last_error"]:
+        console.print(f"[red]Last error:[/red] {st['last_error']}")
+    if st["paired"]:
+        console.print("\n[bold]Paired[/bold]")
+        for p in st["paired"]:
+            console.print(f"  {p['user_id']}  {p.get('name', '')}")
+    else:
+        console.print("\n[dim]Nobody paired yet.[/dim]")
+    if st["pending"]:
+        console.print("\n[bold]Waiting for approval[/bold]")
+        for p in st["pending"]:
+            console.print(f"  [yellow]{p['code']}[/yellow]  {p.get('name', '')} ({p['user_id']})")
+        console.print("\nApprove with: [cyan]evi channel approve <code>[/cyan]")
+
+
+@channel_app.command("approve")
+def channel_approve_cmd(code: str) -> None:
+    """Approve a pairing code so that sender may talk to eVi."""
+    from evi.channels import pairing
+
+    entry = pairing.approve("telegram", code)
+    if entry is None:
+        console.print("[red]Unknown or expired code.[/red] Codes last one hour; "
+                      "ask them to message the bot again for a fresh one.")
+        raise typer.Exit(1)
+    console.print(f"[green]Approved[/green] {entry.get('name') or entry['user_id']}.")
+
+
+@channel_app.command("revoke")
+def channel_revoke_cmd(user_id: str) -> None:
+    """Remove a paired sender's access."""
+    from evi.channels import pairing
+
+    if pairing.revoke("telegram", user_id):
+        console.print(f"[green]Revoked[/green] {user_id}.")
+    else:
+        console.print(f"[yellow]{user_id} wasn't paired.[/yellow]")
+
+
+@channel_app.command("serve")
+def channel_serve_cmd() -> None:
+    """Run the Telegram channel in the foreground (Ctrl-C to stop).
+
+    `evi web` and the desktop app already start it when it's enabled; this is for
+    running the channel on its own.
+    """
+    from evi.channels import telegram as tg
+
+    ch = tg.start_if_configured()
+    if ch is None:
+        console.print("[yellow]Telegram channel is off or has no token.[/yellow]")
+        console.print("Set it up in Settings → Channels, or with "
+                      "[cyan]evi config set channels.telegram_token <token>[/cyan].")
+        raise typer.Exit(1)
+    console.print("[green]Telegram channel running.[/green] Ctrl-C to stop.")
+    try:
+        tg.wait_for_stop()
+    finally:
+        tg.stop_active()
+        console.print("Stopped.")
+
+
 runtime_app = typer.Typer(
     help="Managed local runtime — download + run a llama.cpp model, no external install."
 )
@@ -6084,6 +6162,59 @@ def finetune_export(
 
 sessions_app = typer.Typer(help="Browse and resume past chat sessions.")
 app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("import")
+def sessions_import(
+    source: str = typer.Option("", help="claude-code | codex. Default: both."),
+    limit: int = typer.Option(0, help="Import only the newest N (0 = all listed)."),
+    min_turns: int = typer.Option(2, help="Skip sessions with fewer user turns than this."),
+    dry_run: bool = typer.Option(True, "--dry-run/--write",
+                                 help="List what would be imported; --write to do it."),
+) -> None:
+    """Import past conversations from the CLI agents eVi already drives.
+
+    Reads Claude Code and Codex session logs and writes them into eVi's own
+    transcript store, so they become searchable, resumable and exportable here.
+    Read-only with respect to the source — nothing is modified or deleted there.
+    """
+    from evi import sessionimport as si
+
+    if source and source not in si.SOURCES:
+        console.print(f"[red]Unknown source {source!r}.[/red] Use one of: {', '.join(si.SOURCES)}")
+        raise typer.Exit(1)
+    console.print("[cyan]Scanning[/cyan] for importable sessions…")
+    found = [s for s in si.discover(source) if s.turns >= min_turns]
+    if limit > 0:
+        found = found[:limit]
+    if not found:
+        console.print("[yellow]Nothing to import.[/yellow] "
+                      f"Looked in {si.CLAUDE_ROOT} and {si.CODEX_ROOT}.")
+        return
+
+    from evi.sessions import fmt_when
+
+    for s in found[:40]:
+        console.print(
+            f"  [cyan]{s.source:<11}[/cyan] [dim]{fmt_when(s.started)} · "
+            f"{s.turns} turns · {len(s.messages)} msgs[/dim] {(s.label or '')[:44]}"
+        )
+    if len(found) > 40:
+        console.print(f"  [dim]…and {len(found) - 40} more[/dim]")
+
+    if dry_run:
+        console.print(f"\n[bold]{len(found)}[/bold] session(s) would be imported. "
+                      "Re-run with [cyan]--write[/cyan] to import them.")
+        return
+    done = 0
+    for s in found:
+        try:
+            si.import_session(s)
+            done += 1
+        except Exception as exc:  # noqa: BLE001 — one bad file shouldn't stop the run
+            console.print(f"[yellow]skipped[/yellow] {s.path.name}: {exc}")
+    console.print(f"[green]Imported {done}[/green] session(s). "
+                  "See them with [cyan]evi sessions list[/cyan].")
 
 
 @sessions_app.command("list")

@@ -351,6 +351,9 @@ _SECRET_FIELDS: dict[str, frozenset[str]] = {
     "llm": frozenset({"api_key"}),
     "web": frozenset({"auth_token"}),
     "telemetry": frozenset({"dsn"}),
+    # A bot token is a bearer credential for the bot — anyone holding it can
+    # impersonate it, so it must never be echoed back by /api/config.
+    "channels": frozenset({"telegram_token"}),
 }
 _SECRET_SENTINEL = "********"
 # Sections that can be hot-applied to a live chat. Everything persists to
@@ -873,9 +876,24 @@ def create_app() -> FastAPI:
             logger.warning("scheduler failed to start: %s", exc)
             scheduler_obj = None
 
+        # Inbound chat channels (Telegram). Off unless enabled AND given a token,
+        # so the default install starts no poller and opens no inbound path.
+        try:
+            from evi.channels import telegram as _tg
+
+            _tg.start_if_configured(cfg)
+        except Exception as exc:  # noqa: BLE001 — a channel must never block boot
+            logger.warning("channel start failed: %s", exc)
+
         try:
             yield
         finally:
+            try:
+                from evi.channels import telegram as _tg
+
+                _tg.stop_active()
+            except Exception:  # noqa: BLE001
+                pass
             if scheduler_obj is not None:
                 scheduler_obj.stop()
             if mcp_manager is not None:
@@ -1504,6 +1522,45 @@ def create_app() -> FastAPI:
         GPU (with -ngl). Background; poll GET /api/runtime/status."""
         from evi.runtime import setup as _rt_setup
         return _rt_setup.enable_gpu(background=True)
+
+    @app.get("/api/channels/telegram")
+    def channels_telegram_status() -> dict[str, Any]:
+        """Channel state + who is paired or waiting. Never returns the token."""
+        from evi.channels import telegram as _tg
+
+        return _tg.status()
+
+    @app.post("/api/channels/telegram/approve")
+    def channels_telegram_approve(req: dict[str, Any]) -> dict[str, Any]:
+        """Approve a pairing code. Reachable only from this machine's UI, which is
+        the property that makes pairing meaningful — see evi/channels/pairing.py."""
+        from evi.channels import pairing as _p
+
+        code = str((req or {}).get("code", "")).strip()
+        if not code:
+            raise HTTPException(400, "expected {code}")
+        entry = _p.approve("telegram", code)
+        if entry is None:
+            raise HTTPException(404, "Unknown or expired code — codes last one hour.")
+        return {"ok": True, "paired": entry}
+
+    @app.post("/api/channels/telegram/revoke")
+    def channels_telegram_revoke(req: dict[str, Any]) -> dict[str, Any]:
+        from evi.channels import pairing as _p
+
+        uid = str((req or {}).get("user_id", "")).strip()
+        if not uid:
+            raise HTTPException(400, "expected {user_id}")
+        return {"ok": _p.revoke("telegram", uid)}
+
+    @app.post("/api/channels/telegram/restart")
+    def channels_telegram_restart() -> dict[str, Any]:
+        """Apply a token/enable change without restarting eVi."""
+        from evi.channels import telegram as _tg
+
+        _tg.stop_active()
+        _tg.start_if_configured(Config.load())
+        return _tg.status()
 
     @app.get("/api/runtime/plan")
     def runtime_plan(model_id: str = "") -> dict[str, Any]:
