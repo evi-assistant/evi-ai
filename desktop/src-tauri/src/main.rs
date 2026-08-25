@@ -213,9 +213,15 @@ fn wait_for_health_url(base: &str, timeout: Duration) -> bool {
     let trimmed = base.trim_end_matches('/');
     let url = format!("{}/api/health", trimmed);
     let deadline = Instant::now() + timeout;
+    // ureq 3 moved per-request timeouts onto the agent's config.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_millis(500)))
+        .build()
+        .into();
     while Instant::now() < deadline {
-        if let Ok(resp) = ureq::get(&url).timeout(Duration::from_millis(500)).call() {
-            if resp.status() >= 200 && resp.status() < 300 {
+        if let Ok(resp) = agent.get(&url).call() {
+            let code = resp.status().as_u16();
+            if (200..300).contains(&code) {
                 return true;
             }
         }

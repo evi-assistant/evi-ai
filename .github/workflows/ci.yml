@@ -48,3 +48,41 @@ jobs:
 
       - name: Pytest
         run: python -m pytest -q --timeout=30
+
+  rust:
+    # The Tauri desktop shell was NOT covered by CI: every cargo dependency PR
+    # showed "all checks green" while nothing ever compiled the Rust. A breaking
+    # bump (e.g. ureq 2 -> 3, which removed RequestBuilder::timeout) only
+    # surfaced during a release build — the worst place to find it. This job
+    # compiles the shell and runs its unit tests on every PR.
+    name: cargo check + test (desktop shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # Tauri's Linux build needs GTK/WebKit headers even for `cargo check`.
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
+
+      - name: Cargo check
+        working-directory: desktop/src-tauri
+        run: cargo check --all-targets
+
+      - name: Cargo test
+        working-directory: desktop/src-tauri
+        run: cargo test

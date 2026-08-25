@@ -145,15 +145,22 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Blocking GET returning the response body as bytes (ureq follows redirects).
+/// The explicit limit matters: ureq 3's body readers cap at a small default, and
+/// the sidecar zip is tens of MB — without it a valid download would truncate.
 fn http_get_bytes(url: &str) -> Option<Vec<u8>> {
-    let resp = ureq::get(url).call().ok()?;
+    let mut resp = ureq::get(url).call().ok()?;
     let mut buf = Vec::new();
-    resp.into_reader().take(512 * 1024 * 1024).read_to_end(&mut buf).ok()?;
+    resp.body_mut()
+        .as_reader()
+        .take(512 * 1024 * 1024)
+        .read_to_end(&mut buf)
+        .ok()?;
     Some(buf)
 }
 
 fn http_get_string(url: &str) -> Option<String> {
-    ureq::get(url).call().ok()?.into_string().ok()
+    let mut resp = ureq::get(url).call().ok()?;
+    resp.body_mut().read_to_string().ok()
 }
 
 /// Extract a zip (the `evi-server` onedir at its root) into `dest`.
