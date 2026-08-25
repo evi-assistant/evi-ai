@@ -126,10 +126,16 @@ class MCPManager:
         async def _open_streams(stack: AsyncExitStack):
             """Open the right client transport and return (read, write)."""
             if transport == "http":
-                from mcp.client.streamable_http import streamablehttp_client
+                # mcp 2.0 renamed streamablehttp_client -> streamable_http_client.
+                try:
+                    from mcp.client.streamable_http import streamable_http_client
+                except ImportError:  # mcp 1.x
+                    from mcp.client.streamable_http import (  # type: ignore[no-redef]
+                        streamablehttp_client as streamable_http_client,
+                    )
 
                 ctx = await stack.enter_async_context(
-                    streamablehttp_client(server.url, headers=server.headers or None)
+                    streamable_http_client(server.url, headers=server.headers or None)
                 )
                 return ctx[0], ctx[1]  # (read, write, [get_session_id]) — SDK-version-safe
             if transport == "sse":
@@ -199,8 +205,11 @@ class MCPManager:
             result = bridge.run(_call(), timeout=timeout)
             return _truncate(_flatten_content(result), cap)
 
+        # mcp 2.0 renamed the field inputSchema -> input_schema (the wire key
+        # stays "inputSchema" via the pydantic alias). Read whichever exists.
         parameters = (
-            getattr(mcp_tool, "inputSchema", None)
+            getattr(mcp_tool, "input_schema", None)
+            or getattr(mcp_tool, "inputSchema", None)
             or {"type": "object", "properties": {}}
         )
 

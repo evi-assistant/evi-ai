@@ -198,25 +198,26 @@ def build_server(
     specs = mcp_tool_specs(tools)
     server: Server = Server("evi", version=__version__)
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
+    # --- version-independent handler bodies ------------------------------
+    # `types.Tool(**s)` accepts the "inputSchema" key on both mcp 1.x (the
+    # field) and 2.0 (the pydantic alias for the renamed `input_schema`), and
+    # the wire key stays "inputSchema" either way, so specs are unchanged.
+    def _tool_list() -> list[types.Tool]:
         return [types.Tool(**s) for s in specs]
 
-    @server.call_tool()
-    async def _call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
-        text = await anyio.to_thread.run_sync(lambda: dispatch(by_name, name, arguments))
-        return [types.TextContent(type="text", text=text)]
-
-    @server.list_resources()
-    async def _list_resources() -> list[types.Resource]:
+    def _resource_list() -> list[types.Resource]:
         return [types.Resource(**s) for s in memory_resource_specs()]
 
-    @server.read_resource()
-    async def _read_resource(uri) -> str:
-        return await anyio.to_thread.run_sync(lambda: read_memory_resource(str(uri)))
+    def _prompt_message(body: str) -> "types.GetPromptResult":
+        return types.GetPromptResult(
+            messages=[
+                types.PromptMessage(
+                    role="user", content=types.TextContent(type="text", text=body)
+                )
+            ]
+        )
 
-    @server.list_prompts()
-    async def _list_prompts() -> list[types.Prompt]:
+    def _prompt_list() -> list[types.Prompt]:
         return [
             types.Prompt(
                 name=s["name"],
@@ -226,18 +227,79 @@ def build_server(
             for s in command_prompt_specs()
         ]
 
-    @server.get_prompt()
-    async def _get_prompt(name: str, arguments: dict | None) -> types.GetPromptResult:
-        body = await anyio.to_thread.run_sync(lambda: expand_command_prompt(name, arguments))
-        if body is None:
-            raise ValueError(f"unknown prompt {name!r}")
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="user", content=types.TextContent(type="text", text=body)
-                )
-            ]
-        )
+    # mcp 1.x registers handlers with per-method decorators; 2.0 removed them
+    # in favour of the low-level Server.add_request_handler(method, params, fn).
+    # Both drive the same handler bodies above.
+    if hasattr(server, "list_tools"):  # mcp 1.x
+        @server.list_tools()
+        async def _lt() -> list[types.Tool]:
+            return _tool_list()
+
+        @server.call_tool()
+        async def _ct(name: str, arguments: dict | None) -> list[types.TextContent]:
+            text = await anyio.to_thread.run_sync(lambda: dispatch(by_name, name, arguments))
+            return [types.TextContent(type="text", text=text)]
+
+        @server.list_resources()
+        async def _lr() -> list[types.Resource]:
+            return _resource_list()
+
+        @server.read_resource()
+        async def _rr(uri) -> str:
+            return await anyio.to_thread.run_sync(lambda: read_memory_resource(str(uri)))
+
+        @server.list_prompts()
+        async def _lp() -> list[types.Prompt]:
+            return _prompt_list()
+
+        @server.get_prompt()
+        async def _gp(name: str, arguments: dict | None) -> types.GetPromptResult:
+            body = await anyio.to_thread.run_sync(
+                lambda: expand_command_prompt(name, arguments)
+            )
+            if body is None:
+                raise ValueError(f"unknown prompt {name!r}")
+            return _prompt_message(body)
+    else:  # mcp >= 2.0 — raw request handlers, (context, params) -> Result
+        page = types.PaginatedRequestParams
+
+        async def _lt(_ctx, _params) -> types.ListToolsResult:
+            return types.ListToolsResult(tools=_tool_list())
+
+        async def _ct(_ctx, params) -> types.CallToolResult:
+            text = await anyio.to_thread.run_sync(
+                lambda: dispatch(by_name, params.name, params.arguments)
+            )
+            return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+        async def _lr(_ctx, _params) -> types.ListResourcesResult:
+            return types.ListResourcesResult(resources=_resource_list())
+
+        async def _rr(_ctx, params) -> types.ReadResourceResult:
+            text = await anyio.to_thread.run_sync(
+                lambda: read_memory_resource(str(params.uri))
+            )
+            return types.ReadResourceResult(
+                contents=[types.TextResourceContents(uri=params.uri, text=text)]
+            )
+
+        async def _lp(_ctx, _params) -> types.ListPromptsResult:
+            return types.ListPromptsResult(prompts=_prompt_list())
+
+        async def _gp(_ctx, params) -> types.GetPromptResult:
+            body = await anyio.to_thread.run_sync(
+                lambda: expand_command_prompt(params.name, params.arguments)
+            )
+            if body is None:
+                raise ValueError(f"unknown prompt {params.name!r}")
+            return _prompt_message(body)
+
+        server.add_request_handler("tools/list", page, _lt)
+        server.add_request_handler("tools/call", types.CallToolRequestParams, _ct)
+        server.add_request_handler("resources/list", page, _lr)
+        server.add_request_handler("resources/read", types.ReadResourceRequestParams, _rr)
+        server.add_request_handler("prompts/list", page, _lp)
+        server.add_request_handler("prompts/get", types.GetPromptRequestParams, _gp)
 
     return server
 
