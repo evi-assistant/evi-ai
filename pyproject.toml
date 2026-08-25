@@ -68,13 +68,20 @@ web = [
     "python-multipart>=0.0.9",
 ]
 mcp = [
-    # eVi's MCP layer (evi/mcp/manager.py + publish.py) is DUAL-COMPATIBLE with
-    # both the 1.x and 2.0 SDK lines — 2.0.0 (2026-07-28) was a breaking major
-    # (`Tool.inputSchema` -> `input_schema`, `streamablehttp_client` renamed,
-    # the low-level Server decorators replaced by add_request_handler). Both
-    # paths are covered by the mcp tests and an end-to-end round-trip. `<3`
-    # bounds the next unknown major; revisit dual-compat when adopting 3.0.
-    "mcp>=1.0,<3",
+    # eVi's MCP layer (evi/mcp/manager.py + publish.py) is dual-compatible with
+    # the 1.x and 2.0 SDK lines — 2.0.0 (2026-07-28) was a breaking major
+    # (`Tool.inputSchema` -> `input_schema`, `streamablehttp_client` renamed).
+    # VERIFIED by running the mcp tests against both: mcp 1.28.1 and mcp 2.0.0
+    # are green.
+    #
+    # The ceiling is <2.1, NOT <3: mcp 2.1.0 moved the API again — the low-level
+    # `Server` decorators (`@server.list_tools()` etc.) were replaced outright by
+    # `add_request_handler`, and `Tool.inputSchema` is gone rather than aliased.
+    # eVi fails 4 mcp tests on 2.1.0, so allowing it would let a fresh
+    # `pip install evi-assistant[mcp]` silently break MCP for users — exactly the
+    # trap the original <2 pin existed to prevent. Raise this only with a real
+    # 2.1 migration (publish.py -> add_request_handler) behind passing tests.
+    "mcp>=1.0,<2.1",
 ]
 scheduler = [
     "apscheduler>=3.10",
