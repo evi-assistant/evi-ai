@@ -5,6 +5,39 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.49] — 2026-08-25
+
+### Added
+- **First run offers what your machine can already do.** eVi ships six backends that
+  drive a CLI you may already have — Claude Code, Codex, Gemini, Amp, Qwen, Copilot —
+  but first run never looked for them, so a machine that could answer immediately was
+  offered a model download instead. Setup now probes those CLIs, API keys already in
+  the environment, and running local servers, then ranks the options by how fast they
+  reach a first reply: already installed, then already running, then a key, then a
+  download. Local AI is still there and still needs no account — it's just no longer
+  the only thing on offer.
+- **Setup gets the screen it needs.** When nothing can answer yet, first run is a
+  proper screen rather than an amber strip above a chat window that looks ready but
+  isn't.
+
+### Changed
+- **"Connected" now means it actually answered.** Switching backends previously
+  checked that a port was open, saved the config, and cleared the warning — after
+  which the first message could still fail. eVi now sends a real one-token
+  completion, and a second with a tool attached, and reports both: *Chat ✓ · Tools ✓*.
+  If it doesn't answer, **the switch is rolled back** and your previous backend is
+  left exactly as it was. Found immediately in testing: an installed Claude Code whose
+  login had expired, which the old check would have reported as working.
+
+### Security
+- **Reject requests that name a hostname eVi doesn't serve.** With no access token
+  configured — the default on desktop — the loopback API was reachable by any web
+  page via DNS rebinding, and the filesystem and shell tools sit behind it. Browsers
+  cannot forge the `Host` header, so requests arriving for some other hostname are
+  now refused (`EVI_ALLOW_ANY_HOST=1` to override). Scoped to the unauthenticated
+  case: when a token or users are configured that remains the control, so federation
+  peers, LAN and container deployments are unaffected.
+
 ## [1.0.48] — 2026-08-16
 
 ### Added

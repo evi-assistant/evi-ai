@@ -1315,19 +1315,138 @@ function bkBtn(label, act, kind) {
     '" style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px">' +
     label + '</button>';
 }
+// CLI-agent backends have no HTTP port — "not reachable" means their CLI isn't
+// installed / on PATH, not that a server is down. Kind -> CLI binary.
+const CLI_AGENT_KINDS = { claude_agent:'claude', codex:'codex', gemini:'gemini', amp:'amp', qwen:'qwen', copilot:'copilot' };
+
+// ---- first-run setup screen ------------------------------------------
+// Owns the window when nothing can answer yet. Renders the server-ranked
+// `suggestions` ladder (already-installed CLI > running server > env key >
+// download), so a machine that can answer right now never sees a download
+// prompt first.
+function hideSetupScreen() {
+  const s = document.getElementById('setup-screen');
+  if (s) s.remove();
+}
+function showSetupScreen(st) {
+  if (document.getElementById('setup-screen')) return;  // don't rebuild over progress
+  const sug = (st && st.suggestions) || [];
+  const el = document.createElement('div');
+  el.id = 'setup-screen';
+  // Fixed to the viewport, below the settings/dialog overlays (1500/2000) so
+  // Settings still opens over it, but above the chat UI it replaces.
+  el.style.cssText = 'position:fixed;inset:0;z-index:1200;background:var(--bg,#0f172a);' +
+    'display:flex;align-items:center;justify-content:center;padding:28px;overflow:auto';
+  const top = sug.slice(0, 4), rest = sug.slice(4);
+  const row = function (s, i) {
+    const primary = i === 0;
+    return '<button class="setup-opt" data-i="' + i + '" style="display:flex;gap:12px;width:100%;text-align:left;' +
+      'align-items:flex-start;padding:13px 15px;margin-bottom:9px;border-radius:8px;cursor:pointer;' +
+      'background:' + (primary ? 'var(--accent,#22d3ee)22' : 'var(--panel,#1e293b)') + ';' +
+      'border:1px solid ' + (primary ? 'var(--accent,#22d3ee)' : 'var(--border,#334155)') + ';color:inherit;font:inherit">' +
+      '<span style="opacity:.8;font-size:15px;line-height:1.3">' + (s.instant ? '▸' : '▼') + '</span>' +
+      '<span style="flex:1;min-width:0">' +
+        '<span style="font-weight:600;font-size:14px">' + escapeHtml(s.title) + '</span>' +
+        '<span style="font-size:11px;opacity:.75;border:1px solid currentColor;border-radius:3px;padding:1px 5px;margin-left:8px;white-space:nowrap">' + escapeHtml(s.badge || '') + '</span>' +
+        '<div style="font-size:12.5px;opacity:.72;margin-top:2px">' + escapeHtml(s.detail || '') + '</div>' +
+      '</span></button>';
+  };
+  el.innerHTML =
+    '<div style="max-width:560px;width:100%">' +
+      '<h2 style="font-size:23px;margin:0 0 6px">Get eVi answering</h2>' +
+      '<p style="opacity:.7;font-size:13.5px;margin:0 0 18px">Pick one. You can change it any time in Settings.</p>' +
+      (sug.length ? top.map(row).join('')
+                  : '<p class="sec-blurb">No local AI was found and this platform has no prebuilt runtime. ' +
+                    'Connect a backend under Settings → Model &amp; Backend.</p>') +
+      (rest.length ? '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:13px;opacity:.75">' +
+        'Other options found (' + rest.length + ')</summary><div style="margin-top:9px">' +
+        rest.map(function (s, i) { return row(s, i + 4); }).join('') + '</div></details>' : '') +
+      '<div id="setup-progress" style="margin-top:14px"></div>' +
+      '<p style="opacity:.55;font-size:12px;margin-top:16px">Nothing is sent anywhere you haven\'t connected. ' +
+      '<a href="#" id="setup-later" style="color:inherit">Set this up later</a></p>' +
+    '</div>';
+  document.body.appendChild(el);
+  el.querySelectorAll('.setup-opt').forEach(function (b) {
+    b.onclick = function () { runSetupChoice(sug[+b.getAttribute('data-i')], el); };
+  });
+  el.querySelector('#setup-later').onclick = function (e) { e.preventDefault(); hideSetupScreen(); };
+}
+function setupProgress(html) {
+  const p = document.getElementById('setup-progress');
+  if (p) p.innerHTML = html;
+}
+async function runSetupChoice(s, el) {
+  if (!s) return;
+  el.querySelectorAll('.setup-opt').forEach(function (b) { b.disabled = true; b.style.opacity = '.5'; });
+  try {
+    if (s.action === 'runtime') {
+      hideSetupScreen();
+      openLocalAISetup();
+      return;
+    }
+    setupProgress('<div style="font-size:13px">Connecting to ' + escapeHtml(s.title.replace(/^Use /, '')) +
+      ' and checking it answers…</div>');
+    // verify:true — the server proves it answers and rolls the switch back if
+    // it doesn't, so a failed attempt never leaves config pointing at a dud.
+    const res = await fetch('/api/backend/use', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: s.kind, verify: true }),
+    }).then(function (r) { return r.json(); });
+    showVerdict(res && res.verify, res && res.ok);
+  } catch (e) {
+    setupProgress('<div style="font-size:13px">⚠ ' + escapeHtml(String(e)) + '</div>');
+  }
+  el.querySelectorAll('.setup-opt').forEach(function (b) { b.disabled = false; b.style.opacity = ''; });
+}
+// The differentiator: report what actually ANSWERED. A reachable port is not a
+// working backend — this renders the server's live-completion verdict.
+function showVerdict(v, ok) {
+  if (!ok || !v || !v.chat) {
+    setupProgress('<div style="font-size:13px;color:var(--err,#f87171)">✗ It didn\'t answer — nothing was changed.</div>' +
+      (v && v.error ? '<div style="opacity:.75;font-size:12px;margin-top:4px">' + escapeHtml(v.error) + '</div>' : '') +
+      '<div style="margin-top:9px;font-size:12px;opacity:.8">Pick another option above, or run diagnostics.</div>' +
+      '<div style="margin-top:8px"><button class="set-action-btn" id="setup-diag">Run diagnostics</button></div>');
+    const dg = document.getElementById('setup-diag');
+    if (dg) dg.onclick = function () { hideSetupScreen(); openDiagnostics(); };
+    return false;
+  }
+  const tick = function (ok, label, note) {
+    return '<div style="display:flex;gap:9px;font-size:13px;padding:3px 0">' +
+      '<span style="color:' + (ok ? 'var(--user,#4ade80)' : 'var(--err,#f87171)') + '">' + (ok ? '✓' : '✗') + '</span>' +
+      '<span style="min-width:52px">' + label + '</span>' +
+      '<span style="opacity:.65;font-size:12px">' + note + '</span></div>';
+  };
+  setupProgress(
+    tick(true, 'Chat', 'replied in ' + (v.latency_ms || 0) + ' ms') +
+    tick(!!v.tools, 'Tools', v.tools ? 'tool calls accepted' : 'this model can\'t use tools — file, web and image actions stay off') +
+    '<div style="margin-top:10px"><button class="set-action-btn" id="setup-done" ' +
+    'style="background:var(--accent);color:#fff;border-color:var(--accent)">Start chatting</button></div>');
+  const d = document.getElementById('setup-done');
+  if (d) d.onclick = function () { hideSetupScreen(); checkBackend(); };
+  return true;
+}
+
 function renderBackendBanner(st) {
   const el = document.getElementById('backend-banner');
-  if (!st) { el.style.display = 'none'; return; }
+  if (!st) { el.style.display = 'none'; hideSetupScreen(); return; }
   const cfg = st.configured || {};
   // READY = the backend chat ACTUALLY uses is reachable. (any_reachable is not
   // enough — a *different* candidate being up doesn't mean chat will work; that
   // was the bug where the banner cleared but chats hit a dead backend.)
-  if (cfg.reachable) { el.style.display = 'none'; return; }
+  if (cfg.reachable) { el.style.display = 'none'; hideSetupScreen(); return; }
 
-  // CLI-agent backends have no HTTP port — "not reachable" means their CLI
-  // isn't installed / on PATH, not that a server is down. Kind -> CLI binary.
-  const CLI_AGENT = { claude_agent:'claude', codex:'codex', gemini:'gemini', amp:'amp', qwen:'qwen', copilot:'copilot' };
+  // Nothing at all is answering: this is first run, not a warning. A strip above
+  // a fully-drawn chat UI reads as dismissible chrome, so setup takes the screen
+  // and offers what the machine can ALREADY do, ranked, before any download.
   const live = (st.candidates || []).filter(function (c) { return c.reachable; });
+  if (!live.length && !CLI_AGENT_KINDS[cfg.backend]) {
+    el.style.display = 'none';
+    showSetupScreen(st);
+    return;
+  }
+  hideSetupScreen();
+
+  const CLI_AGENT = CLI_AGENT_KINDS;
   var html, actions = '', hint = '';
   if (CLI_AGENT[cfg.backend]) {
     // State A′ — a CLI-agent backend whose CLI isn't installed / on PATH.

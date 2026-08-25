@@ -110,6 +110,7 @@ class BackendUseRequest(BaseModel):
     kind: str                      # ollama | lmstudio | llamacpp | openai_compat
     model: str | None = None       # explicit; else auto-pick an installed one
     base_url: str | None = None    # override; else the backend's default URL
+    verify: bool = False           # prove it answers; roll back if it doesn't
 
 
 # --- LLM backend probing -------------------------------------------------
@@ -139,6 +140,127 @@ _CLI_AGENT_BINS: dict[str, str] = {
     "qwen": "qwen",
     "copilot": "copilot",
 }
+
+
+def _verify_llm(cfg) -> dict[str, object]:
+    """Send a real 1-token completion (then a tool-bearing one) and report what
+    actually worked. Shared by `/api/backend/verify` and the verified switch."""
+    import time as _t
+
+    from evi.llm.client import make_client as _mk
+
+    out: dict[str, object] = {
+        "model": cfg.llm.model, "backend": cfg.llm.backend,
+        "chat": False, "tools": False, "error": "", "latency_ms": 0,
+    }
+    started = _t.monotonic()
+    try:
+        client = _mk(cfg.llm)
+        client.chat.completions.create(
+            model=cfg.llm.model,
+            messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+            max_tokens=1,
+        )
+        out["chat"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        out["latency_ms"] = int((_t.monotonic() - started) * 1000)
+        return out
+    out["latency_ms"] = int((_t.monotonic() - started) * 1000)
+    # Tools are a separate question: a backend can chat fine and still reject or
+    # ignore tool definitions. Offering one is enough — the model needn't call it.
+    try:
+        client.chat.completions.create(
+            model=cfg.llm.model,
+            messages=[{"role": "user", "content": "ok"}],
+            max_tokens=1,
+            tools=[{"type": "function", "function": {
+                "name": "evi_probe", "description": "probe",
+                "parameters": {"type": "object", "properties": {}}}}],
+        )
+        out["tools"] = True
+    except Exception:  # noqa: BLE001
+        out["tools"] = False
+    return out
+
+
+def _host_is_local(request) -> bool:
+    """True if the request's Host header names this machine.
+
+    Anti-DNS-rebinding: a hostile page can make a browser send requests to
+    127.0.0.1, but it cannot forge the Host header, so a request arriving as
+    `evil.example` (resolved to loopback) is rejected. Bare IPv6 and a missing
+    port are both handled; an absent Host is treated as local because non-browser
+    clients (curl -H, some test clients) legitimately omit it.
+    """
+    import os as _os
+
+    if _os.environ.get("EVI_ALLOW_ANY_HOST", "").strip() in {"1", "true", "TRUE"}:
+        return True
+    raw = (request.headers.get("host") or "").strip().lower()
+    if not raw:
+        return True
+    host = raw
+    if host.startswith("["):                      # [::1]:8473
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:                    # 127.0.0.1:8473
+        host = host.split(":", 1)[0]
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver"}
+
+
+# Human labels for the first-run ladder. The point of naming the product rather
+# than the backend kind is that a beginner recognises "Claude Code", not
+# "claude_agent".
+# NB: detection is a PATH lookup — it proves the CLI is installed, not that it's
+# logged in. The copy says "installed", never "signed in"; the live verify step
+# is what actually proves it answers.
+_CLI_AGENT_LABELS: dict[str, tuple[str, str]] = {
+    "claude_agent": ("Claude Code", "Installed here — uses your Claude plan. No key, no download."),
+    "codex": ("Codex", "Installed here — uses your ChatGPT plan. No key, no download."),
+    "gemini": ("Gemini CLI", "Installed here — uses your Google login. No key, no download."),
+    "copilot": ("GitHub Copilot", "Installed here — uses your Copilot subscription."),
+    "amp": ("Amp", "Installed here — uses your Amp subscription."),
+    "qwen": ("Qwen Code", "Installed here — uses your Qwen login."),
+}
+_SERVER_LABELS: dict[str, str] = {
+    "ollama": "Ollama", "lmstudio": "LM Studio", "llamacpp": "llama.cpp",
+}
+
+
+def _first_run_suggestions(data: dict) -> list[dict]:
+    """Rank the ways this machine could answer a prompt RIGHT NOW.
+
+    Ordered by time-to-first-reply, not by preference: something already
+    installed and authenticated beats a multi-gigabyte download every time.
+    Pure function of an already-probed status dict, so it costs nothing extra.
+    """
+    out: list[dict] = []
+    for kind in data.get("cli_agents", []):  # type: ignore[union-attr]
+        name, detail = _CLI_AGENT_LABELS.get(kind, (kind, "Installed on this PC."))
+        out.append({"kind": kind, "action": "use", "title": f"Use {name}",
+                    "detail": detail, "badge": "installed", "instant": True})
+    for c in data.get("candidates", []):  # type: ignore[union-attr]
+        if c.get("reachable"):
+            name = _SERVER_LABELS.get(c["kind"], c["kind"])
+            out.append({"kind": c["kind"], "action": "use", "title": f"Use {name}",
+                        "detail": f"Already running at {c.get('url', '')}.",
+                        "badge": "running", "instant": True})
+    for key in data.get("api_keys", []):  # type: ignore[union-attr]
+        pretty = {"anthropic": "Anthropic", "openai": "OpenAI"}.get(key, key)
+        out.append({"kind": "openai_compat", "action": "env", "title": f"Use your {pretty} API key",
+                    "detail": "Found in this machine's environment.",
+                    "badge": "key found", "instant": True})
+    if data.get("runtime_supported"):
+        installed = data.get("runtime_installed")
+        out.append({
+            "kind": "llamacpp", "action": "runtime",
+            "title": "Start local AI" if installed else "Download a model",
+            "detail": ("Ready to start — runs on this PC, nothing leaves it."
+                       if installed else
+                       "About 1 GB. Runs on this PC, nothing leaves it. No account."),
+            "badge": "key-free", "instant": bool(installed),
+        })
+    return out
 
 
 def _probe_candidate(kind: str, base_url: str) -> tuple[bool, str]:
@@ -822,8 +944,29 @@ def create_app() -> FastAPI:
         cfg = Config.load()
         token = cfg.web.auth_token.strip()
         users = load_users() if cfg.web.multi_user else []
-        # Open access only when no auth is configured at all.
+        # Open access only when no auth is configured at all — the common desktop
+        # case, where the server is loopback-bound and the user is the only one
+        # on the machine.
+        #
+        # But "loopback-bound" does NOT by itself keep a browser out: any web page
+        # can send requests to 127.0.0.1, and DNS rebinding lets a hostile site
+        # point its own hostname at loopback and drive this API — which, with the
+        # filesystem and shell tools behind it, is the whole machine. Browsers
+        # can't forge the Host header, so requiring a loopback Host closes that
+        # vector at zero cost to real local use.
+        #
+        # Deliberately scoped to the unauthenticated case: if a token or users
+        # are configured, that's the real control and this guard steps aside
+        # (federation peers, LAN and container hostnames all authenticate).
+        # `EVI_ALLOW_ANY_HOST=1` overrides for exotic no-auth deployments.
         if not token and not users:
+            if not _host_is_local(request):
+                return JSONResponse(
+                    {"detail": "Refusing a request for a non-local hostname while no "
+                               "access token is set. Set one with `evi web-config token` "
+                               "(or set EVI_ALLOW_ANY_HOST=1 if this is intended)."},
+                    status_code=403,
+                )
             return await call_next(request)
         path = request.url.path
         if (
@@ -1048,11 +1191,19 @@ def create_app() -> FastAPI:
                 return cached
 
         cfg = Config.load()
-        # Probe the configured backend + all known backends at once so the
-        # total latency is the slowest single probe, not their sum. Each entry
-        # is (kind, url); llama.cpp's probe scans 8080..8090.
+        # Probe the configured backend + all known backends + every CLI-agent
+        # backend at once, so the total latency is the slowest single probe and
+        # not their sum. Each entry is (kind, url); llama.cpp's probe scans
+        # 8080..8090, and CLI-agent probes are a PATH lookup.
+        #
+        # The CLI agents matter for FIRST RUN: eVi ships six subscription-CLI
+        # backends, so a machine with Claude Code already signed in should never
+        # be asked to download a model. Previously they were probed only when one
+        # was the *configured* backend, so first-run never noticed them.
+        cli_kinds = list(_CLI_AGENT_BINS)
         probes: list[tuple[str, str]] = [(cfg.llm.backend, cfg.llm.base_url)]
         probes += list(_KNOWN_BACKENDS)
+        probes += [(k, "") for k in cli_kinds]
         with ThreadPoolExecutor(max_workers=len(probes)) as ex:
             results = list(ex.map(lambda kv: _probe_candidate(*kv), probes))
 
@@ -1062,9 +1213,14 @@ def create_app() -> FastAPI:
             "model": cfg.llm.model,
             "reachable": results[0][0],
         }
+        n_known = len(_KNOWN_BACKENDS)
         candidates = [
             {"kind": kind, "url": resolved, "reachable": ok}
-            for (kind, _url), (ok, resolved) in zip(_KNOWN_BACKENDS, results[1:])
+            for (kind, _url), (ok, resolved) in zip(
+                _KNOWN_BACKENDS, results[1 : 1 + n_known])
+        ]
+        cli_found = [
+            kind for kind, (ok, _r) in zip(cli_kinds, results[1 + n_known :]) if ok
         ]
         any_reachable = configured["reachable"] or any(c["reachable"] for c in candidates)
         data: dict[str, object] = {
@@ -1072,7 +1228,16 @@ def create_app() -> FastAPI:
             "candidates": candidates,
             "ollama_installed": shutil.which("ollama") is not None,
             "any_reachable": any_reachable,
+            "cli_agents": cli_found,
         }
+        # An API key already in the environment is another zero-setup path.
+        import os as _os
+
+        data["api_keys"] = [
+            name
+            for name, env in (("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY"))
+            if _os.environ.get(env, "").strip()
+        ]
         # First-run wizard hints (the recommended model + whether we can install
         # Ollama unattended here). Hardware doesn't change within a run, so
         # compute these once and reuse — keeps the frequently-polled status fast.
@@ -1096,6 +1261,14 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001
             data["runtime_supported"] = False
             data["runtime_installed"] = False
+        # Ranked first-run options, cheapest-to-first-reply first. The UI renders
+        # these in order, so the ladder lives here rather than in the frontend:
+        #   1. a subscription CLI already signed in   (no key, no download)
+        #   2. a local server already running         (no download)
+        #   3. an API key already in the environment
+        #   4. download a small model                 (last resort, but works
+        #                                              with no account at all)
+        data["suggestions"] = _first_run_suggestions(data)
         with _status_lock:
             _status_cache["at"] = time.monotonic()
             _status_cache["data"] = data
@@ -1432,6 +1605,20 @@ def create_app() -> FastAPI:
 
         return EventSourceResponse(stream())
 
+    @app.post("/api/backend/verify")
+    def backend_verify() -> dict[str, object]:
+        """Prove the configured backend actually ANSWERS — don't just check a port.
+
+        `/api/backend/status` (and the old first-run flow) only established that
+        something was listening. A reachable port is not a working backend: the
+        model can be missing, the key wrong, the CLI's login expired, or the
+        endpoint an unrelated server. This sends a real 1-token completion, then
+        offers a trivial tool so the reply also says whether tool calling works —
+        eVi's known trap is a model that reports no tool support, which silently
+        disables image generation and every other tool.
+        """
+        return _verify_llm(Config.load())
+
     @app.post("/api/backend/use")
     def backend_use(req: BackendUseRequest) -> dict[str, object]:
         """Switch the active LLM backend (+ model) and persist it.
@@ -1452,6 +1639,10 @@ def create_app() -> FastAPI:
         base_url = (req.base_url or default_base_url(kind)).strip()
 
         cfg = Config.load()
+        # Remember the outgoing backend so a verified switch can roll back. A
+        # first-run switch that leaves config pointing at something that doesn't
+        # answer is worse than not switching at all.
+        prev = (cfg.llm.backend, cfg.llm.base_url, cfg.llm.api_key, cfg.llm.model)
         cfg.llm.backend = kind
         cfg.llm.base_url = base_url
         cfg.llm.api_key = {"ollama": "ollama", "lmstudio": "lm-studio"}.get(
@@ -1476,6 +1667,18 @@ def create_app() -> FastAPI:
             cfg.llm.model = model
         cfg.save()
 
+        # Verified switch: prove it answers, and undo the switch if it doesn't.
+        # Used by first-run so "connected" never means "a port was open".
+        verdict: dict[str, object] | None = None
+        if req.verify:
+            verdict = _verify_llm(cfg)
+            if not verdict.get("chat"):
+                cfg.llm.backend, cfg.llm.base_url, cfg.llm.api_key, cfg.llm.model = prev
+                cfg.save()
+                return {"ok": False, "verified": False, "verify": verdict,
+                        "backend": cfg.llm.backend, "base_url": cfg.llm.base_url,
+                        "model": cfg.llm.model}
+
         # Apply to every live session (rebuild the client for the new backend).
         for sess in _all_sessions():
             sess.agent.config.llm.backend = cfg.llm.backend
@@ -1487,7 +1690,8 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
             sess.agent.refresh_prompt()  # re-stitch identity for the new model
-        return {"ok": True, "backend": cfg.llm.backend,
+        return {"ok": True, "verified": bool(verdict), "verify": verdict,
+                "backend": cfg.llm.backend,
                 "base_url": cfg.llm.base_url, "model": cfg.llm.model}
 
     @app.get("/api/session/{session_id}/usage")

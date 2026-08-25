@@ -172,6 +172,61 @@ def test_locate_rejects_invalid_binary():
     assert st.get("error")
 
 
+def test_first_run_ladder_ranks_installed_before_download():
+    from evi.apps.web import server as srv
+
+    data = {
+        "cli_agents": ["claude_agent"],
+        "candidates": [{"kind": "ollama", "url": "http://x", "reachable": True},
+                       {"kind": "lmstudio", "url": "http://y", "reachable": False}],
+        "api_keys": ["openai"],
+        "runtime_supported": True,
+        "runtime_installed": False,
+    }
+    out = srv._first_run_suggestions(data)
+    kinds = [s["kind"] for s in out]
+    # Something already installed/running must outrank the multi-hundred-MB
+    # download — that ordering IS the feature.
+    assert kinds.index("claude_agent") < kinds.index("ollama") < kinds.index("llamacpp")
+    assert "lmstudio" not in kinds          # not reachable -> not offered
+    assert out[0]["instant"] is True
+    # Detection is a PATH lookup, so the copy must not claim a working login.
+    assert "signed in" not in out[0]["detail"].lower()
+
+
+def test_first_run_ladder_empty_when_nothing_available():
+    from evi.apps.web import server as srv
+
+    assert srv._first_run_suggestions(
+        {"cli_agents": [], "candidates": [], "api_keys": [], "runtime_supported": False}
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("host", "ok"),
+    [
+        ("127.0.0.1:8473", True), ("localhost:8473", True), ("[::1]:8473", True),
+        ("localhost", True), ("", True),
+        ("evil.example", False), ("attacker.com:8473", False),
+    ],
+)
+def test_host_guard_blocks_dns_rebinding(host, ok, monkeypatch):
+    """A hostile page can point its own hostname at loopback, but can't forge Host."""
+    from evi.apps.web import server as srv
+
+    monkeypatch.delenv("EVI_ALLOW_ANY_HOST", raising=False)
+    req = type("R", (), {"headers": {"host": host}})()
+    assert srv._host_is_local(req) is ok
+
+
+def test_host_guard_env_override(monkeypatch):
+    from evi.apps.web import server as srv
+
+    monkeypatch.setenv("EVI_ALLOW_ANY_HOST", "1")
+    req = type("R", (), {"headers": {"host": "anything.example"}})()
+    assert srv._host_is_local(req) is True
+
+
 def test_kick_resets_stale_state_before_returning():
     # A prior run's done/error must NOT leak into the next op's first status()
     # (that caused a premature "ready" and a spurious 400 on locate).
