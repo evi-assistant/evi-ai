@@ -1505,6 +1505,100 @@ def create_app() -> FastAPI:
         from evi.runtime import setup as _rt_setup
         return _rt_setup.enable_gpu(background=True)
 
+    @app.get("/api/runtime/plan")
+    def runtime_plan(model_id: str = "") -> dict[str, Any]:
+        """Exactly what setting up local AI will put on this machine.
+
+        Shown BEFORE anything downloads, so a multi-hundred-MB write is a choice
+        rather than a surprise: every item names its real size and destination
+        path, and `commands` spells out the literal URLs for anyone who wants to
+        audit or do it by hand. Items already present are marked `needed: false`
+        so a second run doesn't threaten to re-download what's on disk.
+        """
+        from evi.config import MODELS_DIR
+        from evi.runtime import catalog as _cat
+        from evi.runtime import llamacpp_runtime as _rt
+        from evi.runtime import setup as _rt_setup
+
+        entry = _cat.get(model_id) if model_id else None
+        if entry is None:
+            entry = _cat.starter()
+        external = ""
+        try:
+            from pathlib import Path as _P
+
+            raw = Config.load().runtime.server_path or ""
+            # Apply the same existence gate every other consumer applies. A stale
+            # path (binary moved or uninstalled) must NOT make this manifest
+            # promise "no runtime download" when the run would download one —
+            # that is exactly the surprise this endpoint exists to prevent.
+            external = raw if raw and _P(raw).is_file() else ""
+        except Exception:  # noqa: BLE001
+            pass
+
+        items: list[dict[str, Any]] = []
+        cmds: list[str] = []
+        if external:
+            items.append({"kind": "runtime", "label": "Use your llama.cpp install",
+                          "detail": external, "size": "", "needed": False})
+        else:
+            have = _rt.is_installed()
+            asset = _rt.cpu_asset() or ""
+            items.append({
+                "kind": "runtime",
+                "label": f"llama.cpp runtime {_rt.LLAMACPP_VERSION}",
+                "detail": ("Already downloaded." if have else
+                           "CPU build — works on any machine, no drivers."),
+                "size": "" if have else _rt.asset_size_label(),
+                "path": str(_rt.runtime_root()),
+                "needed": not have,
+            })
+            if not have and asset:
+                cmds.append(f"{_rt._RELEASE_BASE}/{asset}")
+
+        have_model = _cat.is_installed(entry)
+        items.append({
+            "kind": "model",
+            "label": f"{entry['name']} ({entry.get('quant', '')})".strip(),
+            "detail": "Already downloaded." if have_model else entry.get("note", "") or "",
+            "size": "" if have_model else f"{entry.get('size_gb', '?')} GB",
+            "path": str(MODELS_DIR),
+            "needed": not have_model,
+        })
+        if not have_model:
+            cmds.append(_cat.download_url(entry))
+
+        items.append({
+            "kind": "server", "label": "A local server on 127.0.0.1",
+            "detail": "Loopback only — not reachable from your network or the internet.",
+            "size": "", "needed": True,
+        })
+        items.append({
+            "kind": "admin", "label": "No administrator access needed",
+            "detail": "Everything is written inside your user folder.",
+            "size": "", "needed": False,
+        })
+        return {
+            "model_id": entry["id"], "items": items, "commands": cmds,
+            "external": external, "supported": _rt.supported(),
+            "log_path": str(_rt_setup.server_log_path()),
+        }
+
+    @app.get("/api/runtime/log")
+    def runtime_log(lines: int = 200) -> dict[str, Any]:
+        """Tail of the managed server's log. The desktop shell's 'open logs'
+        opens ~/.evi/logs, but the runtime writes under ~/.evi/runtime/logs — and
+        the browser has no file manager at all, so serve it here instead."""
+        from evi.runtime import setup as _rt_setup
+
+        p = _rt_setup.server_log_path()
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return {"path": str(p), "text": "", "exists": False}
+        tail = text.splitlines()[-max(1, min(lines, 2000)):]
+        return {"path": str(p), "text": "\n".join(tail), "exists": True}
+
     @app.get("/api/runtime/detect")
     def runtime_detect() -> dict[str, Any]:
         """Existing `llama-server` binaries already on this machine (PATH + common

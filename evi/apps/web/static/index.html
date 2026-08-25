@@ -914,9 +914,50 @@ function addBubble(cls, { history = true } = {}) {
     nextHistoryIndex += 1;
     attachMessageActions(div, cls);
   }
+  clearEmptyState();  // a real message replaces the starter prompts
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   return div;
+}
+
+// ---- empty-chat starter prompts --------------------------------------
+// A blank transcript tells a new user nothing about what eVi can do, and the
+// first thing they need is proof it answers at all. Three prompts do that in one
+// click, and double as a capability tour.
+const STARTERS = [
+  ['Say hi 👋', 'Say hi in one short sentence.'],
+  ['What can you do?', 'What can you do? Give me a short, concrete list of the things you can help with.'],
+  ['Give me a quick tour', 'Give me a quick tour of how to use you — chats, tools, and settings — in a few short bullets.'],
+];
+function clearEmptyState() {
+  const e = document.getElementById('chat-empty');
+  if (e) e.remove();
+}
+function renderEmptyState() {
+  clearEmptyState();
+  if (!log || log.children.length) return;          // only for a truly empty chat
+  const wrap = document.createElement('div');
+  wrap.id = 'chat-empty';
+  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+    'gap:9px;padding:44px 16px;text-align:center';
+  wrap.innerHTML =
+    '<div style="font-size:17px;font-weight:600">How can I help?</div>' +
+    '<div style="font-size:12.5px;opacity:.6;margin-bottom:5px">Any reply means your model, tools and settings are working together.</div>' +
+    STARTERS.map(function (s, i) {
+      return '<button class="starter" data-i="' + i + '" style="min-width:250px;padding:9px 14px;border-radius:8px;' +
+        'border:1px solid var(--border,#334155);background:var(--panel,#1e293b);color:inherit;font:inherit;' +
+        'font-size:13.5px;cursor:pointer">' + escapeHtml(s[0]) + '</button>';
+    }).join('');
+  log.appendChild(wrap);
+  wrap.querySelectorAll('.starter').forEach(function (b) {
+    b.onclick = function () {
+      // Deliberately do NOT clear here. The single log.appendChild path clears
+      // the empty state when a real message renders, so if the send bails (no
+      // reachable backend) the prompts survive instead of leaving a blank
+      // transcript with nothing to click.
+      sendMessage(STARTERS[+b.getAttribute('data-i')][1]);
+    };
+  });
 }
 
 function attachMessageActions(bubble, cls) {
@@ -960,7 +1001,7 @@ async function rebuildHistory() {
     const r = await fetch(`/api/session/${sessionId}/history`);
     if (!r.ok) return;
     const { messages } = await r.json();
-    log.innerHTML = '';
+    log.innerHTML = ''; renderEmptyState();
     nextHistoryIndex = 1;
     for (const m of messages) {
       if (m.role === 'system') {
@@ -1407,7 +1448,7 @@ function showVerdict(v, ok) {
       '<div style="margin-top:9px;font-size:12px;opacity:.8">Pick another option above, or run diagnostics.</div>' +
       '<div style="margin-top:8px"><button class="set-action-btn" id="setup-diag">Run diagnostics</button></div>');
     const dg = document.getElementById('setup-diag');
-    if (dg) dg.onclick = function () { hideSetupScreen(); openDiagnostics(); };
+    if (dg) dg.onclick = function () { hideSetupScreen(); _openDiagnostics(); };
     return false;
   }
   const tick = function (ok, label, note) {
@@ -1579,6 +1620,11 @@ async function autoSetup(st) {
 const RT_INPUT = 'width:100%;padding:7px 9px;background:var(--panel,#0f172a);' +
   'color:var(--fg,#e2e8f0);border:1px solid var(--border,#334155);border-radius:6px';
 function _rtDlgContent() { return document.getElementById('dialog-content'); }
+// openDiagnostics() is declared inside the app IIFE and published only on
+// window.eviUI, so global-scope callers must go through the bridge.
+function _openDiagnostics() {
+  if (window.eviUI && window.eviUI.openDiagnostics) window.eviUI.openDiagnostics();
+}
 function _rtOpenDialog(title, html) {
   document.getElementById('dialog-title').textContent = title;
   _rtDlgContent().innerHTML = html;
@@ -1623,7 +1669,8 @@ function renderLocalAISetupCard(status, cat) {
     '<p class="sec-blurb">' + intro + '</p>' +
     '<div style="margin:10px 0"><label class="k" style="display:block;margin-bottom:4px">Model</label>' +
     '<select id="rt-model" style="' + RT_INPUT + '">' + opts + '</select></div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
+    '<div id="rt-plan" style="margin-top:12px"></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">' +
       '<button class="set-action-btn" id="rt-go" style="background:var(--accent);color:#fff;border-color:var(--accent)">' + goLabel + '</button>' +
       '<button class="set-action-btn" id="rt-locate-toggle">Already have llama.cpp?</button>' +
     '</div>' +
@@ -1632,12 +1679,57 @@ function renderLocalAISetupCard(status, cat) {
   document.getElementById('rt-go').onclick = function () {
     _runtimeApplyModel(document.getElementById('rt-model').value);
   };
+  // Manifest: what this will actually put on the machine, refreshed whenever the
+  // model changes so the sizes and paths always match what the button will do.
+  const sel = document.getElementById('rt-model');
+  const drawPlan = function () { _renderRuntimePlan(sel ? sel.value : ''); };
+  if (sel) sel.onchange = drawPlan;
+  drawPlan();
   document.getElementById('rt-locate-toggle').onclick = function () {
     const box = document.getElementById('rt-locate');
     if (box.style.display === 'none') { box.style.display = 'block'; _renderLocateBox(box); }
     else { box.style.display = 'none'; }
   };
 }
+// "What this will put on your PC" — real sizes, real destination paths, and the
+// literal download URLs behind a disclosure. Nothing here is a guess: sizes come
+// from the pinned release and the model catalog.
+let _rtPlanSeq = 0;
+async function _renderRuntimePlan(modelId) {
+  const box = document.getElementById('rt-plan');
+  if (!box) return;
+  const seq = ++_rtPlanSeq;   // last request wins; a slow earlier one can't overwrite
+  let plan = null;
+  try {
+    plan = await fetch('/api/runtime/plan?model_id=' + encodeURIComponent(modelId || ''))
+      .then(function (r) { return r.json(); });
+  } catch (e) { return; }
+  if (!box.isConnected || seq !== _rtPlanSeq) return;
+  const rows = (plan.items || []).map(function (it) {
+    const dl = it.size ? '<span style="font-family:ui-monospace,monospace;font-size:11.5px;opacity:.9;white-space:nowrap">' + escapeHtml(it.size) + '</span>' : '';
+    // The verb comes from `needed`, never from `size`: the runtime size is a live
+    // HEAD that can legitimately come back empty, and a required download must
+    // still say "download" when its size is unknown.
+    const verb = (it.kind === 'server') ? 'run' : (it.needed ? 'download' : 'note');
+    return '<div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--border,#334155)">' +
+      '<span style="opacity:.55;font-size:11px;min-width:52px">' + verb + '</span>' +
+      '<span style="flex:1;min-width:0">' +
+        '<span style="font-size:13px">' + escapeHtml(it.label) + '</span>' +
+        (it.detail ? '<div style="font-size:11.5px;opacity:.6">' + escapeHtml(it.detail) + '</div>' : '') +
+        (it.path ? '<div style="font-size:11px;opacity:.45;font-family:ui-monospace,monospace;word-break:break-all">' + escapeHtml(it.path) + '</div>' : '') +
+      '</span>' + dl + '</div>';
+  }).join('');
+  const cmds = (plan.commands || []).length
+    ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;opacity:.7">Show the exact files &amp; commands</summary>' +
+      '<pre style="margin:8px 0 0;padding:9px;background:var(--panel,#0f172a);border:1px solid var(--border,#334155);' +
+      'border-radius:5px;font-size:11px;overflow-x:auto;white-space:pre-wrap;word-break:break-all">' +
+      plan.commands.map(escapeHtml).join('\n') + '</pre></details>'
+    : '';
+  box.innerHTML =
+    '<div style="font-size:12px;opacity:.7;margin-bottom:4px">What this will put on your PC</div>' +
+    '<div style="border:1px solid var(--border,#334155);border-radius:6px;padding:4px 12px 8px">' + rows + '</div>' + cmds;
+}
+
 async function _renderLocateBox(box) {
   const blurb = '<p class="sec-blurb">Point eVi at an existing <code>llama-server</code> binary — ' +
     'eVi supervises it and skips the download (great if you already have a GPU build).</p>';
@@ -1696,9 +1788,68 @@ async function _runtimeLocateStart(path) {
   if (!res) { _rtBtnsDisabled(false); return; }
   _pollRuntimeInto();
 }
+// Named steps rather than one anonymous bar: during a multi-minute download the
+// user should be able to see WHERE it is, and read the log when it stalls.
+const RT_STEPS = [
+  ['runtime', 'Prepare runtime'],
+  ['model', 'Download model'],
+  ['starting', 'Start the model'],
+  ['done', 'Ready'],
+];
+function _rtStepsHtml(stage, message, pct) {
+  const order = RT_STEPS.map(function (s) { return s[0]; });
+  // An unknown or 'idle' stage means nothing is under way — show every step as
+  // pending rather than claiming the first one is spinning. (indexOf returns -1
+  // there, and clamping that to 0 would fake progress that never resolves.)
+  const idx = order.indexOf(stage);
+  const at = idx < 0 ? -1 : idx;
+  return RT_STEPS.map(function (s, i) {
+    const done = i < at || stage === 'done';
+    const now = i === at && stage !== 'done';
+    const mark = done ? '<span style="color:var(--user,#4ade80)">✓</span>'
+      : now ? '<span style="color:var(--accent,#22d3ee)">◐</span>'
+            : '<span style="opacity:.35">○</span>';
+    const note = now && message ? '<span style="opacity:.62;font-size:11.5px">' + escapeHtml(message) + '</span>' : '';
+    const bar = (now && typeof pct === 'number' && pct > 0)
+      ? '<div style="height:4px;background:var(--border,#334155);border-radius:3px;overflow:hidden;margin-top:5px">' +
+        '<div style="height:100%;width:' + Math.min(100, pct) + '%;background:var(--accent,#22d3ee);transition:width .25s"></div></div>' : '';
+    return '<div style="padding:3px 0"><div style="display:flex;gap:9px;align-items:baseline;font-size:13px">' +
+      mark + '<span style="min-width:118px">' + s[1] + '</span>' + note + '</div>' + bar + '</div>';
+  }).join('');
+}
+// Every failure gets the two things that actually help: the log, and diagnostics.
+function _rtFailureHtml(msg) {
+  return '<div style="font-size:13px;color:var(--err,#f87171)">⚠ ' + escapeHtml(msg) + '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap">' +
+    '<button class="set-action-btn" id="rt-diag">Run diagnostics</button>' +
+    '<button class="set-action-btn" id="rt-log">View log</button></div>' +
+    '<div id="rt-logbox" style="margin-top:9px"></div>';
+}
+function _wireFailureButtons() {
+  const d = document.getElementById('rt-diag');
+  if (d) d.onclick = function () { _openDiagnostics(); };
+  const l = document.getElementById('rt-log');
+  if (l) l.onclick = async function () {
+    // Expand in place. Replacing the dialog body would destroy the error text,
+    // the model picker and the retry button, with no way back.
+    const box = document.getElementById('rt-logbox');
+    if (!box) return;
+    if (box.innerHTML) { box.innerHTML = ''; l.textContent = 'View log'; return; }
+    box.innerHTML = '<div style="font-size:12px;opacity:.6">Loading log…</div>';
+    let r = null;
+    try { r = await fetch('/api/runtime/log').then(function (x) { return x.json(); }); } catch (e) {}
+    if (!box.isConnected) return;
+    l.textContent = 'Hide log';
+    box.innerHTML = (r && r.exists && (r.text || '').trim())
+      ? '<div style="font-size:11px;opacity:.5;margin-bottom:5px;word-break:break-all">' + escapeHtml(r.path) + '</div>' +
+        '<pre style="margin:0;padding:9px;background:var(--panel,#0f172a);border:1px solid var(--border,#334155);' +
+        'border-radius:6px;font-size:11px;max-height:38vh;overflow:auto;white-space:pre-wrap">' + escapeHtml(r.text) + '</pre>'
+      : '<div style="font-size:12px;opacity:.7">No log yet — the model server never got as far as starting, ' +
+        'so the failure is above (usually a download or disk problem). Diagnostics has more.</div>';
+  };
+}
 async function _pollRuntimeInto() {
   const prog = document.getElementById('rt-progress');
-  const LABEL = { runtime: 'Preparing runtime', model: 'Downloading model', starting: 'Starting your model', done: 'Ready' };
   for (var i = 0; i < 1800; i++) {  // up to ~30 min for a big model on a slow line
     await new Promise(function (r) { setTimeout(r, 1000); });
     var st = await fetch('/api/runtime/status').then(function (r) { return r.json(); }).catch(function () { return null; });
@@ -1707,13 +1858,17 @@ async function _pollRuntimeInto() {
     // alone stays true — also check the overlay is still shown).
     if (!prog || !prog.isConnected ||
         !document.getElementById('dialog-overlay').classList.contains('shown')) return;
-    if (st.error) { prog.innerHTML = '<p class="sec-blurb">⚠ Setup failed: ' + escapeHtml(st.error) + '</p>'; _rtBtnsDisabled(false); return; }
+    if (st.error) {
+      prog.innerHTML = _rtFailureHtml('Setup failed: ' + st.error);
+      _wireFailureButtons();
+      _rtBtnsDisabled(false);
+      return;
+    }
     var pct = (typeof st.pct === 'number') ? Math.max(0, Math.min(100, st.pct)) : null;
-    var bar = pct !== null ? '<div style="height:8px;background:#1f2937;border-radius:4px;overflow:hidden;margin-top:6px">' +
-      '<div style="height:100%;width:' + pct + '%;background:#22d3ee;transition:width .2s"></div></div>' : '';
-    prog.innerHTML = '<div>' + escapeHtml(st.message || LABEL[st.stage] || st.stage || 'Working…') + '</div>' + bar;
+    prog.innerHTML = _rtStepsHtml(st.stage, st.message, pct);
     if (st.done) {
-      prog.innerHTML = '<p class="sec-blurb" style="color:#4caf50">✓ Local AI is ready — close this and start chatting.</p>';
+      prog.innerHTML = _rtStepsHtml('done', '', 100) +
+        '<p class="sec-blurb" style="color:#4caf50;margin-top:8px">✓ Local AI is ready — close this and start chatting.</p>';
       await checkBackend();  // configured backend now reachable → banner hides
       return;
     }
@@ -2066,7 +2221,7 @@ async function handleEvent(ev, assistant) {
     // first (drops the stale transcript + the '/reset' echo), then leave the
     // confirmation bubble as the fresh slate. (New chat starts a NEW session;
     // /reset keeps this one but empties it.)
-    if (ev.clear_transcript) log.innerHTML = '';
+    if (ev.clear_transcript) { log.innerHTML = ''; renderEmptyState(); }
     const b = addBubble('system');
     renderMarkdownInto(b, ev.text);
     trackChipState(ev.text);
@@ -2157,7 +2312,7 @@ function newTab() {
   setSessionId(tabs[activeIdx].id);
   saveTabsState();
   renderTabs();
-  log.innerHTML = '';
+  log.innerHTML = ''; renderEmptyState();
   nextHistoryIndex = 1;
   refreshUsage();
 }
@@ -2178,7 +2333,7 @@ function closeTab(i) {
   setSessionId(tabs[activeIdx].id);
   saveTabsState();
   renderTabs();
-  log.innerHTML = '';
+  log.innerHTML = ''; renderEmptyState();
   nextHistoryIndex = 1;
   rebuildHistory();
 }
@@ -2523,6 +2678,9 @@ if (_loaded || _wantSession) {
 // Warn up front if no LLM backend is reachable (common on a fresh desktop
 // install before LM Studio / Ollama is started).
 checkBackend();
+// Offer the starter prompts on a fresh transcript. Deferred a tick so a restored
+// session's history wins — the prompts are for an empty chat, not a loaded one.
+setTimeout(renderEmptyState, 600);
 
 // --- file upload (drag-drop + paperclip) ---------------------------------
 const attachBtn = document.getElementById('attach');
@@ -2727,7 +2885,7 @@ resetBtn.addEventListener('click', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, message: '' }),
   });
-  log.innerHTML = '';
+  log.innerHTML = ''; renderEmptyState();
   nextHistoryIndex = 1;
   refreshUsage();  // the cleared session's context is back to ~0 — don't show the old count
   // Reset the current tab's label too — it'll get re-named on the next user msg.
@@ -3053,16 +3211,49 @@ resetBtn.addEventListener('click', async () => {
     } catch {}
   }
 
+  // Twenty-four flat entries make a new user read the whole list to find
+  // anything. Grouping is purely presentational — SCHEMA still drives order and
+  // content — but it turns a wall into four short, scannable lists. Anything not
+  // named here falls into "More", so adding a section never silently drops it.
+  const NAV_GROUPS = [
+    ['Assistant', ['model', 'tools', 'editing', 'sampling', 'context', 'specialty', 'multiagent']],
+    ['This computer', ['permissions', 'guardrails', 'voice', 'notifications', 'desktop', 'server']],
+    ['Extend', ['integrations', 'plugins', 'mcp', 'hooks', 'automation', 'peers', 'ultracode']],
+    ['App', ['general', 'statusline', 'stats', 'evals', 'about']],
+  ];
   function renderNav() {
     navEl.innerHTML = '';
-    SCHEMA.forEach(sec => {
-      if (sec.desktopOnly && !isDesktop()) return;  // hide desktop-shell settings in the browser
-      const b = document.createElement('button');
-      b.textContent = sec.title;
-      b.className = sec.id === activeSection ? 'active' : '';
-      b.onclick = () => { activeSection = sec.id; renderNav(); renderSection(); };
-      navEl.appendChild(b);
+    const visible = SCHEMA.filter(s => !(s.desktopOnly && !isDesktop()));
+    const byId = {};
+    visible.forEach(s => { byId[s.id] = s; });
+    const placed = new Set();
+    const groups = NAV_GROUPS.map(([label, ids]) => {
+      const secs = ids.map(id => byId[id]).filter(Boolean);
+      secs.forEach(s => placed.add(s.id));
+      return [label, secs];
     });
+    const leftover = visible.filter(s => !placed.has(s.id));
+    if (leftover.length) groups.push(['More', leftover]);
+    groups.forEach(([label, secs]) => {
+      if (!secs.length) return;
+      const h = document.createElement('div');
+      h.textContent = label;
+      h.style.cssText = 'font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;opacity:.45;' +
+        'padding:12px 10px 4px;pointer-events:none';
+      navEl.appendChild(h);
+      secs.forEach(sec => {
+        const b = document.createElement('button');
+        b.textContent = sec.title;
+        b.className = sec.id === activeSection ? 'active' : '';
+        if (sec.id === activeSection) b.dataset.active = '1';
+        b.onclick = () => { activeSection = sec.id; renderNav(); renderSection(); };
+        navEl.appendChild(b);
+      });
+    });
+    // Grouping reorders the list, so the selected section may now sit below the
+    // fold — without this, Settings can open looking like nothing is selected.
+    const cur = navEl.querySelector('button[data-active]');
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
   }
 
   // ---- Settings section explainers + live health banners (declarative) ----

@@ -52,6 +52,14 @@ def starter_model_path():
     return catalog.model_path(catalog.starter())
 
 
+def server_log_path():
+    """Where the managed server writes its log — surfaced next to setup progress
+    so a stall or a crash is one click from being readable."""
+    from evi.config import RUNTIME_DIR
+
+    return RUNTIME_DIR / "logs" / "llama-server.log"
+
+
 def _gpu_info() -> tuple[str | None, float, str | None]:
     """(compute_capability, vram_gb, name) of the best GPU, or (None, 0, None)."""
     try:
@@ -81,7 +89,14 @@ def _external_binary() -> str:
         cfg.runtime.server_path = ""
         cfg.save()
         return ""
-    return p if llamacpp_runtime.validate_server_binary(p) else ""
+    if llamacpp_runtime.validate_server_binary(p):
+        return p
+    # Present but not a usable llama-server (e.g. a sibling binary, or a build
+    # whose DLLs went missing). Clear it too, so config and the setup card agree
+    # instead of the path lingering and being re-reported as usable.
+    cfg.runtime.server_path = ""
+    cfg.save()
+    return ""
 
 
 def _pick_runtime(entry: dict, external: str = "") -> tuple:

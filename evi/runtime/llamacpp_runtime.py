@@ -94,6 +94,40 @@ def is_installed() -> bool:
     return server_path() is not None
 
 
+_ASSET_SIZE_CACHE: dict[str, str] = {}
+
+
+def asset_size_label() -> str:
+    """Human size of this platform's runtime download ("41 MB"), or "" if unknown.
+
+    A HEAD against the pinned release — cheap, cached for the process, and
+    deliberately failure-tolerant: the install manifest would rather omit a size
+    than block on the network or state one it had to guess.
+    """
+    asset = cpu_asset()
+    if not asset:
+        return ""
+    if asset in _ASSET_SIZE_CACHE:
+        return _ASSET_SIZE_CACHE[asset]
+    label = ""
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{_RELEASE_BASE}/{asset}", method="HEAD")
+        with urllib.request.urlopen(req, timeout=4) as resp:  # noqa: S310
+            n = int(resp.headers.get("Content-Length") or 0)
+        if n:
+            label = f"{round(n / (1 << 20))} MB"
+    except Exception:  # noqa: BLE001
+        label = ""
+    # Cache successes only: caching a failure would suppress the size for the
+    # rest of the process, so one flaky moment would permanently hide how big
+    # the download is.
+    if label:
+        _ASSET_SIZE_CACHE[asset] = label
+    return label
+
+
 def validate_server_binary(path: str | Path) -> bool:
     """True if `path` is really a `llama-server` (not just any executable). Used by
     the 'locate existing install' flow to vet a user-provided binary before it's

@@ -5,6 +5,31 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.50] — 2026-08-25
+
+### Added
+- **See what setting up local AI will put on your machine — before it does.** The
+  setup card now lists each item with its real size and destination path (the
+  runtime size comes from the pinned release, the model size from the catalog),
+  states that the server is loopback-only and needs no administrator access, and
+  discloses the literal download URLs behind "Show the exact files & commands".
+  Anything already on disk is marked as such, so a second run never threatens to
+  re-download it.
+- **Named setup steps, and a way to read the log.** A multi-minute download showed
+  one anonymous progress bar; it now shows where it actually is — *Prepare runtime ·
+  Download model · Start the model · Ready* — and every failure offers **Run
+  diagnostics** and **View log**. The managed server's log is served over the API,
+  so it's readable from the browser too, not just the desktop app.
+- **Starter prompts in an empty chat.** A blank transcript now offers *Say hi* ·
+  *What can you do?* · *Give me a quick tour*. Any reply is proof that the model,
+  tools and settings are working together.
+
+### Changed
+- **Settings are grouped instead of stacked.** Twenty-five sections in one flat list
+  meant reading all of it to find anything; they're now sorted under **Assistant**,
+  **This computer**, **Extend** and **App**. A section that doesn't match a group
+  still appears (under "More"), so nothing can go missing.
+
 ## [1.0.49] — 2026-08-25
 
 ### Added

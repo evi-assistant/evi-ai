@@ -172,6 +172,124 @@ def test_locate_rejects_invalid_binary():
     assert st.get("error")
 
 
+def test_install_plan_lists_sizes_paths_and_urls(monkeypatch, tmp_path):
+    """The manifest must state what lands on disk BEFORE anything downloads."""
+    from fastapi.testclient import TestClient
+
+    from evi.apps.web.server import create_app
+    from evi.runtime import llamacpp_runtime as rt
+
+    monkeypatch.setattr(rt, "RUNTIME_DIR", tmp_path)          # nothing installed
+    monkeypatch.setattr(rt, "asset_size_label", lambda: "18 MB")  # no network in tests
+    c = TestClient(create_app())
+    p = c.get("/api/runtime/plan").json()
+
+    kinds = [i["kind"] for i in p["items"]]
+    assert kinds == ["runtime", "model", "server", "admin"]
+    runtime_item = p["items"][0]
+    model_item = p["items"][1]
+    assert runtime_item["needed"] is True and runtime_item["size"] == "18 MB"
+    assert str(tmp_path) in runtime_item["path"]
+    assert model_item["size"].endswith("GB")
+    # Every pending download is auditable: the literal URL is disclosed.
+    assert len(p["commands"]) == 2
+    assert all(u.startswith("https://") for u in p["commands"])
+    # The loopback promise is stated, not implied.
+    assert "not reachable" in p["items"][2]["detail"].lower()
+
+
+def test_install_plan_marks_present_items_not_needed(monkeypatch, tmp_path):
+    """A second run must not threaten to re-download what's already on disk."""
+    from fastapi.testclient import TestClient
+
+    from evi.apps.web.server import create_app
+    from evi.runtime import catalog as cat
+    from evi.runtime import llamacpp_runtime as rt
+
+    monkeypatch.setattr(rt, "is_installed", lambda: True)
+    monkeypatch.setattr(cat, "is_installed", lambda e: True)
+    p = TestClient(create_app()).get("/api/runtime/plan").json()
+    assert p["items"][0]["needed"] is False and p["items"][0]["size"] == ""
+    assert p["items"][1]["needed"] is False
+    assert p["commands"] == []          # nothing to download -> nothing to show
+
+
+def test_install_plan_ignores_a_stale_external_binary(monkeypatch, tmp_path):
+    """A moved/deleted located binary must not make the manifest promise that no
+    runtime download is coming — the run would download one anyway."""
+    from fastapi.testclient import TestClient
+
+    from evi.apps.web.server import create_app
+    from evi.config import Config
+    from evi.runtime import llamacpp_runtime as rt
+
+    monkeypatch.setattr(rt, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(rt, "asset_size_label", lambda: "18 MB")
+    cfg = Config.load()
+    cfg.runtime.server_path = str(tmp_path / "gone" / "llama-server.exe")  # not a file
+    cfg.save()
+
+    p = TestClient(create_app()).get("/api/runtime/plan").json()
+    assert p["external"] == ""                       # stale path ignored
+    assert p["items"][0]["kind"] == "runtime"
+    assert p["items"][0]["needed"] is True           # the download IS disclosed
+    assert any("llama.cpp" in u or "releases/download" in u for u in p["commands"])
+
+
+def test_external_binary_clears_a_path_that_is_not_llama_server(monkeypatch, tmp_path):
+    """Present but not a usable llama-server: clear it, so config and the setup
+    card agree instead of the dead path lingering."""
+    from evi.config import Config
+    from evi.runtime import llamacpp_runtime as rt
+    from evi.runtime import setup as s
+
+    fake = tmp_path / "llama-cli.exe"
+    fake.write_text("x")
+    cfg = Config.load()
+    cfg.runtime.server_path = str(fake)
+    cfg.save()
+    monkeypatch.setattr(rt, "validate_server_binary", lambda p: False)
+
+    assert s._external_binary() == ""
+    assert Config.load().runtime.server_path == ""   # self-healed
+
+
+def test_runtime_log_endpoint_handles_missing_log(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from evi.apps.web.server import create_app
+    from evi.runtime import setup as s
+
+    monkeypatch.setattr(s, "server_log_path", lambda: tmp_path / "nope.log")
+    r = TestClient(create_app()).get("/api/runtime/log").json()
+    assert r["exists"] is False and r["text"] == ""
+
+    p = tmp_path / "there.log"
+    p.write_text("\n".join(f"line {i}" for i in range(500)), encoding="utf-8")
+    monkeypatch.setattr(s, "server_log_path", lambda: p)
+    r = TestClient(create_app()).get("/api/runtime/log?lines=10").json()
+    assert r["exists"] is True
+    assert r["text"].splitlines()[-1] == "line 499"      # it's a TAIL
+    assert len(r["text"].splitlines()) == 10
+
+
+def test_asset_size_label_never_raises(monkeypatch):
+    """Offline or rate-limited, the manifest omits a size rather than blocking."""
+    from evi.runtime import llamacpp_runtime as rt
+
+    rt._ASSET_SIZE_CACHE.clear()
+    monkeypatch.setattr(rt, "cpu_asset", lambda *a, **k: "x.zip")
+
+    def boom(*a, **k):
+        raise OSError("no network")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert rt.asset_size_label() == ""
+    rt._ASSET_SIZE_CACHE.clear()
+
+
 def test_first_run_ladder_ranks_installed_before_download():
     from evi.apps.web import server as srv
 
