@@ -31,7 +31,7 @@ url = "2"
 minisign-verify = "0.2"
 sha2 = "0.10"
 base64 = "0.22"  # decode the tauri-signer manifest signature before minisign-verify
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
