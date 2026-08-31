@@ -29,7 +29,7 @@ url = "2"
 # Sidecar update channel (sidecar_update.rs): verify the minisign-signed manifest,
 # sha256-check the zip, and extract the onedir into a writable dir.
 minisign-verify = "0.2"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"  # decode the tauri-signer manifest signature before minisign-verify
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
