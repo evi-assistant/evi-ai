@@ -81,7 +81,7 @@ mcp = [
     # `pip install evi-assistant[mcp]` silently break MCP for users — exactly the
     # trap the original <2 pin existed to prevent. Raise this only with a real
     # 2.1 migration (publish.py -> add_request_handler) behind passing tests.
-    "mcp>=1.0,<2.1",
+    "mcp>=1.0,<2.2",
 ]
 scheduler = [
     "apscheduler>=3.10",
