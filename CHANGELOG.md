@@ -5,6 +5,20 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.52] — 2026-09-10
+
+### Added
+- **Say something mid-answer without throwing away the work.** Type a follow-up
+  while eVi is already working and it's now **applied at the next step** — after the
+  tool it's running finishes — instead of being swallowed by a disabled Send button.
+  The message appears in the conversation straight away marked *"queued — applies at
+  the next step"*, and flips to *"applied"* when it lands. The Send button says
+  **Queue** while a turn is in flight so the behaviour is visible before you rely on it.
+
+  Nothing is ever lost: if the turn happens to finish before there's a next step,
+  the queued message is sent as a normal message instead. "Correct it while it
+  works" replaces "wait, or interrupt and start over".
+
 ## [1.0.51] — 2026-08-25
 
 ### Added

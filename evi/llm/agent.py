@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Iterator
@@ -395,9 +396,23 @@ class RouteInfo:
     route: str
 
 
+@dataclass
+class Steering:
+    """A follow-up the user sent while a turn was already running.
+
+    eVi applies it at the next step rather than interrupting the current one, so
+    a mid-turn correction lands without killing work in flight. `applied` is
+    False when the turn ended before there was a next step — the caller is then
+    responsible for sending it as a normal message, so the text is never lost.
+    """
+
+    text: str
+    applied: bool = True
+
+
 Event = (
     TextDelta | ThinkingDelta | ToolCall | ToolResult | ToolProgress | UsageStats
-    | LogProbs | Guardrail | RouteInfo | Done | Error
+    | LogProbs | Guardrail | RouteInfo | Steering | Done | Error
 )
 
 # Seconds between ToolProgress heartbeats while tools are still running.
@@ -484,6 +499,12 @@ class Agent:
             getattr(getattr(config, "auto", None), "auto_approve", []) or []
         )
         self.auto_all: bool = False  # set via /auto on for the session
+        # Non-interrupting steering: follow-ups the user sends WHILE a turn is
+        # running. They're queued here and applied between steps rather than
+        # interrupting the current one. Written from the web request thread and
+        # read from the worker thread running chat(), hence the lock.
+        self._steer_lock = threading.Lock()
+        self._steer_queue: list[str] = []
         self.goal: str | None = None
         self.plan_mode_once: bool = False
         self.plan_mode: bool = False  # persistent plan/read-only mode (/plan on)
@@ -503,6 +524,36 @@ class Agent:
         self._last_route_name: str | None = None
 
     # --- prompt composition ---------------------------------------------
+
+    # --- non-interrupting steering ----------------------------------------
+
+    def steer(self, text: str) -> bool:
+        """Queue a follow-up to apply at the next step of a running turn.
+
+        Safe to call from another thread. Returns False for empty text so a
+        caller can fall back to sending a normal message.
+        """
+        text = (text or "").strip()
+        if not text:
+            return False
+        with self._steer_lock:
+            self._steer_queue.append(text)
+        return True
+
+    def pending_steering(self) -> int:
+        with self._steer_lock:
+            return len(self._steer_queue)
+
+    def take_pending_steering(self) -> list[str]:
+        """Remove and return anything still queued.
+
+        Used after a turn ends: whatever never reached a next step has to be
+        handed back so the caller can send it normally. Dropping it silently
+        would be worse than refusing the message in the first place.
+        """
+        with self._steer_lock:
+            out, self._steer_queue = self._steer_queue, []
+        return out
 
     def _compose_system_prompt(self) -> str:
         """Stitch base + style + memory + skills + project context together."""
@@ -1403,6 +1454,14 @@ class Agent:
             extra_body["cache_prompt"] = True
 
         for turn_idx in range(max_turns):
+            # Non-interrupting steering: a follow-up the user sent while this
+            # turn was running lands HERE — between steps, once the previous
+            # tool round is complete — instead of interrupting work in flight.
+            for _steer in self.take_pending_steering():
+                self.history.append({"role": "user", "content": _steer})
+                self._log_to_transcript("user", _steer)
+                yield Steering(_steer, applied=True)
+
             # Recompute each round so tools surfaced mid-turn by `search_tools`
             # (deferred tool-search-at-scale) become available immediately, and
             # so an active skill's tool scope (set by invoke_skill) takes effect

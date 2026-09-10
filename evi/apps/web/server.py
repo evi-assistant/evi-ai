@@ -3463,6 +3463,23 @@ def create_app() -> FastAPI:
 
         return EventSourceResponse(stream())
 
+    @app.post("/api/session/{session_id}/steer")
+    def session_steer(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        """Queue a follow-up onto a turn that's already running.
+
+        eVi applies it at the next step rather than interrupting the current
+        one, so a mid-turn correction doesn't throw away work in flight. When
+        the session ISN'T busy there is nothing to steer — we say so, and the
+        caller sends a normal message instead.
+        """
+        text = str((req or {}).get("text", "")).strip()
+        if not text:
+            raise HTTPException(400, "expected {text}")
+        sess = get_session(session_id)
+        if not sess.busy:
+            return {"queued": False, "reason": "not busy"}
+        return {"queued": sess.agent.steer(text), "pending": sess.agent.pending_steering()}
+
     @app.post("/api/chat")
     async def chat(req: ChatRequest) -> EventSourceResponse:
         message = req.message.strip()
@@ -3536,7 +3553,20 @@ def create_app() -> FastAPI:
                 enqueue({"kind": "Error", "message": f"{type(exc).__name__}: {exc}"})
             finally:
                 sess.busy = False
-                enqueue(None)  # sentinel
+                # A turn can end before there's another step (no tool calls, an
+                # error, max_turns). Anything still queued was never applied —
+                # report it so the UI resends it instead of losing it.
+                #
+                # Guarded, and strictly before the sentinel: anything raising
+                # here would skip `enqueue(None)` and leave the SSE stream open
+                # forever. A hang is worse than a dropped follow-up.
+                try:
+                    take = getattr(sess.agent, "take_pending_steering", None)
+                    for leftover in (take() if take else []):
+                        enqueue({"kind": "Steering", "text": leftover, "applied": False})
+                except Exception:  # noqa: BLE001
+                    pass
+                enqueue(None)  # sentinel — must always run or the stream never closes
 
         threading.Thread(target=worker, daemon=True).start()
 

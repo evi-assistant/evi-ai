@@ -1982,6 +1982,50 @@ function notifyTurnDone(assistant) {
   notifyBeep();
 }
 
+// ---- non-interrupting steering ---------------------------------------
+// While a turn runs, a follow-up is QUEUED onto it and applied at the next
+// step instead of being dropped or killing work in flight. Bubbles for queued
+// text are kept here so the Steering event can mark them applied.
+let turnInFlight = false;
+const steerPending = [];      // [{text, bubble}] awaiting a verdict
+function markSteerApplied(text, applied) {
+  const i = steerPending.findIndex(function (p) { return p.text === text; });
+  const entry = i >= 0 ? steerPending.splice(i, 1)[0] : null;
+  if (!entry || !entry.bubble) return entry;
+  const tag = entry.bubble.querySelector('.steer-tag');
+  if (tag) {
+    if (applied) { tag.textContent = 'applied'; tag.style.opacity = '.55'; }
+    else { tag.remove(); }
+  }
+  return entry;
+}
+async function steerMessage(text) {
+  // Show it immediately — the point is that the draft is never lost.
+  const bubble = addBubble('user');
+  bubble.textContent = text;
+  const tag = document.createElement('span');
+  tag.className = 'steer-tag';
+  tag.textContent = 'queued — applies at the next step';
+  tag.style.cssText = 'display:block;font-size:11px;opacity:.6;margin-top:3px';
+  bubble.appendChild(tag);
+  attachMessageActions(bubble, 'user');
+  steerPending.push({ text: text, bubble: bubble });
+  let res = null;
+  try {
+    res = await fetch('/api/session/' + encodeURIComponent(sessionId) + '/steer', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text }),
+    }).then(function (r) { return r.json(); });
+  } catch (e) {}
+  if (!res || !res.queued) {
+    // The turn finished between the keystroke and the request — send normally
+    // rather than leaving a bubble that never gets answered.
+    markSteerApplied(text, false);
+    if (bubble && bubble.remove) bubble.remove();
+    sendMessage(text);
+  }
+}
+
 async function sendMessage(text, images) {
   // Don't fire a real LLM turn into the void. Slash commands (/help, /reset,
   // …) are handled without a model, so only gate normal messages.
@@ -2005,7 +2049,9 @@ async function sendMessage(text, images) {
   userBubble.textContent = text;
   attachMessageActions(userBubble, 'user');  // textContent above wiped the toolbar
   let assistant = null;  // built lazily on first TextDelta
-  send.disabled = true;
+  turnInFlight = true;
+  send.textContent = 'Queue';
+  send.title = 'This turn is running — your message is applied at the next step';
   workStatus.start();
   // The plan badge is one-shot — clear it once a turn starts.
   if (planArmed && !text.startsWith('/')) {
@@ -2055,6 +2101,9 @@ async function sendMessage(text, images) {
   } catch (err) {
     addBubble('error').textContent = `error: ${err.message}`;
   } finally {
+    turnInFlight = false;
+    send.textContent = 'Send';
+    send.title = '';
     workStatus.stop();
     send.disabled = false;
     input.focus();
@@ -2145,6 +2194,16 @@ async function handleEvent(ev, assistant) {
   } else if (ev.kind === 'PermissionRequest') {
     const approved = await askPermission(ev);
     await postDecision(ev.decision_id, approved);
+  } else if (ev.kind === 'Steering') {
+    if (ev.applied === false) {
+      // The turn ended before there was a next step. Nothing was lost — resend
+      // it as a normal message once this turn's stream is done.
+      const entry = markSteerApplied(ev.text, false);
+      if (entry && entry.bubble && entry.bubble.remove) entry.bubble.remove();
+      setTimeout(function () { sendMessage(ev.text); }, 0);
+    } else {
+      markSteerApplied(ev.text, true);
+    }
   } else if (ev.kind === 'RouteInfo') {
     const lbl = document.getElementById('model-btn-label');
     if (lbl) {
@@ -2253,6 +2312,12 @@ form.addEventListener('submit', e => {
     attachedIsImage = false;
   }
   input.value = '';
+  // A follow-up typed while a turn is running steers it instead of being
+  // swallowed — the send button stays live for exactly this reason.
+  if (turnInFlight && !images.length && !text.startsWith('/')) {
+    steerMessage(text);
+    return;
+  }
   sendMessage(text, images);
 });
 
