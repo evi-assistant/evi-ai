@@ -5,6 +5,64 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.0.53] — 2026-10-09
+
+A security release. Update promptly, especially if you use the desktop app or
+open repos you didn't write.
+
+### Security
+- **Another website can no longer write files on your computer through eVi.**
+  The attachment upload and voice transcription endpoints built their save
+  folder from an unchecked session id, so `../..` or an absolute path wrote the
+  upload anywhere your account can write (a Startup-folder script, for
+  example). Any web page you visited could trigger this on the default desktop
+  setup (no access token), because a file upload is a cross-site "simple
+  request" browsers send without asking. Session ids are now validated
+  everywhere they become a path, every upload path is checked to stay inside
+  the uploads folder, and eVi refuses state-changing requests that a browser
+  marks as coming from another site (`Origin` / `Sec-Fetch-Site`). eVi's own
+  pages, the desktop shell, the CLI, the VS Code extension and federation/A2A
+  peers are unaffected. Drive-relative names (`D:x`) are also refused on
+  `/uploads` and `/images`.
+- **A repo's `.evi.toml` can no longer take over eVi.** Opening a cloned repo
+  used to merge its `.evi.toml` over your whole config: it could run a shell
+  command through the status line, point eVi (and your API key) at another
+  server, or switch on auto-approve ("yolo") and the shell. A project config
+  may now only set model-behaviour preferences (`[llm] model`, sampling,
+  context and compaction knobs, `output_style`, `reasoning_effort`) and
+  `[worktree] base_ref`, and may only make permissions *stricter*: tools can be
+  switched off but not on, `hard_deny` / `protected_paths` / deny rules are
+  added to yours, and `mode` applies only if it is stricter than your own.
+  Everything else is ignored with a one-time warning naming the keys. A
+  malformed `.evi.toml` no longer crashes config loading (which had silently
+  disabled the sandbox and shell guard). See "Per-project config" in
+  docs/configuration.md.
+- **Spoken replies can no longer run commands on Windows.** Text-to-speech put
+  the model's reply inside a PowerShell command and escaped only plain `'`, but
+  PowerShell also treats typographic quotes (`’`) as quotes. The text now
+  reaches PowerShell (and `say` / `espeak`, via stdin) outside the command
+  line, and `powershell.exe` is resolved from System32.
+- **`evi plugin remove ..` no longer deletes your whole eVi folder**, and
+  `evi skill remove` / `evi profile remove|add|show` no longer accept path-like
+  names (`evi profile remove ../config` deleted `config.toml`). Deletion is
+  confined to the plugin, skill or profile folder, and a linked plugin is
+  unlinked rather than having its target deleted.
+- **Desktop: "open in browser" no longer goes through `cmd.exe`.** Links are
+  validated (http/https only, no embedded credentials) and opened without a
+  shell, so a crafted link can't run a program and links containing `&` now
+  open correctly.
+
+### Changed
+- Behind a reverse proxy, keep the browser's `Host` header
+  (nginx `proxy_set_header Host $host;`, Apache `ProxyPreserveHost On`), or
+  send `X-Forwarded-Host` and start eVi with `EVI_TRUSTED_PROXY=1`; otherwise
+  browser requests get `403 Refusing a cross-site request`.
+  `EVI_ALLOW_CROSS_ORIGIN=1` turns the cross-site check off entirely.
+- Session ids may contain only letters, digits, `-` and `_` (up to 96
+  characters). Every id eVi creates already does; SDK users with their own
+  ids containing `.`, `:` or spaces can no longer attach files to them.
+- On Linux, `espeak` / `espeak-ng` now read the text from stdin.
+
 ## [1.0.52] — 2026-09-10
 
 ### Added

@@ -194,9 +194,38 @@ whether a sandboxer is actually present on this machine.
 ### Per-project and per-profile overrides
 
 Because `[auto]` and `[tools]` are ordinary config sections, a profile
-(`~/.evi/profiles/<name>.toml`, via `--profile`/`EVI_PROFILE`) or a per-project
-`.evi.toml` (walked up from the working directory) can override them. A repo can
-thus pin a stricter `mode` or a `deny` rule for everyone who works in it.
+(`~/.evi/profiles/<name>.toml`, via `--profile`/`EVI_PROFILE`) can override them
+freely — it is your own file.
+
+A per-project `.evi.toml` (the nearest one walking up from the working
+directory) is different: it arrives with whatever repository you cloned, so
+since 1.0.53 eVi treats it as **untrusted** and it can only **tighten** these
+sections, judged against your config + active profile:
+
+| Key | What a `.evi.toml` can do |
+|---|---|
+| `[tools] <category> = false` | Switch a tool category off. `= true` is ignored. |
+| `[tools] sandbox = true` | Turn the `run_python` / `run_command` OS sandbox on. `= false` is ignored. |
+| `[auto] mode` | Applies only if **stricter** than yours (`yolo` < `accept_edits` < `ask` < `plan`). |
+| `[auto] rules` | Only `deny …` rules apply, and they are evaluated **before** your rules (so your broad `allow` can't shadow them). `allow` rules are dropped. Like all `rules`, they are **skipped in `yolo`** mode. |
+| `[auto] hard_deny`, `protected_paths` | **Added** to your lists — never replace or shrink them. `hard_deny` applies in **every** mode, `yolo` included. |
+| `[auto] block_destructive = true` | Honoured. `= false` is ignored. |
+
+Everything else that loosens is ignored: `auto_approve`, `trusted_dirs`,
+`trusted_domains`, `destructive_allow`, `destructive_disable_rules`, any other
+`[tools]` key (`transcripts`, `mcp_allow`, `search_backend`, `searxng_url`,
+`cleanup_period_days`, …). So a repo can pin a stricter `mode`, a `deny` rule or
+a `hard_deny` entry for everyone who works in it, but it can never grant itself
+more. A `deny` rule alone does nothing for someone on `yolo`: for a block that
+must hold for everyone, use `hard_deny` (or also set `mode`). Rule and
+`hard_deny` entries match the tool **name** (`run_command`, `write_file`, …),
+not its `[tools]` category, e.g. `hard_deny = ["run_command rm -rf*"]`. Outside
+`[tools]`/`[auto]` a `.evi.toml` may only set model/sampling preferences — see
+[Per-project config](../configuration.md#per-project-config--evitoml) for the
+full list. Ignored keys are named once per process in a warning (e.g. `eVi:
+ignoring these settings from project config <path>: auto.mode, …`); a file that
+can't be parsed is ignored as a whole, so it can never switch your own settings
+off. `--safe-mode` skips the file entirely.
 
 ## Examples
 

@@ -29,6 +29,7 @@ All functions take an optional ``root`` (the eVi home) for tests.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -68,6 +69,57 @@ def _plugins_dir(root: Path | None = None) -> Path:
 
 def _slug(name: str) -> str:
     return Path(name).name.removesuffix(".git")
+
+
+def _is_link(p: Path) -> bool:
+    """A symlink or Windows junction — removed as a link, never followed.
+    Keep this portable: ``Path`` methods only, no Windows-only ``stat`` constants."""
+    try:
+        return p.is_symlink() or p.is_junction()
+    except (OSError, ValueError):
+        return False
+
+
+def _safe_child(parent: Path, name: str) -> Path | None:
+    """``parent/name`` when ``name`` is a plain installed name (the slug rule
+    install enforces) — or the exact on-disk name of a hand-copied dir — that
+    stays a direct child of ``parent``; else None.
+
+    Name -> path lookups that delete or record state go through this, so
+    ``..``, ``''``, ``a/../..``, ``/abs``, ``C:\\``, ``\\\\host\\share`` etc. can
+    never address ``parent`` itself or anything outside it (``remove('..')``
+    used to rmtree the whole eVi home). Skills reuse it for their own remove."""
+    if not isinstance(name, str):
+        return None
+    if not _NAME_RE.fullmatch(name):
+        # Only an existing entry's exact name: a listdir entry is one component,
+        # never '.', '..' or a path — and must not be one Windows reads as a
+        # different entry (it drops a trailing '.'/' ': "x." would hit "x").
+        try:
+            listed = name in os.listdir(parent)
+        except (OSError, ValueError):
+            return None
+        if not listed or os.path.basename(os.path.abspath(parent / name)) != name:
+            return None
+    dest = parent / name
+    if _is_link(dest):
+        return dest  # judged by where the link sits (in parent), not its target
+    try:
+        base, real = parent.resolve(), dest.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if real == base or real.parent != base:
+        return None
+    return dest
+
+
+def _remove_installed(dest: Path) -> None:
+    """Delete an installed plugin/skill dir from ``_safe_child``. A symlinked or
+    junctioned dir is unlinked — never rmtree'd through into its target."""
+    if _is_link(dest):
+        dest.unlink()
+    else:
+        shutil.rmtree(dest, ignore_errors=True)
 
 
 def _read_manifest(d: Path) -> dict:
@@ -200,12 +252,14 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
 
         manifest = _read_manifest(plugin_src)
         pname = _slug(name or str(manifest.get("name") or plugin_src.name))
-        if not _NAME_RE.match(pname):
+        if not _NAME_RE.fullmatch(pname):
             raise PluginError(f"invalid plugin name {pname!r}")
 
         dest = _plugins_dir(root) / pname
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
+        if _is_link(dest):
+            dest.unlink()  # a linked install: drop the link, never its target
+        elif dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(plugin_src, dest, ignore=shutil.ignore_patterns(".git"))
         return pname
@@ -256,7 +310,7 @@ def init_plugin(
     ``skills/<slug>-example/SKILL.md`` so the plugin works immediately.
     """
     slug = _slug(name)
-    if not _NAME_RE.match(slug):
+    if not _NAME_RE.fullmatch(slug):
         raise PluginError(f"invalid plugin name {slug!r}")
 
     if install_now:
@@ -317,11 +371,11 @@ def set_enabled(name: str, enabled: bool, root: Path | None = None) -> bool:
     """Persist an enable/disable override. False if no such installed plugin."""
     import json
 
-    pd = _plugins_dir(root) / _slug(name)
-    if not (pd / "plugin.toml").is_file():
+    pd = _safe_child(_plugins_dir(root), _slug(name))
+    if pd is None or not (pd / "plugin.toml").is_file():
         return False
     state = _load_state(root)
-    state[_slug(name)] = enabled
+    state[pd.name] = enabled
     p = _state_path(root)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
@@ -423,8 +477,17 @@ def list_plugin_errors(root: Path | None = None) -> list[dict[str, str]]:
 
 
 def remove(name: str, root: Path | None = None) -> bool:
-    dest = _plugins_dir(root) / _slug(name)
-    if not dest.is_dir():
+    """Delete an installed plugin by its name (as `evi plugin list` shows it).
+
+    False if there's no such plugin — including any ``name`` that isn't a plain
+    plugin name or an installed dir's exact name (``..``, a path, …), so nothing
+    outside the plugins dir, nor the dir itself, can be deleted. A symlinked
+    plugin loses only the link; if that fails it raises ``PluginError``."""
+    dest = _safe_child(_plugins_dir(root), name)
+    if dest is None or not dest.is_dir():
         return False
-    shutil.rmtree(dest, ignore_errors=True)
+    try:
+        _remove_installed(dest)
+    except OSError as exc:
+        raise PluginError(f"couldn't remove {name}: {exc}") from exc
     return True

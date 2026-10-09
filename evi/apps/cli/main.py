@@ -43,6 +43,7 @@ from evi.mcp import MCPManager, filter_allowed, load_servers
 from evi.profiles import (
     ENV_VAR as PROFILE_ENV_VAR,
     PROFILES_DIR,
+    ProfileNameError,
     list_profiles,
     load_profile_overlay,
     profile_path,
@@ -4571,12 +4572,19 @@ def plugin_disable(name: str) -> None:
 @plugin_app.command("remove")
 def plugin_remove(name: str) -> None:
     """Remove an installed plugin."""
+    from rich.markup import escape
+
     from evi import plugins
 
-    if not plugins.remove(name):
-        console.print(f"[red]no such plugin:[/red] {name}")
+    try:
+        removed = plugins.remove(name)
+    except plugins.PluginError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(1)
-    console.print(f"[yellow]removed[/yellow] {name}")
+    if not removed:
+        console.print(f"[red]no such plugin:[/red] {escape(name)}")
+        raise typer.Exit(1)
+    console.print(f"[yellow]removed[/yellow] {escape(name)}")
 
 
 def _load_marketplace():
@@ -4789,17 +4797,19 @@ def skill_show(name: str) -> None:
 @skill_app.command("remove")
 def skill_remove(name: str) -> None:
     """Remove a user skill (~/.evi/skills/<name>/)."""
+    from rich.markup import escape
+
     from evi import skills
 
     try:
         removed = skills.remove(name)
     except skills.SkillError as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(1)
     if not removed:
-        console.print(f"[red]no such skill:[/red] {name}")
+        console.print(f"[red]no such skill:[/red] {escape(name)}")
         raise typer.Exit(1)
-    console.print(f"[yellow]removed[/yellow] {name}")
+    console.print(f"[yellow]removed[/yellow] {escape(name)}")
 
 
 @app.command()
@@ -6620,6 +6630,15 @@ profile_app = typer.Typer(help="Manage config profiles for different machines.")
 app.add_typer(profile_app, name="profile")
 
 
+def _profile_file(name: str) -> Path:
+    """profile_path(), but a bad name is a clean CLI error, not a traceback."""
+    try:
+        return profile_path(name)
+    except ProfileNameError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+
+
 @profile_app.command("list")
 def profile_list() -> None:
     """List available profiles."""
@@ -6639,7 +6658,7 @@ def profile_list() -> None:
 @profile_app.command("show")
 def profile_show(name: str) -> None:
     """Print a profile's TOML contents."""
-    path = profile_path(name)
+    path = _profile_file(name)
     if not path.is_file():
         console.print(f"[red]no such profile:[/red] {name}")
         raise typer.Exit(1)
@@ -6653,7 +6672,7 @@ def profile_path_cmd(name: str | None = typer.Argument(None)) -> None:
     if name is None:
         console.print(str(PROFILES_DIR))
     else:
-        console.print(str(profile_path(name)))
+        console.print(str(_profile_file(name)))
 
 
 @profile_app.command("add")
@@ -6666,7 +6685,7 @@ def profile_add(
 ) -> None:
     """Create a partial profile under ~/.evi/profiles/<name>.toml."""
     ensure_dirs()
-    path = profile_path(name)
+    path = _profile_file(name)
     if path.is_file() and not force:
         console.print(f"[red]exists:[/red] {path}. Use --force to overwrite.")
         raise typer.Exit(1)
@@ -6694,7 +6713,7 @@ def profile_add(
 @profile_app.command("remove")
 def profile_remove(name: str) -> None:
     """Delete a profile."""
-    path = profile_path(name)
+    path = _profile_file(name)
     if not path.is_file():
         console.print(f"[red]no such profile[/red]: {name}")
         raise typer.Exit(1)

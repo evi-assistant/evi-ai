@@ -280,12 +280,17 @@ def import_skill(
     if not slug or not _NAME_RE.match(slug):
         raise SkillError(f"invalid skill name {slug!r} (use --name)")
 
+    from evi.plugins import _is_link
+
     dest_root = root if root is not None else SKILL_DIR
     dest = dest_root / slug
-    if dest.exists():
+    if dest.exists() or _is_link(dest):
         if not overwrite:
             raise SkillError(f"skill exists: {slug} (pass overwrite=True / --force)")
-        shutil.rmtree(dest)
+        if _is_link(dest):
+            dest.unlink()  # a linked skill: drop the link, never its target
+        else:
+            shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git"))
     if rewrite_paths:
@@ -404,15 +409,25 @@ def remove(name: str, root: Path | None = None) -> bool:
 
     Returns True if it was removed, False if no such user skill exists.
     Plugin skills (``<plugin>:<skill>``) are owned by their plugin and can't be
-    removed here — that raises ``SkillError``.
+    removed here — that raises ``SkillError``, as does any ``name`` that isn't
+    a plain skill name or an existing dir's exact name (``..``, a path, …):
+    nothing outside the skills dir, nor the dir itself, is ever deleted. A
+    symlinked skill loses only the link.
     """
+    from evi.plugins import _remove_installed, _safe_child
+
     if ":" in name:
         raise SkillError(
             f"{name!r} is a plugin skill — remove its plugin with `evi plugin remove`"
         )
     dest_root = root if root is not None else SKILL_DIR
-    dest = dest_root / _slug(name)
+    dest = _safe_child(Path(dest_root), name)
+    if dest is None:
+        raise SkillError(f"invalid skill name {name!r} — use a name from `evi skill list`")
     if not dest.is_dir():
         return False
-    shutil.rmtree(dest, ignore_errors=True)
+    try:
+        _remove_installed(dest)
+    except OSError as exc:  # e.g. a locked link: say so, don't traceback
+        raise SkillError(f"couldn't remove {name}: {exc}") from exc
     return True

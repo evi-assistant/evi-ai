@@ -573,13 +573,23 @@ class Config:
             overlay = load_profile_overlay()
             if overlay:
                 data = merge_overlay(data, overlay)
-            # Per-project `.evi.toml` (walked up from cwd) wins over user + profile,
-            # so a repo can pin its own model / tools / permissions.
-            from evi.project import load_project_config_overlay
+            # Per-project `.evi.toml` (walked up from cwd). It ships with the
+            # repo, so it is UNTRUSTED: only allowlisted preferences (model,
+            # sampling) apply as-is, and [tools]/[auto] can only TIGHTEN the
+            # user + profile values above. Everything else is ignored and
+            # reported once per process. None of these raise: a file that
+            # can't be parsed or applied is ignored whole (fail closed). See
+            # evi/project.py.
+            from evi.project import (
+                load_project_config_overlay,
+                merge_project_overlay,
+                warn_ignored_project_keys,
+            )
 
             project_overlay = load_project_config_overlay()
             if project_overlay:
-                data = merge_overlay(data, project_overlay)
+                data, ignored = merge_project_overlay(data, project_overlay)
+                warn_ignored_project_keys(ignored)
         return cls(
             llm=LLMSettings(**data.get("llm", {})),
             comfy=ComfySettings(**data.get("comfy", {})),

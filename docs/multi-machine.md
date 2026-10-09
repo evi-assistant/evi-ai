@@ -167,11 +167,18 @@ is on a network you don't control, you should:
 - Bind to a specific interface (`--host 10.0.0.5`) or only localhost
   (`--host 127.0.0.1`) and tunnel via SSH or Tailscale.
 - Put it behind a reverse proxy that does auth (nginx + basic auth, or
-  Cloudflare Access).
+  Cloudflare Access). The proxy must pass the browser's `Host` through
+  (nginx: `proxy_set_header Host $host;`, Apache: `ProxyPreserveHost On`).
+  Since 1.0.53 eVi refuses state-changing requests whose `Origin` doesn't match
+  the host it was reached on, so a proxy that rewrites `Host` (nginx's default)
+  gets `403 Refusing a cross-site request` on every chat. If you can't keep the
+  `Host`, have the proxy send `X-Forwarded-Host` (and `X-Forwarded-Port`) and
+  start eVi with `EVI_TRUSTED_PROXY=1`.
 - Or just keep it on a LAN you trust.
 
-eVi has no built-in auth on the web UI by design — it assumes a trusted
-network.
+Set an access token (`evi web-config token`) whenever eVi is reachable from
+another machine: without one, eVi only answers requests addressed to a
+loopback hostname.
 
 ## Syncing your state across machines (`evi sync`)
 

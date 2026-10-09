@@ -16,6 +16,7 @@ same across machines.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,31 @@ def active_profile_name() -> str | None:
     return name or None
 
 
+# A profile name becomes a filename under PROFILES_DIR, so it must not be able
+# to name anything else: `evi profile remove ../config` used to delete
+# ~/.evi/config.toml, and `profile add` could write anywhere (1.0.53).
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+
+
+class ProfileNameError(ValueError):
+    """Raised for a profile name that isn't a plain file stem."""
+
+
+def valid_profile_name(name: str) -> bool:
+    return (
+        isinstance(name, str)
+        and _NAME_RE.fullmatch(name) is not None
+        and ".." not in name
+        and not name.endswith(".")
+    )
+
+
 def profile_path(name: str) -> Path:
+    if not valid_profile_name(name):
+        raise ProfileNameError(
+            f"invalid profile name {name!r}: use letters, digits, '-', '_' or '.' "
+            "(no path separators)"
+        )
     return PROFILES_DIR / f"{name}.toml"
 
 
@@ -47,7 +72,7 @@ def list_profiles() -> list[str]:
 def load_profile_overlay(name: str | None = None) -> dict[str, Any]:
     """Return the profile's parsed TOML as a dict (empty if none active)."""
     name = name or active_profile_name()
-    if not name:
+    if not name or not valid_profile_name(name):
         return {}
     path = profile_path(name)
     if not path.is_file():

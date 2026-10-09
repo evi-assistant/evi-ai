@@ -248,6 +248,85 @@ Profile merge is **deep** for tables (dicts) and **replacing** for lists.
 So a profile that overrides `[microsoft] scopes` replaces it wholesale
 rather than appending.
 
+## Per-project config — `.evi.toml`
+
+A `.evi.toml` in a repository (the nearest one walking up from the working
+directory) is layered on top of `config.toml` + the active profile. Because it
+comes with the repo — including repos you merely cloned — it is **untrusted**:
+since 1.0.53 it is filtered through an allowlist, and everything not listed
+below is ignored. eVi names the ignored keys once per process in a warning
+(`eVi: ignoring these settings from project config <path>: …`; odd key names
+are shown escaped). A file that can't be used at all — not valid UTF-8 TOML,
+nested too deeply, or larger than 64 KB — is ignored as a whole and reported
+the same way; it never stops eVi from loading your own config.
+`--safe-mode` skips the file entirely.
+
+**Applied as-is** (model / sampling preferences only):
+
+- `[llm]` `model`, `embed_model`, `embed_dimensions`, `temperature`, `top_p`,
+  `presence_penalty`, `frequency_penalty`, `seed`, `stop_sequences`,
+  `logit_bias`, `max_tokens`, `max_completion_tokens`, `context_size`,
+  `compact_after_messages`, `compact_keep_recent`, `compact_when_pct`,
+  `reasoning_effort`, `parallel_tool_calls`, `cache_prompt`, `logprobs`,
+  `top_logprobs`, `output_style`
+- `[worktree]` `base_ref`
+
+Values must have the field's type and contain no control characters, and
+anything else is ignored (the warning marks it `(invalid value)`):
+
+- names (`model`, `embed_model`, `output_style`) must be plain names —
+  letters, digits and `_ . : / @ + -`, with single spaces allowed inside
+  (`"Qwen2.5 7B Instruct"`), not starting with `-` or with a word that starts
+  with `-`; `base_ref` may also use `~` and `^` (e.g. `HEAD~1`) but no spaces;
+- numbers must be finite and in range: `temperature` 0–2, `top_p` 0–1,
+  `presence_penalty` / `frequency_penalty` −2–2, `max_tokens` ≥ 1,
+  `compact_when_pct` 1–100, `embed_dimensions` 1–65536, `top_logprobs` 0–20,
+  `seed` a 64-bit integer, and the other counts 0 to 2³¹−1;
+- `reasoning_effort` must be one of `off`, `none`, `low`, `medium`, `high`,
+  `max`;
+- `logit_bias` must be a JSON object of token id → number from −100 to 100;
+- `stop_sequences` may hold at most 16 entries of up to 256 characters
+  (newlines and tabs are fine).
+
+`fast_mode`, `fast_model`, `fallback_models`, `router_enabled`,
+`router_model` and `request_timeout` are **not** honoured from a `.evi.toml`:
+each can make a turn run on a different model (or deadline) from the one the
+`[[judge]]` guardrails use, and a judge that errors lets the message through.
+
+**Tighten-only** (`[tools]` and `[auto]`): a project can switch tool categories
+off (and the `run_python` / `run_command` OS sandbox on), pick a *stricter*
+`mode`, add `deny` rules, add `hard_deny` / `protected_paths` entries, and
+force `block_destructive = true` — never the reverse. `[tools] transcripts` is
+not a tool category and can't be changed. Details in
+[Permissions & sandbox](features/permissions-and-sandbox.md#per-project-and-per-profile-overrides).
+
+**Always ignored**: anything that is an endpoint, credential, executable,
+shell command, listener or file path — `[llm]` `backend`, `base_url`,
+`api_key`, `api`, `responses_tools` — and the whole `[statusline]`,
+`[runtime]`, `[web]`, `[federation]`, `[channels]`, `[notify]`,
+`[telemetry]`, `[plugins]`, `[desktop]`, `[google]`, `[microsoft]`,
+`[obsidian]`, `[comfy]`, `[voice]`, `[models]` and `[ultracode]` sections, plus
+any unknown key. Put those in `config.toml` or a profile.
+
+```toml
+# <repo>/.evi.toml
+[llm]
+model       = "qwen2.5-coder:14b"
+temperature = 0.2
+
+[tools]
+computer = false            # no desktop control in this repo
+
+[auto]
+mode      = "ask"           # applies only if you're on yolo / accept_edits
+rules     = ["deny run_command git push*"]  # skipped in yolo (the mode above rules that out)
+hard_deny = ["run_command rm -rf*"]         # applies in every mode, even yolo
+```
+
+`rules` and `hard_deny` entries match the **tool name** (`run_command`,
+`run_python`, `write_file`, `edit_file`, …), not the `[tools]` category: a rule
+such as `"deny shell rm*"` matches no tool and blocks nothing.
+
 ## Memory — `~/.evi/memory/`
 
 One markdown file per fact:

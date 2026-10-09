@@ -49,13 +49,17 @@ def test_speak_runs_espeak_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
+        captured["input"] = kwargs.get("input")
         return subprocess.CompletedProcess(cmd, returncode=0)
 
     monkeypatch.setattr(voice_mod.subprocess, "run", fake_run)
     speak("hello", rate=180, blocking=True)
     assert captured["cmd"][0] == "espeak-ng"
-    assert "hello" in captured["cmd"]
     assert "180" in captured["cmd"]
+    # The text goes over stdin, never on the command line (1.0.53).
+    assert "--stdin" in captured["cmd"]
+    assert "hello" not in captured["cmd"]
+    assert captured["input"].decode("utf-8").startswith("hello")
 
 
 def test_speak_handles_empty_text(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,10 @@ TTS uses what's already on the box, no Python deps:
 - macOS:   `say`
 - Linux:   `espeak-ng` (if installed), else `espeak`, else error
 
+The text to speak is model output, so it never goes into a script or onto a
+command line: PowerShell reads it from environment variables, `say` /
+`espeak` read it from stdin.
+
 STT uses `faster-whisper` (CTranslate2-backed whisper) + `sounddevice` for
 mic capture. Both are optional — install `evi[stt]` to enable. The model
 is downloaded on first use to the HF cache (~75 MB for the `tiny.en`
@@ -46,6 +50,80 @@ def detect_backend() -> str:
     return "none"
 
 
+# Windows caps one environment variable at 32,767 UTF-16 code units. 16,000
+# code points is at most 32,000 units even if every one is a surrogate pair,
+# so each chunk always fits; longer text is spoken as several chunks.
+_PS_ENV_CHUNK = 16_000
+_PS_ENV_PREFIX = "EVI_TTS_TEXT_"
+# System.Speech SpeechSynthesizer.Rate accepts -10..10; `say -r` and
+# `espeak -s` take words per minute.
+_PS_RATE_RANGE = (-10, 10)
+_WPM_RATE_RANGE = (1, 1000)
+
+
+def _valid_rate(rate: object, lo: int, hi: int) -> int | None:
+    """Return `rate` if it's a plain int in [lo, hi]; None (speak at the
+    default rate) if it's None or an int out of range; else raise VoiceError.
+
+    It gets formatted into a script / argv, so anything but a plain int —
+    str, float, bool, an int subclass (whose __format__ / __str__ could
+    return anything) — is rejected outright.
+    """
+    if rate is None:
+        return None
+    if type(rate) is not int:
+        raise VoiceError(f"TTS rate must be an integer, got {type(rate).__name__}")
+    # Out of range (e.g. the docs' WPM `--rate 140` on Windows, whose SAPI
+    # Rate is -10..10): the old command spoke at the default rate, so keep
+    # doing that rather than fail the whole utterance.
+    return rate if lo <= rate <= hi else None
+
+
+def _powershell_exe() -> str:
+    """Absolute path to Windows PowerShell. A bare "powershell.exe" would let
+    CreateProcess pick up a planted copy in the current directory (e.g. a
+    cloned repo) before System32."""
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
+def _chunk_text(text: str, limit: int = _PS_ENV_CHUNK) -> list[str]:
+    """Split `text` into pieces of at most `limit` chars, breaking before a
+    space where possible. ``"".join(chunks) == text`` always holds."""
+    chunks: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind(" ", 1, limit + 1)
+        if cut <= 0:
+            cut = limit
+        chunks.append(text[:cut])
+        text = text[cut:]
+    chunks.append(text)
+    return chunks
+
+
+def _windows_tts(text: str, rate: int | None) -> tuple[list[str], dict[str, str]]:
+    """PowerShell command + child environment for the Windows system voice.
+
+    The script is built only from constants and a validated int. The text
+    travels out of band in $env:EVI_TTS_TEXT_<n>, which PowerShell reads as
+    data and never parses as code — quote-escaping isn't enough, since
+    PowerShell also treats U+2018/U+2019/U+201A/U+201B as single quotes.
+    """
+    env = dict(os.environ)
+    script = [
+        "Add-Type -AssemblyName System.Speech;",
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;",
+    ]
+    ps_rate = _valid_rate(rate, *_PS_RATE_RANGE)
+    if ps_rate is not None:
+        script.append(f"$s.Rate = {ps_rate};")
+    for i, chunk in enumerate(_chunk_text(text)):
+        name = f"{_PS_ENV_PREFIX}{i}"
+        env[name] = chunk
+        script.append(f"$s.Speak($env:{name});")
+    return [_powershell_exe(), "-NoProfile", "-Command", "".join(script)], env
+
+
 def speak(
     text: str,
     *,
@@ -63,7 +141,10 @@ def speak(
     they lazy-import their deps and raise `VoiceError` with an install hint if
     missing. `rate` only applies to the system engine.
     """
-    text = text.strip()
+    # NUL can't travel in an env var / argv, and a lone surrogate (possible in
+    # JSON-decoded model output) can't be encoded for stdin / argv; neither
+    # is meaningful speech.
+    text = text.replace("\x00", "").encode("utf-8", "ignore").decode("utf-8").strip()
     if not text:
         return
 
@@ -88,36 +169,51 @@ def speak(
         )
 
     cmd: list[str]
+    env: dict[str, str] | None = None
+    stdin_data: bytes | None = None
     if backend == "windows":
-        # PowerShell one-liner. We escape single quotes by doubling them.
-        escaped = text.replace("'", "''")
-        rate_part = f"$s.Rate = {rate};" if rate is not None else ""
-        ps = (
-            "Add-Type -AssemblyName System.Speech;"
-            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-            f"{rate_part}"
-            f"$s.Speak('{escaped}')"
-        )
-        cmd = ["powershell.exe", "-NoProfile", "-Command", ps]
-    elif backend == "macos":
-        cmd = ["say"]
-        if rate is not None:
-            cmd += ["-r", str(rate)]
-        cmd += [text]
-    else:  # espeak / espeak-ng
-        cmd = [backend]
-        if rate is not None:
-            cmd += ["-s", str(rate)]
-        cmd += [text]
+        cmd, env = _windows_tts(text, rate)
+    else:
+        # say / espeak read the text from stdin (`say -f -`, `espeak --stdin`)
+        # rather than argv, so text starting with '-' can't be taken as an
+        # option (and long text can't hit ARG_MAX).
+        wpm = _valid_rate(rate, *_WPM_RATE_RANGE)
+        if backend == "macos":
+            cmd = ["say"]
+            if wpm is not None:
+                cmd += ["-r", str(wpm)]
+            cmd += ["-f", "-"]
+        else:  # espeak / espeak-ng
+            cmd = [backend]
+            if wpm is not None:
+                cmd += ["-s", str(wpm)]
+            cmd += ["--stdin"]
+        # End with a newline: espeak-ng 1.50-1.52 `--stdin` overwrites the
+        # last byte read (expecting `echo text |`), which would otherwise eat
+        # the final character. Plain whitespace to `say` and older espeak.
+        stdin_data = (text + "\n").encode("utf-8")
 
     if blocking:
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, input=stdin_data, env=env, check=True, capture_output=True)
         except (OSError, subprocess.CalledProcessError) as exc:
             raise VoiceError(f"TTS failed: {exc}") from exc
     else:
         try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if stdin_data is None:
+                subprocess.Popen(
+                    cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                # Feed stdin from an anonymous temp file, not a pipe, so we
+                # never block (or need a writer thread) on a slow reader.
+                with tempfile.TemporaryFile() as fh:
+                    fh.write(stdin_data)
+                    fh.seek(0)
+                    subprocess.Popen(
+                        cmd, stdin=fh, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
         except OSError as exc:
             raise VoiceError(f"TTS spawn failed: {exc}") from exc
 
@@ -194,11 +290,17 @@ def _synth_f5(text, out, *, model, clone_sample, language) -> Path:
         raise VoiceError(
             "F5-TTS not installed — pip install f5-tts (provides f5-tts_infer-cli)"
         )
-    cmd = [cli, "--gen_text", text, "--output_file", str(out)]
+    if os.name == "nt" and cli.lower().endswith((".bat", ".cmd")):
+        # cmd.exe re-parses a batch file's command line, so argv quoting
+        # can't keep the text from being run as shell syntax.
+        raise VoiceError(f"refusing to pass text to a batch-file launcher: {cli}")
+    # `--opt=value` binds the value even when it starts with '-', so the text
+    # (or a config value) can't be parsed as another option.
+    cmd = [cli, f"--gen_text={text}", "--output_file", str(out)]
     if model:
-        cmd += ["--model", model]
+        cmd.append(f"--model={model}")
     if clone_sample:
-        cmd += ["--ref_audio", clone_sample]
+        cmd.append(f"--ref_audio={clone_sample}")
     try:
         subprocess.run(cmd, check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError) as exc:

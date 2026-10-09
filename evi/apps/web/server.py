@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from evi import safemode
+from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
 from evi.backends import get_backend
 from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
@@ -206,6 +207,156 @@ def _host_is_local(request) -> bool:
     elif host.count(":") == 1:                    # 127.0.0.1:8473
         host = host.split(":", 1)[0]
     return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver"}
+
+
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# GETs with side effects, guarded like a POST: /api/backend/pull starts an
+# Ollama model download of whatever `?model=` names (the first-run wizard opens
+# it as a same-origin EventSource). HEAD runs the same handler.
+_SIDE_EFFECT_GETS = frozenset({"/api/backend/pull"})
+_LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+# The desktop shell's bundled loading page (tauri://localhost on macOS/Linux,
+# http(s)://tauri.localhost on Windows). Today it only polls /api/health and then
+# navigates to http://127.0.0.1:<port>/ (same-origin from there on), but the
+# shell must never be locked out of its own sidecar.
+_TAURI_ORIGINS = frozenset(
+    {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
+)
+
+
+def _authority(host: str | None, port: int | None) -> tuple[str, int | None]:
+    """(host, port) with 80 and 443 folded to None whatever the scheme, so an
+    `https://x` Origin matches a TLS-terminating proxy's plain-HTTP `Host: x`
+    or `Host: x:443` (an implicit http and https port already compare equal)."""
+    if port in (80, 443):
+        port = None
+    return (host or "").lower(), port
+
+
+def _cross_site_refusal(request) -> str | None:
+    """Why a state-changing request must be refused as cross-site, else None.
+
+    Anti-CSRF: any web page can POST to 127.0.0.1, and a multipart or
+    form-encoded POST is a CORS "simple request" — no preflight — so without
+    this a hostile page could drive the upload/shell-backed API through the
+    user's browser on the default no-token setup. Browsers stamp every
+    non-GET request with an Origin (and Sec-Fetch-Site) the page can't forge,
+    so we accept only our own origin, a loopback alias of the same port, or the
+    desktop shell. No Origin at all means a non-browser client (CLI, the VS Code
+    extension host, federation/A2A peers, curl) — those pass, unless the browser
+    says another site sent it: a no-cors GET (<img>, <link>) carries no Origin,
+    so for the side-effecting GETs Sec-Fetch-Site is the only tell. `null`
+    (sandboxed iframe, file://) is refused. `EVI_ALLOW_CROSS_ORIGIN=1` overrides.
+
+    Behind a reverse proxy that rewrites Host (nginx's default
+    `Host $proxy_host`, Apache without ProxyPreserveHost) the public name the
+    browser used can arrive as X-Forwarded-Host (+ X-Forwarded-Port), matched
+    only with `EVI_TRUSTED_PROXY=1`. Not by default: a page that reaches eVi
+    through such a proxy by DNS rebinding is same-origin with itself, so it can
+    set that header (or the proxy forwards its rebound Host as it) and match
+    its own Origin. Opting in vouches that the proxy sets the header itself.
+    """
+    import os as _os
+    from urllib.parse import urlsplit
+
+    def _flag(name: str) -> bool:
+        return _os.environ.get(name, "").strip() in {"1", "true", "TRUE"}
+
+    if request.method not in _STATE_CHANGING_METHODS and not (
+        request.method in ("GET", "HEAD") and request.url.path in _SIDE_EFFECT_GETS
+    ):
+        return None
+    if _flag("EVI_ALLOW_CROSS_ORIGIN"):
+        return None
+    # Routine webhooks: the unguessable path token is the credential (the same
+    # reason they skip web auth), so a page that doesn't know it can't forge the
+    # call — and a browser dashboard that does know it may fire it.
+    if request.url.path.startswith("/api/routine/"):
+        return None
+    site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    origin = (request.headers.get("origin") or "").strip()
+    if not origin:
+        # Every browser POST carries an Origin; a no-cors GET doesn't. Another
+        # local port is `same-site` (ports don't count), so refuse that too.
+        if site in ("cross-site", "same-site"):
+            return f"Sec-Fetch-Site: {site}"
+        return None
+    norm = origin.lower().rstrip("/")
+    refusal = f"Origin: {origin[:200]}"
+    # The desktop shell and a loopback alias of this very port are this
+    # machine's own pages, but a real browser (WebView2 included) labels their
+    # requests to 127.0.0.1 `cross-site` — a different site — so they're
+    # matched before the Sec-Fetch-Site check below.
+    if norm in _TAURI_ORIGINS:
+        return None
+    try:
+        o = urlsplit(norm)
+        if o.scheme not in ("http", "https") or not o.hostname:
+            return refusal
+        theirs = _authority(o.hostname, o.port)
+        mine = _authority(request.url.hostname, request.url.port)
+    except ValueError:  # malformed port in either header
+        return refusal
+    if (theirs != mine and theirs[1] == mine[1]
+            and theirs[0] in _LOOPBACK_NAMES and mine[0] in _LOOPBACK_NAMES):
+        return None
+    if site == "cross-site":  # a browser never says so for its own origin
+        return "Sec-Fetch-Site: cross-site"
+    if theirs == mine:
+        return None
+    fwd_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    if fwd_host and _flag("EVI_TRUSTED_PROXY"):
+        fwd_port = (request.headers.get("x-forwarded-port") or "").split(",")[0].strip()
+        try:
+            f = urlsplit("//" + fwd_host.lower())
+            port = f.port
+        except ValueError:  # malformed port
+            return refusal
+        if port is None and fwd_port.isascii() and fwd_port.isdigit():
+            port = int(fwd_port)
+        if f.hostname and _authority(f.hostname, port) == theirs:
+            return None
+    return refusal
+
+
+def _within(path: Path, root: Path) -> bool:
+    """True if `path` resolves strictly inside `root` (`..`, absolute or
+    drive-relative components and symlinks all resolved first)."""
+    try:
+        p, r = path.resolve(), root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return p != r and p.is_relative_to(r)
+
+
+_BAD_SESSION_ID = (
+    f"invalid session_id (expected 1-{SESSION_ID_MAX_LEN} letters, digits, '_' or '-')"
+)
+
+
+def _require_session_id(session_id: str) -> str:
+    """`session_id`, or HTTP 400 if it isn't a plain token (see ids.py).
+
+    One contract for every surface: the id names the session's transcript file
+    and its uploads dir, so a path-like one (`../..`, `C:/x`) is refused up
+    front rather than at whichever join happens to see it first."""
+    if not valid_session_id(session_id):
+        raise HTTPException(400, _BAD_SESSION_ID)
+    return session_id
+
+
+def _session_upload_dir(session_id: str) -> Path:
+    """`UPLOADS_DIR/<session_id>`, or HTTP 400 if the id isn't a plain token.
+
+    The id arrives as a raw form field / URL segment, and pathlib walks `..` or
+    swaps the base for an absolute id (`C:/x`, `/abs`), so an unchecked join
+    writes anywhere the user can. Shape check first, then — defense in depth —
+    the resolved path must still sit under UPLOADS_DIR.
+    """
+    target = UPLOADS_DIR / _require_session_id(session_id)
+    if not _within(target, UPLOADS_DIR):
+        raise HTTPException(400, _BAD_SESSION_ID)
+    return target
 
 
 # Human labels for the first-run ladder. The point of naming the product rather
@@ -959,6 +1110,30 @@ def create_app() -> FastAPI:
         from evi.users import authenticate, load_users
 
         _CURRENT_USER.set(None)  # reset per request; set below when authenticated
+        # Cross-site request guard — first, for every route (incl. /a2a and
+        # federation), whatever the auth setup. A page on another site can make
+        # the browser POST here without a preflight (multipart uploads are
+        # "simple requests"); the Origin it can't forge gives it away. Peers and
+        # CLIs send no Origin and pass. See _cross_site_refusal.
+        refusal = _cross_site_refusal(request)
+        if refusal is not None:
+            return JSONResponse(
+                {"detail": f"Refusing a cross-site request ({refusal}): eVi only accepts "
+                           "changes from its own pages, so another website can't drive it "
+                           "through your browser. Behind a reverse proxy that rewrites "
+                           "Host, have it send the public host as X-Forwarded-Host and "
+                           "set EVI_TRUSTED_PROXY=1 (or set EVI_ALLOW_CROSS_ORIGIN=1 if "
+                           "this is intended)."},
+                status_code=403,
+            )
+        # A `?session=<id>` link (handoff URL, evi://session deep link) seeds the
+        # web UI's tab id, which the page then splices into its own same-origin
+        # API paths and request bodies — so a crafted link from another site
+        # would steer those requests past the guard above. Refuse a malformed
+        # id before the page is served, whatever path serves it.
+        for want in request.query_params.getlist("session"):
+            if want and not valid_session_id(want):
+                return JSONResponse({"detail": _BAD_SESSION_ID}, status_code=400)
         cfg = Config.load()
         token = cfg.web.auth_token.strip()
         users = load_users() if cfg.web.multi_user else []
@@ -1094,6 +1269,10 @@ def create_app() -> FastAPI:
         return callback
 
     def get_session(session_id: str) -> WebSession:
+        # The id names the transcript file (TranscriptStore joins it onto a day
+        # dir) and the uploads dir, so a path-like one is a 400 here — the one
+        # door every session-creating route goes through.
+        _require_session_id(session_id)
         bucket = _my_sessions()
         sess = bucket.get(session_id)
         if sess is None:
@@ -1956,8 +2135,9 @@ def create_app() -> FastAPI:
         """
         from evi import sessions as _sessions
 
+        # handoff_info looks the id up as `<day dir>/<id>.jsonl`.
         info = _sessions.handoff_info(
-            session_id, base_url=str(request.base_url)
+            _require_session_id(session_id), base_url=str(request.base_url)
         )
         if info is None:
             raise HTTPException(
@@ -3308,7 +3488,9 @@ def create_app() -> FastAPI:
         # for a session revived from its transcript.
         from urllib.parse import quote
 
-        udir = UPLOADS_DIR / session_id
+        # get_session above already refused a malformed id; re-checked here so
+        # the listing can never walk off UPLOADS_DIR.
+        udir = UPLOADS_DIR / session_id if valid_session_id(session_id) else None
         upload_imgs = (
             [
                 p.name
@@ -3316,7 +3498,7 @@ def create_app() -> FastAPI:
                 if p.is_file()
                 and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
             ]
-            if udir.is_dir()
+            if udir is not None and _within(udir, UPLOADS_DIR) and udir.is_dir()
             else []
         )
 
@@ -3592,9 +3774,13 @@ def create_app() -> FastAPI:
         if not session_id.strip() or not file.filename:
             raise HTTPException(400, "session_id and file are required")
         safe_name = Path(file.filename).name
-        target_dir = UPLOADS_DIR / session_id
-        target_dir.mkdir(parents=True, exist_ok=True)
+        if not safe_name or safe_name in (".", ".."):
+            raise HTTPException(400, "invalid filename")
+        target_dir = _session_upload_dir(session_id)
         target = target_dir / safe_name
+        if not _within(target, target_dir):
+            raise HTTPException(400, "invalid filename")
+        target_dir.mkdir(parents=True, exist_ok=True)
         with target.open("wb") as out:
             while True:
                 chunk = await file.read(64 * 1024)
@@ -3628,9 +3814,11 @@ def create_app() -> FastAPI:
         if not safe_name or safe_name in (".", ".."):
             raise HTTPException(400, "invalid filename")
 
-        target_dir = UPLOADS_DIR / session_id
-        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dir = _session_upload_dir(session_id)
         target = target_dir / safe_name
+        if not _within(target, target_dir):
+            raise HTTPException(400, "invalid filename")
+        target_dir.mkdir(parents=True, exist_ok=True)
 
         # Stream to disk in chunks; cap at 32 MB to refuse mistakes.
         max_bytes = 32 * 1024 * 1024
@@ -3659,6 +3847,8 @@ def create_app() -> FastAPI:
         if "/" in name or "\\" in name or ".." in name:
             raise HTTPException(400, "invalid image name")
         path = IMAGE_DIR / name
+        if not _within(path, IMAGE_DIR):  # e.g. a drive-relative `D:x.png` on Windows
+            raise HTTPException(400, "invalid image name")
         if not path.is_file():
             raise HTTPException(404, "not found")
         return FileResponse(path)
@@ -3669,10 +3859,12 @@ def create_app() -> FastAPI:
         # after a history rebuild (tab switch) — the attach-time thumbnail is an
         # ephemeral blob otherwise lost. The unguessable session UUID in the path
         # is the capability, same idea as /images's random names.
-        for part in (session_id, name):
-            if "/" in part or "\\" in part or ".." in part:
-                raise HTTPException(400, "invalid path")
-        path = UPLOADS_DIR / session_id / name
+        if "/" in name or "\\" in name or ".." in name:
+            raise HTTPException(400, "invalid path")
+        udir = _session_upload_dir(session_id)
+        path = udir / name
+        if not _within(path, udir):  # e.g. a drive-relative `D:x.png` on Windows
+            raise HTTPException(400, "invalid path")
         if not path.is_file():
             raise HTTPException(404, "not found")
         return FileResponse(path)
