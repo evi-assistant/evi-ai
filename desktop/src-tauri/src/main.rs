@@ -471,38 +471,148 @@ fn restart_app_cmd(app: tauri::AppHandle) {
 #[tauri::command]
 fn open_logs_cmd() -> Result<(), String> {
     match server_log_dir() {
-        Some(dir) => os_open(&dir.to_string_lossy()).map_err(|e| e.to_string()),
+        Some(dir) => os_open_dir(&dir).map_err(|e| e.to_string()),
         None => Err("no log directory".into()),
     }
 }
 
-/// Open an external http(s) URL in the default browser. Restricted to http/https
-/// so a stray invoke can't launch arbitrary local programs.
+/// Open an external http(s) URL in the default browser. Invokable from the
+/// webview — which renders model output — so the URL is strictly validated and
+/// only its normalized form is handed to the OS, never through a shell.
 #[tauri::command]
 fn open_external_cmd(url: String) -> Result<(), String> {
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("only http(s) URLs are allowed".into());
-    }
-    os_open(&url).map_err(|e| e.to_string())
+    let url = validate_external_url(&url)?;
+    os_open_url(&url).map_err(|e| e.to_string())
 }
 
-/// Hand a URL or path to the OS to open with its default handler.
-fn os_open(target: &str) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", "", target]).creation_flags(0x0800_0000);
-        c.spawn().map(|_| ())
+/// Strictly validate a URL before it leaves the app: parse it with the `url`
+/// crate, allow only http/https with a real host (an IP literal or a DNS-style
+/// name) and no embedded credentials, and refuse whitespace and control
+/// characters in the raw input (the parser would silently strip tabs/newlines).
+/// Quotes are percent-encoded rather than refused, and the normalized form is
+/// re-checked (host percent-decoding can introduce e.g. `"`). Returns the
+/// normalized serialization — the only string the OS ever sees.
+fn validate_external_url(raw: &str) -> Result<String, String> {
+    fn bad_char(c: char) -> bool {
+        c.is_control() || c.is_whitespace()
     }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open").arg(target).spawn().map(|_| ())
+    fn quote(c: char) -> bool {
+        matches!(c, '"' | '\'' | '`')
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        Command::new("xdg-open").arg(target).spawn().map(|_| ())
+    if raw.is_empty() {
+        return Err("empty URL".into());
     }
+    if raw.chars().any(bad_char) {
+        return Err("URL contains whitespace or control characters".into());
+    }
+    let parsed = url::Url::parse(raw).map_err(|e| format!("invalid URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("only http(s) URLs are allowed".into());
+    }
+    // `https://github.com@evil.com/` opens evil.com — a phishing disguise, and
+    // nothing eVi links to needs credentials in the URL.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URLs with embedded credentials are not allowed".into());
+    }
+    // WHATWG host rules (which `url` follows) only forbid a few code points, so
+    // a host like `x&calc.exe` parses. No DNS name looks like that — refuse
+    // anything but [A-Za-z0-9._-] (IDN hosts are punycode by now) as defense in
+    // depth on top of never using a shell.
+    let host_ok = match parsed.host() {
+        Some(url::Host::Domain(d)) => {
+            let dns_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_');
+            !d.is_empty() && d.chars().all(dns_char)
+        }
+        Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_)) => true,
+        _ => false,
+    };
+    if !host_ok {
+        return Err("URL has no valid host".into());
+    }
+    // The parser percent-encodes `"` everywhere but leaves `'` raw in paths and
+    // fragments and `` ` `` raw in queries. Encode those too (WHATWG already
+    // encodes `'` in http(s) queries; servers decode both back) so no quote ever
+    // reaches the OS — old xdg-open versions mis-quote them — without refusing
+    // links like `.../wiki/Moore's_law`. The host allowlist above keeps quotes
+    // out of the host, so this only touches path/query/fragment.
+    let normalized = parsed.as_str().replace('\'', "%27").replace('`', "%60");
+    if !normalized.is_ascii() || normalized.chars().any(|c| bad_char(c) || quote(c)) {
+        return Err("URL contains whitespace, quotes or control characters".into());
+    }
+    Ok(normalized)
+}
+
+/// Open an already-validated http(s) URL in the default browser, always as a
+/// single argument and never through a shell.
+///
+/// Windows: NOT `cmd /C start "" <url>` — cmd.exe re-parses the whole command
+/// line (`&`, `|`, `^`, `%VAR%`), so `http://x&calc.exe` ran calc and real URLs
+/// with `&` broke. `rundll32 url.dll,FileProtocolHandler <url>` instead: rundll32
+/// passes everything after the entry point verbatim to FileProtocolHandler,
+/// which ShellExecutes it — the same default-browser lookup `start` did, minus
+/// the shell. `explorer.exe <url>` was rejected because explorer treats commas
+/// as switch separators, and the shell plugin's opener isn't initialized in
+/// this app (no `.plugin(tauri_plugin_shell::init())`). The validator guarantees no
+/// whitespace or quotes, so std's argument quoting leaves the URL untouched.
+/// rundll32 is a GUI-subsystem binary, so no CREATE_NO_WINDOW is needed.
+fn os_open_url(url: &str) -> std::io::Result<()> {
+    url_open_command(Opener::host(), url).spawn().map(|_| ())
+}
+
+/// Which OS opener to build a command for. A runtime value rather than
+/// `#[cfg]` blocks so every OS's argv — the Windows no-shell one included — is
+/// compiled and unit-tested on any CI host (CI's `rust` job is Linux-only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Opener {
+    Windows,
+    MacOs,
+    Xdg,
+}
+
+impl Opener {
+    fn host() -> Opener {
+        if cfg!(windows) {
+            Opener::Windows
+        } else if cfg!(target_os = "macos") {
+            Opener::MacOs
+        } else {
+            Opener::Xdg
+        }
+    }
+}
+
+/// The (unspawned) opener command for `os_open_url` — split out so tests can
+/// assert the program and argv without launching a browser.
+fn url_open_command(os: Opener, url: &str) -> Command {
+    let mut cmd = match os {
+        Opener::Windows => {
+            let mut c = Command::new("rundll32.exe");
+            c.arg("url.dll,FileProtocolHandler");
+            c
+        }
+        Opener::MacOs => Command::new("open"),
+        Opener::Xdg => Command::new("xdg-open"),
+    };
+    cmd.arg(url);
+    cmd
+}
+
+/// Open a local directory in the OS file manager, passed as a single argument.
+/// Windows uses `explorer.exe <dir>` (browse only, no cmd.exe re-parsing; a
+/// GUI-subsystem binary, so no CREATE_NO_WINDOW). Never used for URLs.
+fn os_open_dir(dir: &Path) -> std::io::Result<()> {
+    dir_open_command(Opener::host(), dir).spawn().map(|_| ())
+}
+
+/// The (unspawned) opener command for `os_open_dir`, split out for tests.
+fn dir_open_command(os: Opener, dir: &Path) -> Command {
+    let mut cmd = Command::new(match os {
+        Opener::Windows => "explorer.exe",
+        Opener::MacOs => "open",
+        Opener::Xdg => "xdg-open",
+    });
+    cmd.arg(dir);
+    cmd
 }
 
 /// Build the File/Edit/View/Help menu bar. Custom items carry stable ids that
@@ -916,5 +1026,210 @@ mod deep_link_tests {
         assert_eq!(deep_link_to_path("https://evi/session/x"), None);
         assert_eq!(deep_link_to_path("not a url"), None);
         assert_eq!(deep_link_to_path(""), None);
+    }
+}
+
+#[cfg(test)]
+mod external_url_tests {
+    // `open_external_cmd` is invokable from the webview, which renders model
+    // output, so `validate_external_url` is the gate between a crafted link and
+    // the OS. The other half of the fix (no shell ever parses the URL) is
+    // pinned by inspecting the unspawned `url_open_command` / `dir_open_command`
+    // for every OS, so even Linux CI catches a Windows revert to cmd.exe.
+    use super::{dir_open_command, url_open_command, validate_external_url, Opener};
+    use std::path::Path;
+    use std::process::Command;
+
+    fn ok(raw: &str) -> String {
+        validate_external_url(raw)
+            .unwrap_or_else(|e| panic!("{raw:?} rejected: {e}"))
+    }
+
+    fn rejected(raw: &str) -> bool {
+        validate_external_url(raw).is_err()
+    }
+
+    /// Program followed by its arguments, as the OS will receive them.
+    fn argv(cmd: &Command) -> Vec<String> {
+        std::iter::once(cmd.get_program())
+            .chain(cmd.get_args())
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn accepts_normal_http_and_https_urls() {
+        assert_eq!(
+            ok("https://github.com/evi-assistant/evi-ai/issues"),
+            "https://github.com/evi-assistant/evi-ai/issues"
+        );
+        // `&` and `%` are everyday URL characters and must survive untouched —
+        // they were only dangerous because cmd.exe re-parsed them.
+        assert_eq!(
+            ok("http://example.com/a?b=1&c=2#frag"),
+            "http://example.com/a?b=1&c=2#frag"
+        );
+        assert_eq!(
+            ok("https://example.com/search?q=a%20b&x=%26y"),
+            "https://example.com/search?q=a%20b&x=%26y"
+        );
+        assert_eq!(
+            ok("https://example.com/&calc.exe"),
+            "https://example.com/&calc.exe"
+        );
+        assert_eq!(ok("http://127.0.0.1:8473/x"), "http://127.0.0.1:8473/x");
+        assert_eq!(ok("http://[::1]:8080/"), "http://[::1]:8080/");
+    }
+
+    #[test]
+    fn returns_the_normalized_serialization() {
+        assert_eq!(ok("https://example.com"), "https://example.com/");
+        assert_eq!(ok("HTTPS://Example.COM/Path"), "https://example.com/Path");
+        assert_eq!(ok("https://example.com:443/"), "https://example.com/");
+        assert_eq!(
+            ok("https://bücher.example/"),
+            "https://xn--bcher-kva.example/"
+        );
+    }
+
+    #[test]
+    fn shell_metacharacters_in_the_host_are_rejected() {
+        // Real `url` behaviour: `&` is not a WHATWG forbidden domain code point,
+        // so the crate itself accepts `x&calc.exe` as a host...
+        assert_eq!(
+            url::Url::parse("http://x&calc.exe").unwrap().host_str(),
+            Some("x&calc.exe")
+        );
+        // ...and it's our host allowlist that refuses it.
+        assert!(rejected("http://x&calc.exe"));
+        assert!(rejected("http://x|calc.exe/"));
+        assert!(rejected("http://a%26calc.exe/")); // host percent-decodes to a&calc.exe
+        assert!(rejected("http://a%22b/")); // host percent-decodes to a"b
+        assert!(rejected("http://a'b/")); // quotes are only encoded outside the host
+        assert!(rejected("http://a`b/"));
+    }
+
+    #[test]
+    fn non_http_schemes_are_rejected() {
+        for raw in [
+            "file:///C:/Windows",
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "ms-settings:",
+            "mailto:someone@example.com",
+            "ftp://example.com/",
+            "data:text/html,hi",
+            "evi://session/x",
+            "C:\\Windows\\System32\\calc.exe",
+            "calc.exe",
+        ] {
+            assert!(rejected(raw), "{raw:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn whitespace_and_control_chars_are_rejected() {
+        for raw in [
+            "https://example.com/a b",
+            "https://exa mple.com/",
+            " https://example.com/",
+            "https://example.com/\n",
+            "https://example.com/\r\ncalc.exe",
+            "https://exam\tple.com/",
+            "https://example.com/\u{0}",
+            "https://example.com/\u{7f}",
+            "https://example.com/\u{85}",
+            "https://example.com/\u{a0}",
+            "https://example.com/\u{2028}",
+        ] {
+            assert!(rejected(raw), "{raw:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn empty_and_hostless_inputs_are_rejected() {
+        assert!(rejected(""));
+        assert!(rejected("http://"));
+        assert!(rejected("https://"));
+        assert!(rejected("//example.com/"));
+        assert!(rejected("not a url"));
+    }
+
+    #[test]
+    fn embedded_credentials_are_rejected() {
+        for raw in [
+            "https://github.com@evil.com/", // opens evil.com
+            "https://user:pass@evil.com/",
+            "https://:pass@evil.com/",
+            "http://user@127.0.0.1:8473/",
+        ] {
+            assert!(rejected(raw), "{raw:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn quotes_are_percent_encoded_never_passed_through() {
+        // Raw `'` is legal in real links; it's encoded, not refused (and not
+        // left raw for the OS opener).
+        assert_eq!(
+            ok("https://en.wikipedia.org/wiki/Moore's_law"),
+            "https://en.wikipedia.org/wiki/Moore%27s_law"
+        );
+        assert_eq!(
+            ok("https://en.wikipedia.org/wiki/Moore%27s_law"),
+            "https://en.wikipedia.org/wiki/Moore%27s_law"
+        );
+        assert_eq!(
+            ok("https://example.com/\"&calc.exe"),
+            "https://example.com/%22&calc.exe"
+        );
+        // Every quote kind in path, query and fragment.
+        let out = ok("https://example.com/p`a\"t'h?q=\"a\"&r='b'&s=`c`#f'r`a\"g");
+        assert_eq!(
+            out,
+            "https://example.com/p%60a%22t%27h?q=%22a%22&r=%27b%27&s=%60c%60#f%27r%60a%22g"
+        );
+        assert!(!out.contains(['"', '\'', '`']), "{out:?}");
+    }
+
+    #[test]
+    fn url_goes_to_a_non_shell_opener_as_one_verbatim_argument() {
+        // The core of the fix: reverting Windows to `cmd /C start "" <url>`
+        // (which let `http://x&calc.exe` run calc) fails here on any host OS,
+        // since every OS's argv is built and checked, not just the host's.
+        let url = ok("https://example.com/?a=1&b=2|c^d");
+        assert_eq!(url, "https://example.com/?a=1&b=2|c^d");
+        let u = url.as_str();
+        assert_eq!(
+            argv(&url_open_command(Opener::Windows, u)),
+            ["rundll32.exe", "url.dll,FileProtocolHandler", u]
+        );
+        assert_eq!(argv(&url_open_command(Opener::MacOs, u)), ["open", u]);
+        assert_eq!(argv(&url_open_command(Opener::Xdg, u)), ["xdg-open", u]);
+    }
+
+    #[test]
+    fn dir_goes_to_a_non_shell_opener_as_one_argument() {
+        // A profile path like `Tom & Jerry` must not be re-parsed by cmd.exe.
+        let dir = "C:/Users/Tom & Jerry/.evi/logs";
+        for (os, opener) in [
+            (Opener::Windows, "explorer.exe"),
+            (Opener::MacOs, "open"),
+            (Opener::Xdg, "xdg-open"),
+        ] {
+            assert_eq!(argv(&dir_open_command(os, Path::new(dir))), [opener, dir]);
+        }
+    }
+
+    #[test]
+    fn the_host_opener_matches_the_build_target() {
+        let want = if cfg!(windows) {
+            Opener::Windows
+        } else if cfg!(target_os = "macos") {
+            Opener::MacOs
+        } else {
+            Opener::Xdg
+        };
+        assert_eq!(Opener::host(), want);
     }
 }
