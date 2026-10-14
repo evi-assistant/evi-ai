@@ -1,6 +1,7 @@
 """gemini backend + driver: `gemini -o json` parsing (success + the stderr-error
-path), token extraction, registration. Uses a fake `subprocess.run` so these run
-without the `gemini` CLI installed (as in CI)."""
+path), token extraction, registration. Uses a fake runner (in place of
+`cli_agent.run_cli`) so these run without the `gemini` CLI installed (as in CI).
+argv/stdin, timeout and auth-message coverage is in test_cli_agent_drivers.py."""
 
 from __future__ import annotations
 
@@ -70,7 +71,10 @@ def test_gemini_error_from_realistic_multiline_stderr():
     )
     items = _collect(stdout="", stderr=stderr, rc=41)
     errs = [it for it in items if isinstance(it, tuple) and it and it[0] == "__error__"]
-    assert len(errs) == 1 and str(errs[0][1]) == "Please set an Auth method"
+    # the raw gemini message is kept, with what to do about it
+    msg = str(errs[0][1])
+    assert len(errs) == 1 and "(gemini: Please set an Auth method)" in msg
+    assert "GEMINI_API_KEY" in msg and "Vertex AI" in msg
 
 
 def test_gemini_error_from_plain_stderr():
@@ -95,12 +99,14 @@ def test_extract_tokens_nested_and_missing():
     assert _extract_tokens(None) == (0, 0)
 
 
-# --- client path (fake _gemini_path + subprocess.run) ------------------------
+# --- client path (fake _gemini_path + run_cli + --help probe) ----------------
 
 
 def test_gemini_client_stream(monkeypatch):
     monkeypatch.setattr(gm, "_gemini_path", lambda: "gemini")
-    monkeypatch.setattr(gm.subprocess, "run",
+    monkeypatch.setattr(gm.cli_agent, "help_text",
+                        lambda _p, **_k: "--output-format --approval-mode")
+    monkeypatch.setattr(gm, "run_cli",
                         _run_of(stdout=json.dumps({"response": "answer", "stats": {}}), rc=0))
     client = gm.GeminiAgentClient()
     chunks = list(client.chat.completions.create(

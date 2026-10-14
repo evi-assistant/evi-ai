@@ -2,8 +2,8 @@
 authenticated by a FREE Qwen OAuth login (sign in with a qwen.ai / Alibaba account,
 ~2000 req/day) — no API key. Like ``codex``/``gemini``/``amp`` it is NOT
 OpenAI-compatible on the wire; its ``make_client()`` returns a shim
-(``evi.llm.qwen_agent.QwenAgentClient``) that adapts ``qwen -p … -o json`` into the
-``chat.completions`` surface eVi expects.
+(``evi.llm.qwen_agent.QwenAgentClient``) that adapts ``qwen -o json`` (the
+conversation on stdin) into the ``chat.completions`` surface eVi expects.
 
 Qwen Code is an autonomous agent that drives its OWN tools, so eVi's tools don't
 route through it (a chat / delegate provider). There is no ``base_url`` / ``api_key``

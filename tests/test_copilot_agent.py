@@ -1,6 +1,8 @@
-"""copilot backend + driver: `copilot -p … --output-format text -s` silent-text
-handling, the stderr error path, the timeout backstop, and backend registration.
-Uses a fake `subprocess.run` so these run without the `copilot` CLI (as in CI)."""
+"""copilot backend + driver: `copilot --output-format text -s` with the
+conversation piped on stdin (no `-p`), silent-text handling, the stderr error
+path, the timeout backstop, and backend registration.
+Uses a fake runner (in place of `cli_agent.run_cli`) so these run without the
+`copilot` CLI (as in CI)."""
 
 from __future__ import annotations
 
@@ -22,7 +24,8 @@ def _run_of(stdout="", stderr="", rc=0):
 
 def _collect(stdout="", stderr="", rc=0, run=None):
     q: queue.Queue = queue.Queue()
-    run_copilot_turn(["copilot", "-p", "x"], out=q, run=run or _run_of(stdout, stderr, rc))
+    run_copilot_turn(["copilot", "--output-format", "text", "-s"], "x", out=q,
+                     run=run or _run_of(stdout, stderr, rc))
     items = []
     while not q.empty():
         items.append(q.get())
@@ -73,12 +76,13 @@ def test_error_message_helper():
     assert _error_message("", 2) == "copilot exited with code 2"
 
 
-# --- client path (fake _copilot_path + subprocess.run) -----------------------
+# --- client path (fake _copilot_path + run_cli + --help probe) ---------------
 
 
 def test_copilot_client_stream(monkeypatch):
     monkeypatch.setattr(co, "_copilot_path", lambda: "copilot")
-    monkeypatch.setattr(co.subprocess, "run", _run_of(stdout="answer", rc=0))
+    monkeypatch.setattr(co.cli_agent, "help_text", lambda _p, **_k: "--output-format")
+    monkeypatch.setattr(co, "run_cli", _run_of(stdout="answer", rc=0))
     client = co.CopilotAgentClient()
     chunks = list(client.chat.completions.create(
         model="auto", messages=[{"role": "user", "content": "q"}], stream=True))

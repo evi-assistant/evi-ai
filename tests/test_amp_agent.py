@@ -175,7 +175,7 @@ def test_backend_list_models():
     from evi.backends.amp_agent import AmpAgentBackend
 
     b = AmpAgentBackend()
-    assert [m.id for m in b.list_models()] == ["medium", "low", "high"]
+    assert [m.id for m in b.list_models()] == ["medium", "low", "high", "ultra"]
     assert all(m.backend == "amp" and m.family == "amp" for m in b.list_models())
     assert b.supports_pull() is False
 

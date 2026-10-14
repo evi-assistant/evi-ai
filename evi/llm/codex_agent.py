@@ -14,7 +14,8 @@ Mechanism: spawn ``codex exec --json`` (JSONL events on stdout, Rust logs on
 stderr), feed the rendered conversation on stdin, and map events →  OpenAI chunks:
 ``item.completed`` with ``item.type == "agent_message"`` → text; ``reasoning`` →
 ``<think>``; ``turn.completed.usage`` → token counts; ``turn.failed`` → error.
-Transient top-level ``error`` events are retries and are ignored. Requires the
+Transient top-level ``error`` events are retries and are ignored. A watchdog
+bounds every turn and kills the whole process tree when it fires. Requires the
 ``codex`` binary on PATH (``npm i -g @openai/codex``), logged in.
 """
 
@@ -28,14 +29,24 @@ from evi.llm import cli_agent
 from evi.llm.cli_agent import (
     CliAgentClient,
     CliUnavailable,
+    Watchdog,
     delta_chunk,
+    read_lines,
     render_transcript,
+    safe_arg,
     usage_chunk,
 )
+from evi.proc import kill_tree, spawn
+
+# Wall-clock seconds per turn. Longer than the other CLI agents: codex exec
+# explores the repo (read-only) before it answers. A hung CLI is killed with
+# its children.
+_TURN_TIMEOUT = 600.0
 
 
 class CodexUnavailable(CliUnavailable):
-    """Raised (lazily, at call time) when the ``codex`` CLI isn't on PATH."""
+    """Raised (lazily, at call time) when the ``codex`` CLI isn't on PATH or a
+    turn timed out."""
 
 
 def _codex_path() -> str:
@@ -60,23 +71,32 @@ _ACTIVITY_ITEMS = {"command_execution", "file_changes", "mcp_tool_calls",
                    "web_search", "plan_updates", "todo_list", "error"}
 
 
-def run_codex_turn(argv: list[str], prompt: str, *, out, popen=None) -> None:
+def run_codex_turn(argv: list[str], prompt: str, *, out, popen=None,
+                   timeout: float | None = None) -> None:
     """Spawn one ``codex exec --json`` process, stream its stdout JSONL onto
-    `out` as OpenAI chunks. `popen` is injectable for testing (defaults to
-    ``subprocess.Popen``, resolved at call time so tests can monkeypatch it)."""
-    popen = popen or subprocess.Popen
+    `out` as OpenAI chunks. After `timeout` seconds (default ``_TURN_TIMEOUT``)
+    the process tree is killed and the turn errors. `popen` is injectable for
+    testing (defaults to :func:`evi.proc.spawn`, which resolves
+    ``subprocess.Popen`` at call time so tests can monkeypatch it)."""
+    popen = popen or spawn
+    timeout = _TURN_TIMEOUT if timeout is None else timeout
     proc = popen(
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,  # Rust tracing noise; the fatal error rides turn.failed
         text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
+    watchdog = Watchdog(proc, timeout)
     finished = False
     prompt_toks = comp_toks = 0
     try:
         if proc.stdin is not None:
-            proc.stdin.write(prompt)
-            proc.stdin.close()
-        for line in proc.stdout:
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except OSError:  # broken pipe: codex exited early or was killed
+                pass
+        # Bounded even if the tree kill can't free stdout (see read_lines).
+        for line in read_lines(proc, watchdog):
             line = line.strip()
             if not line:
                 continue
@@ -84,6 +104,8 @@ def run_codex_turn(argv: list[str], prompt: str, *, out, popen=None) -> None:
                 ev = json.loads(line)
             except ValueError:
                 continue  # non-JSON stray line — ignore defensively
+            if not isinstance(ev, dict):
+                continue  # a bare JSON scalar/array is not an event
             etype = ev.get("type")
             if etype == "item.completed":
                 item = ev.get("item") or {}
@@ -108,14 +130,19 @@ def run_codex_turn(argv: list[str], prompt: str, *, out, popen=None) -> None:
                 return
             # thread.started / turn.started / item.started / item.updated /
             # transient top-level "error" (retries): ignore.
+    except BaseException:
+        kill_tree(proc)  # don't leave codex running behind a failed turn
+        raise
     finally:
-        try:
-            if proc.stdout is not None:
-                proc.stdout.close()
-        except Exception:  # noqa: BLE001
-            pass
-        rc = proc.wait()
+        # read_lines' reader thread closes stdout once it reaches EOF.
+        rc = proc.wait()  # still bounded: the watchdog stays armed until codex exits
+        watchdog.cancel()
 
+    if watchdog.fired.is_set() and not finished:
+        out.put(cli_agent.error(CodexUnavailable(
+            f"codex turn exceeded {int(timeout)}s and was terminated."
+        )))
+        return
     if not finished:
         # Process ended without turn.completed/turn.failed (crash / killed).
         if rc:
@@ -141,13 +168,15 @@ class _CodexDriver:
             "--ephemeral",             # don't persist session files
         ]
         if model:
-            argv += ["-m", str(model)]
+            argv += ["-m", safe_arg(model)]
         argv.append("-")               # read the prompt from stdin
-        run_codex_turn(argv, prompt, out=out)
+        run_codex_turn(argv, prompt, out=out, timeout=_TURN_TIMEOUT)
 
 
 class CodexAgentClient(CliAgentClient):
     """OpenAI-client-shaped Codex backend over the local ``codex`` CLI."""
+
+    kind = "codex"
 
     def __init__(self, model: str = ""):
         super().__init__(_CodexDriver(), model)

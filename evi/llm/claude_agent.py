@@ -31,6 +31,10 @@ from evi.llm.cli_agent import (
 _MCP_SERVER = "evi"
 _TOOL_PREFIX = f"mcp__{_MCP_SERVER}__"
 
+# Wall-clock seconds per turn (one model response, max_turns=1). The SDK owns
+# the `claude` process and closes it when the turn is cancelled.
+_TURN_TIMEOUT = 600.0
+
 
 class ClaudeAgentUnavailable(CliUnavailable):
     """Raised (lazily, at call time) when the SDK or the ``claude`` CLI is missing."""
@@ -217,14 +221,25 @@ class _ClaudeDriver:
         import asyncio  # noqa: PLC0415
 
         system_prompt, sdk_msgs = translate_messages(messages or [])
-        asyncio.run(_run_claude_turn(
-            self._sdk, model=model or None, system_prompt=system_prompt,
-            sdk_msgs=sdk_msgs, tools=tools, out=out,
-        ))
+        timeout = _TURN_TIMEOUT
+        try:
+            asyncio.run(asyncio.wait_for(_run_claude_turn(
+                self._sdk, model=model or None, system_prompt=system_prompt,
+                sdk_msgs=sdk_msgs, tools=tools, out=out,
+            ), timeout))
+        except TimeoutError:
+            out.put(cli_agent.error(ClaudeAgentUnavailable(
+                f"claude_agent turn exceeded {int(timeout)}s and was stopped."
+            )))
 
 
 class ClaudeAgentClient(CliAgentClient):
-    """OpenAI-client-shaped Claude backend over the local ``claude`` CLI."""
+    """OpenAI-client-shaped Claude backend over the local ``claude`` CLI. Not a
+    delegate: Claude Code's own tools are off and every tool call comes back to
+    eVi's permission engine, so it may run inside an unattended entry point."""
+
+    kind = "claude_agent"
+    delegate = False
 
     def __init__(self, model: str = ""):
         super().__init__(_ClaudeDriver(), model)

@@ -3048,7 +3048,7 @@ resetBtn.addEventListener('click', async () => {
     { id:'model', title:'Model & Backend', blurb:'Where eVi sends your messages.', fields:[
       { type:'select', section:'llm', key:'backend', label:'Backend',
         options:['lmstudio','ollama','llamacpp','openai_compat','claude_agent','codex','gemini','copilot','amp'],
-        help:'Switching rebuilds the live connection. The claude_agent/codex/gemini/copilot/amp kinds drive a local CLI-agent (subscription auth) instead of an HTTP endpoint.' },
+        help:'Switching rebuilds the live connection. The claude_agent/codex/gemini/copilot/amp kinds drive a local CLI-agent instead of an HTTP endpoint; the CLI signs in itself (a subscription login, or for gemini a Gemini API key / Vertex AI).' },
       { type:'text', section:'llm', key:'base_url', label:'Base URL' },
       { type:'model', section:'llm', key:'model', label:'Model',
         help:'Detected on the backend; pick Custom… to type one.' },
@@ -3330,7 +3330,7 @@ resetBtn.addEventListener('click', async () => {
   // and render for custom sections too (injected before the custom dispatch).
   const SECTION_EXPLAINERS = {
     general: `Controls appearance (theme, and the output-style response persona) and all opt-in reporting — crash reports plus OpenTelemetry traces and metrics, and the endpoints they ship to. Change it to switch light/dark or to wire eVi into your monitoring. Reporting is <b>off and inert by default</b>: crash reports send only when a <code>dsn</code> is set, and OTel exports only with an OTLP endpoint <i>and</i> the <code>[otel]</code> extra installed — a blank endpoint exports nothing. Theme also lives under View → Toggle Theme.`,
-    model: `Picks where eVi sends your messages — backend kind, Base URL, model, API key — plus the generation defaults (temperature, context size, reasoning effort, fast mode, fallbacks, routing). Change it to point at a different local server or cloud endpoint, swap models, or dial thinking up or down. <b>Switching backend rebuilds the live connection.</b> The <code>claude_agent</code>/<code>codex</code>/<code>gemini</code>/<code>copilot</code>/<code>amp</code> kinds drive a local CLI on subscription auth — they ignore Base URL and need their command on PATH, not a running server. Local backends ignore the API key; <code>reasoning_effort=off</code> fully disables extended thinking.`,
+    model: `Picks where eVi sends your messages — backend kind, Base URL, model, API key — plus the generation defaults (temperature, context size, reasoning effort, fast mode, fallbacks, routing). Change it to point at a different local server or cloud endpoint, swap models, or dial thinking up or down. <b>Switching backend rebuilds the live connection.</b> The <code>claude_agent</code>/<code>codex</code>/<code>gemini</code>/<code>copilot</code>/<code>amp</code> kinds drive a local CLI that signs in itself (a subscription login; <code>gemini</code> needs a Gemini API key or Vertex AI) — they ignore Base URL and need their command on PATH, not a running server. Local backends ignore the API key; <code>reasoning_effort=off</code> fully disables extended thinking.`,
     tools: `Toggles which capability categories eVi may use — filesystem, code, shell, web, image, memory, MCP, git, sqlite, pdf, ocr, vision and more — plus the code sandbox, MCP allowlist, and tool-search threshold. Change it to grant or revoke a capability or to trim the toolset. <b>These apply to new chats only</b> — an open session keeps the tools it started with. The <b>⚠ marks risk</b> (a tool that acts outside eVi’s sandbox, like <code>shell</code> or <code>computer</code>), <i>not</i> unavailability — a tool that cannot run is instead missing an install dependency, shown in its own help.`,
     permissions: `Resolves every tool call to <b>allow</b> / <b>deny</b> / <b>ask</b> before it runs, in a fixed order: <code>hard_deny</code> (beats everything, even yolo), then <code>mode</code>, then first-match <code>rules</code>, then trusted dirs/domains, otherwise ask. Loosen it with trusted directories, trusted domains, or auto-approved categories; tighten it with <code>deny</code> rules, <code>hard_deny</code>, and <code>protected_paths</code>. Gotcha: <code>yolo</code> short-circuits <i>before</i> rules, so an ordinary <code>deny</code> rule won’t protect you there — only <code>hard_deny</code> and the destructive-command guard still fire. Changes here apply to new chats, not the turn you’re in.`,
     server: `Gates who can reach the web UI and API. <b>Access token</b>: blank leaves localhost open; set it and the web UI requires that token. <b>Multi-user logins</b>: each person signs in with their own token from <code>~/.evi/users.json</code> on a shared workspace. <b>A2A interop</b> exposes <code>POST /a2a</code> so any standards-compliant external agent — not just trusted eVi peers — can delegate a task here. Gotcha: turning on A2A or multi-user (or binding to the LAN) while the access token is blank leaves an unauthenticated surface reachable off-box — set a token first.`,
@@ -3753,11 +3753,11 @@ resetBtn.addEventListener('click', async () => {
               <option value="lmstudio">lmstudio</option>
               <option value="llamacpp">llamacpp</option>
             </optgroup>
-            <optgroup label="CLI agent — subscription/login, no key">
+            <optgroup label="CLI agent — the CLI signs in, no URL or key here">
               <option value="claude_agent">claude_agent — Claude Max/Pro</option>
               <option value="codex">codex — ChatGPT plan</option>
-              <option value="gemini">gemini — Google free login</option>
-              <option value="amp">amp — Sourcegraph Amp</option>
+              <option value="gemini">gemini — Gemini API key / Vertex AI</option>
+              <option value="amp">amp — Amp subscription</option>
               <option value="qwen">qwen — free Qwen OAuth</option>
               <option value="copilot">copilot — GitHub Copilot</option>
             </optgroup>
@@ -3797,6 +3797,12 @@ resetBtn.addEventListener('click', async () => {
     // no base URL and no API key. Keep this in step with KNOWN_BACKENDS.
     const CLI_AGENT_KINDS = ['claude_agent', 'codex', 'gemini', 'amp', 'qwen', 'copilot'];
     const DEFAULT_MSG = 'Pick a preset (OpenAI, xAI, Anthropic, OpenRouter, …) and enter a key, or "custom…" for a local / other endpoint.';
+    // Kinds whose sign-in isn't a plain subscription login. Install commands
+    // match CLI_AGENTS in evi/llm/cli_agent.py.
+    const CLI_AGENT_HINT = {
+      gemini: 'gemini uses the local gemini CLI (npm i -g @google/gemini-cli) with a Gemini API key (GEMINI_API_KEY) or Vertex AI — no URL or key here. Google stopped serving Gemini CLI to free, Google AI Pro and Ultra "Login with Google" accounts on 2026-06-18.',
+      amp: 'amp uses the local amp CLI (npm i -g @ampcode/cli), signed in with "amp login" or AMP_API_KEY — no URL or key here.',
+    };
     const sync = () => {
       const custom = preset.value === '__custom__';
       const cliAgent = custom && CLI_AGENT_KINDS.includes(kindI.value);
@@ -3805,7 +3811,8 @@ resetBtn.addEventListener('click', async () => {
       urlI.style.display = (custom && !cliAgent) ? '' : 'none';
       keyI.style.display = (preset.value && !cliAgent) ? '' : 'none';
       msg0.textContent = cliAgent
-        ? `${kindI.value} uses the local CLI's subscription/login — no URL or key. Install that CLI and log in first.`
+        ? (CLI_AGENT_HINT[kindI.value] ||
+           `${kindI.value} uses the local CLI's subscription/login — no URL or key. Install that CLI and log in first.`)
         : DEFAULT_MSG;
     };
     preset.addEventListener('change', sync);

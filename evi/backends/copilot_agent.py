@@ -3,8 +3,8 @@ authenticated by a GitHub Copilot subscription (``copilot login`` / ``/login``, 
 an existing GitHub credential) — no separate model API key. Like the other
 CLI-agent backends it is NOT OpenAI-compatible on the wire; its ``make_client()``
 returns a shim (``evi.llm.copilot_agent.CopilotAgentClient``) that adapts
-``copilot -p … --output-format text -s`` into the ``chat.completions`` surface eVi
-expects.
+``copilot --output-format text -s`` (the conversation piped on stdin) into the
+``chat.completions`` surface eVi expects.
 
 Copilot is an autonomous agent that drives its OWN tools, so eVi's tools don't
 route through it (a chat / delegate provider). It picks the underlying model via

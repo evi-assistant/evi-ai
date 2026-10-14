@@ -7,10 +7,11 @@ surface eVi expects.
 
 Amp is an autonomous agent that drives its OWN tools (per your ``amp permissions``),
 so eVi's tools don't route through it — a chat / delegate provider. It selects the
-underlying model/behaviour by AGENT MODE (``low``/``medium``/``high``), not a model
-id, so ``list_models`` exposes those three. Setup: ``npm i -g @sourcegraph/amp``
-then ``amp login`` (or set ``AMP_API_KEY``). The import is lazy, so eVi runs fine
-without the CLI until this backend is selected.
+underlying model/behaviour by AGENT MODE (``low``/``medium``/``high``/``ultra``), not
+a model id, so ``list_models`` exposes those four. Setup: ``npm i -g @ampcode/cli``
+(the package that replaced ``@sourcegraph/amp``) or Amp's installer, then ``amp
+login`` (or set ``AMP_API_KEY``). The import is lazy, so eVi runs fine without the
+CLI until this backend is selected.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ _MODES: list[tuple[str, str]] = [
     ("medium", "Amp — balanced (default)"),
     ("low", "Amp — fast / lighter"),
     ("high", "Amp — most capable"),
+    ("ultra", "Amp — deepest reasoning (slowest, most credits)"),
 ]
 
 

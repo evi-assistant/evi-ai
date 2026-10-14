@@ -13,14 +13,15 @@ configure ``amp permissions`` to restrict it.
 Mechanism: ``amp -x --stream-json`` reads the prompt on stdin and streams
 Claude-Code-compatible JSONL on stdout — ``{"type":"assistant","message":{...}}``
 carries the agent's text blocks, ``{"type":"result",...}`` carries the final text
-+ token usage. Amp's model/behaviour is chosen by ``-m/--mode {low,medium,high}``
-(there is no ``-m <model-id>``).
++ token usage. Amp's model/behaviour is chosen by
+``-m/--mode {low,medium,high,ultra}`` (there is no ``-m <model-id>``).
 
 Login guard: an UNAUTHENTICATED ``amp`` opens an interactive browser login and
 blocks forever — which would hang a chat turn. So this driver (a) refuses to spawn
 without evidence of auth (``AMP_API_KEY`` or a saved settings file), and (b)
 wall-clock bounds every turn with a watchdog that kills the process tree. Requires
-the ``amp`` binary on PATH (``npm i -g @sourcegraph/amp``).
+the ``amp`` binary on PATH (``npm i -g @ampcode/cli``, the package that replaced
+``@sourcegraph/amp``, or Amp's own installer).
 """
 
 from __future__ import annotations
@@ -29,21 +30,25 @@ import json
 import os
 import shutil
 import subprocess
-import threading
 
 from evi.llm import cli_agent
 from evi.llm.cli_agent import (
     CliAgentClient,
     CliUnavailable,
+    Watchdog,
     delta_chunk,
     emit_claude_events,
+    read_lines,
     render_transcript,
     usage_chunk,
 )
+from evi.proc import kill_tree, spawn
 
 _TURN_TIMEOUT = 180.0  # wall-clock seconds; a stalled login/turn can't hang eVi
 
-_MODES = {"low", "medium", "high"}
+_MODES = {"low", "medium", "high", "ultra"}
+
+_INSTALL = cli_agent.CLI_AGENTS["amp"][1]
 
 
 class AmpUnavailable(CliUnavailable):
@@ -54,9 +59,10 @@ def _amp_path() -> str:
     path = shutil.which("amp")
     if not path:
         raise AmpUnavailable(
-            "The amp backend needs the Sourcegraph Amp CLI. Install it with "
-            "`npm i -g @sourcegraph/amp`, then run `amp login` (Amp subscription) "
-            "or set AMP_API_KEY (token from https://ampcode.com/settings)."
+            f"The amp backend needs the Amp CLI. Install it with `{_INSTALL}` "
+            "(it replaced @sourcegraph/amp) or Amp's installer, then run `amp login` "
+            "(Amp subscription) or set AMP_API_KEY (token from "
+            "https://ampcode.com/settings)."
         )
     return path
 
@@ -83,54 +89,29 @@ def _require_auth() -> None:
     )
 
 
-def _terminate_tree(proc) -> None:
-    """Best-effort kill of the amp process AND its node children — a killed ``.cmd``
-    shim on Windows can otherwise orphan the real process that holds the login."""
-    try:
-        import psutil  # optional dep (present in eVi); fall back if absent
-
-        parent = psutil.Process(proc.pid)
-        for child in parent.children(recursive=True):
-            try:
-                child.kill()
-            except Exception:  # noqa: BLE001
-                pass
-        parent.kill()
-        return
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        proc.kill()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def run_amp_turn(argv: list[str], prompt: str, *, out, popen=None,
-                 timeout: float = _TURN_TIMEOUT) -> None:
+                 timeout: float | None = None) -> None:
     """Spawn one ``amp -x --stream-json`` process, stream its assistant text onto
     `out` as OpenAI chunks (via the shared Claude-Code parser). A watchdog kills
     the process tree after `timeout` so a stalled login can't hang eVi. `popen` is
-    injectable for testing (defaults to ``subprocess.Popen``, resolved at call time
-    so tests can monkeypatch it)."""
-    popen = popen or subprocess.Popen
+    injectable for testing (defaults to :func:`evi.proc.spawn`, which resolves
+    ``subprocess.Popen`` at call time so tests can monkeypatch it). The process
+    tree is killed through :func:`evi.proc.kill_tree` (a ``.cmd`` shim's
+    ``node`` child included, and a helper left holding the pipes after amp
+    exits)."""
+    popen = popen or spawn
+    timeout = _TURN_TIMEOUT if timeout is None else timeout
     proc = popen(
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,  # login prompts / progress noise; errors ride the result event
         text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
-    killed = threading.Event()
-
-    def _on_timeout():
-        killed.set()
-        _terminate_tree(proc)
-
-    watchdog = threading.Timer(timeout, _on_timeout)
-    watchdog.daemon = True
-    watchdog.start()
+    watchdog = Watchdog(proc, timeout)
 
     def _events():
-        """Parse amp's NDJSON stdout lazily so text streams as it arrives."""
-        for line in proc.stdout:
+        """Parse amp's NDJSON stdout lazily so text streams as it arrives.
+        Bounded even if the tree kill can't free stdout (see read_lines)."""
+        for line in read_lines(proc, watchdog):
             line = line.strip()
             if not line:
                 continue
@@ -150,16 +131,15 @@ def run_amp_turn(argv: list[str], prompt: str, *, out, popen=None,
             except Exception:  # noqa: BLE001 — broken pipe if amp exited early
                 pass
         got_result, error_msg, prompt_toks, comp_toks = emit_claude_events(_events(), out)
+    except BaseException:
+        kill_tree(proc)  # don't leave amp running behind a failed turn
+        raise
     finally:
+        # read_lines' reader thread closes stdout once it reaches EOF.
+        rc = proc.wait()  # still bounded: the watchdog stays armed until amp exits
         watchdog.cancel()
-        try:
-            if proc.stdout is not None:
-                proc.stdout.close()
-        except Exception:  # noqa: BLE001
-            pass
-        rc = proc.wait()
 
-    if killed.is_set():
+    if watchdog.fired.is_set():
         out.put(cli_agent.error(AmpUnavailable(
             f"amp turn exceeded {int(timeout)}s and was terminated (possible "
             "login/auth stall — run `amp login` or set AMP_API_KEY)."
@@ -188,11 +168,13 @@ class _AmpDriver:
         mode = str(model or "").strip().lower()
         if mode in _MODES:
             argv += ["--mode", mode]
-        run_amp_turn(argv, prompt, out=out)
+        run_amp_turn(argv, prompt, out=out, timeout=_TURN_TIMEOUT)
 
 
 class AmpAgentClient(CliAgentClient):
     """OpenAI-client-shaped Amp backend over the local ``amp`` CLI."""
+
+    kind = "amp"
 
     def __init__(self, model: str = ""):
         super().__init__(_AmpDriver(), model)

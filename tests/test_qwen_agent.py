@@ -1,6 +1,6 @@
 """qwen backend + driver: `qwen -o json` (Claude-Code event array) parsing, the
-timeout backstop, and backend registration. Uses a fake `subprocess.run` so these
-run without the `qwen` CLI installed (as in CI)."""
+timeout backstop, and backend registration. Uses a fake runner (in place of
+`cli_agent.run_cli`) so these run without the `qwen` CLI installed (as in CI)."""
 
 from __future__ import annotations
 
@@ -71,12 +71,14 @@ def test_qwen_timeout_errors():
     assert len(errs) == 1 and isinstance(errs[0][1], qw.QwenUnavailable)
 
 
-# --- client path (fake _qwen_path + subprocess.run) --------------------------
+# --- client path (fake _qwen_path + run_cli + --help probe) ------------------
 
 
 def test_qwen_client_stream(monkeypatch):
     monkeypatch.setattr(qw, "_qwen_path", lambda: "qwen")
-    monkeypatch.setattr(qw.subprocess, "run", _run_of(
+    monkeypatch.setattr(qw.cli_agent, "help_text",
+                        lambda _p, **_k: "--output-format --approval-mode")
+    monkeypatch.setattr(qw, "run_cli", _run_of(
         stdout='[{"type":"assistant","message":{"content":[{"type":"text","text":"answer"}]}},'
                '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}]',
         rc=0))
