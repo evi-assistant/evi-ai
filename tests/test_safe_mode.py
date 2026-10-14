@@ -117,10 +117,15 @@ def test_safe_mode_skips_profile_and_project_overlays(monkeypatch, tmp_path):
     (tmp_path / "config.toml").write_text('[llm]\nmodel = "base"\n', encoding="utf-8")
     monkeypatch.setattr("evi.profiles.load_profile_overlay",
                         lambda *a, **k: {"llm": {"model": "from-profile"}})
-    monkeypatch.setattr("evi.project.load_project_config_overlay",
-                        lambda *a, **k: {"llm": {"model": "from-project"}})
+    # A real .evi.toml in a trusted folder (an untrusted one never applies).
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".evi.toml").write_text('[llm]\nmodel = "from-project"\n', encoding="utf-8")
+    monkeypatch.chdir(proj)
+    from evi import trust
     from evi.config import Config
 
+    trust.grant(proj)
     monkeypatch.delenv("EVI_SAFE_MODE", raising=False)
     assert Config.load().llm.model == "from-project"  # overlays apply normally
     monkeypatch.setenv("EVI_SAFE_MODE", "1")

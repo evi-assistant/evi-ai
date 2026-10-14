@@ -1416,6 +1416,8 @@ def chat(
     if mode and mode not in MODES:
         console.print(f"[red]unknown mode:[/red] {mode} (choose: {' | '.join(MODES)})")
         raise typer.Exit(2)
+    # Before the config is loaded, so a yes applies the project layer now.
+    _project_trust_prompt()
     agent = _build_agent()
     if mode:
         # Same as `evi run --mode`: the preset replaces the tool list before the
@@ -1439,6 +1441,166 @@ def chat(
 
         agent.project = load_project_context(start=p.resolve())
     _run_repl(agent)
+
+
+def _inside_evi_session() -> bool:
+    """Running under an eVi REPL: a command the agent runs through its shell
+    tool (or a `!` command) inherits EVI_INTERACTIVE=1 from `_run_repl`."""
+    return os.environ.get("EVI_INTERACTIVE") == "1"
+
+
+def _can_ask_about_trust() -> bool:
+    """Whether a folder-trust question reaches the user: a terminal on both
+    ends — the agent's shell tool captures stdout but passes the REPL's
+    stdin through — and not from inside an eVi session, where the agent
+    (steered by the repository's own instructions) would be the one asking."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty() and not _inside_evi_session()
+    except (AttributeError, ValueError):  # replaced or closed streams
+        return False
+
+
+def _print_trust_summary(st) -> None:
+    from evi import trust as _trust
+
+    for line in _trust.describe(st):
+        console.print(line, markup=False, highlight=False)
+
+
+def _project_trust_prompt() -> None:
+    """First-use folder trust for `evi chat` and the other interactive REPL
+    starts (`evi sessions resume|continue|fork`), see evi/trust.py.
+
+    When the folder has a `.evi.toml` that isn't trusted yet — or changed
+    since — say what it sets and ask. Config.load (which every surface uses)
+    never asks; it just leaves an untrusted project layer off. Without a
+    terminal to ask on, the summary is shown and the folder stays untrusted.
+    The config is read from the process's folder, the one Config.load uses."""
+    from rich.markup import escape
+
+    from evi import trust as _trust
+
+    if _safe_mode():
+        return
+    try:
+        st = _trust.status()
+    except OSError:
+        return
+    if not st.has_config:
+        return
+    if not st.needs_prompt:
+        console.print(
+            f"[dim]project config applied: {escape(str(st.config.path))} "
+            "(trusted folder)[/dim]",
+            highlight=False,
+        )
+        return
+    _print_trust_summary(st)
+    if _can_ask_about_trust():
+        answer = console.input(
+            "Trust this folder and apply its project config? [bold]y[/bold]/N: "
+        ).strip().lower()
+        if answer in ("y", "yes"):
+            # The version just summarised — not whatever is on disk by now.
+            _trust.grant(config=st.config)
+            console.print(
+                "[green]trusted[/green] [dim](`evi trust --revoke` undoes it)[/dim]"
+            )
+            return
+    console.print(
+        "[yellow]not trusted:[/yellow] the settings above are ignored this session. "
+        "Run [cyan]evi trust[/cyan] here to trust the folder."
+    )
+
+
+@app.command("trust")
+def trust_cmd(
+    path: str = typer.Argument(
+        "", help="Folder or repository (default: the current folder)."
+    ),
+    list_: bool = typer.Option(False, "--list", "-l", help="List the trusted folders."),
+    revoke: bool = typer.Option(False, "--revoke", help="Stop trusting PATH."),
+    show: bool = typer.Option(
+        False, "--status", help="Show PATH's trust state without changing it."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Don't ask for confirmation (for scripts)."
+    ),
+) -> None:
+    """Trust a folder so its project config (.evi.toml) applies.
+
+    A repository's .evi.toml is ignored until you trust the folder, and again
+    after it is edited. Trust is per repository (its worktrees share it);
+    outside git it covers just that folder, not its subfolders. Shows what
+    the .evi.toml sets and asks you to confirm (--yes skips that in scripts);
+    refuses inside an eVi session, so the agent can't trust a folder for
+    you. `evi chat` asks the first time; `evi run`, the web UI and the
+    scheduler never ask — there an untrusted folder's project config stays
+    off. Even trusted, a .evi.toml can only set model/sampling preferences and
+    tighten tools/permissions."""
+    from rich.markup import escape
+
+    from evi import trust as _trust
+
+    if list_:
+        rows = _trust.list_trusted()
+        if not rows:
+            console.print("[dim]no trusted folders.[/dim]")
+            return
+        for r in rows:
+            console.print(
+                f"{escape(r['path'])}  [dim]{escape(r['kind'])} · since "
+                f"{escape(r['trusted_at'])} · {r['approved']} approved .evi.toml "
+                "version(s)[/dim]",
+                highlight=False,
+            )
+        return
+    target = Path(path).expanduser() if path.strip() else Path.cwd()
+    if revoke:
+        removed = _trust.revoke(target)
+        if removed is None:
+            console.print(f"[dim]not trusted:[/dim] {escape(str(target))}")
+            raise typer.Exit(1)
+        console.print(f"[green]no longer trusted:[/green] {escape(removed)}", highlight=False)
+        return
+    if not target.is_dir():
+        console.print(f"[red]not a directory:[/red] {escape(str(target))}")
+        raise typer.Exit(1)
+    st = _trust.status(target)
+    if show:
+        console.print(f"[bold]{st.state}[/bold]", highlight=False)
+        _print_trust_summary(st)
+        return
+    _print_trust_summary(st)
+    if _inside_evi_session():
+        # The agent's shell commands inherit the REPL's environment: a
+        # repository's EVI.md/AGENTS.md (loaded untrusted) must not be able
+        # to talk the agent into trusting the repository. Revoking is fine.
+        console.print(
+            "[red]refusing to trust a folder from inside an eVi session[/red] (a "
+            "command the agent runs, or a `!` command). Run [cyan]evi trust[/cyan] "
+            "in your own terminal, or answer the prompt `evi chat` shows."
+        )
+        raise typer.Exit(2)
+    if not yes:
+        if not _can_ask_about_trust():
+            console.print(
+                "[yellow]not trusted:[/yellow] `evi trust` asks for confirmation and "
+                "there is no terminal to ask on. Run it in a terminal, or pass "
+                "--yes in a script."
+            )
+            raise typer.Exit(2)
+        answer = console.input(
+            "Trust this folder and apply its project config? [bold]y[/bold]/N: "
+        ).strip().lower()
+        if answer not in ("y", "yes"):
+            console.print("[dim]not trusted.[/dim]")
+            raise typer.Exit(1)
+    # Approve the version just summarised — not whatever is on disk by now.
+    st = _trust.grant(target, config=st.config)
+    console.print(
+        f"[green]trusted:[/green] {escape(_trust.scope_text(st.identity))}", highlight=False
+    )
 
 
 _AGENTS_TEMPLATE = """\
@@ -6442,6 +6604,7 @@ def sessions_resume(session_id: str) -> None:
     if path is None:
         console.print(f"[red]no session[/red] {session_id}")
         raise typer.Exit(1)
+    _project_trust_prompt()  # as `evi chat`: before the config is loaded
     agent = _build_agent()
     agent.session_id = session_id  # new messages append to the same file
     n = _hydrate_agent(agent, path)
@@ -6459,6 +6622,7 @@ def sessions_continue() -> None:
         console.print("[dim]no sessions to continue[/dim]")
         raise typer.Exit(1)
     path = find_session(sid)
+    _project_trust_prompt()  # as `evi chat`: before the config is loaded
     agent = _build_agent()
     agent.session_id = sid
     n = _hydrate_agent(agent, path)
@@ -6504,6 +6668,7 @@ def sessions_fork(session_id: str) -> None:
     if path is None:
         console.print(f"[red]no session[/red] {session_id}")
         raise typer.Exit(1)
+    _project_trust_prompt()  # as `evi chat`: before the config is loaded
     agent = _build_agent()  # fresh agent → new auto-generated session_id
     n = _hydrate_agent(agent, path)
     console.print(

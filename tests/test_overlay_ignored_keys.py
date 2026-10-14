@@ -5,6 +5,11 @@ could set a status-line shell command, point [llm] at another host, flip
 [auto] to yolo, enable shell tools, and so on. Now only benign preferences
 apply as-is, [tools]/[auto] can only tighten, and everything else is ignored
 (and reported once). The user's own profile overlay is not filtered.
+
+Since the folder-trust gate (evi/trust.py) the file applies at all only in a
+trusted folder, so `_Env.project` trusts the repo after each write: these
+tests cover what even a TRUSTED repo can't do. tests/test_trust.py covers the
+untrusted case.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import pytest
 import evi.config as config_mod
 import evi.profiles as profiles_mod
 import evi.project as project_mod
+from evi import trust
 from evi.config import AutoSettings, Config, LLMSettings
 from evi.permissions import VALID_MODES, decide
 from evi.project import filter_project_overlay, merge_project_overlay
@@ -55,6 +61,7 @@ class _Env:
 
     def project(self, text: str) -> None:
         (self.repo / ".evi.toml").write_text(text, encoding="utf-8")
+        trust.grant(self.repo)  # the trust pins the file content: re-grant
 
 
 @pytest.fixture

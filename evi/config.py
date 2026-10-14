@@ -1,16 +1,29 @@
 """Configuration loading and paths.
 
 Config lives at %USERPROFILE%/.evi/config.toml. First run writes defaults.
+
+`Config.load()` layers, lowest first: config.toml (the USER layer), the
+active profile (~/.evi/profiles/<name>.toml), then the project `.evi.toml` —
+only in a trusted folder and only through an allowlist (evi/project.py,
+evi/trust.py). `Config.save()` writes back only the user layer plus the
+fields the caller changed, so a profile's or a repository's values never end
+up in config.toml.
 """
 
 from __future__ import annotations
 
+import copy
+import datetime as _dt
+import logging
 import os
-from dataclasses import dataclass, field, asdict
+import re
+from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
 from typing import Any
 
 import tomllib
+
+logger = logging.getLogger(__name__)
 
 
 def _home_dir() -> Path:
@@ -563,6 +576,9 @@ class Config:
             return cfg
         with CONFIG_PATH.open("rb") as f:
             data = tomllib.load(f)
+        # The user layer as written — save() patches the caller's changes
+        # into this, never the merged result below.
+        user = copy.deepcopy(data)
         # Safe mode means STOCK config: skip both the profile overlay and the
         # per-project `.evi.toml`. Either can re-introduce exactly what a clean
         # boot is trying to rule out (a pinned model, an output_style pointing at
@@ -579,52 +595,175 @@ class Config:
             overlay = load_profile_overlay()
             if overlay:
                 data = merge_overlay(data, overlay)
-            # Per-project `.evi.toml` (walked up from cwd). It ships with the
-            # repo, so it is UNTRUSTED: only allowlisted preferences (model,
-            # sampling) apply as-is, and [tools]/[auto] can only TIGHTEN the
-            # user + profile values above. Everything else is ignored and
-            # reported once per process. None of these raise: a file that
+            # Per-project `.evi.toml` (walked up from cwd to the git top
+            # level). It ships with the repo, so it is UNTRUSTED: it applies
+            # only in a folder the user trusted, and only the version they
+            # trusted (evi/trust.py) — never prompted for here, so evi run,
+            # web and the scheduler fail closed. Even then only allowlisted
+            # preferences (model, sampling) apply as-is, and [tools]/[auto]
+            # can only TIGHTEN the user + profile values above. Whatever isn't
+            # applied is reported once per process. Never raises: a file that
             # can't be parsed or applied is ignored whole (fail closed). See
             # evi/project.py.
-            from evi.project import (
-                load_project_config_overlay,
-                merge_project_overlay,
-                warn_ignored_project_keys,
-            )
+            from evi.project import apply_project_config
 
-            project_overlay = load_project_config_overlay()
-            if project_overlay:
-                data, ignored = merge_project_overlay(data, project_overlay)
-                warn_ignored_project_keys(ignored)
-        return cls(
-            llm=LLMSettings(**data.get("llm", {})),
-            comfy=ComfySettings(**data.get("comfy", {})),
-            google=GoogleSettings(**data.get("google", {})),
-            microsoft=MicrosoftSettings(**data.get("microsoft", {})),
-            obsidian=ObsidianSettings(**data.get("obsidian", {})),
-            tools=ToolToggles(**data.get("tools", {})),
-            auto=AutoSettings(**data.get("auto", {})),
-            web=WebSettings(**data.get("web", {})),
-            telemetry=TelemetrySettings(**data.get("telemetry", {})),
-            statusline=StatusLineSettings(**data.get("statusline", {})),
-            voice=VoiceSettings(**data.get("voice", {})),
-            plugins=PluginsSettings(**data.get("plugins", {})),
-            federation=FederationSettings(**data.get("federation", {})),
-            ultracode=UltracodeSettings(**data.get("ultracode", {})),
-            worktree=WorktreeSettings(**data.get("worktree", {})),
-            models=SpecialtyModels(**data.get("models", {})),
-            notify=NotifySettings(**data.get("notify", {})),
-            # Without this the [desktop] section was never read back: it stayed
-            # write-only (the UI showed defaults) and any other section's save
-            # rewrote asdict(self), clobbering saved desktop values.
-            desktop=DesktopSettings(**data.get("desktop", {})),
-            runtime=RuntimeSettings(**data.get("runtime", {})),
-            channels=ChannelSettings(**data.get("channels", {})),
-        )
+            data = apply_project_config(data)
+        cfg, unknown = cls._from_dict(data)
+        _warn_unknown_keys(unknown)
+        cfg._user_raw = user
+        cfg._snapshot = asdict(cfg)
+        return cfg
+
+    @classmethod
+    def _from_dict(cls, data: dict[str, Any]) -> tuple["Config", list[str]]:
+        """Build a Config from merged TOML data. Keys this version doesn't
+        know (a typo, or a setting from a newer eVi) are left out and
+        returned as dotted names rather than crashing the load; save() keeps
+        them in config.toml. Every section is read back — a section missing
+        here would be write-only (the old [desktop] bug)."""
+        unknown: list[str] = []
+        sections: dict[str, Any] = {}
+        for f in fields(cls):
+            section_cls = f.default_factory  # type: ignore[misc]
+            body = data.get(f.name, {})
+            if not isinstance(body, dict):
+                unknown.append(f.name)
+                body = {}
+            known = {g.name for g in fields(section_cls)}
+            sections[f.name] = section_cls(**{k: v for k, v in body.items() if k in known})
+            unknown.extend(f"{f.name}.{k}" for k in body if k not in known)
+        names = set(sections)
+        unknown.extend(str(k) for k in data if k not in names)
+        return cls(**sections), sorted(unknown)
 
     def save(self) -> None:
+        """Write config.toml — the USER layer only.
+
+        For a Config from load(), that is the file as it is on disk now (or as
+        it was at load, if it has since become unreadable) with the fields the
+        caller changed since load() (or the last save) patched in. Profile and
+        project values are never written: before, saving any setting inside a
+        repo (/model, POST /api/config, …) copied the repo's `.evi.toml` and
+        the active profile into config.toml for good.
+
+        What a changed field writes is worked out against the two fixed
+        references load() kept — the merged values it returned and the user's
+        own config.toml — so it doesn't matter how often the caller saves:
+        - set back to the value load() returned (an undo, e.g. a failed
+          backend switch rolling back): the user's own value is restored, or
+          the key dropped if config.toml never had it;
+        - a list that a profile or a trusted repo contributed to (e.g. a
+          profile's auto_approve, the repo's hard_deny union): only the
+          entries the caller added or removed are applied to the user's own
+          list, never the inherited ones;
+        - anything else: the new value.
+        A field set to the value it already had isn't a change, so setting a
+        value you only inherit (from a profile or `.evi.toml`) doesn't copy it
+        into config.toml — set it in config.toml itself to keep it.
+
+        A Config built in code (`Config()`) has no layers and is written
+        whole, as before."""
         ensure_dirs()
-        CONFIG_PATH.write_text(_to_toml(asdict(self)), encoding="utf-8")
+        current = asdict(self)
+        loaded: dict[str, Any] | None = getattr(self, "_snapshot", None)
+        if loaded is None:
+            out = current
+        else:
+            last: dict[str, Any] = getattr(self, "_last", None) or loaded
+            user: dict[str, Any] = getattr(self, "_user_raw", None) or {}
+            defaults = asdict(type(self)())
+            out = self._user_layer_on_disk()
+            for section, body in current.items():
+                for key, value in body.items():
+                    if (last.get(section) or {}).get(key, _MISSING) == value:
+                        continue  # not changed since load() / the last save
+                    _patch_user_layer(
+                        out, user, section, key, value,
+                        at_load=(loaded.get(section) or {}).get(key, _MISSING),
+                        default=(defaults.get(section) or {}).get(key, _MISSING),
+                    )
+        CONFIG_PATH.write_text(_to_toml(out), encoding="utf-8")
+        self._last = current
+
+    def _user_layer_on_disk(self) -> dict[str, Any]:
+        """config.toml as it is now — another surface may have saved since
+        load() — else the copy load() kept."""
+        try:
+            with CONFIG_PATH.open("rb") as f:
+                return tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
+            return copy.deepcopy(getattr(self, "_user_raw", None) or {})
+
+
+_MISSING: Any = object()
+
+
+def _patch_user_layer(
+    out: dict[str, Any],
+    user: dict[str, Any],
+    section: str,
+    key: str,
+    value: Any,
+    *,
+    at_load: Any,
+    default: Any,
+) -> None:
+    """Apply one changed field to the user layer `out` (see Config.save).
+    `user` is config.toml as load() read it, `at_load` the merged value
+    load() returned, `default` the field's default."""
+    user_body = user.get(section)
+    has_own = isinstance(user_body, dict) and key in user_body
+    own = user_body[key] if has_own else default  # the user layer's own value
+    if value == at_load:
+        new = own  # an undo: back to what the user layer had
+    elif (
+        isinstance(value, list)
+        and isinstance(at_load, list)
+        and isinstance(own, list)
+        and at_load != own
+    ):
+        # The loaded list was (partly) inherited — a profile's list, or a
+        # trusted repo's entries unioned in. Carry over the caller's edits
+        # only, so the inherited entries stay where they came from.
+        removed = [x for x in at_load if x not in value]
+        added = [x for x in value if x not in at_load]
+        new = [x for x in own if x not in removed] + [x for x in added if x not in own]
+    else:
+        new = value
+    target = out.get(section)
+    if new == own and not has_own:
+        # Nothing of the user's own to write: leave the key (and a section
+        # config.toml didn't have) out rather than pinning the default.
+        if isinstance(target, dict):
+            target.pop(key, None)
+            if not target and not isinstance(user_body, dict):
+                del out[section]
+        return
+    if not isinstance(target, dict):
+        target = out[section] = {}
+    target[key] = copy.deepcopy(user_body[key] if new == own else new)
+
+
+# Unknown config keys already reported (once per process per key set).
+_WARNED_UNKNOWN: set[tuple[str, ...]] = set()
+
+
+def _warn_unknown_keys(unknown: list[str]) -> None:
+    if not unknown:
+        return
+    key = tuple(unknown)
+    if key in _WARNED_UNKNOWN:
+        return
+    _WARNED_UNKNOWN.add(key)
+    from evi.project import format_key_list
+
+    logger.warning(
+        "eVi: unknown settings in %s (or the active profile): %s. They are "
+        "ignored but kept in the file — a newer eVi may use them; otherwise "
+        "check for a typo.",
+        CONFIG_PATH,
+        format_key_list(unknown),
+    )
 
 
 MODELS_DIR = HOME / "models"
@@ -661,14 +800,47 @@ def ensure_dirs() -> None:
 
 
 def _to_toml(d: dict[str, Any]) -> str:
-    """Minimal TOML writer for our flat-section config (no nested tables)."""
-    lines: list[str] = []
-    for section, body in d.items():
-        lines.append(f"[{section}]")
-        for k, v in body.items():
-            lines.append(f"{k} = {_fmt(v)}")
+    """Small TOML writer for config.toml: one `[section]` per table. Since
+    save() writes the user's own file back, it also round-trips what our
+    flat sections don't use — top-level keys, nested tables (`[a.b]`),
+    inline tables, dates and odd key names."""
+    lines = [f"{_key(k)} = {_fmt(v)}" for k, v in d.items() if not isinstance(v, dict)]
+    if lines:
         lines.append("")
+    for section, body in d.items():
+        if isinstance(body, dict):
+            _table(lines, [section], body)
     return "\n".join(lines)
+
+
+def _table(lines: list[str], path: list[Any], body: dict[str, Any]) -> None:
+    scalars = [(k, v) for k, v in body.items() if not isinstance(v, dict)]
+    if scalars or len(scalars) == len(body):  # no bare `[a]` above `[a.b]`
+        lines.append("[" + ".".join(_key(p) for p in path) + "]")
+        lines.extend(f"{_key(k)} = {_fmt(v)}" for k, v in scalars)
+        lines.append("")
+    for k, v in body.items():
+        if isinstance(v, dict):
+            _table(lines, [*path, k], v)
+
+
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n",
+            "\f": "\\f", "\r": "\\r"}
+
+
+def _key(k: Any) -> str:
+    k = str(k)
+    return k if _BARE_KEY.fullmatch(k) else _quote(k)
+
+
+def _quote(s: str) -> str:
+    """A TOML basic string. Control characters are escaped: written raw, a
+    newline in a value (e.g. a stop sequence) made the file unloadable."""
+    return '"' + "".join(
+        _ESCAPES.get(c) or (f"\\u{ord(c):04x}" if ord(c) < 0x20 or ord(c) == 0x7F else c)
+        for c in s
+    ) + '"'
 
 
 def _fmt(v: Any) -> str:
@@ -678,4 +850,8 @@ def _fmt(v: Any) -> str:
         return str(v)
     if isinstance(v, list):
         return "[" + ", ".join(_fmt(x) for x in v) + "]"
-    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{_key(k)} = {_fmt(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, (_dt.datetime, _dt.date, _dt.time)):
+        return v.isoformat()
+    return _quote(str(v))

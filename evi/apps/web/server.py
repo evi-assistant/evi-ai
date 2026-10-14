@@ -485,6 +485,14 @@ class CwdRequest(BaseModel):
     path: str
 
 
+class ProjectTrustRequest(BaseModel):
+    session_id: str
+    trust: bool = True  # False revokes
+    # The `config_sha256` the GET showed the user: refused if the file has
+    # changed since, so what gets approved is what was reviewed.
+    config_sha256: str = ""
+
+
 class CompleteRequest(BaseModel):
     prefix: str
     suffix: str = ""
@@ -2559,6 +2567,55 @@ def create_app() -> FastAPI:
         except Exception:  # noqa: BLE001
             pass
         return {"working_dir": sess.agent.cwd}
+
+    @app.get("/api/project/trust")
+    def project_trust_get(session_id: str) -> dict[str, Any]:
+        """Folder trust (evi/trust.py) for the session's working folder: its
+        state ("trusted" / "changed" / "untrusted"), what its .evi.toml sets
+        and what of that would apply. Read-only — the server never prompts;
+        an untrusted folder's project config simply stays off."""
+        import os as _os
+
+        from evi import trust as _trust
+
+        sess = get_session(session_id)
+        folder = Path(getattr(sess.agent, "cwd", "") or _os.getcwd())
+        return _trust.status_dict(_trust.status(folder))
+
+    @app.post("/api/project/trust")
+    def project_trust_set(req: ProjectTrustRequest, request: Request) -> dict[str, Any]:
+        """Trust (or, with trust=false, stop trusting) the session's working
+        folder — the user's answer to the trust prompt. Approves the
+        .evi.toml as it is now; pass the `config_sha256` the GET returned to
+        refuse (409) a file that changed after it was reviewed. In multi-user
+        mode only the owner may change the trust list: it applies to the
+        owner's config."""
+        import os as _os
+
+        from evi import trust as _trust
+
+        if _CURRENT_USER.get() not in (None, ""):
+            # Multi-user: only the owner's own token (web.auth_token) — not
+            # whoever holds an account that happens to be *named* "owner".
+            owner_token = Config.load().web.auth_token.strip()
+            header = request.headers.get("Authorization", "")
+            provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            provided = provided or request.query_params.get("token", "")
+            if not (owner_token and provided
+                    and secrets.compare_digest(provided.encode(), owner_token.encode())):
+                raise HTTPException(403, "only the owner can change folder trust")
+        sess = get_session(req.session_id)
+        folder = Path(getattr(sess.agent, "cwd", "") or _os.getcwd())
+        if req.trust:
+            st = _trust.status(folder)
+            current = st.config.sha256 if st.config is not None else ""
+            if req.config_sha256 and req.config_sha256 != current:
+                raise HTTPException(409, "the project config changed; review it again")
+            st = _trust.grant(folder, config=st.config)
+        else:
+            _trust.revoke(folder)
+            st = _trust.status(folder)
+        return _trust.status_dict(st)
 
     @app.post("/api/complete")
     def complete_post(req: CompleteRequest) -> dict[str, str]:

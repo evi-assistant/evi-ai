@@ -9,16 +9,21 @@ behavior just by `cd`ing into the right directory.
 The file is read once at agent construction. If you edit `EVI.md` in a
 long-running session, `Agent.reset()` re-reads it.
 
+Inside a git repository the walk stops at the work tree's top level: a
+parent folder's EVI.md or `.evi.toml` is not part of the repository.
+
 Size cap: 64 KB. Large project docs should be split and referenced; the
 goal is "always-on context", not "stuff every README into every turn".
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,40 +53,66 @@ class ProjectContext:
         return f"## Project context (`{self.path}`)\n\n{self.content.strip()}\n"
 
 
+def _is_git_toplevel(d: Path) -> bool:
+    """`d` holds a `.git` directory or file: it is a work tree's top level."""
+    try:
+        return (d / ".git").exists()
+    except OSError:
+        return False
+
+
+def _search_dirs(start: Path | None) -> Iterator[Path]:
+    """`start` (default cwd) and its ancestors, nearest first, ending at the
+    git top level when there is one (else at the filesystem root). A
+    repository's project files never come from above it: a parent folder's
+    `.evi.toml` or AGENTS.md is not part of the repo, and its trust (see
+    evi/trust.py) is keyed per repository."""
+    cur = (start or Path.cwd()).resolve()
+    while True:
+        yield cur
+        if _is_git_toplevel(cur):
+            return
+        parent = cur.parent
+        if parent == cur:
+            return
+        cur = parent
+
+
+def git_toplevel(start: Path | None = None) -> Path | None:
+    """The top level of the git work tree containing `start` (default cwd),
+    found by looking for `.git` — no git process. None outside git."""
+    last: Path | None = None
+    for last in _search_dirs(start):
+        pass
+    return last if last is not None and _is_git_toplevel(last) else None
+
+
 def find_project_file(start: Path | None = None) -> Path | None:
     """Walk up from `start` (default cwd) looking for EVI.md.
 
-    Returns the first match, or None. Stops at the filesystem root.
+    Returns the first match, or None. Stops at the git top level (else the
+    filesystem root).
     """
-    cur: Path | None = (start or Path.cwd()).resolve()
-    while cur is not None:
+    for cur in _search_dirs(start):
         for name in PROJECT_FILENAMES:
             candidate = cur / name
             if candidate.is_file():
                 return candidate
-        parent = cur.parent
-        if parent == cur:
-            return None
-        cur = parent
     return None
 
 
 def find_project_files(start: Path | None = None) -> list[Path]:
-    """Every project file from the filesystem root down to `start` (outermost
-    first, nearest last), one per directory. Enables monorepo-style layered
-    context: a repo-root EVI.md plus a package-level one."""
-    cur: Path | None = (start or Path.cwd()).resolve()
+    """Every project file from the git top level (else the filesystem root)
+    down to `start` (outermost first, nearest last), one per directory.
+    Enables monorepo-style layered context: a repo-root EVI.md plus a
+    package-level one."""
     found: list[Path] = []
-    while cur is not None:
+    for cur in _search_dirs(start):
         for name in PROJECT_FILENAMES:
             candidate = cur / name
             if candidate.is_file():
                 found.append(candidate)
                 break  # one per directory
-        parent = cur.parent
-        if parent == cur:
-            break
-        cur = parent
     found.reverse()  # root → nearest, so the most-specific context comes last
     return found
 
@@ -161,25 +192,33 @@ def load_project_context(start: Path | None = None) -> ProjectContext | None:
 
 
 def find_project_config(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (default cwd) for a `.evi.toml` project config."""
-    cur: Path | None = (start or Path.cwd()).resolve()
-    while cur is not None:
+    """Walk up from `start` (default cwd) for a `.evi.toml` project config,
+    stopping at the git top level (else the filesystem root)."""
+    for cur in _search_dirs(start):
         candidate = cur / PROJECT_CONFIG_FILENAME
         if candidate.is_file():
             return candidate
-        parent = cur.parent
-        if parent == cur:
-            return None
-        cur = parent
     return None
 
 
-def load_project_config_overlay(start: Path | None = None) -> dict:
-    """Return the project `.evi.toml` parsed to a dict (empty if none).
+@dataclass(frozen=True)
+class ProjectConfigFile:
+    """A located `.evi.toml`: its path, the exact bytes read (what folder
+    trust pins, see evi/trust.py) and the parsed table — `{}` when the file
+    can't be used. Raw and UNTRUSTED."""
 
-    This is the RAW, untrusted file. Config.load passes it through
-    merge_project_overlay (allowlist + tighten-only) before it touches the
-    user config — never merge it directly.
+    path: Path
+    raw: bytes
+    data: dict[str, Any]
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.raw).hexdigest()
+
+
+def read_project_config(start: Path | None = None) -> ProjectConfigFile | None:
+    """Locate, read and parse the project `.evi.toml` for `start` (default
+    cwd). None when there is none.
 
     Never raises. Callers such as the run_python sandbox check and the MCP
     destructive-command guard treat a Config.load error as "setting off", so a
@@ -190,15 +229,16 @@ def load_project_config_overlay(start: Path | None = None) -> dict:
     try:
         path = find_project_config(start)
     except OSError:
-        return {}
+        return None
     if path is None:
-        return {}
+        return None
+    raw = b""
     try:
         with path.open("rb") as f:
             raw = f.read(_MAX_CONFIG_BYTES + 1)
         if len(raw) <= _MAX_CONFIG_BYTES:
             data = tomllib.loads(raw.decode("utf-8"))
-            return data if isinstance(data, dict) else {}
+            return ProjectConfigFile(path, raw, data if isinstance(data, dict) else {})
         reason = f"larger than {_MAX_CONFIG_BYTES // 1024} KB"
     except OSError:
         reason = "could not be read"
@@ -206,7 +246,64 @@ def load_project_config_overlay(start: Path | None = None) -> dict:
         # ValueError covers TOMLDecodeError and UnicodeDecodeError.
         reason = "not valid UTF-8 TOML, or nested too deeply"
     warn_ignored_project_keys([f"the whole file ({reason})"], path)
-    return {}
+    return ProjectConfigFile(path, raw, {})
+
+
+def load_project_config_overlay(start: Path | None = None) -> dict:
+    """Return the project `.evi.toml` parsed to a dict (empty if none).
+
+    This is the RAW, untrusted file. Config.load goes through
+    apply_project_config (folder trust, then the allowlist + tighten-only
+    merge) — never merge it directly. Never raises (see read_project_config)."""
+    pc = read_project_config(start)
+    return pc.data if pc is not None else {}
+
+
+def project_config_keys(data: dict[str, Any]) -> list[str]:
+    """Sorted dotted names ("llm.model", "auto.mode") of the settings in a
+    project config table, safe to print (see _key_label)."""
+    keys: set[str] = set()
+    for section, body in data.items():
+        if isinstance(body, dict) and body:
+            keys.update(_key_label(section, key) for key in body)
+        else:
+            keys.add(_key_label(section))
+    return sorted(keys)
+
+
+def apply_project_config(
+    base: dict[str, Any], start: Path | None = None
+) -> dict[str, Any]:
+    """Config.load's project layer: `base` (user config + profile) with the
+    `.evi.toml` for `start` (default cwd) applied.
+
+    Only when the folder is trusted AND the file is the version that was
+    trusted (evi/trust.py) — and even then only through merge_project_overlay
+    (allowlist + tighten-only). Otherwise `base` is returned unchanged and the
+    reason, with the keys the file sets, is reported once per process. There
+    is no prompt here: Config.load serves every surface, and the
+    non-interactive ones (evi run, web, scheduler, subagents) must fail
+    closed. `evi chat` asks before it loads the config (apps/cli/main.py).
+
+    Never raises (see read_project_config)."""
+    pc = read_project_config(start)
+    if pc is None or not pc.data:
+        return base
+    try:
+        from evi import trust
+
+        st = trust.status(start, config=pc)
+        allowed = st.project_layer_on
+        state = st.state
+    except Exception:  # noqa: BLE001 — fail closed: an unreadable trust store trusts nothing
+        logger.debug("folder trust could not be checked", exc_info=True)
+        allowed, state = False, "untrusted"
+    if not allowed:
+        warn_untrusted_project_config(pc, state)
+        return base
+    merged, ignored = merge_project_overlay(base, pc.data)
+    warn_ignored_project_keys(ignored, pc.path)
+    return merged
 
 
 # --- project config trust policy (1.0.53 security hotfix) ---------------
@@ -218,11 +315,12 @@ def load_project_config_overlay(start: Path | None = None) -> dict:
 # "yolo", [tools] shell = true, [runtime] server_path (an executable eVi
 # launches), and so on.
 #
-# So a project overlay is filtered through an explicit ALLOWLIST before it is
-# merged — fail closed: any section or key not named below (including every
-# field added to Config in future) is ignored and reported once. The user's
-# own profile overlay (~/.evi/profiles/, user-owned) is trusted and NOT
-# filtered.
+# So the file applies at all only in a folder the user has trusted, and only
+# the version that was trusted (apply_project_config, evi/trust.py). Even
+# then it is filtered through an explicit ALLOWLIST before it is merged —
+# fail closed: any section or key not named below (including every field
+# added to Config in future) is ignored and reported once. The user's own
+# profile overlay (~/.evi/profiles/, user-owned) is trusted and NOT filtered.
 
 # Benign per-repo preferences, applied as-is (the project value wins). Only
 # model-behaviour knobs: nothing here is a URL / host / port, credential, path,
@@ -511,7 +609,7 @@ def merge_project_overlay(
     (merged, ignored_keys).
 
     Never raises: if anything goes wrong the whole overlay is dropped and
-    `base` is returned unchanged (see load_project_config_overlay for why a
+    `base` is returned unchanged (see read_project_config for why a
     Config.load error must not be possible from a repo file)."""
     try:
         return _merge_project_overlay(base, overlay)
@@ -569,10 +667,10 @@ def warn_ignored_project_keys(ignored: list[str], path: Path | None = None) -> N
     """Log (once per process per file + key set) which `.evi.toml` keys were
     ignored. Goes through `logging`, so the CLI prints it to stderr.
 
-    Config.load calls this on every load without a `path`, so the dedupe is
-    keyed on the working directory and checked BEFORE locating the file —
-    find_project_config stats every ancestor directory, which is slow on a
-    network share."""
+    Config.load runs on every web request, so it passes the `path` it already
+    found. Without one the dedupe is keyed on the working directory and
+    checked BEFORE locating the file — find_project_config stats every
+    ancestor directory, which is slow on a network share."""
     if not ignored:
         return
     if path is not None:
@@ -591,14 +689,44 @@ def warn_ignored_project_keys(ignored: list[str], path: Path | None = None) -> N
             path = find_project_config()
         except OSError:
             path = None
-    listed = ", ".join(_printable(k) for k in ignored[:_MAX_LISTED])
-    if len(ignored) > _MAX_LISTED:
-        listed += f" (+{len(ignored) - _MAX_LISTED} more)"
     logger.warning(
         "eVi: ignoring these settings from project config %s: %s. A repo's "
         ".evi.toml may only set model/sampling preferences (to valid values) "
         "and tighten tools/permissions (see 'Per-project config' in the eVi "
         "configuration docs).",
         _printable(str(path)) if path is not None else PROJECT_CONFIG_FILENAME,
-        listed,
+        format_key_list(ignored),
+    )
+
+
+def format_key_list(keys: list[str]) -> str:
+    """Comma-separated, printable, capped at _MAX_LISTED (the rest counted)."""
+    listed = ", ".join(_printable(k) for k in keys[:_MAX_LISTED])
+    if len(keys) > _MAX_LISTED:
+        listed += f" (+{len(keys) - _MAX_LISTED} more)"
+    return listed
+
+
+def warn_untrusted_project_config(pc: ProjectConfigFile, state: str) -> None:
+    """Log (once per process per file version) that a `.evi.toml` is NOT
+    applied because its folder isn't trusted (`state` "untrusted") or the
+    file changed since it was trusted ("changed"), naming the keys it sets.
+    Values are never echoed."""
+    key = (str(pc.path), ("<not trusted>", state, pc.sha256))
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    reason = (
+        "it is new or changed since you trusted this folder"
+        if state == "changed"
+        else "this folder is not trusted"
+    )
+    logger.warning(
+        "eVi: not applying project config %s: %s. It sets: %s. Review it, then "
+        "run `evi trust` in that folder (or answer the prompt `evi chat` shows) "
+        "to apply it — even then only model/sampling preferences and tighter "
+        "tools/permissions take effect.",
+        _printable(str(pc.path)),
+        reason,
+        format_key_list(project_config_keys(pc.data)),
     )

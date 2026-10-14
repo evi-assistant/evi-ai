@@ -128,6 +128,7 @@ def test_config_load_applies_project_overlay(tmp_path: Path, monkeypatch) -> Non
     user_config = tmp_path / "home" / "config.toml"
     user_config.parent.mkdir()
     user_config.write_text("[llm]\ntemperature = 0.5\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "HOME", user_config.parent)  # the trust list
     monkeypatch.setattr(config_mod, "CONFIG_PATH", user_config)
     monkeypatch.delenv(profiles.ENV_VAR, raising=False)
     monkeypatch.delenv(safemode.ENV_VAR, raising=False)
@@ -136,5 +137,34 @@ def test_config_load_applies_project_overlay(tmp_path: Path, monkeypatch) -> Non
     project.mkdir()
     (project / ".evi.toml").write_text("[llm]\ntemperature = 0.123\n", encoding="utf-8")
     monkeypatch.chdir(project)
+    assert Config.load().llm.temperature == 0.5  # untrusted folder: not applied
+    from evi import trust
+
+    trust.grant(project)
     cfg = Config.load()
     assert cfg.llm.temperature == 0.123  # project overlay wins over the user's 0.5
+
+
+def test_discovery_stops_at_the_git_toplevel(tmp_path: Path) -> None:
+    # A parent folder's EVI.md / .evi.toml is not part of the repository below
+    # it (and must not ride along on that repository's trust).
+    outer = tmp_path / "outer"
+    repo = outer / "repo"
+    sub = repo / "src"
+    sub.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (outer / "EVI.md").write_text("OUTER", encoding="utf-8")
+    (outer / ".evi.toml").write_text("[llm]\ntemperature = 0.1\n", encoding="utf-8")
+    assert find_project_files(start=sub) == []
+    assert find_project_file(start=sub) is None
+    assert find_project_config(start=sub) is None
+    assert load_project_context(start=sub) is None
+    (repo / "EVI.md").write_text("REPO", encoding="utf-8")
+    assert find_project_files(start=sub) == [repo / "EVI.md"]
+    # A `.git` FILE (linked worktree / submodule) marks a top level too.
+    (repo / ".git").rmdir()
+    (repo / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    assert find_project_config(start=sub) is None
+    # Outside git the walk still reaches the filesystem root (layered context).
+    (repo / ".git").unlink()
+    assert find_project_config(start=sub) == outer / ".evi.toml"
