@@ -54,19 +54,34 @@ def _play_sound() -> None:
         return  # never let a beep break the turn
 
 
+# The toast text reaches AppleScript as `argv` of a fixed `run` handler, never
+# as script source: quotes, backslashes or `& (do shell script ...)` in a model
+# reply are just characters to display, with no escaping to get wrong. The
+# handler reads the LAST two items, so it shows the right text whether or not
+# osascript passes the "--" separator through to argv.
+_OSASCRIPT_TOAST = (
+    "-e", "on run argv",
+    "-e", "display notification (item -1 of argv) with title (item -2 of argv)",
+    "-e", "end run",
+)
+
+
+def _osascript_toast_argv(title: str, body: str) -> list[str]:
+    # "--" ends option parsing, so text starting with "-" stays an argument
+    # instead of being read as an osascript flag.
+    return ["osascript", *_OSASCRIPT_TOAST, "--", title, body]
+
+
 def _desktop_toast(title: str, body: str) -> None:
     sysname = platform.system()
     try:
         if sysname == "Darwin" and shutil.which("osascript"):
-            # Escape double quotes for the AppleScript string literals.
-            t = title.replace('"', '\\"')
-            b = body.replace('"', '\\"')
             subprocess.run(
-                ["osascript", "-e", f'display notification "{b}" with title "{t}"'],
-                timeout=5, capture_output=True,
+                _osascript_toast_argv(title, body), timeout=5, capture_output=True,
             )
         elif sysname == "Linux" and shutil.which("notify-send"):
-            subprocess.run(["notify-send", title, body], timeout=5, capture_output=True)
+            # "--" so a title/body starting with "-" is text, not an option.
+            subprocess.run(["notify-send", "--", title, body], timeout=5, capture_output=True)
         # Windows visual toast: handled by the desktop/web UI, not here.
     except Exception:
         return
