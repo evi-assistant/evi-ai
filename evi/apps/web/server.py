@@ -968,8 +968,12 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
             text=f"auto-all: **{status}** · always-allowed: {cats}",
         )
 
-    # Fall through to user-defined command.
-    expanded = cmd_store.expand(name, args)
+    # Fall through to user-defined command. Only the template's own @refs are
+    # inlined (args stay text), confined to the session's folder + trusted dirs.
+    try:
+        expanded = cmd_store.expand_for_agent(agent, name, args)
+    except (ValueError, OSError) as exc:  # e.g. its file isn't UTF-8: say so, don't 500
+        return _SlashOutcome(handled=True, text=f"can't run `/{name}`: {exc}")
     if expanded is None:
         return _SlashOutcome(handled=True, text=f"unknown command: `/{name}` (try /help)")
     return _SlashOutcome(handled=False, expand_to=expanded)

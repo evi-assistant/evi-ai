@@ -49,6 +49,38 @@ def test_dispatch_blocks_destructive_shell_command(monkeypatch):
     assert "destructive-command guard" not in ok and "ran echo hi" in ok
 
 
+def _monitor_tool():
+    return Tool(
+        name="monitor",
+        description="watch a file or a command",
+        parameters={"type": "object", "properties": {"target": {"type": "string"}}},
+        func=lambda target="", kind="file": f"watched {kind} {target}",
+        category="code",
+    )
+
+
+def test_dispatch_guard_covers_monitor_commands(monkeypatch):
+    # monitor (category "code") runs `target` through a shell only for kind=command.
+    monkeypatch.setattr("evi.config.Config.load", classmethod(lambda cls: cls()))
+    by_name = {"monitor": _monitor_tool()}
+    out = publish.dispatch(by_name, "monitor", {"kind": "command", "target": "rm -rf ~"})
+    assert "destructive-command guard" in out
+    out = publish.dispatch(by_name, "monitor", {"kind": "file", "target": "rm -rf ~"})
+    assert out == "watched file rm -rf ~"  # a file path, never run
+
+
+def test_dispatch_guard_shares_the_permissions_shell_map(monkeypatch):
+    # One map (permissions.SHELL_EXEC_TOOLS) decides which calls run a shell
+    # line for decide(), the agent's guard and MCP dispatch alike.
+    from evi import permissions
+
+    monkeypatch.setattr("evi.config.Config.load", classmethod(lambda cls: cls()))
+    monkeypatch.setitem(permissions.SHELL_EXEC_TOOLS, "echo", "x")
+    out = publish.dispatch({"echo": _fake_tool()}, "echo", {"x": "rm -rf ~"})
+    assert "destructive-command guard" in out
+    assert not hasattr(publish, "_MCP_SHELL_TOOLS")
+
+
 def test_dispatch_guard_respects_disable(monkeypatch):
     cfg = __import__("evi.config", fromlist=["Config"]).Config()
     cfg.auto.block_destructive = False
@@ -195,15 +227,19 @@ def test_command_prompt_specs_and_expand(monkeypatch):
         def list(self):
             return [SlashCommandEntry(name="commit", path=Path("x"), summary="make a commit")]
 
-        def expand(self, name, args=""):
+        def expand(self, name, args="", *, inline=True):
+            seen_inline.append(inline)
             return f"do {name} {args}".strip() if name == "commit" else None
 
+    seen_inline: list[bool] = []
     monkeypatch.setattr(cmds, "CommandStore", FakeCmds)
     specs = publish.command_prompt_specs()
     assert specs[0]["name"] == "commit"
     assert specs[0]["arguments"][0]["name"] == "args"
     assert publish.expand_command_prompt("commit", {"args": "now"}) == "do commit now"
     assert publish.expand_command_prompt("missing", {}) is None
+    # MCP-served prompts never inline @file refs (see test_command_file_inline).
+    assert seen_inline == [False, False]
 
 
 # --- HTTP transport ------------------------------------------------------

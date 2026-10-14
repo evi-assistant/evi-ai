@@ -89,7 +89,8 @@ def test_file_reference_inlined(tmp_path: Path) -> None:
     (tmp_path / "data.txt").write_text("FILE BODY", encoding="utf-8")
     (tmp_path / "read.md").write_text(f"Summarize @{tmp_path / 'data.txt'}\n")
     store = CommandStore(root=tmp_path)
-    out = store.expand("read", "")
+    # @refs are confined to the working folder (or trusted dirs).
+    out = store.expand("read", "", workdir=tmp_path)
     assert "FILE BODY" in out
 
 

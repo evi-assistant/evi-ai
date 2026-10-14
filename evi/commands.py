@@ -15,11 +15,21 @@ Claude Code's custom commands:
   `description` is shown in `/help`; `argument-hint` documents expected args;
   `model` is surfaced for callers that want a per-command model override.
 - **Arguments**: ``$ARGUMENTS`` (everything after the name), positional
-  ``$1``..``$9`` (shlex-split), and the legacy ``{args}`` (== ``$ARGUMENTS``).
-- **File references**: ``@path/to/file`` inlines that file's contents (fenced),
-  if it exists — otherwise the token is left untouched.
+  ``$1``..``$9`` (shlex-split; an unbalanced quote falls back to a whitespace
+  split), and the legacy ``{args}`` (== ``$ARGUMENTS``). Arguments are always
+  substituted as plain text.
+- **File references**: an ``@path/to/file`` written in the template inlines
+  that file's contents (fenced, first 16k chars) if it is a regular UTF-8 file
+  inside the working folder or a trusted dir that matches neither a protected
+  path nor a key/credential file (``_SECRET_PATHS``) — otherwise the token is
+  left untouched, with a logged warning when it names a file that exists. Only
+  the template's own refs are read: an ``@path`` that arrives in the arguments
+  (typed after ``/name``, sent by an MCP client, or spliced in by ``@$1``)
+  stays text. MCP-served prompts never inline.
 - **Namespacing**: subdirectories become ``:`` names, e.g.
-  ``commands/git/commit.md`` → ``/git:commit``.
+  ``commands/git/commit.md`` → ``/git:commit``. A command file that isn't
+  readable UTF-8 is listed as ``(unreadable: ...)`` and fails on its own,
+  without breaking the other commands.
 
 We deliberately do **not** execute ``!bash`` blocks (Claude Code gates those
 behind allowed-tools; auto-running shell on expansion is too sharp an edge for
@@ -29,20 +39,62 @@ a Skill (`evi/skills.py`).
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Iterable
 
-from evi.config import COMMANDS_DIR
+from evi import workdir as _workdir
+from evi.config import COMMANDS_DIR, AutoSettings
+from evi.permissions import _is_protected
+
+logger = logging.getLogger(__name__)
 
 # Each path segment must be a safe identifier (also blocks traversal).
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-_POSITIONAL_RE = re.compile(r"\$([1-9])")
-# `@path` not preceded by a non-space char (so emails like a@b aren't matched).
-_FILE_REF_RE = re.compile(r"(?<!\S)@([^\s]+)")
+# Argument placeholders; group 1 is the positional digit.
+_PLACEHOLDER_RE = re.compile(r"\$ARGUMENTS|\{args\}|\$([1-9])")
+# One pass over a template: the placeholders, plus `@path` refs (group 2) not
+# preceded by a non-space char (so emails like a@b aren't matched). Each match
+# is replaced once and never rescanned, so argument text can't become an @ref
+# and inlined file text is left verbatim.
+_TOKEN_RE = re.compile(_PLACEHOLDER_RE.pattern + r"|(?<!\S)@(\S+)")
 _MAX_INLINE_BYTES = 16_000
+# Key and credential files a template ref never inlines, whatever `[auto]
+# protected_paths` says (that list is aimed at writes, and a user may thin it
+# out); these have no business being pasted into a prompt. Matched (ignoring
+# case) against each spelling of the file and its basename (`_RefScope.denies`);
+# the `*/` twin of a `dir/...` pattern catches that dir nested below a root or
+# in an absolute path.
+_SECRET_PATHS = (
+    # env files, keys and certificates (id_* = every SSH key type, _sk and .pub)
+    ".env", "*.env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx",
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*",
+    ".ssh/*", "*/.ssh/*", ".gnupg/*", "*/.gnupg/*",
+    # login / token stores of common tools
+    ".netrc", "_netrc", ".git-credentials", "*/git/credentials", ".pgpass",
+    ".my.cnf", ".npmrc", ".yarnrc.yml", ".pypirc", ".vault-token",
+    ".cargo/credentials", ".cargo/credentials.toml", "*/.cargo/credentials*",
+    ".gem/credentials", "*/.gem/credentials",
+    ".docker/config.json", "*/.docker/config.json",
+    ".kube/config", "*/.kube/config", "kubeconfig",
+    ".config/gh/hosts.yml", "*/.config/gh/hosts.yml",
+    # cloud CLIs: AWS, Google Cloud, Azure; Terraform state / vars hold secrets too
+    ".aws/credentials", "*/.aws/credentials", ".aws/sso/cache/*", "*/.aws/sso/cache/*",
+    ".config/gcloud/*", "*/.config/gcloud/*", "application_default_credentials.json",
+    "*service-account*.json", ".azure/*", "*/.azure/*",
+    ".terraform.d/credentials.tfrc.json", "*.tfvars", "*.tfstate", "*.tfstate.*",
+    # eVi's own config (API keys, channel tokens)
+    ".evi/config.toml", "*/.evi/config.toml",
+)
+
+
+class CommandFileError(ValueError):
+    """A command's own template file can't be read as UTF-8 text."""
 
 
 @dataclass(frozen=True)
@@ -83,6 +135,8 @@ class CommandStore:
                 rel = p.relative_to(root).with_suffix("")
                 if not all(_NAME_RE.match(part) for part in rel.parts):
                     continue
+                if not p.is_file():  # e.g. a directory named `x.md`
+                    continue
                 out.append(self._entry(prefix + ":".join(rel.parts), p))
         return out
 
@@ -94,19 +148,66 @@ class CommandStore:
                 return entry
         return None
 
-    def expand(self, name: str, args: str = "") -> str | None:
+    def expand(
+        self,
+        name: str,
+        args: str = "",
+        *,
+        inline: bool = True,
+        workdir: str | Path | None = None,
+        trusted_dirs: Iterable[str] = (),
+        protected_paths: Iterable[str] | None = None,
+    ) -> str | None:
         """Return the command body (frontmatter stripped) with arguments and
-        file references substituted, or None if the command doesn't exist."""
+        file references substituted, or None if the command doesn't exist.
+
+        Only `@path` refs written in the template are inlined, and only files
+        inside `workdir` (default: the session working folder) or one of
+        `trusted_dirs` that don't match `protected_paths` (default: the stock
+        `[auto] protected_paths`). `inline=False` leaves every ref as text —
+        for callers serving the expansion to someone else (MCP prompts/get).
+
+        Raises CommandFileError if the command's own file can't be read."""
         entry = self.get(name)
         if entry is None:
             return None
-        _, body = _split_frontmatter(entry.path.read_text(encoding="utf-8"))
-        return _substitute(body, args).strip()
+        try:
+            text = entry.path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            raise CommandFileError(f"{entry.path.name}: {_unreadable(exc)}") from exc
+        _, body = _split_frontmatter(text)
+        return _substitute(
+            body, args, inline=inline, workdir=workdir,
+            trusted_dirs=trusted_dirs, protected_paths=protected_paths,
+        ).strip()
+
+    def expand_for_agent(self, agent: Any, name: str, args: str = "") -> str | None:
+        """`expand` scoped to an agent session: template refs resolve in its
+        working folder (`agent.cwd`, else the session working folder) and obey
+        its `[auto] trusted_dirs` (which `/add-dir` extends) and
+        `protected_paths`. Chat surfaces (web, CLI) expand through this so they
+        agree on what a template may read."""
+        auto = getattr(getattr(agent, "config", None), "auto", None)
+        return self.expand(
+            name,
+            args,
+            workdir=getattr(agent, "cwd", "") or None,
+            trusted_dirs=getattr(auto, "trusted_dirs", None) or (),
+            protected_paths=getattr(auto, "protected_paths", None),
+        )
 
     # --- internals -------------------------------------------------------
 
     def _entry(self, name: str, path: Path) -> SlashCommandEntry:
-        meta, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            # Listed (so /help shows why it doesn't work) but no longer able to
+            # break every other command's lookup.
+            return SlashCommandEntry(
+                name=name, path=path, summary=f"(unreadable: {_unreadable(exc)})"
+            )
+        meta, body = _split_frontmatter(text)
         desc = meta.get("description", "")
         return SlashCommandEntry(
             name=name,
@@ -131,25 +232,165 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, text[m.end():]
 
 
-def _substitute(body: str, args: str) -> str:
-    parts = shlex.split(args) if args.strip() else []
-    body = body.replace("$ARGUMENTS", args).replace("{args}", args)
-    body = _POSITIONAL_RE.sub(
-        lambda m: parts[int(m.group(1)) - 1] if int(m.group(1)) <= len(parts) else "",
-        body,
-    )
-    return _inline_files(body)
+def _split_args(args: str) -> list[str]:
+    """Positional args, shell-style. An unbalanced quote or a trailing backslash
+    (`/fix don't panic`) falls back to a whitespace split instead of failing."""
+    if not args.strip():
+        return []
+    try:
+        return shlex.split(args)
+    except ValueError:
+        return args.split()
 
 
-def _inline_files(body: str) -> str:
-    def repl(m: "re.Match[str]") -> str:
-        try:
-            text = Path(m.group(1)).expanduser().read_text(encoding="utf-8")[:_MAX_INLINE_BYTES]
-        except OSError:
-            return m.group(0)  # not a readable file → leave the @token as-is
-        return f"\n```\n{text}\n```\n"
+def _substitute(
+    body: str,
+    args: str,
+    *,
+    inline: bool = True,
+    workdir: str | Path | None = None,
+    trusted_dirs: Iterable[str] = (),
+    protected_paths: Iterable[str] | None = None,
+) -> str:
+    parts = _split_args(args)
+    scope: _RefScope | None = None  # built on the first template ref
 
-    return _FILE_REF_RE.sub(repl, body)
+    def arg(m: "re.Match[str]") -> str:
+        if m.group(1):  # $1..$9 — missing positional → blank
+            i = int(m.group(1))
+            return parts[i - 1] if i <= len(parts) else ""
+        return args  # $ARGUMENTS / {args}
+
+    def token(m: "re.Match[str]") -> str:
+        nonlocal scope
+        ref = m.group(2)
+        if ref is None:
+            return arg(m)
+        if _PLACEHOLDER_RE.search(ref):
+            # `@$1` and the like: the path would come from the arguments, so
+            # splice them in as text and never read it.
+            return "@" + _PLACEHOLDER_RE.sub(arg, ref)
+        if inline:
+            if scope is None:
+                scope = _RefScope.build(workdir, trusted_dirs, protected_paths)
+            text = _read_ref(ref, scope)
+            if text is not None:
+                return f"\n```\n{text}\n```\n"
+        return m.group(0)  # not an inlinable file → leave the @token as-is
+
+    return _TOKEN_RE.sub(token, body)
+
+
+@dataclass(frozen=True)
+class _RefScope:
+    """Where a template's `@refs` may read from, built once per expansion."""
+
+    root: Path  # relative refs resolve here
+    lexical: tuple[Path, ...]  # the working folder + trusted dirs, absolute
+    resolved: tuple[Path, ...]  # ...and with symlinks followed
+    deny: tuple[str, ...]  # lower-cased protected + secret patterns
+
+    @classmethod
+    def build(
+        cls,
+        workdir: str | Path | None,
+        trusted_dirs: Iterable[str],
+        protected_paths: Iterable[str] | None,
+    ) -> _RefScope:
+        root = Path(workdir) if workdir else _workdir.get_cwd()
+        lexical: list[Path] = []
+        resolved: list[Path] = []
+        for d in (root, *(t for t in trusted_dirs if t)):
+            try:
+                lex = Path(os.path.abspath(Path(d).expanduser()))
+                resolved.append(lex.resolve())
+                lexical.append(lex)
+            except (OSError, ValueError, RuntimeError):
+                continue
+        pats = AutoSettings().protected_paths if protected_paths is None else protected_paths
+        deny: list[str] = []
+        for pat in (*pats, *_SECRET_PATHS):
+            if pat:
+                deny.append(pat.lower())
+                if pat.startswith("~"):  # `~/.evi/**` names an absolute path
+                    deny.append(os.path.expanduser(pat).lower())
+        return cls(root, tuple(lexical), tuple(resolved), tuple(deny))
+
+    def contains(self, real: Path) -> bool:
+        return any(real == r or real.is_relative_to(r) for r in self.resolved)
+
+    def denies(self, ref: str, lex: Path, real: Path) -> bool:
+        """Match every spelling of the file — as written, normalised, absolute,
+        and relative to each root — case-insensitively (a case-insensitive disk
+        opens `ID_ED25519` as `id_ed25519`), so `./x`, `a/../x` and absolute
+        refs can't slip past a `dir/*` pattern."""
+        names = [ref, os.path.normpath(ref), str(lex), str(real)]
+        for base in (*self.lexical, *self.resolved):
+            for path in (lex, real):
+                if path == base or path.is_relative_to(base):
+                    names.append(path.relative_to(base).as_posix())
+        return _is_protected([n.lower() for n in names], self.deny)
+
+
+def _is_network_path(p: Path) -> bool:
+    """A UNC (`\\\\host\\share`) or device (`\\\\?\\`, `\\\\.\\`) path — Windows only."""
+    return p.drive.startswith(("\\\\", "//"))
+
+
+def _read_ref(ref: str, scope: _RefScope) -> str | None:
+    """The (capped) text of a template's `@ref`, or None unless it is a regular
+    UTF-8 file inside the working folder or a trusted dir that matches no
+    protected or secret path. Relative refs resolve against the working folder."""
+    try:
+        p = Path(ref).expanduser()
+        if not p.is_absolute():
+            p = scope.root / p
+        lex = Path(os.path.abspath(p))  # lexical only: no filesystem access yet
+    except (OSError, ValueError, RuntimeError):  # bad path / unknown ~user
+        return None
+    if _is_network_path(lex) and lex.drive.lower() not in {
+        r.drive.lower() for r in (*scope.lexical, *scope.resolved)
+    }:
+        # Refuse before resolve(): resolving would already connect to the host.
+        _refused(ref, "a network or device path outside the working folder")
+        return None
+    try:
+        real = p.resolve()  # follow symlinks before the containment check
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not scope.contains(real):
+        if _exists(real):
+            _refused(ref, "outside the working folder and [auto] trusted_dirs")
+        return None
+    if not real.is_file():  # missing, a directory, or a FIFO/device (open could block)
+        return None
+    if scope.denies(ref, lex, real):
+        _refused(ref, "a protected path or a key/credential file")
+        return None
+    try:
+        with real.open(encoding="utf-8") as f:
+            return f.read(_MAX_INLINE_BYTES)  # never reads (or decodes) the rest
+    except (OSError, ValueError):  # unreadable or not UTF-8 text
+        return None
+
+
+def _exists(p: Path) -> bool:
+    try:
+        return p.exists()
+    except (OSError, ValueError):
+        return False
+
+
+def _refused(ref: str, why: str) -> None:
+    logger.warning("command template ref @%s not inlined: %s", ref, why)
+
+
+def _unreadable(exc: BaseException) -> str:
+    if isinstance(exc, UnicodeDecodeError):
+        return "not UTF-8 text"
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc)
 
 
 def _first_line(text: str) -> str:

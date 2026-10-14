@@ -1179,7 +1179,16 @@ def _dispatch_slash(
     handler = _BUILTINS.get(name.lower())
     if handler is not None:
         return handler(agent, args, cmd_store)
-    expanded = cmd_store.expand(name, args)
+    # User-defined command: the same guarded expansion as the web chat — only
+    # the template's own @refs inline (args stay text), confined to the session
+    # folder + [auto] trusted_dirs (/add-dir) and never protected/secret paths.
+    try:
+        expanded = cmd_store.expand_for_agent(agent, name, args)
+    except (ValueError, OSError) as exc:  # e.g. its file isn't UTF-8: say so, don't crash
+        from rich.markup import escape
+
+        console.print(f"[red]can't run /{escape(name)}:[/red] {escape(str(exc))}")
+        return "continue"
     if expanded is None:
         console.print(f"[red]unknown command:[/red] /{name} [dim](try /help)[/dim]")
         return "continue"

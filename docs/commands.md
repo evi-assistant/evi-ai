@@ -35,17 +35,36 @@ Look at the staged diff and write a commit message for $ARGUMENTS.
 
 - `$ARGUMENTS` — everything typed after the command name.
 - `$1`, `$2`, … `$9` — positional args (shell-split; quote to group:
-  `/review "two words" tail` → `$1` = `two words`).
+  `/review "two words" tail` → `$1` = `two words`). Input that doesn't
+  shell-split, such as an unbalanced quote in `/fix don't panic`, falls back to
+  a plain whitespace split.
 - `{args}` — legacy alias for `$ARGUMENTS` (still works).
 
-`/commit auth` with the file above sends:
+Arguments are pasted in as plain text. `/commit auth` with the file above sends:
 *"Look at the staged diff and write a commit message for auth."*
 
 ### File references
 
-`@path/to/file` inlines that file's contents (fenced) if it exists — handy for
-templates that should always include a checklist or style guide. Tokens that
-aren't readable files (emails, `@handles`) are left untouched.
+An `@path/to/file` written **in the command file** inlines that file's contents
+(fenced, first 16,000 characters) — handy for templates that should always
+include a checklist or style guide. The rules:
+
+- Only the template's own refs are read. An `@path` in your arguments
+  (`/review @src/app.py`), or a ref built from them (`@$1`, `@{args}`), stays
+  text.
+- The file must be inside the session's working folder or a folder in
+  `[auto] trusted_dirs` (`/add-dir` adds one for the session), after symlinks
+  are followed. Put a shared style guide in a trusted dir to keep inlining it.
+- Files matching `[auto] protected_paths` never inline, and neither do key and
+  credential files (`.env*`, SSH keys, `.ssh/`, `*.pem`, `*.key`, `.netrc`,
+  `.git-credentials`, `.npmrc`, `.pypirc`, Docker, Kubernetes, `gh` and cloud
+  CLI credential files, Terraform state, `~/.evi/config.toml`), even if you
+  empty `protected_paths`.
+- Commands served over MCP (`evi mcp serve` prompts) never inline files.
+
+Anything else (emails, `@handles`, a refused or missing file) is left as typed;
+a refused file that exists is logged with the reason. The full list and
+details are in [features/slash-commands.md](features/slash-commands.md#file-references-path).
 
 ### Namespacing
 

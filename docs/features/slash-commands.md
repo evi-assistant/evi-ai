@@ -85,26 +85,91 @@ argument-hint: [scope]
 model: qwen2.5-coder:14b-instruct-q4_K_M
 ---
 
-Write a conventional-commit message for the staged changes.
+Write a conventional-commit message for the staged changes
+(run `git diff --cached` to see them).
 Scope: $1
 Full request: $ARGUMENTS
-Here is the diff:
-@<(git diff --cached)
+Follow the conventions in @CONTRIBUTING.md
 ```
 
 - **Frontmatter** (optional `---` block):
   - `description` — shown in `/help`. If omitted, the first body line is used.
   - `argument-hint` — documents expected args (e.g. `[scope]`), shown to you.
   - `model` — a per-command model override surfaced to callers that honour it.
-- **Arguments**:
+- **Arguments** — always substituted as plain text (never re-scanned, never read
+  as file refs):
   - `$ARGUMENTS` — everything after the command name.
-  - `$1` … `$9` — positional args (the argument string is `shlex`-split).
+  - `$1` … `$9` — positional args. The argument string is `shlex`-split; if it
+    doesn't parse (an unbalanced quote or a trailing backslash, as in
+    `/fix don't panic`), it falls back to a plain whitespace split instead of
+    failing. A missing positional becomes an empty string.
   - `{args}` — legacy alias for `$ARGUMENTS`.
-- **File references** — `@path/to/file` inlines that file's contents (fenced), up
-  to 16 KB, if the file exists; otherwise the token is left as-is. (Emails like
-  `a@b.com` are *not* treated as file refs.)
+- **File references** — an `@path` written in the command file inlines that
+  file, within the limits below.
 - **Namespacing** — subdirectories become `:` names:
   `~/.evi/commands/git/commit.md` → `/git:commit`.
+
+### File references (`@path`)
+
+An `@` at the start of a line or after whitespace starts a file ref (so emails
+like `a@b.com` and `x@y` are not refs). A ref is replaced by the file's
+contents, fenced, when **all** of these hold:
+
+- **It is written in the template itself.** Only the command file's own refs
+  are read. An `@path` in your arguments stays text: with a template of
+  `Review $ARGUMENTS`, `/review @src/app.py` sends the literal `@src/app.py`
+  (the model can still open the file with its own tools, under the normal
+  permission prompt). A ref built from arguments (`@$1`, `@$ARGUMENTS`,
+  `@{args}`) is spliced in as text and never read either. Inlined file text is
+  pasted verbatim: placeholders and `@` refs inside it are not expanded.
+- **It is inside the working folder or a trusted dir.** Relative refs resolve
+  against the session's working folder (`evi chat --cwd`, `/cd`, or the web
+  session's folder). Absolute and `~/` refs are allowed too, but after symlinks
+  are followed the file must sit under the working folder or a directory in
+  `[auto] trusted_dirs` (which `/add-dir` extends for the session). A UNC or
+  device path (`\\host\share\...`) on a share that neither the working folder
+  nor a trusted dir is on is refused before anything touches the network.
+- **It is not a protected or secret path.** Files matching
+  `[auto] protected_paths` are skipped, and so are key and credential files on
+  a built-in list that applies even if you empty `protected_paths`: `.env*`,
+  SSH keys (`id_rsa*`, `id_ed25519*`, …), anything under `.ssh/` or `.gnupg/`,
+  `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `.netrc`, `.git-credentials`,
+  `.npmrc`, `.yarnrc.yml`, `.pypirc`, `.pgpass`, `.my.cnf`, `.vault-token`,
+  Cargo and RubyGems credentials, `.docker/config.json`, `.kube/config`,
+  `gh`'s `hosts.yml`, the AWS (`.aws/credentials`, SSO cache), Google Cloud
+  (`.config/gcloud/`, `application_default_credentials.json`,
+  `*service-account*.json`) and Azure (`.azure/`) CLI stores, Terraform
+  `*.tfvars` / `*.tfstate`, and `~/.evi/config.toml`. Matching ignores case and
+  checks the path however it is spelled (`./x`, `a/../x`, absolute, or relative
+  to each allowed folder).
+- **It is a regular UTF-8 text file.** Only the first 16,000 characters are
+  read. Directories, FIFOs and devices are never opened.
+
+Anything else is left in the message as the literal `@path` token. When a ref
+names a file that exists but is refused (outside the folders above, protected,
+secret, or a network path), eVi logs a warning saying why, so check the log if
+a template's file stops appearing.
+
+To inline a shared file that lives outside the project (a style guide in your
+notes, say), trust its folder. This also auto-approves `fs` and `code` tools
+under it (see [permissions-and-sandbox.md](permissions-and-sandbox.md)):
+
+```toml
+[auto]
+trusted_dirs = ["~/notes/style"]
+```
+
+The REPL and the web chat apply the same rules. When eVi serves your commands
+as MCP prompts (`evi mcp serve`), `prompts/get` never inlines anything: template
+refs and the client's `args` both come back as text, so an MCP client can't
+read local files through a prompt.
+
+> **Changed after 1.0.53.** Earlier versions inlined every `@path` after the
+> arguments were substituted, including refs typed in the arguments, refs
+> outside the working folder (such as `@~/notes/style.md`), and key files.
+> Commands that relied on those now send the `@path` text instead. Move the
+> ref into the template and the file under the working folder or a trusted
+> dir, or let the model read the file with its tools.
 
 > **No shell execution.** Unlike some tools, eVi does **not** run `!bash` blocks
 > when expanding a command — auto-running shell on expansion is too sharp an edge
@@ -154,9 +219,9 @@ description: Draft a PR description from the branch diff
 argument-hint: [ticket]
 ---
 Write a concise PR description for ticket $1.
-Summarise the change, call out risks, and list manual test steps.
-Diff:
-@<(git diff main...HEAD)
+Run `git diff main...HEAD` to see the change, then summarise it, call out
+risks, and list manual test steps. Follow the layout in
+@.github/pull_request_template.md
 EOF
 ```
 
@@ -168,6 +233,12 @@ Fire it with `/pr:describe ABC-123`.
   blocks path traversal).
 - The command store **rescans on every call**, so newly added files show up
   without restarting `evi web`.
+- A command file that isn't readable UTF-8 is listed in `/help` as
+  `(unreadable: …)`. Running it replies `can't run /<name>: …`; your other
+  commands keep working.
+- Templates never run shell: there is no `@<(command)` or `!command`
+  substitution. Ask the model to run the command instead (it goes through the
+  usual permission prompt).
 - `/json` and `/schema` are per-turn structured-output controls — see
   [structured-and-batch.md](structured-and-batch.md). The web/API equivalent is
   the `output_schema` field on the chat request.
