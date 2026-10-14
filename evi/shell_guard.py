@@ -3,8 +3,9 @@
 A default-on, deterministic second gate over shell-executing tools: a small,
 curated set of high-precision patterns for genuinely destructive/irreversible
 commands (``rm -rf ~``, ``git reset --hard``, disk formats, force-pushes,
-credential exfil, IaC mass-teardown, …) across bash/zsh, PowerShell, and cmd —
-since eVi runs on Windows as well as macOS/Linux.
+credential exfil, IaC mass-teardown, ``GIT_*=`` / ``LD_PRELOAD=`` environment
+that silently changes what a command runs, …) across bash/zsh, PowerShell, and
+cmd — since eVi runs on Windows as well as macOS/Linux.
 
 This is *not* a sandbox — a determined operator can obfuscate around it
 (``bash -c``/``python -c``/base64/dynamic strings). It's a safety net that stops
@@ -31,8 +32,10 @@ Design (mirrors Claude Code's "auto mode" soft-deny, minus the LLM classifier):
   confirmation" at the agent layer; the tier is surfaced in the reason.
 
 Config (``[auto]`` in config.toml): ``block_destructive`` (default true),
-``destructive_allow`` (fnmatch globs matched against the whole command that
-exempt it), and ``destructive_disable_rules`` (builtin rule ids to silence).
+``destructive_allow`` (fnmatch globs matched against each command segment of
+the line, see `evi.shellsplit`; a hit is exempt only when every segment it
+touches matches one), and ``destructive_disable_rules`` (builtin rule ids to
+silence).
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ import fnmatch
 import re
 from dataclasses import dataclass
 
+from evi import shellsplit
+
 
 @dataclass(frozen=True)
 class DestructiveRule:
@@ -48,6 +53,45 @@ class DestructiveRule:
     severity: str  # "block" | "prompt"
     reason: str
     pattern: re.Pattern[str]
+
+
+# --- environment assignments that change what a command loads or runs ---
+# A command position: the line start or a separator / opening bracket / `$(`,
+# then up to two of sudo / env / export / set / then ... (with their options)
+# and up to eight other assignments (`LANG=C LD_PRELOAD=x ls`). Every run of
+# whitespace is followed by a token that can't start with whitespace, so a long
+# blank run can't drive backtracking.
+_CMD_POS = (
+    r'''(?:^|[;&|({`\n]|\$\()\s*'''
+    r'''(?:(?:sudo|doas|env|export|set|declare|typeset|local|readonly|nohup|command|exec'''
+    r'''|then|do|else)\s+(?:-[-\w]+\s+)*){0,2}'''
+)
+_OTHER_ASSIGNS = r'''(?:[A-Za-z_]\w*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;|&"'])*\s+){0,8}'''
+# GIT_* (GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, GIT_DIR, GIT_CONFIG_COUNT/KEY/VALUE
+# — any config, `alias.*` and `core.fsmonitor` included), minus the data-only
+# ones (identity, dates, prompt / lock / autoedit switches, trace levels) and
+# the no-op editor / pager agents use (`GIT_EDITOR=true`, `GIT_PAGER=cat`).
+_GIT_ENV_NAME = (
+    r'''GIT_(?!(?:(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE)|TERMINAL_PROMPT|OPTIONAL_LOCKS'''
+    r'''|MERGE_AUTOEDIT)\b|(?:(?:SEQUENCE_)?EDITOR\s*=\s*["']?(?:true|:)|PAGER\s*=\s*["']?'''
+    r'''(?:cat)?|TRACE\w*\s*=\s*["']?(?:[0-2]|true|false))["']?(?=[\s;&|)}]|$))\w+'''
+)
+# The dynamic loader's injection / search-path variables (Linux, macOS).
+_LOADER_ENV_NAME = r'''(?:LD_(?:PRELOAD|LIBRARY_PATH|AUDIT)|DYLD_\w+)\b'''
+
+
+def _env_assign(name: str) -> str:
+    """Regex for an assignment of the variable `name` matches that a command
+    (or the rest of the session) then sees: bash/zsh `NAME=v cmd`,
+    `export NAME=v`, `env NAME=v cmd`; cmd `set NAME=v`, `set "NAME=v"`,
+    `setx NAME v`; PowerShell `$env:NAME = v`, `Set-Item env:NAME v`,
+    `[Environment]::SetEnvironmentVariable('NAME', v)`."""
+    return (
+        rf'''{_CMD_POS}{_OTHER_ASSIGNS}["']?{name}='''
+        rf'''|{_CMD_POS}\$\{{?env:{name}\}}?\s*=(?!=)'''
+        rf'''|\bsetx\s+["']?{name}|\b(?:Set-Item|New-Item|si|ni)\s+(?:-Path\s+)?["']?env:{name}'''
+        rf'''|SetEnvironmentVariable\(\s*["']{name}["']'''
+    )
 
 
 # (id, severity, case_insensitive, reason, regex). Sourced from a cross-platform
@@ -88,6 +132,19 @@ _RAW: list[tuple[str, str, bool, str, str]] = [
     ("git-history-purge", "block", True,
      "expiring reflog / pruning now / deleting refs makes lost commits unrecoverable",
      r'''\bgit\s+(?:reflog\s+expire\b[^;|&\n]*--expire(?:[= ](?:now|all))|gc\b[^;|&\n]*--prune[= ]now|update-ref\s+-d)\b'''),
+
+    # --- environment that changes what a command loads or runs ---
+    # Invisible in the command itself: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=
+    # alias.status GIT_CONFIG_VALUE_0='!rm -rf ~' git status` reads as a status,
+    # `LD_PRELOAD=x.so ls` as an ls. Only an assignment counts — reading
+    # `$GIT_DIR` / `$env:GIT_DIR`, `unset`, or `-e GIT_X=1` handed to another
+    # program does not. See _CMD_POS / _GIT_ENV_NAME above for the forms.
+    ("env-git-override", "prompt", True,
+     "a GIT_* environment assignment can make git run another program or use another repository",
+     _env_assign(_GIT_ENV_NAME)),
+    ("env-loader-inject", "prompt", True,
+     "LD_PRELOAD / LD_LIBRARY_PATH / DYLD_* make every program load a library of the caller's choosing",
+     _env_assign(_LOADER_ENV_NAME)),
 
     # --- recursive/forced deletion (unix) ---
     # An optional quote is consumed before the target so `rm -rf "$HOME"` is
@@ -291,36 +348,80 @@ _PURE_PRINT = re.compile(r'''^\s*(?:echo|printf|Write-Output|Write-Host)\b''', r
 _HAS_EXEC_META = re.compile(r'''[|>`;&]|\$\(|\$\{|<\(''')
 
 
-def destructive_hit(
-    command: str,
-    *,
-    disable_rules: object = (),
-    allow: object = (),
-) -> DestructiveRule | None:
-    """Return the first matching destructive rule for `command`, or None.
-
-    `allow` is an iterable of fnmatch globs matched against the WHOLE command —
-    a match exempts the command (user opt-out for a pattern they truly want).
-    `disable_rules` is an iterable of rule ids to skip entirely.
-    """
-    if not command or not command.strip():
-        return None
-    cmd = command.strip()
-
-    # Whole-command glob exemptions only (no substring match — a substring
-    # exemption would let `<allowed>; rm -rf ~` through).
-    for a in allow or ():
-        a = str(a)
-        if a and fnmatch.fnmatch(cmd, a):
-            return None
-
+def _first_hit(cmd: str, disabled: set[str]) -> DestructiveRule | None:
     if _PURE_PRINT.match(cmd) and not _HAS_EXEC_META.search(cmd):
         return None
-
-    disabled = {str(d) for d in (disable_rules or ())}
     for rule in _MATCH_ORDER:
         if rule.id in disabled:
             continue
         if rule.pattern.search(cmd):
             return rule
     return None
+
+
+def _unexempted_hit(
+    cmd: str,
+    hit: DestructiveRule,
+    globs: list[str],
+    disabled: set[str],
+    dialect: str | None,
+) -> DestructiveRule | None:
+    """Apply `destructive_allow` globs per segment: a glob exempts the command
+    segments it matches, never the line around them (so ``*--force-with-lease*``
+    can't exempt ``rm -rf ~; git push --force-with-lease``)."""
+    sp = shellsplit.split(cmd, dialect)
+    if not sp.ok:  # can't tell which command a hit belongs to
+        return hit
+    segs = sp.commands
+    exempt = [any(fnmatch.fnmatch(seg.text, g) for g in globs) for seg in segs]
+    if not any(exempt):
+        return hit
+    # Every match must lie only in exempt segments. One that touches no segment
+    # (a heredoc body, a comment) or a redirect can't be attributed, so it stands.
+    for rule in _MATCH_ORDER:
+        if rule.id in disabled:
+            continue
+        for m in rule.pattern.finditer(cmd):
+            a, b = m.start(), max(m.end(), m.start() + 1)
+            touched = [k for k, seg in enumerate(segs) if seg.start < b and a < seg.end]
+            if (
+                not touched
+                or not all(exempt[k] for k in touched)
+                or any(r.start < b and a < r.end for r in sp.redirects)
+            ):
+                return rule
+    # Backstop: every non-exempt segment, scanned on its own.
+    for k, seg in enumerate(segs):
+        if not exempt[k]:
+            seg_hit = _first_hit(seg.text, disabled)
+            if seg_hit is not None:
+                return seg_hit
+    return None
+
+
+def destructive_hit(
+    command: str,
+    *,
+    disable_rules: object = (),
+    allow: object = (),
+    dialect: str | None = None,
+) -> DestructiveRule | None:
+    """Return the first matching destructive rule for `command`, or None.
+
+    `allow` is an iterable of fnmatch globs (user opt-outs for a pattern they
+    truly want) matched against each command segment of the line as `dialect`
+    (default: this platform's shell) splits it: a hit is exempt only when every
+    segment it touches matches a glob, and never when the line is unparsable.
+    `disable_rules` is an iterable of rule ids to skip entirely.
+    """
+    if not command or not command.strip():
+        return None
+    cmd = command.strip()
+    disabled = {str(d) for d in (disable_rules or ())}
+    hit = _first_hit(cmd, disabled)
+    if hit is None:
+        return None
+    globs = [str(a) for a in (allow or ()) if str(a)]
+    if not globs:
+        return hit
+    return _unexempted_hit(cmd, hit, globs, disabled, dialect)

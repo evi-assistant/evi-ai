@@ -826,34 +826,24 @@ class Agent:
     def _is_pre_approved(self, tool: Tool) -> bool:
         return self.auto_all or tool.category in self.auto_approve_categories
 
-    # Tools that execute a shell/OS command, and the arg field holding it. The
-    # destructive guard inspects these (not just category=="shell") so a
-    # command-runner like `monitor` (category "code", runs its `target` with
-    # shell=True) can't slip a destructive command past the guard. `run_python`
-    # is intentionally excluded — arbitrary Python is a different, broader threat
-    # surface a shell-command regex can't secure (gated by its own toggle).
-    _SHELL_EXEC_TOOLS = {"run_command": "command", "monitor": "target"}
-
     def _guarded_command(self, tool: Tool, args_json: str) -> str | None:
         """The shell command a guarded tool would execute, or None if `tool`
-        isn't a shell-executing call this invocation."""
-        field = self._SHELL_EXEC_TOOLS.get(getattr(tool, "name", ""))
-        if field is None:
-            if getattr(tool, "category", "") != "shell":
-                return None
-            field = "command"  # any future category-"shell" tool
-        import json
+        isn't a shell-executing call this invocation.
+
+        The destructive guard inspects every tool in
+        `evi.permissions.SHELL_EXEC_TOOLS` (not just category "shell"), so a
+        command-runner like `monitor` (category "code", runs its `target` with
+        shell=True) can't slip a destructive command past it. That one map also
+        drives `permissions.decide`, so the guard and the rules always agree on
+        which calls run a shell line."""
+        from evi.permissions import shell_command_of
 
         try:
-            data = json.loads(args_json) if isinstance(args_json, str) else dict(args_json)
+            return shell_command_of(
+                getattr(tool, "name", ""), getattr(tool, "category", ""), args_json
+            )
         except Exception:  # noqa: BLE001
             return None
-        if not isinstance(data, dict):
-            return None
-        if getattr(tool, "name", "") == "monitor" and data.get("kind") != "command":
-            return None  # monitor is tailing a file, not running a command
-        val = data.get(field)
-        return val if isinstance(val, str) else None
 
     def _destructive_decision(self, tool: Tool, args_json: str) -> tuple[str, str] | None:
         """Guard curated destructive shell commands so they can never run
@@ -861,11 +851,14 @@ class Agent:
         UI exists (require confirmation) or ``"deny"`` when there's none
         (headless fail-safe) — or ``None`` when the guard doesn't apply.
 
-        Sits above yolo / accept_edits / auto-approve / `/auto on`. An explicit
-        *specific* user allow-rule (matching the tool by name OR category and
-        carrying a non-trivial arg-glob) is honoured as intent and clears the
-        guard; a broad ``allow shell`` / ``allow shell *`` does NOT, so a
-        wildcard can't silently disable the safety net.
+        Sits above yolo / accept_edits / auto-approve / `/auto on`. Explicit
+        *specific* user allow-rules (matching the tool by name OR category and
+        carrying a non-trivial arg-glob) are honoured as intent and clear the
+        guard, but only when they cover EVERY segment of the command line
+        (`evi.shellsplit`), the line parses, and its redirects stay inside the
+        working folder: ``allow run_command git*`` must not clear
+        ``git log; rm -rf ~``. A broad ``allow shell`` / ``allow shell *`` never
+        clears it, so a wildcard can't silently disable the safety net.
         """
         auto = getattr(self.config, "auto", None)
         if not getattr(auto, "block_destructive", True):
@@ -882,20 +875,21 @@ class Agent:
         )
         if hit is None:
             return None
-        from evi.permissions import _arg_values, _rule_action
+        from evi.permissions import _arg_values, exec_cwd_of, shell_rule_action
 
-        values = _arg_values(args_json)
-        cat = getattr(tool, "category", "")
-        for rule in getattr(auto, "rules", []) or []:
-            parts = rule.split(None, 2)
-            act = _rule_action(rule, tool.name, values)
-            if act is None and cat:
-                act = _rule_action(rule, cat, values)  # rules keyed on category too
-            if act == "deny":
-                return ("deny", hit.reason)
-            # A non-trivial arg-glob (not just "*"/"?") is a real, specific intent.
-            if act == "allow" and len(parts) > 2 and parts[2].strip().strip("*? "):
-                return None
+        act = shell_rule_action(
+            getattr(auto, "rules", []) or [],
+            (tool.name, getattr(tool, "category", "")),  # rules keyed on category too
+            _arg_values(args_json),
+            cmd,
+            workdir=getattr(self, "cwd", "") or None,
+            cwd=exec_cwd_of(tool.name, args_json),
+            broad=False,  # only a non-trivial arg-glob is a real, specific intent
+        )
+        if act == "deny":
+            return ("deny", hit.reason)
+        if act == "allow":
+            return None
         has_ui = (
             self.permission_callback is not None
             or getattr(self, "permission_batch_callback", None) is not None
@@ -938,6 +932,7 @@ class Agent:
             getattr(auto, "trusted_domains", []) or [],
             getattr(auto, "hard_deny", []) or [],
             getattr(auto, "protected_paths", []) or [],
+            workdir=getattr(self, "cwd", "") or None,
         )
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
