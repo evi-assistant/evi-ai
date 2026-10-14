@@ -18,6 +18,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from evi import gitsafe
+
 ANATOMY_REL = Path(".evi") / "anatomy.md"
 
 _IGNORE_DIRS = {
@@ -50,12 +52,12 @@ def _keep(rel: Path) -> bool:
 def _git_files(root: Path) -> list[Path] | None:
     """Tracked + untracked-but-not-ignored files via git, or None if not a repo."""
     try:
-        res = subprocess.run(
+        res = gitsafe.run_git(
             # core.quotepath=false keeps non-ASCII paths raw (not octal-escaped +
             # quoted), so files like résumé.txt resolve instead of vanishing.
-            ["git", "-C", str(root), "-c", "core.quotepath=false", "ls-files",
+            ["-C", str(root), "-c", "core.quotepath=false", "ls-files",
              "--cached", "--others", "--exclude-standard"],
-            capture_output=True, text=True, timeout=15,
+            timeout=15,
         )
     except (OSError, subprocess.SubprocessError):
         return None

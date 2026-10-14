@@ -347,15 +347,14 @@ def install_skill(
             tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
             skill_src: str | Path = _find_skill_dir(download_and_unzip(src, tmp), name)
         elif _looks_like_git(src):
-            import subprocess
+            from evi import gitsafe
 
             if src.startswith("-"):
                 raise SkillError(f"refusing suspicious source: {src!r}")
             tmp = Path(tempfile.mkdtemp(prefix="evi-skill-"))
-            res = subprocess.run(
+            res = gitsafe.run_git(
                 # `--` stops git treating "--upload-pack=…" sources as options.
-                ["git", "clone", "--depth", "1", "--", src, str(tmp)],
-                capture_output=True, text=True,
+                ["clone", "--depth", "1", "--", src, str(tmp)],
             )
             if res.returncode != 0:
                 raise SkillError("git clone failed:\n" + (res.stderr or res.stdout))

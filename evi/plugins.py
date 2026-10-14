@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +40,7 @@ import tomllib
 import re
 
 import evi.config as config
+from evi import gitsafe
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
@@ -237,10 +237,9 @@ def install(source: str, name: str | None = None, root: Path | None = None) -> s
             tmp = Path(tempfile.mkdtemp(prefix="evi-plugin-"))
             if source.startswith("-"):
                 raise PluginError(f"refusing suspicious source: {source!r}")
-            res = subprocess.run(
+            res = gitsafe.run_git(
                 # `--` stops git treating a source like "--upload-pack=…" as an option.
-                ["git", "clone", "--depth", "1", "--", source, str(tmp)],
-                capture_output=True, text=True,
+                ["clone", "--depth", "1", "--", source, str(tmp)],
             )
             if res.returncode != 0:
                 raise PluginError("git clone failed:\n" + (res.stderr or res.stdout))

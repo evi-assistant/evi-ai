@@ -24,6 +24,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from evi import gitsafe
+
 
 _MAX_DIFF_BYTES = 64 * 1024  # cap so we don't blow the context window
 
@@ -33,13 +35,20 @@ class ReviewError(RuntimeError):
 
 
 def _git(*args: str, cwd: str | Path | None = None, timeout: float = 30.0) -> str:
-    """Run a git command and return stdout. Raises ReviewError on non-zero."""
+    """Run a hardened git command (evi.gitsafe) and return stdout. Raises
+    ReviewError on non-zero.
+
+    With no `cwd` this is `evi review` / `/ultrareview` run in the user's own
+    shell, so an inherited GIT_DIR / GIT_INDEX_FILE is honoured as plain git
+    would: in a pre-commit hook during `git commit -a` GIT_INDEX_FILE names
+    the index being committed, and `--staged` must review exactly that.
+    """
     try:
-        proc = subprocess.run(
-            ["git", *args],
-            capture_output=True, text=True, timeout=timeout, check=False,
-            cwd=str(cwd) if cwd else None,
+        proc = gitsafe.run_git(
+            args, cwd=cwd or None, timeout=timeout, inherit_repo_env=not cwd,
         )
+    except gitsafe.UnsafeRepoError as exc:
+        raise ReviewError(str(exc)) from exc
     except FileNotFoundError as exc:
         raise ReviewError("git not on PATH — install git to use `evi review`") from exc
     except subprocess.TimeoutExpired as exc:
@@ -65,13 +74,28 @@ def get_diff(
         if not p.is_file():
             raise ReviewError(f"diff file not found: {p}")
         return p.read_text(encoding="utf-8", errors="replace")
+    # Refuse a directory outside the work tree git reports for it — no repo
+    # (git diff would run as --no-index) — or a work tree that isn't the
+    # repository's own: its config (core.worktree) points git at files
+    # somewhere else, an ancestor such as the home directory included.
+    inside, _, prefix = _git(
+        "rev-parse", "--is-inside-work-tree", "--show-prefix", cwd=cwd,
+    ).partition("\n")
+    if inside.strip() != "true" or not gitsafe.is_own_work_tree(
+        cwd, prefix.strip("\r\n"), inherit_repo_env=not cwd,
+    ):
+        raise ReviewError(gitsafe.NOT_IN_WORK_TREE)
     if file:
         return _git("diff", "HEAD", "--", file, cwd=cwd)
-    if branch:
-        # Three-dot: changes on HEAD that aren't on `branch` (typical PR view).
-        return _git("diff", f"{branch}...HEAD", cwd=cwd)
-    if range:
-        return _git("diff", range, cwd=cwd)
+    try:
+        if branch:
+            # Three-dot: changes on HEAD that aren't on `branch` (typical PR view).
+            base = gitsafe.validate_ref(branch, what="branch")
+            return _git("diff", *gitsafe.rev_args(f"{base}...HEAD"), cwd=cwd)
+        if range:
+            return _git("diff", *gitsafe.rev_args(range, what="range"), cwd=cwd)
+    except gitsafe.UnsafeRefError as exc:
+        raise ReviewError(str(exc)) from exc
     if staged:
         return _git("diff", "--cached", cwd=cwd)
     # Default: working tree vs last commit.

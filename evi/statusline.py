@@ -20,15 +20,15 @@ import json
 import subprocess
 from pathlib import Path
 
+from evi import gitsafe
+
 DEFAULT_FORMAT = "{model} · {pct}% ctx · {branch}{goal}{fast}"
 
 
 def git_branch(cwd: str | Path | None = None) -> str:
     try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=2,
-            cwd=str(cwd) if cwd else None,
+        r = gitsafe.run_git(
+            ["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd or None, timeout=2,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:  # noqa: BLE001

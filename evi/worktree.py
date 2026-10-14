@@ -8,6 +8,18 @@ main checkout rather than scattered across the filesystem.
 
 The functions in this module raise `WorktreeError` on git failures; the
 CLI layer translates them into clean error output.
+
+git runs hardened (evi.gitsafe): a hostile `.git/config` can't run programs
+through fsmonitor, diff drivers, the filter drivers and `hook.<name>.*`
+hooks the repository's (or a submodule's) own config defines, or the
+programs it names for Git LFS, and `core.hooksPath` points at an empty file,
+so `git worktree add` here does NOT run the repo's (or your global, or Git
+LFS's) post-checkout hook file. Run it by hand in the new worktree if you
+rely on one. Git LFS files are checked out as pointer files (no download);
+run `git lfs pull` in the new worktree for their contents. Branch and base
+names are validated before they reach git, and a repository whose own
+`core.worktree` moves its work tree away from the directory holding its
+`.git` (somewhere else, or up to an ancestor) is refused.
 """
 
 from __future__ import annotations
@@ -15,9 +27,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
+
+from evi import gitsafe
 
 
 class WorktreeError(RuntimeError):
@@ -35,14 +48,12 @@ class WorktreeEntry:
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
-    if shutil.which("git") is None:
-        raise WorktreeError("git not found on PATH")
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd is not None else None,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = gitsafe.run_git(args, cwd=cwd)
+    except gitsafe.GitNotFoundError as exc:
+        raise WorktreeError("git not found on PATH") from exc
+    except gitsafe.UnsafeRepoError as exc:
+        raise WorktreeError(str(exc)) from exc
     if proc.returncode != 0:
         raise WorktreeError(
             (proc.stderr or proc.stdout or f"git {' '.join(args)} failed").strip()
@@ -102,12 +113,29 @@ def _walk_up_for_git(start: Path) -> Path | None:
     return None
 
 
+def _same_dir(a: Path, b: Path) -> bool:
+    """Whether `a` and `b` are the same directory (both resolved)."""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
 def repo_root(start: Path | None = None) -> Path:
     """Top-level dir of the git repo containing `start` (default cwd)."""
     base = Path(start) if start is not None else Path.cwd()
     out = _git("rev-parse", "--show-toplevel", cwd=base)
     p = _git_path(out)
     if p.is_dir():
+        own = _walk_up_for_git(base)
+        if own is None or not _same_dir(own, p):
+            # The repository's own config (core.worktree) moved its work
+            # tree away from the directory holding its .git — somewhere
+            # else, or up to an ancestor such as the home directory;
+            # worktrees would land under that directory.
+            raise WorktreeError(
+                f"{base}: {gitsafe.NOT_IN_WORK_TREE} (git reports the work tree as {p})"
+            )
         return p
     # git answered with a path this platform can't use (an msys mount point).
     found = _walk_up_for_git(base)
@@ -184,6 +212,16 @@ def list_worktrees(start: Path | None = None) -> list[WorktreeEntry]:
     return entries
 
 
+def _managed_path(root: Path, name: str) -> Path:
+    """`<root>/.worktrees/<name with / as __>`, refusing names that would land
+    anywhere else (a drive or root prefix, a backslash separator, `..`)."""
+    flat = name.replace("/", "__")
+    pure = PurePath(flat)
+    if not flat or flat in (".", "..") or pure.anchor or len(pure.parts) != 1:
+        raise WorktreeError(f"not a usable worktree name: {name!r}")
+    return root / ".worktrees" / flat
+
+
 def create_worktree(
     branch: str,
     *,
@@ -195,24 +233,27 @@ def create_worktree(
 
     `create_branch=True` (the default) means we'll create the branch if it
     doesn't already exist. Pass `base="main"` to fork from a non-HEAD base.
+    With `create_branch=False`, `branch` may be any existing branch or
+    commit-ish. Names git could read as an option are refused.
     """
-    if not branch or "/" in branch.replace("refs/", "") and "refs/" not in branch:
-        # Allow `refs/heads/foo` but block bare `foo/bar` filenames as a
-        # rough sanity check.
-        pass
+    try:
+        branch = (gitsafe.validate_branch_name(branch) if create_branch
+                  else gitsafe.validate_ref(branch, what="branch"))
+        base = gitsafe.validate_ref(base, what="base") if base else None
+    except gitsafe.UnsafeRefError as exc:
+        raise WorktreeError(str(exc)) from exc
     root = repo_root(start)
-    dest = root / ".worktrees" / branch.replace("/", "__")
+    dest = _managed_path(root, branch)
     if dest.exists():
         raise WorktreeError(f"worktree path already exists: {dest}")
 
     args: list[str] = ["worktree", "add"]
     if create_branch:
-        args += ["-b", branch]
-        args += [str(dest)]
+        args += ["-b", branch, *gitsafe.end_of_options(), str(dest)]
         if base:
             args += [base]
     else:
-        args += [str(dest), branch]
+        args += [*gitsafe.end_of_options(), str(dest), branch]
     _git(*args, cwd=root)
     return dest
 
@@ -226,7 +267,7 @@ def resolve_worktree_path(branch_or_path: str, *, start: Path | None = None) -> 
     candidate = Path(branch_or_path)
     if candidate.is_absolute():
         return candidate
-    return repo_root(start) / ".worktrees" / branch_or_path.replace("/", "__")
+    return _managed_path(repo_root(start), branch_or_path)
 
 
 def dirty_files(path: Path) -> list[str] | None:
@@ -276,18 +317,63 @@ def orphaned_head(path: Path) -> str | None:
         return None
 
 
+def _lacks_worktree_remove(exc: WorktreeError) -> bool:
+    """Whether `git worktree remove` failed because this git predates it (2.17).
+
+    Decided by version, not by sniffing the message for "remove": that also
+    matched "cannot remove a locked working tree" and any path containing the
+    word, and handed those to the rmtree fallback.
+    """
+    version = gitsafe.git_version()
+    if version is not None:
+        return version < (2, 17)
+    return "usage:" in str(exc).lower()
+
+
+def _is_link(p: Path) -> bool:
+    return p.is_symlink() or os.path.isjunction(p)
+
+
+def _rmtree_managed(root: Path, candidate: Path) -> None:
+    """Delete a worktree directory ourselves (old gits only), but only a real
+    directory directly under `<root>/.worktrees/` that git lists as a
+    worktree, and never through a symlink or junction."""
+    base = root / ".worktrees"
+    if not os.path.lexists(candidate):
+        return
+    try:
+        inside = (
+            candidate.parent == base
+            and not _is_link(base) and not _is_link(candidate)
+            and candidate.is_dir()
+            and candidate.resolve().parent == base.resolve()
+            and base.resolve().parent == root.resolve()
+        )
+        registered = inside and any(
+            e.path.resolve() == candidate.resolve() for e in list_worktrees(root)
+        )
+    except OSError:
+        registered = False
+    if not registered:
+        raise WorktreeError(
+            f"refusing to delete {candidate}: only a registered worktree "
+            f"directly under {base} (not a link) is removed this way"
+        )
+    shutil.rmtree(candidate, ignore_errors=True)
+
+
 def remove_worktree(branch_or_path: str, *, start: Path | None = None) -> None:
     """Remove a worktree by branch name or path. Force-removes.
 
-    On git ≥ 2.17 this uses `git worktree remove --force`. On older versions
-    (which lack that subcommand) we fall back to deleting the directory
-    ourselves and running `git worktree prune` to clean the admin entry.
+    On git ≥ 2.17 this uses `git worktree remove --force`, which only ever
+    removes a registered worktree. Older gits lack that subcommand, so we
+    delete the directory ourselves, confined to `<repo>/.worktrees/` (see
+    `_rmtree_managed`), and run `git worktree prune` to clean the admin
+    entry. A directory that is already gone just gets the prune.
 
     This always forces: callers that want to protect uncommitted work should
     check `dirty_files()` and confirm with the user first (the CLI does).
     """
-    import shutil as _shutil
-
     root = repo_root(start)
     candidate = resolve_worktree_path(branch_or_path, start=start)
 
@@ -295,13 +381,14 @@ def remove_worktree(branch_or_path: str, *, start: Path | None = None) -> None:
         _git("worktree", "remove", "--force", str(candidate), cwd=root)
         return
     except WorktreeError as exc:
-        # Older git lacks `worktree remove` entirely; fall through if that's
-        # the reason. Anything else is a real failure we should surface.
-        if "remove" not in str(exc).lower() and "usage" not in str(exc).lower():
+        # Older git lacks `worktree remove` entirely, and some early versions
+        # refuse to remove a worktree whose directory was deleted by hand.
+        # Anything else is a real failure we should surface.
+        gone = not os.path.lexists(candidate) and "does not exist" in str(exc)
+        if not gone and not _lacks_worktree_remove(exc):
             raise
 
-    if candidate.exists():
-        _shutil.rmtree(candidate, ignore_errors=True)
+    _rmtree_managed(root, candidate)
     # Drop the stale admin entry under .git/worktrees/<name>/.
     _git("worktree", "prune", cwd=root)
 

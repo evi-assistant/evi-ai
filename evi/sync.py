@@ -19,12 +19,12 @@ point at a temp home; the CLI uses the real ``~/.evi``.
 from __future__ import annotations
 
 import socket
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import evi.config as config
+from evi import gitsafe
 
 # Top-level entries (relative to the eVi home) that travel between machines.
 SYNCED_PATHS = (
@@ -75,11 +75,10 @@ def _root(root: Path | None) -> Path:
 
 
 def _git(root: Path, *args: str, check: bool = False) -> GitResult:
-    proc = subprocess.run(
-        ["git", "-C", str(root), *args],
-        capture_output=True,
-        text=True,
-    )
+    # Hardened like every internal git call (evi.gitsafe), but this is eVi's
+    # own home repo driven from the CLI: the user's own hooks (e.g. a global
+    # secret scanner on push) still run, and git may prompt for credentials.
+    proc = gitsafe.run_git(["-C", str(root), *args], prompt=True, run_hooks=True)
     out = (proc.stdout + proc.stderr).strip()
     if check and proc.returncode != 0:
         raise SyncError(out or f"git {' '.join(args)} failed")

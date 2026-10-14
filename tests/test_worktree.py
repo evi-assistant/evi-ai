@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -299,3 +300,137 @@ def test_cli_remove_yes_skips_prompt_on_dirty(
     )
     cli.worktree_remove("forced", yes=True)
     assert find_worktree_for("forced") is None
+
+
+# --- hardening: option-like names, confined removal (evi.gitsafe) -----------
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"branch": "--orphan"},
+    {"branch": "-b"},
+    {"branch": "a..b"},
+    {"branch": "x", "base": "--output=pwned.txt"},
+    {"branch": "--detach", "create_branch": False},
+])
+def test_create_refuses_option_like_or_invalid_names(repo: Path, kwargs) -> None:
+    from evi.worktree import WorktreeError, create_worktree
+
+    with pytest.raises(WorktreeError):
+        create_worktree(**kwargs)
+    assert not (repo / ".worktrees").exists()
+    assert not (repo / "pwned.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "name", ["..", ".", ""] + ([r"..\..\escape", "C:escape"] if os.name == "nt" else [])
+)
+def test_resolve_worktree_path_refuses_escapes(repo: Path, name: str) -> None:
+    from evi.worktree import WorktreeError, resolve_worktree_path
+
+    with pytest.raises(WorktreeError):
+        resolve_worktree_path(name)
+
+
+def test_remove_refuses_a_locked_worktree(repo: Path) -> None:
+    """git refuses ("cannot remove a locked working tree"); the old message
+    sniffing saw "remove" in that and rmtree'd the worktree anyway."""
+    from evi.worktree import WorktreeError, create_worktree, remove_worktree
+
+    wt = create_worktree("locked")
+    (wt / "keep.txt").write_text("precious\n", encoding="utf-8")
+    _git("worktree", "lock", str(wt), cwd=repo)
+    with pytest.raises(WorktreeError, match="locked"):
+        remove_worktree("locked")
+    assert (wt / "keep.txt").is_file()
+
+
+def test_remove_never_deletes_an_unregistered_directory(repo: Path, tmp_path: Path) -> None:
+    """A path that merely contains the word "remove" used to fall through to
+    shutil.rmtree once git said it is not a working tree."""
+    from evi.worktree import WorktreeError, remove_worktree
+
+    precious = tmp_path / "remove-me"
+    precious.mkdir()
+    (precious / "data.txt").write_text("keep\n", encoding="utf-8")
+    with pytest.raises(WorktreeError):
+        remove_worktree(str(precious))
+    assert (precious / "data.txt").is_file()
+
+
+@pytest.fixture
+def old_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend git predates `git worktree remove` (2.17) to reach the fallback."""
+    from evi import gitsafe, worktree
+
+    monkeypatch.setattr(gitsafe, "git_version", lambda: (2, 16, 0))
+    real_git = worktree._git
+
+    def fake_git(*args: str, **kw):
+        if args[:2] == ("worktree", "remove"):
+            raise worktree.WorktreeError(
+                "usage: git worktree add [<options>] <path> [<commit-ish>]"
+            )
+        return real_git(*args, **kw)
+
+    monkeypatch.setattr(worktree, "_git", fake_git)
+
+
+def test_old_git_fallback_removes_a_managed_worktree(repo: Path, old_git) -> None:
+    from evi.worktree import create_worktree, find_worktree_for, remove_worktree
+
+    wt = create_worktree("oldgit")
+    remove_worktree("oldgit")
+    assert not wt.exists()
+    assert find_worktree_for("oldgit") is None
+
+
+def test_old_git_fallback_prunes_a_vanished_worktree(repo: Path, old_git) -> None:
+    from evi.worktree import create_worktree, find_worktree_for, remove_worktree
+
+    wt = create_worktree("vanished")
+    shutil.rmtree(wt)
+    remove_worktree("vanished")
+    assert find_worktree_for("vanished") is None
+
+
+def test_old_git_fallback_refuses_paths_outside_worktrees(
+    repo: Path, tmp_path: Path, old_git
+) -> None:
+    from evi.worktree import WorktreeError, remove_worktree
+
+    precious = tmp_path / "precious"
+    precious.mkdir()
+    (precious / "data.txt").write_text("keep\n", encoding="utf-8")
+    with pytest.raises(WorktreeError, match="refusing"):
+        remove_worktree(str(precious))
+    assert (precious / "data.txt").is_file()
+
+
+def _make_dir_link(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        import _winapi
+
+        try:
+            _winapi.CreateJunction(str(target), str(link))
+            return
+        except OSError:
+            pass
+    pytest.skip("cannot create a directory link here")
+
+
+def test_old_git_fallback_never_follows_a_link(repo: Path, tmp_path: Path, old_git) -> None:
+    from evi.worktree import WorktreeError, remove_worktree
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "data.txt").write_text("keep\n", encoding="utf-8")
+    (repo / ".worktrees").mkdir()
+    _make_dir_link(repo / ".worktrees" / "linky", target)
+    with pytest.raises(WorktreeError, match="refusing"):
+        remove_worktree("linky")
+    assert (target / "data.txt").is_file()
