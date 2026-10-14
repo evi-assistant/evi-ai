@@ -19,7 +19,8 @@ runs tools, shows a **working-status** bar (spinner + elapsed timer + live token
 count) while a turn runs.
 
 **Session modes** — Chat / Cowork / Code presets gate the tool set. REPL: pick
-at launch; Web: the mode switcher; per-turn headless: `evi run -m code`.
+at launch with `evi chat -m code` (an unknown mode exits 2); Web: the mode
+switcher; per-turn headless: `evi run -m code`.
 
 **Headless** — `evi run "prompt" [-m mode] [-y] [--format json] [--schema f]`.
 One-shot for scripts/CI. Example: `git diff | evi run "review for bugs" -y`.
@@ -171,15 +172,27 @@ stable namespace (`py.typed`). Guide: [sdk.md](sdk.md); runnable scripts:
 
 **Sync** — `evi sync push|pull` git-syncs portable `~/.evi` state. **Backup** —
 `evi backup`. **Profiles** — `evi profile` per-machine config overlays.
-**Worktrees** — `evi worktree` for parallel work. **Doctor** — `evi doctor`
-(Web: Help → Diagnostics). **Fine-tune export** — `evi finetune export` →
-JSONL training set.
+**Worktrees** — `evi worktree` for parallel work. eVi's git calls ignore
+what a repository's own config would run, so `evi worktree create` runs no
+hooks (the repo's or your global post-checkout), no repo-local filter drivers,
+and no Git LFS download — run `git lfs pull` in the new worktree if it uses
+LFS. A repository whose `core.worktree` points outside it is refused. See
+[Permissions & sandbox → Repositories you didn't
+write](features/permissions-and-sandbox.md#repositories-you-didnt-write).
+**Doctor** — `evi doctor` (Web: Help → Diagnostics); `evi doctor --dev`
+checks a development checkout instead (venv, git `safe.directory`, test and
+lint tools, `pytest --collect-only`, line endings) and prints fix commands
+without running them — see [self-build.md](self-build.md).
+**Fine-tune export** — `evi finetune export` → JSONL training set.
 
 ## Packaging & release
 
 PyPI (`v*` tag, Trusted Publishing + **sigstore** signing), **Docker** image
 (`docker.yml` → GHCR), desktop installers (`desktop-v*`, 3-OS), a reusable
-**`evi-run` GitHub Action**, and **CodeQL + gitleaks** security scanning. See
-[releasing.md](releasing.md). To build locally in one command (sidecar + Tauri),
-run `scripts/build-desktop.{ps1,sh}` — see [self-build.md](self-build.md) for
-developing/building eVi with eVi (the `EVI.md` bootstrap).
+**`evi-run` GitHub Action**, and **CodeQL + gitleaks** security scanning. A
+`v*` tag publishes nothing until the browser e2e suite passes and the
+CHANGELOG carries that version; the Docker image and desktop release follow
+the PyPI publish. See [releasing.md](releasing.md). To build locally in one
+command (sidecar + Tauri), run `scripts/build-desktop.{ps1,sh}` — see
+[self-build.md](self-build.md) for developing/building eVi with eVi (the
+`EVI.md` bootstrap).

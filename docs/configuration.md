@@ -58,8 +58,11 @@ auto_approve = ["fs", "code", "memory", "skills", "image"]
 # confirmation prompt, and is DENIED when there's no UI to confirm with
 # (headless / scheduler / MCP). Overrides yolo, accept_edits and auto_approve.
 block_destructive = true
-# fnmatch globs matched against the WHOLE command that exempt it from the guard.
-destructive_allow = ["*--force-with-lease*"]
+# fnmatch globs that exempt a command from the guard. Each is matched against
+# every command in the line (`a && b` is two), never the whole line: a hit is
+# exempt only if every command it touches matches, and never on a line eVi
+# can't split.
+destructive_allow = ["git push --force-with-lease*"]
 # Builtin rule ids to silence without disabling the guard (see evi/shell_guard.py).
 destructive_disable_rules = ["git-commit-amend"]
 ```
@@ -68,8 +71,15 @@ Everyday commands are deliberately *not* flagged — `rm -rf ./build`, `rm -rf
 node_modules`, `git reset --soft`, `git branch -d`, `chmod 644`, `terraform
 plan`, `apt remove <app>` all run as normal. Only genuinely destructive,
 hard-to-reverse forms match. An explicit, *specific* allow rule (one carrying an
-arg-glob, e.g. `allow shell *--force*`) is honoured as intent and clears the
-guard; a broad `allow shell` / `allow shell *` does not.
+arg-glob, e.g. `allow run_command git push --force-with-lease*`) is honoured as
+intent and clears the guard, but only when it covers every command in the line,
+the line can be split and its redirects stay inside the working folder — so
+`allow run_command git*` does not clear `git log; rm -rf ~`. A broad
+`allow run_command` / `allow run_command *` never clears it. For the guard a
+rule may name the tool's category (`allow shell …`) as well as the tool; the
+permission rules themselves match the tool name only. Details in
+[Permissions & sandbox → Shell command
+lines](features/permissions-and-sandbox.md#shell-command-lines).
 
 ### `evi config show` prints the resolved config (with profile overlay).
 ### `evi config path` prints the file path.
@@ -383,6 +393,12 @@ substituted.
 Run `git diff` to see what changed, then propose a conventional-commits
 style message under 70 chars. Args: {args}
 ```
+
+An `@path` written in the template inlines that file, if it is inside the
+working folder or an `[auto] trusted_dirs` entry and is neither a protected
+path nor a key / credential file. An `@path` in the arguments is never read,
+and MCP-served prompts never inline. See
+[File references](features/slash-commands.md#file-references-path).
 
 Built-in slash commands (handled in code, not files): `/help /reset
 /exit /tools /model /goal /plan /auto`.

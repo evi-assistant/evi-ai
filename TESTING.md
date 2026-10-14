@@ -10,25 +10,28 @@ UI**. The Python tests asserted the server *emits* SSE events; nothing checked
 that the browser *renders* them. The fix is a real end-to-end (e2e) layer plus
 a standing rule: **every UI-affecting change ships with an e2e test.**
 
-## The four layers
+## The layers
 
 | Layer | Tool | Speed | Covers | Runs |
 |---|---|---|---|---|
-| **Unit** | `pytest` (`tests/*.py`) | fast (~1,300+ tests; run `pytest --collect-only` for the live count) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push (CI `ci.yml`) + locally |
+| **Unit** | `pytest` (`tests/*.py`, plus the composite actions' tests in `.github/actions/`) | fast (run `pytest --collect-only -q` for the live count) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push and PR (CI `ci.yml`), every release, + locally |
 | **E2E (CLI)** | subprocess (`tests/cli_e2e/`) | medium (~100 s, no browser) | the real `evi` CLI per subsystem — arg parsing, config wiring, file I/O, output (the offline commands) | opt-in (`-m e2e`) |
-| **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs + weekly + dispatch (CI `e2e.yml`) |
-| **Manual** | a human + the desktop app | slow | things no harness reaches: the Tauri window itself, the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
+| **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs, pushes to main, weekly, dispatch, and every release before it publishes (CI `e2e.yml`) |
+| **E2E (desktop)** | tauri-driver + msedgedriver (`tests/desktop_e2e/`) | slow (needs a built `evi-desktop.exe`, Windows) | the native shell: the built app launches and renders the UI, the Tauri bridge is there, the native menu opens Settings | opt-in (`-m desktop`); in `desktop-release.yml` behind a flag (see [CI gates](#ci-gates)) |
+| **Manual** | a human + the desktop app | slow | things no harness reaches: the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
 
 The web UI **is** the desktop UI (the Tauri shell wraps the same server +
 `static/index.html`), so e2e against the web server covers the desktop UI's
-HTML/JS. Only the native shell (window, updater, sidecar spawn) needs manual.
+HTML/JS. Only the native shell (window, updater, sidecar spawn) needs the
+desktop e2e or a human.
 
 ## Running the tests
 
 ```bash
-# Unit (fast; e2e auto-excluded)
-.venv/Scripts/python -m pytest -q
-.venv/Scripts/python -m ruff check evi tests scripts
+# Unit (fast; e2e auto-excluded). The composite actions' tests sit next to
+# them under .github/actions, outside `testpaths`, so name that dir too.
+.venv/Scripts/python -m pytest -q tests .github/actions
+.venv/Scripts/python -m ruff check evi tests scripts .github/actions
 
 # E2E (CLI) — drives the real `evi` CLI as a subprocess; no browser needed
 .venv/Scripts/python -m pytest tests/cli_e2e -m e2e --timeout=120
@@ -70,6 +73,38 @@ DOM render — which is exactly where the 0.24.2 bug lived.
 
 This catches CLI-wiring regressions — a renamed option, a broken `add_typer`
 mount, a config path that doesn't resolve — that function-level unit tests miss.
+
+## CI gates
+
+What runs on GitHub, and what each check wants from a change:
+
+| Check | Workflow / job | Runs on | Fails when |
+|---|---|---|---|
+| pytest + ruff | `ci.yml` `test` | push to main, PRs (full OS/Python matrix on PRs, weekly, dispatch) | a unit test or lint error, in `tests` or `.github/actions` |
+| cargo check + test | `ci.yml` `rust` (Linux), `rust-windows` | `rust`: push to main and PRs; `rust-windows`: PRs, weekly, dispatch (releases run the same `cargo test` in `desktop-release.yml`'s Windows leg) | the desktop shell doesn't build or its tests fail |
+| actionlint | `ci.yml` `actionlint` | push to main, PRs | a workflow has a syntax, expression or type error, or a shellcheck error in a `run:` |
+| workflow injection | `ci.yml` `workflow-injection` | push to main, PRs | any `${{ … }}` inside a `run:`, a github-script `script:`, a retry `command:` or a `docker://` step's `args:` / `entrypoint:` (pass the value through `env:` and read `$VAR`), or a zizmor template-injection finding; zizmor's other findings are printed only |
+| docs freshness | `docs-freshness.yml` | PRs and pushes to main | the change adds a CLI command (Typer `@….command`, `add_typer`) or a web route (FastAPI `@app.get/post/…`, `add_api_route`) under `evi/` and changes nothing under `docs/` |
+| UI e2e | `e2e.yml` | PRs, pushes to main, weekly, dispatch; called by `release.yml` | a Playwright test fails twice in a row |
+| desktop e2e | `desktop-release.yml` (Windows leg) | releases, only with the `desktop_e2e` input or the repo variable `EVI_DESKTOP_E2E=true` | a smoke test fails or skips, or no test runs |
+
+- **Docs freshness escape hatch.** For an internal route, a rename, or docs
+  landing in a follow-up: label the PR `docs-skip`, or, for a direct push to
+  main, put a `Docs-skip: <reason>` trailer line in one of the commit
+  messages. Run it locally with
+  `python scripts/check_docs_freshness.py --base origin/main`. A registration
+  the same diff also removes counts as moved, not new.
+- **Flaky UI tests.** e2e gives a failing test one retry (`--reruns 1`,
+  pytest-rerunfailures, which `e2e.yml` installs). A test known to be flaky can
+  be marked `@pytest.mark.quarantine`: it then runs in a separate step that
+  never fails the run, so it stays visible without blocking merges or
+  releases. Fix or delete it promptly. The gate runs
+  `pytest tests/e2e -m "e2e and not quarantine" --reruns 1 --timeout=120`.
+- **Workflow injection locally:**
+  `python .github/actions/workflow-guard/workflow_guard.py` (the strict check;
+  zizmor runs only in CI, pinned to 1.30.1).
+- **Releases** are gated on top of this; see
+  [docs/releasing.md](docs/releasing.md).
 
 ## The rule for new phases
 
@@ -170,4 +205,6 @@ Before announcing a `desktop-v*` release, on a clean machine:
 4. Trigger an update (bump version, publish, relaunch) → app self-updates.
 
 Automating 1–4 needs a windowed CI runner + a real backend; until then it's a
-human gate. Items 2–3's *logic* is covered by e2e against the web server.
+human gate. Items 2–3's *logic* is covered by e2e against the web server, and
+the opt-in desktop e2e (`EVI_DESKTOP_E2E=true`) checks that the built app
+launches, renders the UI and opens Settings from its native menu.

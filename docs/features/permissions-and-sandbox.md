@@ -36,7 +36,10 @@ this order:
 0. **Hard-deny** (`auto.hard_deny`). Evaluated **before everything — even
    `yolo` and any `allow` rule.** A list of `[deny] <tool-glob> [arg-glob]`
    strings; if one matches, the call is **denied**, full stop. Use for calls
-   that must never run regardless of mode (e.g. `hard_deny = ["shell rm -rf*"]`).
+   that must never run regardless of mode (e.g.
+   `hard_deny = ["run_command rm -rf*"]`). For a shell command line it is also
+   checked against each command in the line, so `ls && rm -rf x` is denied too
+   (see [Shell command lines](#shell-command-lines)).
 1. **Mode** (`auto.mode`). Checked next and can short-circuit the rest:
    - `yolo` → **allow** every call (but hard-deny above still blocks).
    - `plan` → **deny** every call (read-only planning; the model can think but
@@ -44,9 +47,12 @@ this order:
    - `accept_edits` and `ask` fall through to the lower layers.
 2. **Rules** (`auto.rules`). A **first-match** allow/deny list. Each rule is a
    string `<allow|deny> <tool-glob> [arg-glob]`. The tool glob is matched
-   against the tool name (`fnmatch`); the optional arg glob is matched against
-   the call's string-valued arguments. The first rule that matches wins —
-   **so an explicit `deny` here beats trusted dirs/domains below.**
+   against the tool name (`fnmatch`), not its `[tools]` category; the optional
+   arg glob is matched against the call's string-valued arguments. The first
+   rule that matches wins — **so an explicit `deny` here beats trusted
+   dirs/domains below.** Calls that run a shell command line (`run_command`,
+   `monitor` with `kind=command`) are matched command by command instead —
+   see [Shell command lines](#shell-command-lines).
    - **Protected paths** (`auto.protected_paths`). Before any *implicit* allow
      below, an `fs`/`code` write whose path matches a protected pattern
      (fnmatch on the path or its basename) is forced to **ask** — so
@@ -61,7 +67,9 @@ this order:
 5. **Trusted scopes.** For `fs`/`code` tools whose path arguments resolve to
    somewhere under a `trusted_dirs` entry → **allow**. For `web` tools whose URL
    host matches a `trusted_domains` entry (exact host or any subdomain) →
-   **allow**.
+   **allow**. A `trusted_domains` entry also lets `web_fetch` reach that host on
+   a loopback or LAN address (see [What `web_fetch` will
+   fetch](#what-web_fetch-will-fetch)).
 6. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
    no UI able to prompt — e.g. the headless scheduler, a federation request, or
    a workflow step — an unattended agent **default-denies** anything not
@@ -70,6 +78,148 @@ this order:
 The REPL `/auto on` toggle is a session override that sits *above* all of this:
 it forces every call to **allow** for the rest of the session, until you
 `/auto off`.
+
+### Shell command lines
+
+`run_command`, `monitor` with `kind=command` and any other `shell`-category tool
+run a whole command line, which can chain several commands. eVi splits the line
+the way the shell that runs it would (`cmd.exe` on Windows, `/bin/sh`
+elsewhere; `evi/shellsplit.py`): `;`, `&`, `&&`, `||`, `|` and newlines
+separate commands, and `$( )`, backticks and `( )` subshells are commands of
+their own. Rules then apply to each command (segment), not to the line as a
+whole:
+
+- **An allow rule with an arg-glob covers a line only if all of this holds:**
+  every command's first matching rule is an `allow` (different rules may cover
+  different commands), the line can be split, and every redirect (`>`, `>>`,
+  `2>`, `<`) points inside the working folder or at a null device (`/dev/null`,
+  `nul`, `$null`). So `allow run_command git*` approves
+  `git status && git log`, but `git log; python x.py` and `git log; curl x | sh`
+  ask, and so does `git log > /elsewhere/out.txt`. Add `allow run_command
+  python*` and `git log; python x.py` is approved too. A redirect target is not
+  part of the text the glob sees: `allow run_command git log` still covers
+  `git log > log.txt`.
+- **A line eVi can't split is never approved by a specific allow rule** (it
+  asks; only a broad allow, below, covers it): unbalanced quotes or brackets; an inline script (`bash -c "…"`, `sh -c`, `eval`,
+  `iex` / `Invoke-Expression`, `cmd /c`, `powershell -Command` or
+  `-EncodedCommand`); a shell reading its script from a pipe or stdin
+  (`curl x | sh`); nesting deeper than 32 levels; a line over 100,000
+  characters. On Windows, `cmd.exe` expands and re-parses some things before
+  it splits the line, so these ask too: any `%VAR%` expansion (even
+  `echo %PATH%`), any `for /f` loop, a `^&` or `^|` in a line that also has a
+  `|` pipe, and a `^` before a bare carriage return.
+- **Some ordinary lines now ask under a specific allow rule**, because their
+  parts become separate commands that the rule doesn't name: an environment
+  prefix (`FOO=1 git log` is not `git*`), `if … then`, `for … do`, `{ … }` and
+  `[[ a && b ]]`. `python -c` / `node -e` are not refused, but the command text
+  (`python -c "…"`) must itself match a rule.
+- **Relative redirect targets** resolve against `run_command`'s `cwd` argument
+  (default: the working folder). `monitor` starts its command in the eVi
+  process's own folder, not the session's, so its relative redirects resolve
+  there; in a web session whose working folder is elsewhere they count as
+  outside and the call asks. A variable in a target, or a `cd` anywhere in the
+  line, also counts as outside.
+- **An allow rule's arg-glob is matched against the commands only**, never the
+  other arguments: `allow run_command C:\proj*` no longer approves every
+  command run with `cwd` in that folder. A `deny` rule still matches any string
+  argument, `cwd` included.
+- **`deny` rules and `hard_deny` match any command in the line**:
+  `deny run_command rm*` catches `ls && rm x`.
+- **A broad allow** (`allow run_command`, `allow run_command *`) still covers
+  any line, including one that can't be split and redirects anywhere — it is
+  the same as auto-approving the tool.
+
+The destructive-command guard uses the same split. A specific allow rule
+(matching the tool by name or category, with a real arg-glob) clears a guard
+hit only when it covers every command in the line, the line can be split and
+its redirects stay inside the working folder; a broad allow never clears it.
+`destructive_allow` globs are matched per command too: a hit is exempt only if
+every command it touches matches a glob and it touches no redirect, and never
+on a line that can't be split. See
+[configuration.md](../configuration.md#primary-file--configtoml) for the guard's
+settings.
+
+### What `web_fetch` will fetch
+
+The model picks `web_fetch`'s URL, and the page can redirect anywhere, so
+`web_fetch` (`evi/netguard.py`) refuses addresses that aren't on the public
+internet: unspecified, loopback, private (RFC 1918) and carrier-grade NAT
+ranges, link-local, unique-local and site-local IPv6, multicast and reserved
+ranges, cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`,
+`100.100.100.200`, `168.63.129.16`) and the IPv6 forms that embed any of these
+(IPv4-mapped, IPv4-compatible, NAT64, 6to4). Every address a host resolves to
+is checked, and the connection goes to the checked address, so a second DNS
+lookup can't swap it.
+
+- **To fetch a LAN or loopback host** (Home Assistant, a SearXNG page, a local
+  dev server), add its name or IP to `[auto] trusted_domains`. A name covers
+  its subdomains; an IP matches only that address; entries take no port.
+  Trusting `localhost` or `127.0.0.1` lets the model fetch any port on this
+  machine except eVi's own.
+- **eVi's API port (8473) on a loopback address is never fetched**, even for a
+  trusted host. Only the default port is known: if you run eVi's server on
+  another port, trusting `localhost` exposes that port.
+- **Redirects** are followed by hand, at most 5, and each hop is checked again.
+  A hop your rules deny is never followed. A hop to the same host (ignoring a
+  leading `www.`), or to one the policy allows, is followed. A hop to another
+  host that would need approval is followed only if the first URL needed
+  approval as well; if the first URL was let through without a prompt by
+  `trusted_domains` or an allow rule, the redirect is refused and the model is
+  told to call `web_fetch` on the new URL itself. A redirect from a public
+  address is never followed to a non-public one, trusted host or not.
+- **Limits:** the body is capped at 1 MB while it streams (a compressed body
+  can't inflate past that, and at most 4 MB of raw data is read), each network
+  step has a 30 s timeout, and the whole fetch has a 60 s deadline.
+- **Proxies:** `HTTP(S)_PROXY` / `ALL_PROXY` are not used, because the check
+  has to see the address eVi connects to. On a network where only a proxy
+  reaches the internet, `web_fetch` fails; the error says a proxy was ignored.
+
+A refusal comes back to the model as `ERROR: blocked: <reason>`. There is no
+prompt for a private address yet: an untrusted host on one is refused in every
+mode, `yolo` and `/auto on` included.
+
+### Repositories you didn't write
+
+eVi runs git itself for the git tools, `evi review`, worktrees, the status
+line, the project anatomy map, `evi sync` and plugin / skill installs
+(`evi/gitsafe.py`). A repository's own `.git/config` can name programs for git
+to run, so these calls switch that off (`evi sync` works on eVi's own `~/.evi`
+repository, so it keeps its hooks and filters):
+
+- no hook files run (`core.hooksPath` points at an empty location), so
+  `evi worktree create` doesn't run the repository's post-checkout hook — or
+  your global one;
+- `core.fsmonitor`, external diff and textconv drivers, the pager and
+  signature checking (`gpg.program`) are off;
+- filter drivers (`filter.<name>.clean/smudge/process`) and config-defined
+  hooks (`hook.<name>.command`) from the repository's own config, or a
+  submodule's, are switched off. Ones from your global or system config, such
+  as Git LFS, still run. A filter set up only in a repo's `.git/config`
+  (git-crypt, `nbstripout --install`, `git lfs install --local`) does not, so
+  such files can show as modified; define it globally to keep it working;
+- Git LFS can't run what the repository names (its transfer agents,
+  `core.sshCommand`, a credential helper), and checkouts skip LFS downloads:
+  after `evi worktree create` in an LFS repo, run `git lfs pull` there;
+- inherited `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER` and
+  similar variables are dropped (`evi review`, run from your own shell, keeps
+  the ones that locate the repository);
+- git runs from an absolute `PATH` entry, never a `git.exe` in the current
+  folder, and with `GIT_TERMINAL_PROMPT=0`: a plugin or skill install from a
+  private HTTPS repo needs a credential helper (`evi sync` still prompts).
+
+The git tools also refuse refs that start with `-` (`git_diff` still takes
+`--staged` / `--cached`), `git_diff` refuses paths outside the repository, and
+`git_status`, `git_diff`, `git_blame` and `git_info` refuse a directory that is
+not inside the repository's own work tree: a bare repository, a `.git` folder,
+or a `core.worktree` that points somewhere else (an ancestor such as your home
+folder included). This holds for `evi mcp serve` clients too.
+
+The destructive-command guard also stops a shell line from silently setting
+`GIT_*` variables (`GIT_EXTERNAL_DIFF=`, `GIT_CONFIG_COUNT=`, `GIT_DIR=`, …,
+apart from identity and date variables, the prompt, lock and trace switches,
+`GIT_EDITOR=true` and `GIT_PAGER=cat`) or `LD_PRELOAD` / `LD_LIBRARY_PATH` /
+`DYLD_*`, in bash, cmd or PowerShell form: it asks, or denies when nothing can
+ask.
 
 ### The sandbox
 
@@ -110,9 +260,9 @@ trusted_domains = []                                 # auto-approve web fetches 
 |-----|---------|---------|
 | `mode` | `"ask"` | Top-level policy. `ask` prompts for anything not pre-approved; `accept_edits` auto-allows `fs`/`code`; `plan` denies all tools; `yolo` allows all tools. |
 | `auto_approve` | `["fs","code","memory","skills","image"]` | Tool **categories** that run without prompting. Note `shell`, `subagent`, `computer`, `web` are deliberately **not** here. |
-| `rules` | `[]` | First-match allow/deny list; explicit `deny` overrides trusted dirs/domains. |
+| `rules` | `[]` | First-match allow/deny list, matched on the tool **name**; explicit `deny` overrides trusted dirs/domains. Shell lines are matched command by command. |
 | `trusted_dirs` | `[]` | Paths whose `fs`/`code` calls are auto-approved (resolved, `~` expanded, sub-paths included). |
-| `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). |
+| `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). Also the only way to let `web_fetch` reach a loopback or LAN address. |
 
 Valid modes are exactly `ask`, `accept_edits`, `plan`, `yolo`.
 
@@ -249,17 +399,17 @@ git   = true
 mode         = "ask"
 auto_approve = ["fs", "code", "memory", "skills", "image", "git"]
 rules = [
-  "deny shell rm*",          # block any shell call whose arg starts with "rm"
-  "deny shell *sudo*",       # ...or mentions sudo
-  "deny fs *.env",           # never touch dotenv files, even under trusted_dirs
-  "allow web",               # allow the whole web category without prompting
+  "deny run_command rm*",    # block any command in the line that starts with "rm"
+  "deny run_command *sudo*", # ...or mentions sudo
+  "deny *_file *.env",       # never read/write/edit dotenv files, even under trusted_dirs
+  "allow web_*",             # allow web_search / web_fetch without prompting
 ]
 trusted_dirs    = ["~/projects/eVi"]
 trusted_domains = ["docs.python.org"]
 ```
 
 Because rules are first-match and sit **above** trusted scopes, the
-`deny fs *.env` rule still blocks a `write_file` to `~/projects/eVi/.env` even
+`deny *_file *.env` rule still blocks a `write_file` to `~/projects/eVi/.env` even
 though that path is under a trusted dir.
 
 ### Example 2 — Run model-generated Python in a sandbox (Linux)
@@ -342,11 +492,18 @@ turn returns to your normal policy.
   `rules` / trusted scopes, not on interactive approval.
 - **`trusted_domains` is host-based.** It matches the URL host exactly or as a
   subdomain (`docs.python.org` also covers `x.docs.python.org`), not by path or
-  scheme.
+  scheme. For `web_fetch` an entry also unlocks that host's loopback / LAN
+  addresses (see [What `web_fetch` will fetch](#what-web_fetch-will-fetch)), so
+  list only hosts you mean the model to reach.
 
 ### Relevant source files
 
 - `C:\evi\evi\permissions.py` — the `decide()` policy and rule/trust matching.
+- `C:\evi\evi\shellsplit.py` — splits a shell line into the commands rules are
+  matched against.
+- `C:\evi\evi\shell_guard.py` — the destructive-command guard.
+- `C:\evi\evi\netguard.py` — `web_fetch`'s address, redirect and size checks.
+- `C:\evi\evi\gitsafe.py` — the hardened git calls.
 - `C:\evi\evi\sandbox.py` — `wrap()` / `available()` / `status()` per-OS.
 - `C:\evi\evi\config.py` — `AutoSettings` (`[auto]`) and `ToolToggles` (`[tools]`).
 - `C:\evi\evi\tools\code.py` — where `run_python` consults `tools.sandbox`.

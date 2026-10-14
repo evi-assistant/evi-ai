@@ -15,10 +15,15 @@ The `stt` and `computer` extras pull native deps (PortAudio for
 sounddevice, screen capture libs for pyautogui). If you're not actively
 touching those areas, skip them.
 
+`scripts/dev-bootstrap.sh` / `scripts\dev-bootstrap.ps1` do the same with a
+venv outside the checkout, and `evi doctor --dev` checks the result (venv, git
+`safe.directory`, test and lint tools, line endings) and prints fix commands.
+Both are described in [self-build.md](self-build.md).
+
 ## Test suite
 
 ```bash
-pytest -q                         # ~12 s, 183 tests
+pytest -q                         # the unit suite (pytest --collect-only -q for the count)
 pytest -q tests/test_agent.py     # one file
 pytest -q -k "permission"         # by keyword
 pytest --timeout=15               # ceiling per test
@@ -38,11 +43,15 @@ The suite avoids network calls and external processes by:
 ## Linting
 
 ```bash
-ruff check evi apps tests
-ruff format evi apps tests        # if you want formatter behavior too
+ruff check evi tests scripts .github/actions   # what CI runs
+ruff format evi tests             # if you want formatter behavior too
 ```
 
-`pyproject.toml` sets `line-length = 100, target-version = "py311"`.
+`pyproject.toml` sets `line-length = 100, target-version = "py312"`.
+
+A change that adds a CLI command or a web route must also change something
+under `docs/`, or CI's docs-freshness check fails it; see
+[TESTING.md → CI gates](../TESTING.md#ci-gates) for that and the other checks.
 
 ## Project layout
 
@@ -204,8 +213,59 @@ When you add a meaningful chunk of work:
    `~/.claude/projects/C--evi/memory/project_evi.md` so the next
    Claude Code session knows what changed.
 
+## Bumping llama.cpp or the model catalog
+
+The managed runtime downloads a `llama-server` build and catalog GGUFs, then
+runs and loads them, so every download is checked against a sha256 pinned in
+the repo: the generated `_ASSET_SHA256` block in
+`evi/runtime/llamacpp_runtime.py` (one pin per release asset of
+`LLAMACPP_VERSION`), and a `revision` (HuggingFace commit) plus `sha256` on
+each entry of `evi/data/runtime_models.json`. A download without a pin is
+never made.
+
+After bumping `LLAMACPP_VERSION`, adding an asset table, or adding a catalog
+model, re-pin and commit the result:
+
+```bash
+python scripts/pin_runtime_hashes.py                  # pin new assets and new models
+python scripts/pin_runtime_hashes.py --check          # offline: every download is pinned
+python scripts/pin_runtime_hashes.py --verify         # online: the pins still match upstream
+```
+
+- The script reads only metadata (GitHub's published asset digests, the
+  HuggingFace revision API); it never downloads the files. Set `GITHUB_TOKEN`
+  to avoid GitHub's anonymous rate limit.
+- Models keep their pinned commit; `--models-latest` moves every model to its
+  repo's current `main`. `--only runtime|models` writes one half.
+- An asset that is already pinned is never silently re-pinned: a different
+  upstream digest under the same name means the release asset was replaced,
+  so the run changes nothing and exits 1. Pass `--repin-runtime` only once
+  you have confirmed the replacement is genuine.
+- After editing `runtime_models.json` by hand, run `--format` (offline) to put
+  it back in the layout the script writes; a unit test checks that layout.
+- Exit codes: 0 ok, 1 missing, stale or changed pins, 2 usage or network
+  error. The unit suite fails while any asset or catalog model is unpinned
+  (`tests/test_runtime_integrity.py`), so CI catches a forgotten re-pin.
+
+What users see when a check fails:
+
+- `<file> failed verification (sha256 …, expected …); the download was
+  discarded.` — the bytes didn't match the pin. Nothing is extracted or run;
+  retrying usually fixes a transfer error, and a repeat means the file changed
+  upstream or in transit.
+- `No pinned sha256 for <file>, so eVi won't download it unverified.` — the
+  build is missing a pin (a packaging bug: re-pin and release).
+- `Archive member … escapes …; refusing to extract.` — an archive tried to
+  write outside its folder.
+
+A runtime install is all-or-nothing: archives are verified and extracted in a
+private staging folder and moved into place only when complete. A catalog GGUF
+already on disk counts as installed only if its sha256 matches the pin (hashed
+once, cached beside it in `<file>.sha256`), so the first start after this
+change hashes each installed catalog model once.
+
 ## Releasing
 
-Nothing automated yet. Planned: `scripts/release.sh` that runs
-`pytest && ruff check && python -m build`, tags the commit, attaches
-wheels.
+See [releasing.md](releasing.md): a `v*` tag publishes to PyPI, the desktop
+release and GHCR, gated on the browser e2e suite and a CHANGELOG entry for the
+version.

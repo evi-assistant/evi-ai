@@ -388,6 +388,10 @@ class AutoSettings:
         default_factory=lambda: ["fs", "code", "memory", "skills", "image"]
     )
     mode: str = "ask"  # ask | accept_edits | plan | yolo
+    # First-match "allow|deny <tool-name-glob> [arg-glob]" (evi/permissions.py).
+    # A shell line is matched per command: an allow rule with an arg-glob
+    # approves it only if every command is allowed, the line parses and its
+    # redirects stay in the working folder; a deny matches any one command.
     rules: list[str] = field(default_factory=list)
     # Always-deny rules, evaluated BEFORE everything (even yolo / allow rules) —
     # an unconditional block an allow can't override. Same syntax as `rules`
@@ -415,8 +419,10 @@ class AutoSettings:
     # prompt when a UI exists and is DENIED when there's none (headless /
     # scheduler). Overrides yolo / accept_edits / auto-approve. On by default.
     block_destructive: bool = True
-    # fnmatch globs matched against the whole command that EXEMPT it from the
-    # guard, e.g. ["*--force-with-lease*", "git stash drop"].
+    # fnmatch globs that EXEMPT a command from the guard, matched against each
+    # command of the line (evi/shellsplit.py), never the whole line: a hit is
+    # exempt only if every command it touches matches, and never on a line
+    # that can't be split. E.g. ["git push --force-with-lease*", "git stash drop"].
     destructive_allow: list[str] = field(default_factory=list)
     # Builtin rule ids to silence without disabling the whole guard, e.g.
     # ["git-commit-amend", "system-power"]. See evi/shell_guard.RULE_IDS.

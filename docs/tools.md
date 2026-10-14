@@ -82,10 +82,36 @@ the main conversation focused.
 | Tool         | What it does                                                |
 |--------------|-------------------------------------------------------------|
 | `web_search` | DuckDuckGo search via `ddgs`. Returns JSON `[{title, url, snippet}, …]`. |
-| `web_fetch`  | Download a URL (http/https only) and return extracted text. 1 MB raw cap, 16 KB output cap. |
+| `web_fetch`  | Download a URL (http/https only) and return extracted text. Public addresses only unless the host is in `[auto] trusted_domains`; at most 5 redirects, each re-checked; 1 MB body cap while streaming, 60 s per fetch, 16 KB output cap. |
 
 Requires `pip install 'evi-assistant[web-tools]'` (gets `ddgs` and
 `beautifulsoup4`).
+
+`web_fetch` takes its URL from the model, so it guards where it connects:
+
+- **No private addresses** unless the host is listed in `[auto]
+  trusted_domains`: loopback, LAN (RFC 1918), carrier-grade NAT, link-local,
+  IPv6 unique-local / site-local, multicast, reserved ranges and cloud metadata
+  endpoints are refused, including their IPv6-embedded forms. Every address the
+  host resolves to is checked, and eVi connects to that checked address. A
+  Home Assistant or SearXNG page on your LAN needs its host (or IP) in
+  `trusted_domains`.
+- **Never eVi's own API** on a loopback address (port 8473), trusted or not.
+- **Redirects**: at most 5, each re-checked against your permission settings.
+  A redirect to another host is not followed when the first URL was
+  pre-approved by `trusted_domains` or an allow rule (the model is told to
+  fetch the new URL itself, which goes through the normal check), and a
+  redirect from a public address never leads to a private one.
+- **Size and time**: the body is capped at 1 MB as it streams (a compressed
+  body can't inflate past it; at most 4 MB of raw data is read), 30 s per
+  network step and 60 s for the whole fetch. An HTTP error status returns
+  `ERROR: fetch failed: HTTP <status> for <url>` without reading the body.
+- **No proxy**: `HTTP(S)_PROXY` is not used, because the guard has to see the
+  address it connects to; on a proxy-only network `web_fetch` fails, and the
+  error says so.
+
+A refusal returns `ERROR: blocked: <reason>`. Details: [Permissions &
+sandbox](features/permissions-and-sandbox.md#what-web_fetch-will-fetch).
 
 ## `voice` — TTS + STT (default OFF)
 
