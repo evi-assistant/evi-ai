@@ -401,7 +401,8 @@ class AutoSettings:
         default_factory=lambda: ["fs", "code", "memory", "skills", "image"]
     )
     mode: str = "ask"  # ask | accept_edits | plan | yolo
-    # First-match "allow|deny <tool-name-glob> [arg-glob]" (evi/permissions.py).
+    # First-match "allow|deny <tool-name-or-category-glob> [arg-glob]"
+    # (evi/permissions.py); "shell" also matches monitor kind=command.
     # A shell line is matched per command: an allow rule with an arg-glob
     # approves it only if every command is allowed, the line parses and its
     # redirects stay in the working folder; a deny matches any one command.
@@ -410,14 +411,22 @@ class AutoSettings:
     # an unconditional block an allow can't override. Same syntax as `rules`
     # (the action is forced to deny), e.g. "shell rm -rf*" or "fs *.pem".
     hard_deny: list[str] = field(default_factory=list)
-    # Paths that force a prompt even under accept_edits / trusted_dirs — writing
-    # code-executing or secret files should never be silently auto-approved.
-    # Matched (fnmatch) against the path and its basename. Edit to taste.
+    # Secret and shell start-up files: writing one asks in every mode (yolo
+    # included) and reading one asks even with fs auto-approved. Matched
+    # (fnmatch, ignoring case) on the path, its name and its real path. Edit to
+    # taste; eVi's built-in write-protected paths (EVI.md, AGENTS.md,
+    # .evi.toml, .evi/**, ~/.evi/**, .git/hooks/**, .github/workflows/** ...;
+    # evi.permissions.WRITE_PROTECTED_PATHS) always apply on top of it.
     protected_paths: list[str] = field(default_factory=lambda: [
         ".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
         ".bashrc", ".zshrc", ".bash_profile", ".profile",
         "*.pem", "id_rsa", "id_ed25519",
     ])
+    # Entries to un-protect, by their exact text: a built-in write-protected
+    # path (e.g. "AGENTS.md") that would otherwise be added back on every load,
+    # or one of the list above. Only config.toml or a profile can set this; a
+    # project's .evi.toml can't.
+    protected_paths_remove: list[str] = field(default_factory=list)
     # Auto-approve fs/code tools whose path is under one of these dirs, and
     # web fetches to one of these hosts — without listing the whole category.
     trusted_dirs: list[str] = field(default_factory=list)

@@ -28,14 +28,16 @@ Design (mirrors Claude Code's "auto mode" soft-deny, minus the LLM classifier):
   into an unrelated command's argument. A *pure* ``echo``/``printf`` that merely
   prints a dangerous-looking string is not treated as a command.
 - Severity ``block`` = catastrophic/near-certainly-malicious; ``prompt`` =
-  destructive-but-often-intended. Both currently resolve to "require explicit
-  confirmation" at the agent layer; the tier is surfaced in the reason.
+  destructive-but-often-intended. Both resolve to "require explicit
+  confirmation" at the agent layer, but only a ``prompt`` hit can be cleared
+  by a specific ``[auto] rules`` allow rule; a ``block`` hit never is.
 
 Config (``[auto]`` in config.toml): ``block_destructive`` (default true),
 ``destructive_allow`` (fnmatch globs matched against each command segment of
 the line, see `evi.shellsplit`; a hit is exempt only when every segment it
-touches matches one), and ``destructive_disable_rules`` (builtin rule ids to
-silence).
+touches matches one; a glob whose command word holds a wildcard is rejected,
+see `rejected_allow_globs`), and ``destructive_disable_rules`` (builtin rule
+ids to silence).
 """
 
 from __future__ import annotations
@@ -399,6 +401,21 @@ def _unexempted_hit(
     return None
 
 
+def rejected_allow_globs(allow: object) -> list[str]:
+    """The `destructive_allow` globs `destructive_hit` ignores: those whose
+    first word (the command) holds a wildcard (``*``, ``?``, ``[``). Such a glob
+    doesn't name the command it exempts: ``*--force-with-lease*`` would exempt
+    ``rm -rf ~ --force-with-lease`` as well as the push it was written for, and
+    ``r*`` or ``git*`` exempt ``rm -rf ~`` or a force-push. Write the command
+    out: ``git push --force-with-lease*``."""
+    out: list[str] = []
+    for a in allow or ():
+        words = str(a).split()
+        if words and any(c in words[0] for c in "*?["):
+            out.append(str(a))
+    return out
+
+
 def destructive_hit(
     command: str,
     *,
@@ -412,6 +429,7 @@ def destructive_hit(
     truly want) matched against each command segment of the line as `dialect`
     (default: this platform's shell) splits it: a hit is exempt only when every
     segment it touches matches a glob, and never when the line is unparsable.
+    A glob whose command word holds a wildcard is ignored (`rejected_allow_globs`).
     `disable_rules` is an iterable of rule ids to skip entirely.
     """
     if not command or not command.strip():
@@ -421,7 +439,9 @@ def destructive_hit(
     hit = _first_hit(cmd, disabled)
     if hit is None:
         return None
-    globs = [str(a) for a in (allow or ()) if str(a)]
+    allow = [str(a) for a in (allow or ())]
+    rejected = set(rejected_allow_globs(allow))
+    globs = [a for a in allow if a.strip() and a not in rejected]
     if not globs:
         return hit
     return _unexempted_hit(cmd, hit, globs, disabled, dialect)

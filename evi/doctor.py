@@ -111,6 +111,11 @@ def _check_backend() -> list[Check]:
         cfg = Config.load()
     except Exception:  # noqa: BLE001
         return [Check("backend reachable", "warn", "skipped (config did not load)")]
+    from evi.llm.cli_agent import CLI_AGENTS
+
+    kind = (cfg.llm.backend or "").strip().lower()
+    if kind in CLI_AGENTS:
+        return _check_cli_agent(kind)
     base = (cfg.llm.base_url or "").rstrip("/")
     if not base:
         return [Check("backend reachable", "warn", "no base_url configured")]
@@ -118,7 +123,17 @@ def _check_backend() -> list[Check]:
     try:
         import httpx
 
-        r = httpx.get(url, timeout=2.5)
+        from evi.backends.presets import resolve_api_key
+
+        key = resolve_api_key(cfg.llm.api_key or "")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        r = httpx.get(url, timeout=2.5, headers=headers)
+        if r.status_code in (401, 403):
+            return [Check(
+                "backend reachable",
+                "fail",
+                f"{base} rejected the API key (HTTP {r.status_code}) — check [llm] api_key",
+            )]
         if r.status_code < 500:
             return [Check("backend reachable", "ok", f"{base} (HTTP {r.status_code})")]
         return [Check("backend reachable", "warn", f"{base} returned HTTP {r.status_code}")]
@@ -128,6 +143,99 @@ def _check_backend() -> list[Check]:
             "fail",
             f"{base} unreachable ({type(exc).__name__}) — is the server running?",
         )]
+
+
+def _check_cli_agent(kind: str) -> list[Check]:
+    """A CLI-agent backend has no HTTP endpoint: check its CLI is on PATH and
+    that it has the sign-in eVi needs to run it headless. Never runs the CLI."""
+    from evi.llm.cli_agent import CLI_AGENTS
+
+    binary, install = CLI_AGENTS[kind]
+    name = f"backend CLI ({kind})"
+    if kind == "claude_agent" and not _have_module("claude_agent_sdk"):
+        return [Check(name, "fail", "Claude Agent SDK not installed", fix=(install,))]
+    path = shutil.which(binary)
+    if not path:
+        return [Check(name, "fail", f"`{binary}` not on PATH", fix=(install,))]
+    out = [Check(name, "ok", f"{binary} at {path}")]
+    auth = _cli_agent_auth(kind)
+    if auth is not None:
+        out.append(auth)
+    return out
+
+
+def _cli_agent_auth(kind: str) -> Check | None:
+    """Evidence of auth for the CLIs where a missing sign-in fails a headless
+    turn (amp would even block on a browser login). None = not checked."""
+    name = f"backend sign-in ({kind})"
+    if kind == "amp":
+        from evi.llm.amp_agent import _settings_file
+
+        if os.environ.get("AMP_API_KEY"):
+            return Check(name, "ok", "AMP_API_KEY set")
+        if os.path.isfile(_settings_file()):
+            return Check(name, "ok", f"amp login ({_settings_file()})")
+        return Check(name, "fail", "amp is not signed in; eVi won't start it unauthenticated",
+                     fix=("amp login",))
+    if kind == "gemini":
+        return _gemini_auth(name)
+    return None
+
+
+def _gemini_auth(name: str) -> Check:
+    """Gemini CLI auth. Google stopped serving free / AI Pro / Ultra
+    "Login with Google" accounts on 2026-06-18; API keys and Vertex AI work."""
+    fix = ("set GEMINI_API_KEY (https://aistudio.google.com/apikey), or "
+           "GOOGLE_GENAI_USE_VERTEXAI=true with GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION",)
+    if os.environ.get("GEMINI_API_KEY"):
+        return Check(name, "ok", "Gemini API key (GEMINI_API_KEY)")
+    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in ("1", "true"):
+        return Check(name, "ok", "Vertex AI (GOOGLE_GENAI_USE_VERTEXAI)")
+    selected = ""
+    settings = Path(os.path.expanduser("~")) / ".gemini" / "settings.json"
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        auth = ((data.get("security") or {}).get("auth") or {})
+        selected = str(auth.get("selectedType") or data.get("selectedAuthType") or "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if selected in ("oauth-personal", "login-with-google"):
+        return Check(
+            name, "warn",
+            "gemini uses \"Login with Google\", which Google stopped serving to free, "
+            "AI Pro and Ultra accounts on 2026-06-18 (they moved to the Antigravity CLI, "
+            "which eVi doesn't drive); only Code Assist Standard/Enterprise logins still work",
+            fix=fix,
+        )
+    if selected:
+        return Check(name, "ok", f"gemini auth type {selected}")
+    return Check(name, "warn", "no Gemini API key or Vertex AI setup found", fix=fix)
+
+
+def _check_protected_paths() -> list[Check]:
+    """The protected paths in force, as the agent applies them: `[auto]
+    protected_paths` plus the built-in write-protected ones, minus
+    `protected_paths_remove` (`evi.permissions.effective_protected_paths`).
+    Warns when a built-in one was removed."""
+    name = "protected paths"
+    try:
+        from evi import config as _config
+        from evi.permissions import WRITE_PROTECTED_PATHS, effective_protected_paths
+
+        # No config.toml yet: the defaults (Config.load would write the file).
+        exists = _config.CONFIG_PATH.is_file()
+        auto = _config.Config.load().auto if exists else _config.AutoSettings()
+        in_force = effective_protected_paths(
+            auto.protected_paths, getattr(auto, "protected_paths_remove", []) or []
+        )
+    except Exception:  # noqa: BLE001
+        return [Check(name, "warn", "skipped (config did not load)")]
+    detail = f"{len(in_force)} in force: {', '.join(in_force) or '(none)'}"
+    removed = [p for p in WRITE_PROTECTED_PATHS if p not in in_force]
+    if removed:
+        return [Check(name, "warn", f"{detail}; built-in ones removed by "
+                      f"protected_paths_remove: {', '.join(removed)}")]
+    return [Check(name, "ok", detail)]
 
 
 def _check_optional_deps() -> list[Check]:
@@ -225,6 +333,7 @@ def run_checks() -> list[Check]:
     checks: list[Check] = []
     checks += _check_home()
     checks += _check_config()
+    checks += _check_protected_paths()
     checks += _check_backend()
     checks += _check_hardware()
     checks += _check_binaries()

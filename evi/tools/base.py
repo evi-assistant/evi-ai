@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, get_args, get_origin, get_type_hints
 
@@ -21,6 +22,71 @@ from evi.citations import ToolOutput
 
 
 REGISTRY: dict[str, "Tool"] = {}
+
+# Argument names that hold a filesystem path, for any tool. The permission
+# policy checks only these against `[auto] trusted_dirs` and `protected_paths`,
+# never a code, command or content body.
+PATH_PARAMS = frozenset({"path", "paths", "file_path", "cwd", "dir"})
+# MCP servers name their own arguments, so an MCP tool's argument also counts
+# when its name (camelCase / snake_case / kebab-case) ends in one of these
+# words, or is one of `_MCP_PATH_NAMES` ("source" / "destination" of a move).
+_MCP_PATH_WORDS = frozenset({
+    "path", "paths", "filepath", "filename", "filenames", "file", "files",
+    "dir", "dirs", "directory", "directories", "folder", "cwd", "workdir",
+})
+_MCP_PATH_NAMES = frozenset({"source", "destination", "src", "dst", "dest", "root"})
+# Built-in tools that only read the paths they are given. Protected paths guard
+# writes, so these never trigger them; any other tool (MCP tools included) is
+# treated as one that may write its path arguments.
+READ_ONLY_TOOLS = frozenset({
+    "read_file", "list_dir", "find_files", "search_files", "check_file",
+    "python_symbols", "git_blame", "git_diff", "git_info", "git_log", "git_show",
+    "git_status", "read_pdf", "ocr_image", "describe_image", "find_in_project",
+    "project_index_stats", "sqlite_schema",
+})
+# Built-in tools whose glob argument picks files below their `path` argument.
+# A glob with a ".." part (or an absolute one) reaches outside that folder,
+# so `[auto] trusted_dirs` never approves such a call (evi/permissions.py).
+GLOB_PARAMS: dict[str, tuple[str, ...]] = {
+    "find_files": ("pattern",),
+    "search_files": ("glob",),
+}
+
+
+def is_path_param(name: str, category: str = "") -> bool:
+    """True if a tool argument called `name` holds a filesystem path."""
+    if name in PATH_PARAMS:
+        return True
+    if category != "mcp" or not name:
+        return False
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
+    parts = [w for w in re.split(r"[_\-.\s]+", words) if w]
+    return bool(parts) and (parts[-1] in _MCP_PATH_WORDS or "".join(parts) in _MCP_PATH_NAMES)
+
+
+def path_values(
+    args: dict[str, Any], category: str = "", names: Any = None
+) -> list[str]:
+    """The string values (or string-list items) of a call's path arguments:
+    the arguments in `names`, or by default those `is_path_param` names."""
+    out: list[str] = []
+    for key, value in args.items():
+        if names is not None:
+            if key not in names:
+                continue
+        elif not is_path_param(str(key), category):
+            continue
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, list):
+            out.extend(v for v in value if isinstance(v, str))
+    return out
+
+
+def glob_values(tool_name: str, args: dict[str, Any]) -> list[str]:
+    """The string values of a call's glob arguments (`GLOB_PARAMS`)."""
+    values = (args.get(k) for k in GLOB_PARAMS.get(tool_name, ()))
+    return [v for v in values if isinstance(v, str) and v]
 
 
 @dataclass
@@ -34,6 +100,48 @@ class Tool:
     # ToolProgress heartbeat immediately when one starts (rather than only after
     # the first interval) so the UI shows status without an apparent hang.
     long: bool = False
+    # Names of the arguments that hold filesystem paths (see `path_args`).
+    # None = the schema properties `is_path_param` recognises.
+    path_params: tuple[str, ...] | None = None
+    # True for a tool that never writes the paths it is given, so protected
+    # paths (which guard writes) don't apply to it. None = a built-in named in
+    # `READ_ONLY_TOOLS`; any other tool, MCP tools included, may write.
+    read_only: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.read_only is None:
+            self.read_only = self.name in READ_ONLY_TOOLS
+
+    def path_param_names(self) -> tuple[str, ...]:
+        if self.path_params is not None:
+            return tuple(self.path_params)
+        props = (self.parameters or {}).get("properties") or {}
+        if not isinstance(props, dict):
+            return ()
+        return tuple(k for k in props if is_path_param(str(k), self.category))
+
+    def path_args(self, arguments: str | dict[str, Any]) -> list[str]:
+        """The path arguments of one call, as written (relative paths are
+        relative to the session working folder). A path argument the call
+        leaves out counts with its schema default (``list_dir()`` reads "."),
+        and without explicit `path_params` an argument the schema doesn't
+        declare counts too when its name is a path name."""
+        try:
+            args = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+            return []
+        if not isinstance(args, dict):
+            return []
+        names = set(self.path_param_names())
+        if self.path_params is None:
+            names.update(k for k in args if is_path_param(str(k), self.category))
+        props = (self.parameters or {}).get("properties") or {}
+        for n in sorted(names):
+            schema = props.get(n) if isinstance(props, dict) else None
+            default = schema.get("default") if isinstance(schema, dict) else None
+            if n not in args and isinstance(default, (str, list)):
+                args[n] = default
+        return path_values(args, self.category, names)
 
     def openai_schema(self) -> dict[str, Any]:
         return {
@@ -111,13 +219,15 @@ def tool(
     description: str | None = None,
     category: str = "general",
     long: bool = False,
+    read_only: bool | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator: register a function as an LLM tool.
 
     Reads parameter types from type hints. The function's first docstring line
     is used as the description if `description` is not supplied. Pass
     ``long=True`` for known-slow tools so the agent announces progress as soon
-    as they start (see Agent's ToolProgress).
+    as they start (see Agent's ToolProgress), and ``read_only=True`` for one
+    that never writes its path arguments (`Tool.read_only`).
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -147,6 +257,7 @@ def tool(
             func=fn,
             category=category,
             long=long,
+            read_only=read_only,
         )
         REGISTRY[tool_name] = t
         return fn

@@ -2,12 +2,25 @@
 
 Layered on top of eVi's existing per-category auto-approve:
 
+0. **Hard-deny** (`auto.hard_deny`), then **protected paths**
+   (`auto.protected_paths`): a call that would write a protected file (eVi's
+   instruction / config / hook / task files, CI, git hooks, shell start-up and
+   secret files; see `DEFAULT_PROTECTED_PATHS`) asks, in every mode, ``yolo``
+   included, and no allow rule clears it (a deny rule still denies). Paths are
+   the call's path arguments (`evi.tools.base.Tool.path_args`) and, for a
+   shell line, its output redirects and the files of a few writing commands
+   (``tee``, ``cp``, ``Set-Content`` ...), matched as written and on their
+   real path, so a symlink or junction to a protected file is caught. This is
+   a guardrail, not a sandbox: code a tool runs (``run_python``, a script) can
+   still write anywhere.
 1. **Modes** (`auto.mode`): ``yolo`` allows everything, ``plan`` denies every
    tool (read-only planning), ``accept_edits`` auto-allows file edits
    (fs/code), ``ask`` (default) is the normal behaviour.
 2. **Rules** (`auto.rules`): a first-match allow/deny list. Each rule is
    ``<allow|deny> <tool-glob> [arg-glob]`` — e.g. ``deny shell rm*``,
-   ``allow web``, ``deny fs *.env``. The arg-glob (fnmatch) is checked against
+   ``allow web``, ``deny fs *.env``. The tool-glob matches the tool's name or
+   its category (and ``shell`` for any call that runs a shell line, so
+   ``monitor`` kind=command too); the arg-glob (fnmatch) is checked against
    the tool call's string arguments. For a call that runs a shell command line
    (``run_command``, ``monitor`` kind=command) the line is split into segments
    (`evi.shellsplit`) and the rules are matched per segment: an allow rule
@@ -17,8 +30,16 @@ Layered on top of eVi's existing per-category auto-approve:
    segments only, never the other arguments: ``allow run_command C:\\proj*``
    no longer approves every command run with ``cwd`` in that folder. A deny
    rule still matches any string argument, ``cwd`` included.
-3. **Auto-approve categories** (`auto.auto_approve`): the existing per-category
-   allowlist.
+   Then **secret reads**: an fs/code call whose path argument matches a
+   protected pattern other than the write-only defaults (``.env``, ``*.pem``,
+   ``id_rsa`` ...; `protected_read`) asks, so auto-approve never pulls a secret
+   into the model's context silently. An explicit allow rule above still wins.
+3. **Auto-approve categories** (`auto.auto_approve`), then **trusted scopes**:
+   an fs/code call whose path arguments ALL resolve (against the working
+   folder, on their real path) under a `trusted_dirs` entry, and whose glob
+   argument (`find_files`, `search_files`) can't climb out with ``..``, or a
+   web call to a `trusted_domains` host. A call with no path argument
+   (``run_python``) is never approved by a trusted dir.
 4. Otherwise → **ask** (prompt, if there's a UI to prompt with).
 
 Pure + side-effect-free so it's easy to test; the Agent calls `decide()`.
@@ -27,16 +48,46 @@ Pure + side-effect-free so it's easy to test; the Agent calls `decide()`.
 from __future__ import annotations
 
 import fnmatch
+import glob as _glob
 import json
 import os
+import re
+import socket
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
 from evi import shellsplit
 from evi import workdir as _workdir
+from evi.tools.base import READ_ONLY_TOOLS, glob_values, path_values
 
 _EDIT_CATEGORIES = ("fs", "code")
+# The protected paths every config gets (`effective_protected_paths`). Patterns
+# without a "/" match a file's name; ones with a "/" match its path (a
+# relative one at any depth); "~" is the home folder. Matching ignores case.
+#
+# The stock `[auto] protected_paths` list (`evi.config.AutoSettings`): secret
+# and shell start-up files. Guarded against writes by any tool and reads by an
+# fs/code tool (`protected_read`); a user opts out of one by deleting it from
+# their list. `evi.commands` also refuses to inline these into a prompt.
+SECRET_PROTECTED_PATHS: tuple[str, ...] = (
+    ".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
+    ".bashrc", ".zshrc", ".bash_profile", ".profile",
+    "*.pem", "id_rsa", "id_ed25519",
+)
+# The instruction, config, hook, task and CI files an injected agent could
+# rewrite to persist. Guarded against writes only (reading EVI.md is normal),
+# and added to every saved list unless named in `protected_paths_remove`.
+# Keep them OUT of the stock `protected_paths` default: `evi.commands` treats
+# that list as "never inline", which would break `@AGENTS.md` in a template.
+WRITE_PROTECTED_PATHS: tuple[str, ...] = (
+    ".evi.toml", "EVI.md", "AGENTS.md", ".evi/**", "~/.evi/**",
+    ".git/hooks/**", ".git/config", ".git/modules/**/hooks/**", ".git/modules/**/config",
+    ".github/workflows/**", ".vscode/tasks.json",
+)
+DEFAULT_PROTECTED_PATHS: tuple[str, ...] = SECRET_PROTECTED_PATHS + WRITE_PROTECTED_PATHS
+_ABS_PATTERN = re.compile(r"^(?:/|[a-z]:/)")
 VALID_MODES = ("ask", "accept_edits", "plan", "yolo")
 # Tools that run an argument through a shell, and the argument holding the
 # command line; any category-"shell" tool runs its "command" argument. The one
@@ -50,28 +101,117 @@ _NULL_SINKS = frozenset(
 )
 
 
-def _under_trusted_dir(values: list[str], trusted_dirs: Iterable[str]) -> bool:
-    """True if any string arg resolves to a path inside a trusted directory."""
+def _base_dir(workdir: str | Path | None) -> Path:
+    """The folder relative path arguments resolve against (`evi.workdir`)."""
+    p = Path(workdir or _workdir.get_cwd())
+    try:
+        return p.expanduser()
+    except RuntimeError:  # a "~name" pathlib can't expand: use it as written
+        return p
+
+
+def _is_network_path(p: Path) -> bool:
+    """A UNC (``//host/share``) or device (``//?/``) path, Windows only. A
+    model-chosen one is never resolved: resolving opens it, which already
+    connects (and authenticates) to that host before anyone approved the call.
+    Run a value through `_local_spelling` first so a ``\\\\?\\C:\\`` spelling of
+    a local path is treated as the local path it is."""
+    return p.drive.startswith(("\\\\", "//"))
+
+
+_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\", "\\??\\")
+_DRIVE_PATH = re.compile(r"[A-Za-z]:(?:\\|\Z)")
+# \\host\X$\rest: a drive's administrative share.
+_ADMIN_SHARE = re.compile(r"\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?\Z", re.DOTALL)
+_LOOPBACK_V4 = re.compile(r"127(?:\.\d{1,3}){3}\Z")
+
+
+@lru_cache(maxsize=1)
+def _own_host_names() -> frozenset[str]:
+    """This machine's names for a UNC path to itself (no lookup, no I/O)."""
+    names = {"localhost", "::1", "0--1.ipv6-literal.net"}
+    try:
+        names.add(socket.gethostname().lower())
+    except OSError:
+        pass
+    names.add(os.environ.get("COMPUTERNAME", "").lower())
+    return frozenset(n for n in names if n)
+
+
+def _local_spelling(value: str) -> str | None:
+    """Windows: `value` with a ``\\\\?\\`` / ``\\\\.\\`` / ``\\??\\`` device
+    prefix, or as a loopback administrative share (``\\\\localhost\\C$\\x``),
+    rewritten lexically (no I/O) to the plain drive path it opens, so it is
+    matched and resolved like one; ``\\\\?\\UNC\\host\\share`` becomes
+    ``\\\\host\\share``. None when what the path opens can't be told without
+    opening it: a device path naming no drive (``\\\\?\\GLOBALROOT\\...``,
+    ``\\\\?\\Volume{...}``, a pipe) or another host's ``X$`` share (which may
+    be this machine under another name). Elsewhere `value` is returned as is."""
+    if os.name != "nt":
+        return value
+    s = value.replace("/", "\\")
+    changed = False
+    if s.startswith(_DEVICE_PREFIXES):
+        rest = s[4:]
+        if _DRIVE_PATH.match(rest):
+            return rest if len(rest) > 2 else rest + "\\"
+        if rest[:4].lower() != "unc\\":
+            return None
+        s, changed = "\\\\" + rest[4:], True
+    m = _ADMIN_SHARE.match(s)
+    if m:
+        host = m.group(1).lower()
+        if host not in _own_host_names() and not _LOOPBACK_V4.match(host):
+            return None
+        return f"{m.group(2)}:" + (m.group(3) or "\\")
+    return s if changed else value
+
+
+def _glob_escapes(pattern: str) -> bool:
+    """True if a glob argument can select paths outside the folder it is
+    applied to: an absolute, drive- or home-relative one, or one with a
+    ``..`` part (pathlib's glob follows ``..``)."""
+    s = pattern.replace("\\", "/")
+    return s.startswith(("/", "~")) or bool(re.match(r"[A-Za-z]:", s)) or ".." in s.split("/")
+
+
+def _under_trusted_dir(
+    paths: list[str], trusted_dirs: Iterable[str], workdir: str | Path | None = None
+) -> bool:
+    """True if there is at least one path argument and EVERY one resolves (on
+    its real path, relative ones against the working folder) inside a trusted
+    directory. Only path arguments count: a code or content body never does.
+    A network or opaque device path is never trusted (nor resolved)."""
     roots: list[Path] = []
     for d in trusted_dirs or ():
-        try:
-            roots.append(Path(d).expanduser().resolve())
-        except (OSError, ValueError):
+        local = _local_spelling(str(d)) if str(d).strip() else None
+        if local is None:
             continue
-    if not roots:
+        try:
+            r = Path(local).expanduser()
+            if _is_network_path(r):
+                continue  # a network path argument is never trusted anyway
+            roots.append(r.resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    if not roots or not paths:
         return False
-    for v in values:
+    base = _base_dir(workdir)
+    for v in paths:
+        local = _local_spelling(v)
+        if local is None:
+            return False
         try:
-            p = Path(v).expanduser().resolve()
-        except (OSError, ValueError):
-            continue
-        for r in roots:
-            try:
-                if p == r or p.is_relative_to(r):
-                    return True
-            except (OSError, ValueError):
-                continue
-    return False
+            p = Path(local).expanduser()
+            p = p if p.is_absolute() else base / p
+            if _is_network_path(p):
+                return False
+            p = p.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        if not any(p == r or p.is_relative_to(r) for r in roots):
+            return False
+    return True
 
 
 def _host_trusted(values: list[str], trusted_domains: Iterable[str]) -> bool:
@@ -101,8 +241,12 @@ def _arg_values(tool_args: str | dict) -> list[str]:
     return [v for v in data.values() if isinstance(v, str)]
 
 
-def _rule_action(rule: str, tool_name: str, values: list[str]) -> str | None:
-    """Return 'allow'/'deny' if `rule` matches this call, else None."""
+def _rule_action(
+    rule: str, tool_name: str, values: list[str], tool_category: str = ""
+) -> str | None:
+    """Return 'allow'/'deny' if `rule` matches this call, else None. The
+    rule's tool-glob matches the tool name or, when given, its category, so
+    ``deny shell rm*`` covers ``run_command`` and ``allow web`` ``web_fetch``."""
     parts = rule.split(None, 2)
     if len(parts) < 2:
         return None
@@ -110,7 +254,9 @@ def _rule_action(rule: str, tool_name: str, values: list[str]) -> str | None:
     if action not in ("allow", "deny"):
         return None
     tool_glob = parts[1]
-    if not fnmatch.fnmatch(tool_name, tool_glob):
+    if not fnmatch.fnmatch(tool_name, tool_glob) and not (
+        tool_category and fnmatch.fnmatch(tool_category, tool_glob)
+    ):
         return None
     if len(parts) > 2:
         arg_glob = parts[2]
@@ -123,6 +269,23 @@ def _is_broad(rule: str) -> bool:
     """True for a rule with no real arg-glob (none, or only ``*``/``?``)."""
     parts = rule.split(None, 2)
     return len(parts) < 3 or not parts[2].strip().strip("*? ")
+
+
+def unmatched_rules(
+    rules: Iterable[str], tool_names: Iterable[str], categories: Iterable[str]
+) -> list[str]:
+    """The `rules` (or `hard_deny` entries, with or without a leading action)
+    whose tool-glob matches none of `tool_names` and none of `categories`, so
+    they can never apply. For a config linter; a malformed rule is left out."""
+    keys = [k for k in (*tool_names, *categories) if k]
+    out: list[str] = []
+    for rule in rules or ():
+        parts = str(rule).split()
+        if parts and parts[0].lower() in ("allow", "deny"):
+            parts = parts[1:]
+        if parts and not any(fnmatch.fnmatch(k, parts[0]) for k in keys):
+            out.append(rule)
+    return out
 
 
 def _arg_dict(tool_args: str | dict) -> dict | None:
@@ -148,6 +311,15 @@ def shell_command_of(tool_name: str, tool_category: str, tool_args: str | dict) 
         return None
     value = data.get(field)
     return value if isinstance(value, str) else None
+
+
+def rule_keys(tool_name: str, tool_category: str, command: str | None) -> tuple[str, ...]:
+    """What a rule's tool-glob is matched against: the tool's name, its
+    category, and ``shell`` when the call runs a shell line (`command`, see
+    `shell_command_of`): ``monitor`` kind=command is category "code" but runs
+    a shell line, so ``hard_deny = ["shell rm -rf*"]`` must cover it too."""
+    keys = (tool_name, tool_category, "shell" if command is not None else "")
+    return tuple(dict.fromkeys(k for k in keys if k))
 
 
 def _cwd_arg(tool_args: str | dict) -> str:
@@ -179,15 +351,25 @@ def _redirects_inside(
     """True if every redirect of `sp` targets a null sink or a path inside the
     working folder. Relative targets resolve against `cwd` (see `exec_cwd_of`;
     None = unknown); an expansion in a target, or a ``cd`` anywhere in the
-    line, makes the path unknowable, which counts as outside."""
+    line, makes the path unknowable, which counts as outside.
+
+    Relative targets (and a relative `cwd`) are joined to the working folder
+    as given, not to its resolved form: on a mapped drive that resolves to a
+    ``\\\\host\\share`` path, and a relative target there stays on the
+    working folder's own share, so it is resolved. Only an absolute target or
+    cwd naming a network path is never resolved (the model chose that host)."""
     if not sp.redirects:
         return True
     try:
-        root = Path(workdir or _workdir.get_cwd()).expanduser().resolve()
-        base: Path | None = root
+        start = Path(workdir or _workdir.get_cwd()).expanduser()
+        root = start.resolve()
+        base: Path | None = start
         if cwd:
             c = Path(cwd).expanduser()
-            base = (c if c.is_absolute() else root / c).resolve()
+            if c.is_absolute():
+                base = None if _is_network_path(c) else c
+            else:
+                base = start / c
         elif cwd is None:
             base = None
     except (OSError, RuntimeError, ValueError):
@@ -199,7 +381,10 @@ def _redirects_inside(
             return False
         try:
             p = Path(r.text).expanduser()
-            if not p.is_absolute():
+            if p.is_absolute():
+                if _is_network_path(p):
+                    return False
+            else:
                 if sp.changes_dir or base is None:
                     return False
                 p = base / p
@@ -291,6 +476,373 @@ def _is_protected(values: list[str], protected_paths: Iterable[str]) -> bool:
     return False
 
 
+def _evi_home_pattern() -> str:
+    """``<EVI_HOME>/**`` when ``EVI_HOME`` moves eVi's home, else "". The
+    folder's own glob characters are escaped, so a home named ``a[1]`` still
+    matches itself."""
+    home = os.environ.get("EVI_HOME", "").strip()
+    if not home:
+        return ""
+    path = Path(home)
+    try:
+        path = path.expanduser()
+    except RuntimeError:  # a "~name" pathlib can't expand: use it as written
+        pass
+    return _glob.escape(str(path).rstrip("/\\")) + "/**"
+
+
+def effective_protected_paths(
+    configured: Iterable[str] | None = None, removed: Iterable[str] = ()
+) -> list[str]:
+    """The protected patterns in force: the configured ones (None: the stock
+    `SECRET_PROTECTED_PATHS`) plus every `WRITE_PROTECTED_PATHS` entry, so a
+    config saved before those were added still gets them, minus the entries
+    listed in `removed` (``[auto] protected_paths_remove``). A stock secret
+    pattern a saved list leaves out stays out: deleting it from
+    `protected_paths` has always been how a user opts out of one. With
+    ``EVI_HOME`` set, eVi's home is protected along with ``~/.evi/**``."""
+    drop = {str(r).strip() for r in removed or () if str(r).strip()}
+    mine = SECRET_PROTECTED_PATHS if configured is None else configured
+    out: list[str] = []
+    for pat in (*mine, *WRITE_PROTECTED_PATHS):
+        pat = str(pat).strip()
+        if pat and pat not in drop and pat not in out:
+            out.append(pat)
+    home = _evi_home_pattern()
+    if home and "~/.evi/**" not in drop and home not in out:
+        out.append(home)
+    return out
+
+
+def _canon(path: str) -> str:
+    """A lower-case, ``/``-separated spelling of `path` for protected-path
+    matching. Windows drops trailing dots and spaces and an ``:stream`` suffix
+    from a name (``EVI.md.`` and ``EVI.md::$DATA`` both write EVI.md), so those
+    are dropped here too."""
+    parts = path.replace("\\", "/").split("/")
+    for i, part in enumerate(parts):
+        if i == 0 and len(part) == 2 and part[1] == ":":
+            continue  # a drive
+        part = part.split(":", 1)[0]
+        parts[i] = part if part in (".", "..") else part.rstrip(". ")
+    return "/".join(parts).lower()
+
+
+def _path_forms(value: str, base: Path) -> set[str] | None:
+    """Every spelling of a path argument to match: as written, made absolute
+    (relative to `base`) and normalised, and its real path (symlinks and
+    junctions followed). A device-path spelling is read as the drive path it
+    opens (`_local_spelling`); None when what it opens can't be told."""
+    local = _local_spelling(value)
+    if local is None:
+        return None
+    forms = {_canon(value), _canon(local)}
+    try:
+        p = Path(local).expanduser()
+        if not p.is_absolute():
+            p = base / p
+        forms.add(_canon(os.path.normpath(str(p))))
+        if not _is_network_path(p):
+            forms.add(_canon(str(p.resolve())))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return forms
+
+
+def _pattern_forms(pattern: str) -> set[str]:
+    """`pattern` canonicalised, ``~`` expanded; an absolute pattern also with
+    its fixed leading folder resolved (a short or linked home folder). A
+    network folder is never resolved: patterns can come from a repo's
+    ``.evi.toml``, and resolving ``//host/share`` connects (and authenticates)
+    to that host, on every tool call."""
+    pat = pattern.strip()
+    if pat.startswith("~"):
+        pat = os.path.expanduser(pat)
+    pat = _local_spelling(pat) or pat
+    forms = {_canon(pat)}
+    if _ABS_PATTERN.match(_canon(pat)):
+        glob_at = min([pat.find(c) for c in "*?[" if c in pat] or [len(pat)])
+        cut = max(pat.rfind("/", 0, glob_at), pat.rfind("\\", 0, glob_at))
+        head = Path(pat[:cut]) if cut > 0 else None
+        if head is not None and not _is_network_path(head):
+            try:
+                resolved = str(head.resolve())
+            except (OSError, RuntimeError, ValueError):
+                resolved = pat[:cut]
+            forms.add(_canon(resolved + "/" + pat[cut + 1:]))
+    return forms
+
+
+def _matches(form: str, pat: str) -> bool:
+    if "/" not in pat:
+        name = form.rstrip("/").rsplit("/", 1)[-1]
+        return fnmatch.fnmatchcase(name, pat) or fnmatch.fnmatchcase(form, pat)
+    if _ABS_PATTERN.match(pat):
+        return fnmatch.fnmatchcase(form, pat)
+    return fnmatch.fnmatchcase(form, pat) or fnmatch.fnmatchcase(form, "*/" + pat)
+
+
+def _first_protected(
+    targets: list[tuple[str, Path, str]], protected_paths: Iterable[str]
+) -> str | None:
+    """The first `(value, base, shown)` target matching a protected pattern,
+    as `shown` (the path as written, for a message), or None. A target whose
+    path can't be told (`_path_forms` gives None) counts as protected: fail
+    closed."""
+    if not targets:
+        return None
+    pats = [f for p in (protected_paths or ()) if str(p).strip() for f in _pattern_forms(str(p))]
+    if not pats:
+        return None
+    for value, base, shown in targets:
+        forms = _path_forms(value, base)
+        if forms is None or any(_matches(f, p) for f in forms for p in pats):
+            return shown
+    return None
+
+
+# Commands that write the files their arguments name (`protected_write`).
+# Every plain argument counts, a copy's source too: asking about a read is the
+# safe side. `sed` / `perl` count only with an in-place flag, `dd` only its of=.
+_WRITING_COMMANDS = frozenset({
+    "tee", "cp", "mv", "install", "ln", "copy", "move", "xcopy", "robocopy", "ren",
+    "rename", "tee-object", "out-file", "set-content", "add-content", "new-item",
+    "copy-item", "move-item", "rename-item", "sc", "ac", "ni", "cpi", "mi",
+})
+_IN_PLACE_EDITORS = frozenset({"sed", "perl"})
+_CHDIR_COMMANDS = frozenset({"cd", "chdir", "pushd", "set-location", "sl", "push-location"})
+_POP_COMMANDS = frozenset({"popd", "pop-location"})
+# A shell expansion (or a cmd %VAR%): the word's value isn't known statically.
+_EXPANSION = re.compile(r"[$%`]")
+
+
+def _program(seg: shellsplit.Segment) -> tuple[int, str] | None:
+    """The index and lower-cased base name of the program `seg` runs
+    (leading ``NAME=value`` words and wrappers such as ``sudo`` skipped)."""
+    ci = shellsplit._command_index(seg.words)
+    return None if ci is None else (ci, shellsplit._base(seg.words[ci]))
+
+
+def _in_place(args: tuple[str, ...]) -> bool:
+    """True if `args` hold ``sed`` / ``perl``'s in-place flag (``-i``,
+    ``-i.bak``, ``-pi``, ``--in-place``)."""
+    return any(
+        a == "--in-place" or a.startswith("--in-place=")
+        or (a.startswith("-") and not a.startswith("--") and "i" in a[1:])
+        for a in args
+    )
+
+
+def _option_value(arg: str) -> str:
+    """The value an option word carries inline (pwsh ``-Path:x``, GNU
+    ``--target-directory=x``), or "" for an option without one."""
+    if arg.startswith("--"):
+        return arg.split("=", 1)[1] if "=" in arg else ""
+    return arg.split(":", 1)[1] if ":" in arg else ""
+
+
+def _leaf(path: str) -> str:
+    """The last name in `path` ("" for ``.``, ``..`` or a bare separator)."""
+    name = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return "" if name in (".", "..") else name
+
+
+# A name joined to a writer's argument to ask "is this a folder whose files
+# are protected?": `cp x .git/hooks` writes `.git/hooks/<something>`.
+_DIR_PROBE = "evi-dir-probe"
+# Past this many arguments only the probe is joined to each (the cost is
+# every argument times every other argument's name).
+_MAX_NAMED_ARGS = 8
+
+
+def _written_by_commands(sp: shellsplit.Split) -> list[tuple[str, str]]:
+    """The files a writing command in the line (`_WRITING_COMMANDS`, ``sed
+    -i``, ``dd of=``) may write, as ``(path, shown)`` pairs: its plain
+    arguments and inline option values (``-FilePath:x``), options and cmd
+    switches left out. An argument holding an expansion is skipped, like a
+    dynamic redirect. A copy, move, link or new item may name the FOLDER it
+    writes into (``cp pre-commit .git/hooks``), so each argument is also
+    checked as one: with every other argument's name in it, a file under
+    that (a recursive copy), and any file in it."""
+    out: list[tuple[str, str]] = []
+    for seg in sp.commands:
+        prog = _program(seg)
+        if prog is None:
+            continue
+        args = seg.words[prog[0] + 1:]
+        if prog[1] == "dd":
+            out += [(a[3:], a[3:]) for a in args
+                    if a.startswith("of=") and a[3:] and not _EXPANSION.search(a)]
+            continue
+        in_place = prog[1] in _IN_PLACE_EDITORS
+        if not (prog[1] in _WRITING_COMMANDS or (in_place and _in_place(args))):
+            continue
+        files: list[str] = []
+        for a in args:
+            if a.startswith("-"):
+                a = _option_value(a)
+            elif sp.dialect == "cmd" and a.startswith("/"):
+                continue  # a switch: copy /Y, robocopy /MIR
+            if a and not _EXPANSION.search(a):
+                files.append(a)
+        out += [(f, f) for f in files]
+        if in_place:
+            continue  # sed -i edits the files it names, never into a folder
+        names = [n for n in dict.fromkeys(map(_leaf, files)) if n]
+        if len(files) > _MAX_NAMED_ARGS:
+            names = []
+        for f in files:
+            d = f.replace("\\", "/").rstrip("/")
+            if not d:
+                continue
+            for n in names:
+                if n != _leaf(f):
+                    out += [(f"{d}/{n}", f"{d}/{n}"), (f"{d}/{n}/{_DIR_PROBE}", f"{d}/{n}/*")]
+            out.append((f"{d}/{_DIR_PROBE}", f"{d}/*"))
+    return out
+
+
+def _dir_changes(sp: shellsplit.Split, start: Path) -> list[Path] | None:
+    """The folders a relative path in `sp` may resolve against: `start` and
+    each folder a ``cd`` / ``pushd`` / ``Set-Location`` in the line moves to
+    (in order, each from the one before; ``popd`` and ``cd -`` go back to one
+    already listed, a bare ``cd`` to the home folder). None when a move can't
+    be followed: an expansion or a wildcard in its target, or a drive switch
+    (``D:``, which lands in that drive's own current folder)."""
+    bases = [start]
+    cur = start
+    for seg in sp.commands:
+        prog = _program(seg)
+        if prog is None:
+            continue
+        ci, name = prog
+        if re.fullmatch(r"[A-Za-z]:", seg.words[ci]):
+            return None
+        if name in _POP_COMMANDS or name not in _CHDIR_COMMANDS:
+            continue
+        rest = seg.words[ci + 1:]
+        if "-" in rest:
+            continue
+        args = [
+            a for a in rest
+            if a and not a.startswith("-") and not (sp.dialect == "cmd" and a.lower() == "/d")
+        ]
+        if not args:
+            home = Path(os.path.expanduser("~"))
+            bases.append(home)
+            if sp.dialect != "cmd":  # cmd's bare `cd` only prints the folder
+                cur = home
+            continue
+        target = args[0]
+        local = _local_spelling(target)
+        if local is None or _EXPANSION.search(target) or any(c in target for c in "*?["):
+            return None
+        try:
+            cur = cur / Path(local).expanduser()  # an absolute target replaces cur
+        except (OSError, RuntimeError, ValueError):
+            return None  # `cd ~nosuchuser`: pathlib can't expand it, so can't follow
+        bases.append(cur)
+    return bases
+
+
+def _is_absolute(value: str) -> bool:
+    """True for a path that doesn't depend on the current folder (a rooted
+    ``/x`` too, and an opaque device path, which is refused as written). A
+    ``~name`` that can't be expanded counts as relative: its folder is
+    unknown."""
+    local = _local_spelling(value)
+    if local is None:
+        return True
+    if local.startswith(("/", "\\")):
+        return True
+    try:
+        return Path(local).expanduser().is_absolute()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def protected_write(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    protected_paths: Iterable[str],
+    *,
+    workdir: str | Path | None = None,
+    path_args: list[str] | None = None,
+    read_only: bool | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+) -> str | None:
+    """The first path this call would write that matches a protected pattern
+    (as written), or None.
+
+    The paths are the call's path arguments, unless the tool only reads
+    (`read_only`, default: a built-in in `evi.tools.base.READ_ONLY_TOOLS`),
+    and for a shell line its output redirect targets and the files its
+    writing commands name (``tee``, ``cp``, ``Set-Content`` ...;
+    `_written_by_commands`). `path_args` defaults to the arguments named like
+    paths (`evi.tools.base.path_values`). Relative paths resolve against
+    `workdir`, a shell line's against its cwd and every folder a ``cd`` in it
+    moves to; after a ``cd`` that can't be followed a relative one counts as
+    protected. Each is matched as written, normalised and on its real path.
+    Any category counts, not only fs/code. A path whose target can't be told
+    (an opaque device path) counts as protected.
+    """
+    base = _base_dir(workdir)
+    targets: list[tuple[str, Path, str]] = []
+    if read_only is None:
+        read_only = tool_name in READ_ONLY_TOOLS
+    if not read_only:
+        if path_args is None:
+            path_args = path_values(_arg_dict(tool_args) or {}, tool_category)
+        targets += [(v, base, v) for v in path_args if v]
+    command = shell_command_of(tool_name, tool_category, tool_args)
+    if command is not None:
+        sp = split if split is not None else shellsplit.split(command, dialect)
+        cwd = exec_cwd_of(tool_name, tool_args) or ""
+        try:
+            rbase = base / Path(cwd).expanduser()  # an absolute cwd replaces base
+        except (OSError, RuntimeError, ValueError):
+            rbase = base
+        writes = [
+            (r.text, r.text) for r in sp.redirects
+            if ">" in r.op and r.text and not r.dynamic and r.text.lower() not in _NULL_SINKS
+        ] + _written_by_commands(sp)
+        bases = _dir_changes(sp, rbase) if writes and sp.changes_dir else [rbase]
+        for w, shown in writes:
+            if bases is None and not _is_absolute(w):
+                if any(str(p).strip() for p in protected_paths or ()):
+                    # It lands after a `cd` we can't follow, so it may be a
+                    # protected file; say so, as the path isn't known to be one.
+                    return f"{shown} (after a cd eVi can't follow, so where it lands is unknown)"
+                continue
+            targets += [(w, b, shown) for b in (bases or [rbase])]
+    return _first_protected(targets, protected_paths)
+
+
+def protected_read(
+    tool_category: str,
+    tool_args: str | dict,
+    protected_paths: Iterable[str],
+    *,
+    workdir: str | Path | None = None,
+    path_args: list[str] | None = None,
+) -> str | None:
+    """The first path argument of an fs/code call that matches a protected
+    pattern other than the write-only ones (`WRITE_PROTECTED_PATHS` and eVi's
+    home), or None: a secret or start-up file (``.env``, ``id_rsa`` ...) the
+    call could pull into the model's context. `path_args` defaults to the
+    arguments named like paths."""
+    if tool_category not in _EDIT_CATEGORIES:
+        return None
+    if path_args is None:
+        path_args = path_values(_arg_dict(tool_args) or {}, tool_category)
+    skip = {*WRITE_PROTECTED_PATHS, _evi_home_pattern()}
+    pats = [p for p in (protected_paths or ()) if str(p).strip() not in skip]
+    base = _base_dir(workdir)
+    return _first_protected([(v, base, v) for v in path_args if v], pats)
+
+
 def decide(
     mode: str,
     auto_approve: Iterable[str],
@@ -305,16 +857,27 @@ def decide(
     *,
     workdir: str | Path | None = None,
     dialect: str | None = None,
+    path_args: list[str] | None = None,
+    read_only: bool | None = None,
 ) -> str:
     """Return 'allow', 'deny', or 'ask' for one tool call.
 
-    `workdir` is the session working folder that shell redirects must stay
-    inside for an allow rule to apply (default: `evi.workdir.get_cwd()`), and
-    `dialect` the shell the command line runs in (default: this platform's).
+    `workdir` is the session working folder: relative path arguments resolve
+    against it, and shell redirects must stay inside it for an allow rule to
+    apply (default: `evi.workdir.get_cwd()`). `dialect` is the shell the
+    command line runs in (default: this platform's). `path_args` are the
+    call's path arguments (`evi.tools.base.Tool.path_args`; default: the
+    arguments named like paths) and `read_only` whether the tool only reads
+    them (default: `evi.tools.base.READ_ONLY_TOOLS`). `protected_paths` is
+    used as given: `effective_protected_paths` adds the defaults.
     """
     values = _arg_values(tool_args)
+    data = _arg_dict(tool_args) or {}
     command = shell_command_of(tool_name, tool_category, tool_args)
+    keys = rule_keys(tool_name, tool_category, command)
     sp = shellsplit.split(command, dialect) if command is not None else None
+    if path_args is None:
+        path_args = path_values(data, tool_category)
 
     # 0. Hard-deny: unconditional, evaluated before EVERYTHING (even yolo) so an
     #    allow rule or yolo can't override it.
@@ -322,45 +885,62 @@ def decide(
         # hard_deny entries are deny-only — accept "<tool-glob> [arg-glob]" with
         # or without a leading "deny".
         norm = rule if rule.split(None, 1)[:1] == ["deny"] else f"deny {rule}"
-        if _rule_action(norm, tool_name, values) == "deny":
+        if any(_rule_action(norm, k, values) == "deny" for k in keys):
             return "deny"
         # ...and against each segment of a shell line, so `ls && rm -rf x`
-        # can't hide `rm -rf x` from a `run_command rm -rf*` entry.
+        # can't hide `rm -rf x` from a `shell rm -rf*` entry.
         if sp is not None and any(
-            _rule_action(norm, tool_name, [seg.text]) == "deny" for seg in sp.commands
+            _rule_action(norm, k, [seg.text]) == "deny" for seg in sp.commands for k in keys
         ):
             return "deny"
+
+    def rule_action() -> str | None:
+        if command is not None:
+            return shell_rule_action(
+                rules, keys, values, command,
+                workdir=workdir, cwd=exec_cwd_of(tool_name, tool_args), split=sp,
+            )
+        for rule in rules or ():
+            action = _rule_action(rule, tool_name, values, tool_category)
+            if action:  # first match wins (deny or allow); explicit deny beats trust
+                return action
+        return None
+
+    # 1. Protected paths: a write to an instruction / config / hook / CI /
+    #    secret file is never silent, in any mode (yolo included) and whatever
+    #    allow rule matches; plan mode or a deny rule still denies it.
+    if protected_write(
+        tool_name, tool_category, tool_args, protected_paths, workdir=workdir,
+        path_args=path_args, read_only=read_only, split=sp,
+    ) is not None:
+        return "deny" if mode == "plan" or rule_action() == "deny" else "ask"
 
     if mode == "yolo":
         return "allow"
     if mode == "plan":
         return "deny"
 
-    if command is not None:
-        action = shell_rule_action(
-            rules, (tool_name,), values, command,
-            workdir=workdir, cwd=exec_cwd_of(tool_name, tool_args), split=sp,
-        )
-        if action:
-            return action
-    else:
-        for rule in rules or ():
-            action = _rule_action(rule, tool_name, values)
-            if action:  # first match wins (deny or allow); explicit deny beats trust
-                return action
+    action = rule_action()
+    if action:
+        return action
 
-    # Protected paths: a fs/code write to a sensitive file must never be silently
-    # auto-approved by accept_edits / auto-approve / trusted-dir — force a prompt.
-    # (An explicit allow rule above already returned, honouring user intent.)
-    if tool_category in _EDIT_CATEGORIES and _is_protected(values, protected_paths):
+    # Reading a secret file (.env, a key) is never silent either, unless an
+    # explicit allow rule above said so.
+    if protected_read(
+        tool_category, tool_args, protected_paths, workdir=workdir, path_args=path_args
+    ) is not None:
         return "ask"
-
     if mode == "accept_edits" and tool_category in _EDIT_CATEGORIES:
         return "allow"
     if tool_category in set(auto_approve or ()):
         return "allow"
-    # Trusted scopes: files under a trusted dir, or web fetches to a trusted host.
-    if tool_category in _EDIT_CATEGORIES and _under_trusted_dir(values, trusted_dirs):
+    # Trusted scopes: files under a trusted dir (with no glob argument that
+    # climbs out of it), or web fetches to a trusted host.
+    if (
+        tool_category in _EDIT_CATEGORIES
+        and not any(_glob_escapes(g) for g in glob_values(tool_name, data))
+        and _under_trusted_dir(path_args, trusted_dirs, workdir)
+    ):
         return "allow"
     if tool_category == "web" and _host_trusted(values, trusted_domains):
         return "allow"

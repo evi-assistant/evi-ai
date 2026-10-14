@@ -18,10 +18,10 @@ from evi.tools.base import Tool
 
 
 def test_modes():
-    assert decide("yolo", [], [], "run_shell", "shell", "{}") == "allow"
+    assert decide("yolo", [], [], "run_command", "shell", "{}") == "allow"
     assert decide("plan", ["fs"], [], "write_file", "fs", "{}") == "deny"
     assert decide("accept_edits", [], [], "write_file", "fs", "{}") == "allow"
-    assert decide("accept_edits", [], [], "run_shell", "shell", "{}") == "ask"
+    assert decide("accept_edits", [], [], "run_command", "shell", "{}") == "ask"
 
 
 def test_auto_approve_category():
@@ -43,20 +43,20 @@ def test_rule_allow_overrides_ask():
 
 
 def test_rule_first_match_wins():
-    rules = ["deny run_shell rm*", "allow run_shell *"]
-    assert decide("ask", [], rules, "run_shell", "shell", '{"command": "rm -rf /"}') == "deny"
-    assert decide("ask", [], rules, "run_shell", "shell", '{"command": "ls"}') == "allow"
+    rules = ["deny run_command rm*", "allow run_command *"]
+    assert decide("ask", [], rules, "run_command", "shell", '{"command": "rm -rf /"}') == "deny"
+    assert decide("ask", [], rules, "run_command", "shell", '{"command": "ls"}') == "allow"
 
 
 def test_hard_deny_beats_everything():
     # hard_deny is evaluated before yolo AND before allow rules — unoverridable.
-    assert decide("yolo", ["fs"], ["allow run_shell *"], "run_shell", "shell",
-                  '{"command": "rm -rf /"}', hard_deny=["run_shell rm*"]) == "deny"
+    assert decide("yolo", ["fs"], ["allow run_command *"], "run_command", "shell",
+                  '{"command": "rm -rf /"}', hard_deny=["run_command rm*"]) == "deny"
     # a leading "deny" in the entry is accepted too
     assert decide("ask", [], [], "write_file", "fs", '{"path": "/x/secrets"}',
                   hard_deny=["deny write_file *secrets*"]) == "deny"
     # non-matching hard_deny doesn't block
-    assert decide("yolo", [], [], "read_file", "fs", "{}", hard_deny=["run_shell *"]) == "allow"
+    assert decide("yolo", [], [], "read_file", "fs", "{}", hard_deny=["run_command *"]) == "allow"
 
 
 def test_protected_paths_force_ask():
@@ -72,8 +72,20 @@ def test_protected_paths_force_ask():
     # a normal file under accept_edits is still allowed
     assert decide("accept_edits", [], [], "write_file", "fs",
                   '{"path": "/proj/main.py"}', protected_paths=pp) == "allow"
-    # an EXPLICIT allow rule still wins (honour user intent over protection)
+    # Intended change (fix-permission-engine): protection is checked before
+    # yolo and the rules, so an allow rule no longer clears it (it asks)...
     assert decide("ask", ["fs"], ["allow write_file *.env"], "write_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "ask"
+    # ...while a deny rule still denies.
+    assert decide("ask", ["fs"], ["deny write_file *.env"], "write_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "deny"
+    # Reading a secret still asks over an auto-approved category; an explicit
+    # allow rule (or yolo) lets it through.
+    assert decide("ask", ["fs"], [], "read_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "ask"
+    assert decide("ask", ["fs"], ["allow read_file *.env"], "read_file", "fs",
+                  '{"path": "/proj/.env"}', protected_paths=pp) == "allow"
+    assert decide("yolo", [], [], "read_file", "fs",
                   '{"path": "/proj/.env"}', protected_paths=pp) == "allow"
 
 
@@ -90,7 +102,7 @@ def _agent(auto: AutoSettings) -> Agent:
     return Agent(client=object(), config=cfg, tools=[])
 
 
-def _tool(name="run_shell", category="shell") -> Tool:
+def _tool(name="run_command", category="shell") -> Tool:
     return Tool(name=name, description="", parameters={"type": "object", "properties": {}},
                 func=lambda: "x", category=category)
 
@@ -98,7 +110,7 @@ def _tool(name="run_shell", category="shell") -> Tool:
 def test_agent_permission_decision():
     assert _agent(AutoSettings(mode="yolo"))._permission_decision(_tool(), "{}") == "allow"
     assert _agent(AutoSettings(mode="plan"))._permission_decision(_tool(), "{}") == "deny"
-    a = _agent(AutoSettings(mode="ask", rules=["deny run_shell rm*"]))
+    a = _agent(AutoSettings(mode="ask", rules=["deny run_command rm*"]))
     assert a._permission_decision(_tool(), '{"command": "rm x"}') == "deny"
     assert a._permission_decision(_tool(), '{"command": "ls"}') == "ask"
 
@@ -193,16 +205,26 @@ def test_guard_can_be_disabled():
 
 
 def test_guard_allow_exemption():
-    a = _agent(AutoSettings(mode="yolo", destructive_allow=["*--force-with-lease*"]))
+    a = _agent(AutoSettings(mode="yolo", destructive_allow=["git push --force-with-lease*"]))
     args = '{"command": "git push --force-with-lease origin main"}'
     assert a._permission_decision(_tool(), args) == "allow"
+    # a glob that starts with a wildcard is rejected (fix-permission-engine)
+    b = _agent(AutoSettings(mode="yolo", destructive_allow=["*--force-with-lease*"]))
+    assert b._permission_decision(_tool(), args) == "deny"
+
+
+# A prompt-severity hit: a specific allow rule may clear it (a block one, never).
+_RESET = '{"command": "git reset --hard HEAD~1"}'
 
 
 def test_guard_specific_allow_rule_clears_but_broad_does_not():
-    specific = _agent(AutoSettings(mode="yolo", rules=["allow run_shell *--force*"]))
-    assert specific._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
-    broad = _agent(AutoSettings(mode="yolo", rules=["allow run_shell"]))
-    assert broad._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+    specific = _agent(AutoSettings(mode="yolo", rules=["allow run_command git reset*"]))
+    assert specific._permission_decision(_tool(), _RESET) == "allow"
+    broad = _agent(AutoSettings(mode="yolo", rules=["allow run_command"]))
+    assert broad._permission_decision(_tool(), _RESET) == "deny"
+    # git push --force is block-severity: even a specific rule can't clear it
+    force = _agent(AutoSettings(mode="yolo", rules=["allow run_command *--force*"]))
+    assert force._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
 
 
 def test_guard_only_applies_to_shell_category():
@@ -228,18 +250,18 @@ def test_guard_covers_monitor_command_tool():
 
 
 def test_guard_broad_star_glob_rule_does_not_clear():
-    # `allow run_shell *` is a wildcard, not a specific intent → must not disable.
-    a = _agent(AutoSettings(mode="yolo", rules=["allow run_shell *"]))
+    # `allow run_command *` is a wildcard, not a specific intent → must not disable.
+    a = _agent(AutoSettings(mode="yolo", rules=["allow run_command *"]))
     assert a._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
 
 
 def test_guard_rule_may_key_on_category():
     # docs tell users to write rules against the category token ("shell"); a
-    # specific such allow-rule clears the guard for the run_shell tool.
-    a = _agent(AutoSettings(mode="yolo", rules=["allow shell *--force*"]))
-    assert a._permission_decision(_tool(), _DESTRUCTIVE) == "allow"
+    # specific such allow-rule clears a prompt-severity hit for run_command.
+    a = _agent(AutoSettings(mode="yolo", rules=["allow shell *--hard*"]))
+    assert a._permission_decision(_tool(), _RESET) == "allow"
     b = _agent(AutoSettings(mode="yolo", rules=["allow shell"]))  # broad → does not clear
-    assert b._permission_decision(_tool(), _DESTRUCTIVE) == "deny"
+    assert b._permission_decision(_tool(), _RESET) == "deny"
 
 
 # --- shell segment splitting: allow rules must cover every segment ----------
@@ -454,7 +476,7 @@ def test_guard_monitor_redirect_resolves_against_the_process_cwd(tmp_path, monke
     a = _agent(AutoSettings(mode="yolo", rules=["allow monitor git*"]))
     a.cwd = str(work)
     mon = _tool(name="monitor", category="code")
-    args = _monitor_args("git push --force origin main > push.log")
+    args = _monitor_args("git reset --hard > reset.log")
     monkeypatch.chdir(other)
     assert a._permission_decision(mon, args) == "deny"  # headless: guard holds
     monkeypatch.chdir(work)
@@ -501,7 +523,9 @@ def test_guard_category_rule_must_cover_every_segment(tmp_path):
     a.cwd = str(tmp_path)
     run = _tool(name="run_command")
     assert a._permission_decision(run, _sh("git log; rm -rf ~")) == "deny"
-    assert a._permission_decision(run, _sh("git push --force origin main")) == "allow"
+    assert a._permission_decision(run, _sh("git reset --hard HEAD")) == "allow"
+    # block severity (a force-push): no allow rule clears it
+    assert a._permission_decision(run, _sh("git push --force origin main")) == "deny"
 
 
 def test_guard_not_cleared_for_unparsable_or_outside_redirect(tmp_path):
@@ -512,11 +536,11 @@ def test_guard_not_cleared_for_unparsable_or_outside_redirect(tmp_path):
                                                 "allow run_command git*"]))
     a.cwd = str(work)
     assert a._permission_decision(run, _sh('bash -c "rm -rf ~"')) == "deny"
-    assert a._permission_decision(run, _sh('git push --force origin main "oops')) == "deny"
-    outside = tmp_path / "push.log"
+    assert a._permission_decision(run, _sh('git reset --hard HEAD "oops')) == "deny"
+    outside = tmp_path / "reset.log"
     assert a._permission_decision(
-        run, _sh(f'git push --force origin main > "{outside}"')) == "deny"
-    assert a._permission_decision(run, _sh("git push --force origin main > push.log")) == "allow"
+        run, _sh(f'git reset --hard HEAD > "{outside}"')) == "deny"
+    assert a._permission_decision(run, _sh("git reset --hard HEAD > reset.log")) == "allow"
 
 
 def test_guard_deny_rule_matches_a_segment(tmp_path):

@@ -853,12 +853,14 @@ class Agent:
 
         Sits above yolo / accept_edits / auto-approve / `/auto on`. Explicit
         *specific* user allow-rules (matching the tool by name OR category and
-        carrying a non-trivial arg-glob) are honoured as intent and clear the
-        guard, but only when they cover EVERY segment of the command line
-        (`evi.shellsplit`), the line parses, and its redirects stay inside the
-        working folder: ``allow run_command git*`` must not clear
+        carrying a non-trivial arg-glob) are honoured as intent and clear a
+        ``prompt``-severity hit, but only when they cover EVERY segment of the
+        command line (`evi.shellsplit`), the line parses, and its redirects stay
+        inside the working folder: ``allow run_command git*`` must not clear
         ``git log; rm -rf ~``. A broad ``allow shell`` / ``allow shell *`` never
-        clears it, so a wildcard can't silently disable the safety net.
+        clears it, so a wildcard can't silently disable the safety net, and no
+        allow rule clears a ``block``-severity hit (``rm -rf ~``, a force-push,
+        ``curl … | sh``): only a ``destructive_allow`` glob can exempt one.
         """
         auto = getattr(self.config, "auto", None)
         if not getattr(auto, "block_destructive", True):
@@ -875,11 +877,12 @@ class Agent:
         )
         if hit is None:
             return None
-        from evi.permissions import _arg_values, exec_cwd_of, shell_rule_action
+        from evi.permissions import _arg_values, exec_cwd_of, rule_keys, shell_rule_action
 
         act = shell_rule_action(
             getattr(auto, "rules", []) or [],
-            (tool.name, getattr(tool, "category", "")),  # rules keyed on category too
+            # rules keyed on the name, the category and "shell" (monitor too)
+            rule_keys(tool.name, getattr(tool, "category", ""), cmd),
             _arg_values(args_json),
             cmd,
             workdir=getattr(self, "cwd", "") or None,
@@ -888,13 +891,82 @@ class Agent:
         )
         if act == "deny":
             return ("deny", hit.reason)
-        if act == "allow":
+        if act == "allow" and hit.severity != "block":
             return None
-        has_ui = (
+        return ("ask" if self._has_permission_ui() else "deny", hit.reason)
+
+    def _has_permission_ui(self) -> bool:
+        return (
             self.permission_callback is not None
             or getattr(self, "permission_batch_callback", None) is not None
         )
-        return ("ask" if has_ui else "deny", hit.reason)
+
+    def _protected_patterns(self) -> list[str]:
+        """`[auto] protected_paths` plus the built-in defaults, minus
+        `protected_paths_remove` (`permissions.effective_protected_paths`)."""
+        from evi.permissions import effective_protected_paths
+
+        auto = getattr(self.config, "auto", None)
+        return effective_protected_paths(
+            getattr(auto, "protected_paths", None),  # None: the stock list
+            getattr(auto, "protected_paths_remove", []) or [],
+        )
+
+    @staticmethod
+    def _tool_path_args(tool: Tool, args_json: str) -> list[str] | None:
+        fn = getattr(tool, "path_args", None)
+        return fn(args_json) if callable(fn) else None
+
+    def _protected_hit(self, tool: Tool, args_json: str) -> str | None:
+        """The protected path this call would write, or None. Such a call is
+        never pre-approved (yolo, auto-approve, `/auto on`): it asks, or is
+        denied when there is no UI to ask with."""
+        from evi.permissions import protected_write
+
+        try:
+            return protected_write(
+                tool.name,
+                getattr(tool, "category", ""),
+                args_json,
+                self._protected_patterns(),
+                workdir=getattr(self, "cwd", "") or None,
+                path_args=self._tool_path_args(tool, args_json),
+                read_only=getattr(tool, "read_only", None),
+            )
+        except Exception:  # noqa: BLE001 — a check that can't run must not allow
+            return "(unreadable path arguments)"
+
+    def _secret_read_hit(self, tool: Tool, args_json: str) -> str | None:
+        """The protected secret (``.env``, a key) this fs/code call would read,
+        or None (`permissions.protected_read`). Such a call is never
+        pre-approved by a category: `decide` only lets an explicit allow rule
+        or yolo pass it, so here it is confirmed."""
+        from evi.permissions import protected_read
+
+        try:
+            return protected_read(
+                getattr(tool, "category", ""),
+                args_json,
+                self._protected_patterns(),
+                workdir=getattr(self, "cwd", "") or None,
+                path_args=self._tool_path_args(tool, args_json),
+            )
+        except Exception:  # noqa: BLE001 — a check that can't run must not allow
+            return "(unreadable path arguments)"
+
+    def _prompt_one(self, tool: Tool, args_json: str) -> bool:
+        """Ask the user about one call: the per-call callback, else the batch
+        one with a single item. False when there is neither, or it fails."""
+        try:
+            if self.permission_callback is not None:
+                return bool(self.permission_callback(tool.name, args_json, tool.category))
+            batch = getattr(self, "permission_batch_callback", None)
+            if batch is not None:
+                answers = list(batch([(tool.name, args_json, tool.category)]))
+                return bool(answers[0]) if answers else False
+        except Exception:
+            return False
+        return False
 
     def _denial_message(self, tool: Tool | None, name: str, args_json: str) -> str:
         """Tool-result text for a blocked call. When the destructive-command
@@ -908,21 +980,34 @@ class Agent:
                     "find a safer approach; only re-issue if the user explicitly "
                     "asked for this exact command."
                 )
+            protected = self._protected_hit(tool, args_json)
+            if protected is not None:
+                return (
+                    f"PERMISSION DENIED: {name} writes the protected path {protected!r} "
+                    "([auto] protected_paths), which needs the user's approval, and was "
+                    "not approved — not run."
+                )
+            secret = self._secret_read_hit(tool, args_json)
+            if secret is not None:
+                return (
+                    f"PERMISSION DENIED: {name} reads the protected path {secret!r} "
+                    "([auto] protected_paths), which needs the user's approval, and was "
+                    "not approved — not run."
+                )
         return f"PERMISSION DENIED: user did not approve {name}({args_json})"
 
     def _permission_decision(self, tool: Tool, args_json: str) -> str:
         """'allow' | 'deny' | 'ask' for a tool call, via the permission policy
-        (mode + rules + auto-approve categories). `/auto on` forces allow."""
+        (mode + rules + auto-approve categories). `/auto on` acts as yolo for
+        the session: hard_deny, protected paths and the destructive guard
+        still apply. A deny from the policy (hard_deny, plan mode, a deny rule)
+        always wins, even over a guard prompt."""
         guard = self._destructive_decision(tool, args_json)
-        if guard is not None:
-            return guard[0]  # destructive guard overrides auto-approve / yolo / /auto
-        if self.auto_all:
-            return "allow"
         from evi.permissions import decide
 
         auto = getattr(self.config, "auto", None)
-        return decide(
-            getattr(auto, "mode", "ask"),
+        decision = decide(
+            "yolo" if self.auto_all else getattr(auto, "mode", "ask"),
             self.auto_approve_categories,
             getattr(auto, "rules", []) or [],
             tool.name,
@@ -931,23 +1016,37 @@ class Agent:
             getattr(auto, "trusted_dirs", []) or [],
             getattr(auto, "trusted_domains", []) or [],
             getattr(auto, "hard_deny", []) or [],
-            getattr(auto, "protected_paths", []) or [],
+            self._protected_patterns(),
             workdir=getattr(self, "cwd", "") or None,
+            path_args=self._tool_path_args(tool, args_json),
+            read_only=getattr(tool, "read_only", None),
         )
+        if decision == "deny":
+            return "deny"
+        if guard is not None:
+            return guard[0]  # destructive guard overrides auto-approve / yolo / /auto
+        if (
+            decision == "ask"
+            and not self._has_permission_ui()
+            and self._protected_hit(tool, args_json) is not None
+        ):
+            return "deny"  # a protected write is never let through unattended
+        return decision
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
         """Return True iff the tool call is allowed to proceed."""
         guard = self._destructive_decision(tool, args_json)
+        if guard is None and (
+            self._protected_hit(tool, args_json) is not None
+            or self._secret_read_hit(tool, args_json) is not None
+        ):
+            guard = ("ask", "protected path")  # never pre-approved: confirm it
         if guard is not None:
             if guard[0] == "deny":
                 return False  # headless / user-denied destructive command → block
-            # 'ask': require confirmation — bypass the pre-approval short-circuit.
-            if self.permission_callback is None:
-                return False
-            try:
-                return bool(self.permission_callback(tool.name, args_json, tool.category))
-            except Exception:
-                return False
+            # 'ask': require confirmation — bypass the pre-approval short-circuit
+            # (through the batch UI when that is the only one).
+            return self._prompt_one(tool, args_json)
         if self._is_pre_approved(tool):
             return True
         if self.permission_callback is None:

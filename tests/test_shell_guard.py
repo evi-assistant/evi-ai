@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from evi.shell_guard import DEFAULT_RULES, RULE_IDS, destructive_hit
+from evi.shell_guard import DEFAULT_RULES, RULE_IDS, destructive_hit, rejected_allow_globs
 from evi.shellsplit import DIALECTS
 
 # Commands that MUST be flagged, with the rule id we expect to catch them.
@@ -185,15 +185,38 @@ def test_branch_delete_is_case_sensitive():
 def test_allow_exemption():
     assert destructive_hit("git push --force-with-lease origin main") is not None
     assert destructive_hit(
-        "git push --force-with-lease origin main", allow=["*--force-with-lease*"]
+        "git push --force-with-lease origin main", allow=["git push --force-with-lease*"]
     ) is None
+
+
+@pytest.mark.parametrize("glob", ["*--force-with-lease*", " *lease*", "?it push*", "[g]it*"])
+def test_allow_glob_starting_with_a_wildcard_is_rejected(glob):
+    # Exploit regression (fix-permission-engine): a glob that doesn't name the
+    # command exempts any segment carrying the token, `rm -rf ~` included.
+    assert rejected_allow_globs([glob, "git push --force-with-lease*"]) == [glob]
+    assert destructive_hit("rm -rf ~ --force-with-lease", allow=[glob]).id == "rm-rf-root-home"
+    assert destructive_hit("git push --force-with-lease origin main", allow=[glob]) is not None
+
+
+@pytest.mark.parametrize("glob,cmd", [
+    ("r*", "rm -rf ~"), ("rm*", "rm -rf ~"), ("g*", "git push --force origin main"),
+    ("git*", "git push --force origin main"), ("gi? push --force*", "git push --force"),
+])
+def test_allow_glob_with_a_wildcard_in_the_command_word_is_rejected(glob, cmd):
+    # Review finding: only a leading wildcard was rejected, so `r*` still
+    # exempted `rm -rf ~` and `git*` a force-push. The command must be named.
+    assert rejected_allow_globs([glob]) == [glob]
+    assert destructive_hit(cmd, allow=[glob]) is not None
+    # naming the command keeps working, wildcards in its arguments included
+    assert rejected_allow_globs(["git push --force-with-lease*", "rm -rf ./build*"]) == []
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)
 def test_allow_glob_exempts_segments_not_the_line(dialect):
     # Exploit regression (verifier finding): the shipped example glob
     # `*--force-with-lease*` exempted `rm -rf ~; git push --force-with-lease`.
-    globs = ["*--force-with-lease*"]
+    # (A leading `*` is rejected outright now; an anchored glob is per segment.)
+    globs = ["git push --force-with-lease*"]
 
     def hit(cmd):
         return destructive_hit(cmd, allow=globs, dialect=dialect)
@@ -226,7 +249,7 @@ def test_allow_glob_does_not_exempt_cmd_percent_or_reparse():
 
 @pytest.mark.parametrize("dialect", ["bash", "pwsh"])
 def test_allow_glob_does_not_exempt_nested_substitutions(dialect):
-    globs = ["*--force-with-lease*"]
+    globs = ["git push --force-with-lease*"]
     hit = destructive_hit("git push --force-with-lease $(rm -rf ~)", allow=globs, dialect=dialect)
     assert hit is not None and hit.id == "rm-rf-root-home"
 

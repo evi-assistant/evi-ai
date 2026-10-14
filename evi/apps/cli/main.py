@@ -208,8 +208,30 @@ def _global_options(
     otel.init_telemetry()
 
 
+def _confirm_session_approval() -> bool:
+    """`s` at a permission prompt: approve every tool call for the rest of the
+    session (`/auto on`), but only after an explicit y. hard_deny, protected
+    paths and the destructive guard still apply under it. Anything but y
+    turns nothing on, and the call(s) asked about are denied."""
+    answer = console.input(
+        "  allow EVERY tool call for the rest of this session (like /auto on)? y/N: "
+    ).strip().lower()
+    if answer not in ("y", "yes"):
+        console.print("[dim]not approved (session-wide approval needs a y)[/dim]")
+        return False
+    # Caller (the Agent) checks auto_all after this returns; mutate via the
+    # global-ish reference we stash below in _build_agent.
+    agent = _AUTO_STATE.get("agent")
+    if agent is not None:
+        agent.enable_auto_all()
+    return True
+
+
 def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
-    """Ask the user whether to allow a tool call. Default-deny on empty input."""
+    """Ask the user whether to allow a tool call. Default-deny on empty input.
+    y / a approve this call only (as `a` approves the listed calls in the batch
+    prompt); s approves every call for the rest of the session, after a y/N
+    confirmation."""
     preview = args if len(args) <= 200 else args[:200] + "…"
     console.print(
         f"\n[yellow]permission:[/yellow] "
@@ -217,14 +239,11 @@ def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
         f"args={preview}"
     )
     answer = console.input(
-        "  approve? [bold]y[/bold]/n/a (allow all this session): "
+        "  approve? [bold]y[/bold]/a (this call) / n / s (allow all this session): "
     ).strip().lower()
-    if answer in ("a", "all"):
-        # Caller (the Agent) checks auto_all after this returns; mutate via
-        # the global-ish reference we stash below in _build_agent.
-        _AUTO_STATE["agent"].enable_auto_all()
-        return True
-    return answer in ("y", "yes")
+    if answer in ("s", "session"):
+        return _confirm_session_approval()
+    return answer in ("y", "yes", "a", "all")
 
 
 def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool]:
@@ -232,7 +251,9 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
 
     Input: list of (tool_name, args_json, category) for the calls that need
     a decision (pre-approved ones never reach here). The user can approve
-    all, deny all, allow-all-this-session, or pick specific 1-based indices.
+    all of these calls (a), deny all, pick specific 1-based indices, or
+    allow every call for the rest of the session (s, after a y/N
+    confirmation).
     """
     console.print(f"\n[yellow]permission:[/yellow] {len(calls)} tool calls requested")
     for i, (name, args, category) in enumerate(calls, 1):
@@ -241,12 +262,11 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
             f"  [bold]{i}.[/bold] [bold]{name}[/bold] [dim]({category})[/dim] args={preview}"
         )
     answer = console.input(
-        "  approve? [bold]a[/bold]ll / [bold]n[/bold]one / "
+        "  approve? [bold]a[/bold]ll (these calls) / [bold]n[/bold]one / "
         "indices (e.g. 1,3) / [bold]s[/bold] (allow all this session): "
     ).strip().lower()
     if answer in ("s", "session"):
-        _AUTO_STATE["agent"].enable_auto_all()
-        return [True] * len(calls)
+        return [_confirm_session_approval()] * len(calls)
     if answer in ("a", "all", "y", "yes"):
         return [True] * len(calls)
     if answer in ("", "n", "no", "none"):
