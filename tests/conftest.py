@@ -31,3 +31,24 @@ except ImportError:
 import socket as _socket  # noqa: E402
 
 _socket.getfqdn = lambda name="": name or "localhost"
+
+
+# Per-session state lives in ContextVars (the session working folder, the
+# active skill's tool scope). A test that runs a CLI command in-process can set
+# one in this very thread and never reset it, and the next test on the same
+# xdist worker then resolves paths against a stale folder. Give every test a
+# clean slate and restore afterwards.
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_session_contextvars():
+    from evi import skillscope, workdir
+
+    cwd_token = workdir.set_cwd(None)
+    scope_token = skillscope._SCOPE.set(None)
+    try:
+        yield
+    finally:
+        skillscope._SCOPE.reset(scope_token)
+        workdir.reset(cwd_token)
