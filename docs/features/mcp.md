@@ -19,9 +19,10 @@ Everything is local-first: client servers run as child processes on your machine
 2. The consume-side allowlist `[tools] mcp_allow` is applied (see Setup). Then each **enabled** server is spawned as a child process over **stdio** using the `mcp` Python SDK.
 3. For each server, eVi calls `initialize` and `list_tools`, then wraps every discovered tool as a native eVi tool named **`<server>.<tool>`** and registers it in eVi's tool registry. (Plugin-supplied servers are namespaced `<plugin>:<server>`, so they can't collide with your own.)
 4. When the agent calls one of those tools, the call is forwarded to the server through an async-to-sync **bridge** (one asyncio loop on a daemon thread), so eVi's synchronous tool layer can drive the all-async MCP SDK.
-5. Tool results are flattened to text for the model: text content is concatenated; non-text items (images, etc.) become a `[<type> omitted]` placeholder; errors are prefixed `ERROR:`.
+5. Tool results are flattened to text for the model: text content is concatenated; non-text items (images, etc.) become a `[<type> omitted]` placeholder; a result the server flags as an error is prefixed `ERROR:` (once — text that already starts with `ERROR:` isn't prefixed again).
+6. A call that runs past its timeout is cancelled, and the server is told so (`notifications/cancelled`), so it can stop the work too.
 
-**Fail-open by design:** a server that fails to start is logged once and skipped — the rest of eVi keeps working. On shutdown eVi unregisters the added tools first (so an in-flight agent loop can't reach a closed session), then closes each server session.
+**Fail-open by design:** a server that fails to start is logged once (`MCP server <name> failed to start: <reason>`, where the reason names the real error, e.g. `HTTP 401 Unauthorized` or `ConnectError: …`) and skipped — the rest of eVi keeps working. On shutdown eVi unregisters the added tools first (so an in-flight agent loop can't reach a closed session), then closes each server session.
 
 ### Server (`evi mcp serve`)
 
@@ -31,7 +32,9 @@ eVi builds a standard MCP `Server` named `evi` exposing three things, all drawn 
 - **Resources** — each of your long-term memory entries as `evi://memory/<name>` (mimeType `text/markdown`).
 - **Prompts** — each saved slash-command template (`~/.evi/commands/*.md`); each accepts an optional free-text `args` argument substituted for `{args}` in the template body.
 
-Transports: **stdio** (the default; what a desktop MCP client spawns) or **streamable HTTP** (`--http`) served at the `/mcp` path, with an optional bearer-token gate (`--token`) for remote/untrusted clients.
+Transports: **stdio** (the default; what a desktop MCP client spawns) or **streamable HTTP** (`--http`) served at the `/mcp` path. Over HTTP, `--token` requires a bearer token on every request; it is **required** for any non-loopback `--host`. A server without a token answers only to loopback `Host` / `Origin` headers, so a web page that rebinds its own hostname to 127.0.0.1 (DNS rebinding) can't call the tools.
+
+A tool failure served this way (an unknown tool, a call the destructive-command guard refuses, a tool's own `ERROR: …`) is returned with MCP's error flag set, on both the 1.x and 2.x SDK lines.
 
 ## Setup
 
@@ -91,7 +94,7 @@ An empty/unset `mcp_allow` loads every server in the file (each still honoring i
 pip install 'evi-assistant[mcp]'
 ```
 
-If MCP is enabled but the package isn't installed, eVi prints a hint and continues without MCP tools.
+If MCP is enabled but the package isn't installed, eVi prints a hint and continues without MCP tools. The extra admits `mcp>=1.30,<2.4`; CI runs the MCP tests on the 1.30 line, the 2.0 line and the newest release the range allows, so installing or upgrading the extra may upgrade an older `mcp`.
 
 ### Server side (`evi mcp serve`)
 
@@ -101,7 +104,7 @@ No config keys are required — `evi mcp serve` works out of the box once the `m
 - `--tools` — optional comma-separated allow-list of exact tool names *within* those categories.
 - `--http` — serve streamable HTTP instead of stdio.
 - `--host` (default `127.0.0.1`) and `--port` (default `8765`) — HTTP bind address.
-- `--token` — require `Authorization: Bearer <token>` on every HTTP request.
+- `--token` — require `Authorization: Bearer <token>` on every HTTP request. **Required for a non-loopback `--host`.** Without one, `evi mcp serve --http --host 0.0.0.0` exits with code 2 and prints `error: refusing to serve MCP over HTTP on 0.0.0.0 without --token. Pass --token, or bind to 127.0.0.1.` A tokenless server on a loopback address (127.0.0.1 or another 127.x address, `localhost`, `::1`) starts with the warning `⚠ --http without --token: any program on this machine can call these tools. Pass --token to require one.` and answers only requests whose `Host` is a loopback name — `127.0.0.1`, `localhost`, `[::1]` or the address it is bound to — (anything else gets `421`) and whose browser `Origin`, if any, is a loopback page (anything else gets `403`).
 
 ## Usage
 
@@ -129,7 +132,7 @@ Once `tools.mcp = true` and servers are configured, MCP tools are available auto
 | Command | What it does |
 |---------|--------------|
 | `evi mcp serve` | Run eVi as an MCP server over **stdio** (what a desktop client spawns) |
-| `evi mcp serve --http --token <secret>` | Run as a streamable-HTTP server, bearer-token gated |
+| `evi mcp serve --http --token <secret>` | Run as a streamable-HTTP server, bearer-token gated (a token is required for a non-loopback `--host`) |
 | `evi mcp serve-config` | Print a ready-to-paste client config snippet (`mcpServers` block) |
 
 ### Web / Desktop — the MCP panel
@@ -235,18 +238,18 @@ evi mcp serve --http \
   --tools memory.search,memory.read
 ```
 
-The MCP endpoint is served at `/mcp` (e.g. `http://host:8765/mcp`). Every request must send `Authorization: Bearer <token>` or it gets a `401`.
+The MCP endpoint is served at `/mcp` (e.g. `http://host:8765/mcp`). Every request must send `Authorization: Bearer <token>` or it gets a `401`. Leave out `--token` here and eVi refuses to start (exit code 2): `0.0.0.0` is not a loopback address.
 
 ## Notes / limits
 
-- **stdio only on the client side.** eVi launches external servers over stdio (child processes); there is no built-in support for connecting to a remote HTTP MCP server as a *client*. The HTTP transport exists only on the *serve* side.
+- **Local or remote servers.** eVi launches local servers over stdio (child processes) and connects to remote ones over streamable HTTP (`transport: http`, the default when a `url` is set) or legacy SSE, sending the entry's `headers` on every request (see [Remote (HTTP) servers](#client-side)).
 - **Fail-open.** A server that won't start (bad command, missing binary) is logged once and skipped — it never blocks eVi. Malformed `mcp.json` entries are dropped silently; a connection that actually fails is what gets logged.
 - **Off by default.** Client MCP requires `tools.mcp = true`; without it, `mcp.json` is ignored.
 - **Trust the servers you launch.** An MCP server is just a program eVi runs with the `command`/`args`/`env` you give it — it executes with your privileges. Only configure servers you trust, and scope filesystem/git servers to the directories you intend.
 - **Curated serve surface.** `evi mcp serve` defaults to `memory,index,calendar,git` and deliberately excludes shell, computer-control, and code-write tools. Widening `--categories` can hand powerful tools to whatever connects — do so consciously.
-- **HTTP security.** Running `--http` without `--token` is unauthenticated; eVi prints a warning and you should bind to localhost only in that case. For any non-localhost exposure, set `--token` (compared in constant time) and prefer running behind TLS.
+- **HTTP security.** `--http` without `--token` is unauthenticated, so eVi allows it only on a loopback `--host` and refuses any other bind (exit code 2). Even then any program on this machine can call the tools, and only loopback `Host` / `Origin` headers are answered (`421` / `403` otherwise), which keeps a DNS-rebinding web page out. For anything beyond this machine, set `--token` (compared in constant time) and prefer running behind TLS. **Settings → MCP → Serve** in the web / desktop app serves on 127.0.0.1 and gets the same loopback-only guard when you leave its token empty.
 - **Result flattening.** When eVi consumes a server's tool, non-text content (images, binary) is replaced with a `[<type> omitted]` placeholder so the model knows something was elided rather than silently dropped.
-- **Call timeout.** Forwarded client tool calls default to a 120-second timeout; a server that hangs will surface a timeout rather than block forever.
+- **Call timeout.** Forwarded client tool calls default to a 120-second timeout; a server that hangs will surface a timeout rather than block forever, and the call is cancelled on the server too.
 - **Lazy SDK import.** The `mcp` package is imported only when needed, so the rest of eVi runs fine without the `[mcp]` extra installed — you just won't get MCP tools (client) or be able to `serve`.
 
 Source of record: `C:\evi\evi\mcp\__init__.py`, `C:\evi\evi\mcp\manager.py`, `C:\evi\evi\mcp\bridge.py`, `C:\evi\evi\mcp\servers.py`, `C:\evi\evi\mcp\publish.py`, and the `mcp_app` commands in `C:\evi\evi\apps\cli\main.py` (lines 4488-4600). Config keys: `C:\evi\evi\config.py` (`ToolToggles.mcp`, `ToolToggles.mcp_allow`; `MCP_CONFIG_PATH`).

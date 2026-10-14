@@ -78,10 +78,65 @@ The model isn't tool-capable, or the temperature is too high.
 
 ## "Permission denied" for every tool call (CLI)
 
-Auto-approval might be off and you're sitting at a `(approve y/n/a)`
-prompt that hasn't been answered. Type `a` to allow everything for the
-session, then revisit `auto.auto_approve` in `config.toml` for a
-persistent fix.
+Auto-approval might be off and you're sitting at an `approve? y/a (this call)
+/ n / s (allow all this session)` prompt that hasn't been answered. Type `y`
+(or `a`) to allow that call, or `s` and then `y` to allow every call for the
+rest of the session. Then revisit `auto.auto_approve` in `config.toml` for a
+lasting fix.
+
+## "PERMISSION DENIED: … writes the protected path …"
+
+The call would write a protected path: an instruction, config, hook, task or CI
+file (`EVI.md`, `AGENTS.md`, `.evi.toml`, `.evi/**`, `~/.evi/**`,
+`.git/hooks/**`, `.github/workflows/**`, …) or a secret file. That asks in
+every mode, `yolo` and `/auto on` included, and is denied when nothing can
+answer (the scheduler, `evi run -y` in CI or a script with no terminal). If an
+unattended run really should write one, add its exact entry to
+`[auto] protected_paths_remove`, e.g. `protected_paths_remove = ["AGENTS.md"]`;
+`evi doctor` lists the protected paths in force. A reason ending in `(after a cd eVi can't follow, so where it
+lands is unknown)` means the shell line `cd`s somewhere eVi can't work out
+(`cd $DIR`, a wildcard, a drive switch) before writing a relative path: retry
+with an absolute path or without the `cd`. See [Permissions & sandbox →
+Protected paths](features/permissions-and-sandbox.md#protected-paths).
+
+## A repository's `.evi.toml` settings aren't applied
+
+eVi applies a `.evi.toml` only in a folder you have trusted, and only the
+version you trusted. The log says which case it is: `eVi: not applying project
+config <path>: this folder is not trusted` or `… it is new or changed since you
+trusted this folder`. Answer `y` at the prompt `evi chat` shows, or run
+`evi trust` in that folder from your own terminal; `evi trust --status` shows
+the state. `evi run`, `evi batch`, the web UI and the scheduler never ask. In
+the web UI the settings come from the folder the server was started in, not a
+session's working folder. The file is looked for only up to the repository's
+top level, so a `.evi.toml`, `EVI.md` or `AGENTS.md` in a folder above the
+repository doesn't apply inside it. See [Trusting a
+folder](configuration.md#trusting-a-folder).
+
+## "eVi: unknown settings in … config.toml"
+
+A key in `config.toml` (or the active profile) isn't one this eVi knows: a
+typo, or a setting from a newer version. It is ignored but kept in the file,
+and eVi starts normally. Fix the spelling, or leave it if a newer eVi on
+another machine shares the file.
+
+## Chats compact early (or overflow) after switching models
+
+eVi compacts a conversation at `compact_when_pct` of `[llm] context_size`.
+The managed llama.cpp runtime sets that to its server's window (32K, 16K or
+8K), and gives your own value back when you switch to another backend from the
+web or desktop app. After a switch made with the CLI (`evi backend use`, …),
+the old window stays until the next `evi web` or desktop start; start one, or
+set `context_size` yourself. See [`context_size` and the managed llama.cpp
+runtime](configuration.md#context_size-and-the-managed-llamacpp-runtime).
+
+## Gemini backend: "Login with Google" no longer works
+
+Since 2026-06-18 Google doesn't serve Gemini CLI to free, Google AI Pro or
+Google AI Ultra "Login with Google" accounts. Set `GEMINI_API_KEY` (a key from
+<https://aistudio.google.com/apikey>) or Vertex AI, then run `evi doctor`; see
+the Gemini section of [configuration.md](configuration.md). A Gemini Code
+Assist Standard / Enterprise login still works.
 
 ## ComfyUI image generation hangs or times out
 
@@ -97,11 +152,17 @@ get unstuck. Check:
 ## MCP server says "spawned but no tools registered"
 
 The server probably failed to start. Tail eVi's stderr or check
-`~/.evi/logs/`:
+`~/.evi/logs/` for `MCP server <name> failed to start: …`. The reason names
+the actual error, such as `HTTP 401 Unauthorized` (a remote server rejected
+the `headers` you gave it) or `ConnectError: All connection attempts failed`
+(nothing is listening at the `url`):
 
 - `npx` is missing → install Node.js.
 - The MCP server package isn't installable → try
   `npx -y <package>` manually to see the error.
+- A remote (`transport: http`) server fails on every connect → upgrade eVi:
+  older versions passed its headers in a way current mcp SDKs reject. The
+  `[mcp]` extra now needs mcp 1.30 or newer.
 - Server start needs a long handshake → bump
   `MCPBridge.run(timeout=…)` if you're hacking on the code.
 

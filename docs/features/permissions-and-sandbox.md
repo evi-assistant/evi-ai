@@ -37,47 +37,61 @@ this order:
    `yolo` and any `allow` rule.** A list of `[deny] <tool-glob> [arg-glob]`
    strings; if one matches, the call is **denied**, full stop. Use for calls
    that must never run regardless of mode (e.g.
-   `hard_deny = ["run_command rm -rf*"]`). For a shell command line it is also
-   checked against each command in the line, so `ls && rm -rf x` is denied too
-   (see [Shell command lines](#shell-command-lines)).
-1. **Mode** (`auto.mode`). Checked next and can short-circuit the rest:
-   - `yolo` → **allow** every call (but hard-deny above still blocks).
+   `hard_deny = ["shell rm -rf*"]`). The tool-glob matches the tool name or its
+   category, as in `rules` below. For a shell command line it is also checked
+   against each command in the line, so `ls && rm -rf x` is denied too (see
+   [Shell command lines](#shell-command-lines)).
+1. **Protected paths** (`auto.protected_paths`, plus eVi's built-in
+   write-protected paths). Right after hard-deny and before the mode: a call
+   that would **write** a protected path **asks**, in every mode — `yolo` and
+   `/auto on` included — and is **denied** when nothing can ask. Only `plan`
+   mode or a matching `deny` rule changes that, to deny; an `allow` rule does
+   not clear it. See [Protected paths](#protected-paths).
+2. **Mode** (`auto.mode`). Checked next and can short-circuit the rest:
+   - `yolo` → **allow** every call (hard-deny, protected paths and the
+     destructive-command guard still apply).
    - `plan` → **deny** every call (read-only planning; the model can think but
      not act).
    - `accept_edits` and `ask` fall through to the lower layers.
-2. **Rules** (`auto.rules`). A **first-match** allow/deny list. Each rule is a
+3. **Rules** (`auto.rules`). A **first-match** allow/deny list. Each rule is a
    string `<allow|deny> <tool-glob> [arg-glob]`. The tool glob is matched
-   against the tool name (`fnmatch`), not its `[tools]` category; the optional
-   arg glob is matched against the call's string-valued arguments. The first
-   rule that matches wins — **so an explicit `deny` here beats trusted
-   dirs/domains below.** Calls that run a shell command line (`run_command`,
-   `monitor` with `kind=command`) are matched command by command instead —
-   see [Shell command lines](#shell-command-lines).
-   - **Protected paths** (`auto.protected_paths`). Before any *implicit* allow
-     below, an `fs`/`code` write whose path matches a protected pattern
-     (fnmatch on the path or its basename) is forced to **ask** — so
-     `accept_edits` / auto-approve / trusted-dirs never silently write a
-     secret or code-executing file. Defaults cover `.env`, `.npmrc`,
-     `.gitconfig`, `.pypirc`, shell rc files, `*.pem`, SSH keys. An explicit
-     `allow` rule (step 2) still wins, honouring your intent.
-3. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
+   (`fnmatch`) against the tool name **or** its `[tools]` category, so
+   `deny shell rm*`, `deny fs *.env` and `allow web` work as well as
+   `deny run_command rm*`; `shell` also matches any call that runs a shell line
+   (`monitor` with `kind=command` too). The optional arg glob is matched against
+   the call's string-valued arguments. The first rule that matches wins — **so
+   an explicit `deny` here beats trusted dirs/domains below.** Calls that run a
+   shell command line (`run_command`, `monitor` with `kind=command`) are matched
+   command by command instead — see [Shell command
+   lines](#shell-command-lines).
+4. **Secret reads.** An `fs`/`code` call whose path argument matches a protected
+   pattern other than the built-in write-protected ones (`.env`, `*.pem`,
+   `id_rsa`, …) **asks**, even with `fs` auto-approved, so a secret is never
+   pulled into the model's context silently. `yolo` or an explicit allow rule
+   above (e.g. `allow read_file *.env.example`) lets it through.
+5. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
    tool's category is `fs` or `code`, the call is **allowed**.
-4. **Auto-approve categories** (`auto.auto_approve`). If the tool's category is
+6. **Auto-approve categories** (`auto.auto_approve`). If the tool's category is
    in this list, it's **allowed** without prompting.
-5. **Trusted scopes.** For `fs`/`code` tools whose path arguments resolve to
-   somewhere under a `trusted_dirs` entry → **allow**. For `web` tools whose URL
-   host matches a `trusted_domains` entry (exact host or any subdomain) →
-   **allow**. A `trusted_domains` entry also lets `web_fetch` reach that host on
-   a loopback or LAN address (see [What `web_fetch` will
+7. **Trusted scopes.** An `fs`/`code` call is **allowed** when every one of its
+   path arguments resolves (against the working folder, on its real path) under
+   a `trusted_dirs` entry. Only path arguments count — `path`, `paths`,
+   `file_path`, `cwd`, `dir`, and for an MCP tool the arguments named like paths
+   — never a file's content, and a call with no path argument (`run_python`) is
+   never approved this way. A `find_files` / `search_files` glob that is
+   absolute or climbs out with `..` isn't either. For `web` tools whose URL host
+   matches a `trusted_domains` entry (exact host or any subdomain) → **allow**.
+   A `trusted_domains` entry also lets `web_fetch` reach that host on a loopback
+   or LAN address (see [What `web_fetch` will
    fetch](#what-web_fetch-will-fetch)).
-6. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
+8. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
    no UI able to prompt — e.g. the headless scheduler, a federation request, or
    a workflow step — an unattended agent **default-denies** anything not
    pre-approved.
 
-The REPL `/auto on` toggle is a session override that sits *above* all of this:
-it forces every call to **allow** for the rest of the session, until you
-`/auto off`.
+The REPL `/auto on` toggle (and `s` at a CLI prompt) is a session override: it
+acts as `yolo` for the rest of the session, until you `/auto off`. Hard-deny,
+protected paths and the destructive-command guard still apply under it.
 
 ### Shell command lines
 
@@ -118,7 +132,11 @@ whole:
   process's own folder, not the session's, so its relative redirects resolve
   there; in a web session whose working folder is elsewhere they count as
   outside and the call asks. A variable in a target, or a `cd` anywhere in the
-  line, also counts as outside.
+  line, also counts as outside. A relative target counts as inside when it
+  resolves there, which holds on a mapped drive or a `\\server\share` working
+  folder too. A redirect target or `cwd` given as an absolute network path is
+  never resolved (that would already connect to the host) and counts as
+  outside.
 - **An allow rule's arg-glob is matched against the commands only**, never the
   other arguments: `allow run_command C:\proj*` no longer approves every
   command run with `cwd` in that folder. A `deny` rule still matches any string
@@ -129,15 +147,84 @@ whole:
   any line, including one that can't be split and redirects anywhere — it is
   the same as auto-approving the tool.
 
-The destructive-command guard uses the same split. A specific allow rule
-(matching the tool by name or category, with a real arg-glob) clears a guard
-hit only when it covers every command in the line, the line can be split and
-its redirects stay inside the working folder; a broad allow never clears it.
+The destructive-command guard uses the same split. Its rules come in two
+severities. A **prompt**-severity hit (`git reset --hard`, `git stash drop`,
+`find … -delete`, …) is cleared by a specific allow rule
+(matching the tool by name or category, with a real arg-glob) only when the rule
+covers every command in the line, the line can be split and its redirects stay
+inside the working folder; a broad allow never clears it. A **block**-severity
+hit (`rm -rf ~`, a force-push, `curl … | sh`, a disk format, …) is never cleared
+by an allow rule: only a `destructive_allow` glob exempts one.
 `destructive_allow` globs are matched per command too: a hit is exempt only if
 every command it touches matches a glob and it touches no redirect, and never
-on a line that can't be split. See
+on a line that can't be split. A glob whose first word (the command) holds a
+wildcard (`*--force-with-lease*`, `git*`, `r*`) is ignored, because it doesn't
+say which command it exempts; write the command out
+(`git push --force-with-lease*`). See
 [configuration.md](../configuration.md#primary-file--configtoml) for the guard's
 settings.
+
+### Protected paths
+
+Protected paths keep a prompt-injected agent from silently rewriting the files
+that steer it or run code later: its instructions, eVi's own config and hooks,
+git hooks, CI workflows, and secrets. A call that would **write** one asks in
+every mode (`yolo` and `/auto on` included) and is denied when nothing can
+answer (the scheduler, a federation request, `evi run -y` in CI or a script
+with no terminal). Plan mode or a matching `deny`
+rule denies it; no `allow` rule clears it. The denial tells the model which
+path was protected.
+
+The patterns in force are:
+
+- **`[auto] protected_paths`** — by default the secret and shell start-up
+  files: `.env`, `*.env`, `.env.*`, `.npmrc`, `.gitconfig`, `.pypirc`,
+  `.bashrc`, `.zshrc`, `.bash_profile`, `.profile`, `*.pem`, `id_rsa`,
+  `id_ed25519`. Edit the list to taste. Reading one of these asks too (step 4
+  above).
+- **The built-in write-protected paths**, always added on top of your list:
+  `.evi.toml`, `EVI.md`, `AGENTS.md`, `.evi/**`, `~/.evi/**` (and your
+  `EVI_HOME` folder when it is set), `.git/hooks/**`, `.git/config`,
+  `.git/modules/**/hooks/**`, `.git/modules/**/config`, `.github/workflows/**`
+  and `.vscode/tasks.json`. Reading them is normal and never asks.
+- **minus `[auto] protected_paths_remove`**, which un-protects an entry by its
+  exact text: a built-in one, or one of your own `protected_paths` entries.
+  For example, `protected_paths_remove = ["AGENTS.md"]` lets an unattended
+  `evi run -y` rewrite AGENTS.md. Only `config.toml` or a profile can set it; a
+  project's `.evi.toml` can't. `.evi/**` matches an `.evi` folder at any depth,
+  so removing `~/.evi/**` alone does not un-protect your eVi home.
+
+A pattern without a `/` matches a file's name; one with a `/` matches its path
+(a relative one at any depth); `~` is your home folder. Matching ignores case,
+and each path is checked as written, normalised and on its real path, so a
+symlink or junction to a protected file is caught (on Windows, `EVI.md.`,
+`EVI.md::$DATA`, `\\?\C:\…` and `\\localhost\C$\…` spellings count as the file
+they open). Any tool counts as a writer except eVi's built-in read-only ones
+(`read_file`, `list_dir`, `find_files`, `search_files`, the `git_*` readers, …),
+so an MCP tool that names `AGENTS.md` asks too.
+
+For a shell line eVi inspects its `>` / `>>` targets (followed through `cd` /
+`pushd` / `Set-Location`). It also inspects the files named by `tee`, `cp`,
+`mv`, `install`, `ln`, `copy`, `move`, `xcopy`, `robocopy`, `ren`,
+`Tee-Object`, `Out-File`, `Set-Content`, `Add-Content`, `New-Item`,
+`Copy-Item`, `Move-Item` and `Rename-Item` (and their aliases), by `sed -i` /
+`perl -i` and by `dd of=`, inline option values (`-FilePath:x`,
+`--target-directory=x`) included. An argument of a copy, move or link command
+may be the folder it writes into, so `cp pre-commit .git/hooks` counts as a
+write to `.git/hooks/pre-commit`; copying *from* a protected file
+(`cp EVI.md notes.md`) asks too. After a `cd` eVi can't follow, a relative
+write target counts as protected: the call asks, and is denied when nothing can
+ask, with the reason "after a cd eVi can't follow, so where it lands is
+unknown". That covers a `cd` with an expansion such as `cd $DIR`, a wildcard, a
+drive switch, or a `~name` that can't be expanded. Retry with an absolute path
+or without the `cd`.
+
+This is a guardrail, not a sandbox. Not inspected: command strings run through
+`bash -c` / `sh -c` / `pwsh -Command`, `eval`, scripts, `run_python`,
+`git config` and other git subcommands that write `.git/config`, a
+`core.hooksPath` folder such as `.husky/`, the contents of a recursive copy
+(`cp -r payload/. .`), hard links, and paths nested inside an MCP tool's
+arguments (`{"edits": [{"path": …}]}`).
 
 ### What `web_fetch` will fetch
 
@@ -251,20 +338,49 @@ file, then restart or run `/reload` in the REPL.
 [auto]
 mode            = "ask"                              # ask | accept_edits | plan | yolo
 auto_approve    = ["fs", "code", "memory", "skills", "image"]
-rules           = []                                 # first-match "allow|deny <tool> [arg]"
+rules           = []                                 # first-match "allow|deny <tool-or-category> [arg]"
+hard_deny       = []                                 # always deny, in every mode
+protected_paths = [".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
+                   ".bashrc", ".zshrc", ".bash_profile", ".profile",
+                   "*.pem", "id_rsa", "id_ed25519"]
+protected_paths_remove = []                          # protected entries to un-protect
 trusted_dirs    = []                                 # auto-approve fs/code under these paths
 trusted_domains = []                                 # auto-approve web fetches to these hosts
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `mode` | `"ask"` | Top-level policy. `ask` prompts for anything not pre-approved; `accept_edits` auto-allows `fs`/`code`; `plan` denies all tools; `yolo` allows all tools. |
+| `mode` | `"ask"` | Top-level policy. `ask` prompts for anything not pre-approved; `accept_edits` auto-allows `fs`/`code`; `plan` denies all tools; `yolo` allows all tools (hard-deny, protected paths and the destructive-command guard still apply). |
 | `auto_approve` | `["fs","code","memory","skills","image"]` | Tool **categories** that run without prompting. Note `shell`, `subagent`, `computer`, `web` are deliberately **not** here. |
-| `rules` | `[]` | First-match allow/deny list, matched on the tool **name**; explicit `deny` overrides trusted dirs/domains. Shell lines are matched command by command. |
-| `trusted_dirs` | `[]` | Paths whose `fs`/`code` calls are auto-approved (resolved, `~` expanded, sub-paths included). |
+| `rules` | `[]` | First-match list of `allow` / `deny` `<tool-name-or-category-glob> [arg-glob]` entries; `shell` also matches `monitor` with `kind=command`. An explicit `deny` overrides trusted dirs/domains. Shell lines are matched command by command. |
+| `hard_deny` | `[]` | `<tool-name-or-category-glob> [arg-glob]` entries denied before everything else, `yolo` and `/auto on` included. |
+| `protected_paths` | the secret and shell start-up files above | Writing one asks in every mode; reading one asks even with `fs` auto-approved. The built-in write-protected paths always apply on top (see [Protected paths](#protected-paths)). |
+| `protected_paths_remove` | `[]` | Protected entries to un-protect, by exact text: a built-in write-protected path or one of your `protected_paths`. Not settable from a `.evi.toml`. |
+| `trusted_dirs` | `[]` | Paths whose `fs`/`code` calls are auto-approved when every path argument resolves inside one (`~` expanded, real path, sub-paths included). |
 | `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). Also the only way to let `web_fetch` reach a loopback or LAN address. |
 
 Valid modes are exactly `ask`, `accept_edits`, `plan`, `yolo`.
+
+### Checking your policy
+
+A rule or `hard_deny` entry that matches no tool does nothing, and nothing
+used to say so. Two commands check the policy as written:
+
+- **`evi lint`** also checks `config.toml`'s own `[auto]` section (it reads the
+  file and writes nothing). It warns about a `rules` entry that isn't
+  `<allow|deny> <tool-glob> [arg-glob]`, and a `rules` or `hard_deny` entry
+  whose tool-glob matches no tool name, tool category (`shell` and `mcp`
+  included) or configured MCP server. It also warns about a `hard_deny` entry
+  that starts with `allow`, a `destructive_allow` glob with a wildcard in its
+  command word (the guard ignores it), a `destructive_disable_rules` id that
+  names no guard rule, and a `protected_paths_remove` entry that removes
+  nothing, is also listed in `protected_paths`, or removes `~/.evi/**` without
+  `.evi/**`. An MCP rule such as `deny github.delete_*` is checked by its server
+  part only; the tool part can't be checked without connecting.
+- **`evi doctor`** has a `protected paths` check. It lists every protected
+  pattern in force — `[auto] protected_paths`, plus the built-in
+  write-protected ones, minus `protected_paths_remove` — and warns when a
+  built-in one was removed.
 
 ### `[tools]` — the sandbox toggle (and tool categories)
 
@@ -318,13 +434,18 @@ When a call needs a decision, the CLI prints a prompt like:
 
 ```
 permission: write_file (fs) args={"path": "/etc/hosts", ...}
-  approve? y/n/a (allow all this session):
+  approve? y/a (this call) / n / s (allow all this session):
 ```
 
-Press `y` to allow once, `n` (or just Enter) to deny, `a` to flip on allow-all
-for the session. When the model batches several calls in one turn, eVi prompts
-once for the whole batch and you can answer `a` (all), `n` (none), specific
-1-based indices like `1,3`, or `s` (allow all this session).
+Press `y` or `a` to allow this one call, or `n` (or just Enter) to deny it.
+Press `s` to allow every tool call for the rest of the session, the same as
+`/auto on`. `s` first asks `allow EVERY tool call for the rest of this session
+(like /auto on)? y/N`; any answer but `y` turns nothing on and denies the call.
+When the model batches several calls in one turn, eVi prompts once for the
+whole batch: answer `a` (all of these calls), `n` (none), specific 1-based
+indices like `1,3`, or `s` (allow all this session, after the same
+confirmation). Even under `s` or `/auto on`, `hard_deny`, protected paths and
+the destructive-command guard still apply.
 
 ### Setting the policy
 
@@ -348,8 +469,20 @@ Because `[auto]` and `[tools]` are ordinary config sections, a profile
 freely — it is your own file.
 
 A per-project `.evi.toml` (the nearest one walking up from the working
-directory) is different: it arrives with whatever repository you cloned, so
-since 1.0.53 eVi treats it as **untrusted** and it can only **tighten** these
+directory, stopping at the repository's top level) is different: it arrives
+with whatever repository you cloned, so eVi treats it as **untrusted**. It
+applies only in a folder you have trusted — `evi chat` asks the first time,
+`evi trust [PATH]` trusts one up front — and only the version you trusted:
+edit it and it is off again until you re-trust. Trust is per repository (its
+worktrees share it); outside git it covers exactly the folder you trusted, not
+its subfolders. `evi trust` asks you to confirm (`--yes` in scripts) and
+refuses inside an `evi chat` session, so the agent there can't trust a folder
+for you.
+`evi run`, the web UI and the scheduler never ask; in an untrusted folder they
+run with the project config off. See
+[Trusting a folder](../configuration.md#trusting-a-folder).
+
+Even in a trusted folder (since 1.0.53) it can only **tighten** these
 sections, judged against your config + active profile:
 
 | Key | What a `.evi.toml` can do |
@@ -362,20 +495,25 @@ sections, judged against your config + active profile:
 | `[auto] block_destructive = true` | Honoured. `= false` is ignored. |
 
 Everything else that loosens is ignored: `auto_approve`, `trusted_dirs`,
-`trusted_domains`, `destructive_allow`, `destructive_disable_rules`, any other
+`trusted_domains`, `destructive_allow`, `destructive_disable_rules`,
+`protected_paths_remove`, any other
 `[tools]` key (`transcripts`, `mcp_allow`, `search_backend`, `searxng_url`,
 `cleanup_period_days`, …). So a repo can pin a stricter `mode`, a `deny` rule or
 a `hard_deny` entry for everyone who works in it, but it can never grant itself
 more. A `deny` rule alone does nothing for someone on `yolo`: for a block that
 must hold for everyone, use `hard_deny` (or also set `mode`). Rule and
-`hard_deny` entries match the tool **name** (`run_command`, `write_file`, …),
-not its `[tools]` category, e.g. `hard_deny = ["run_command rm -rf*"]`. Outside
+`hard_deny` entries match the tool name (`run_command`, `write_file`, …) or its
+`[tools]` category, e.g. `hard_deny = ["shell rm -rf*"]`. Outside
 `[tools]`/`[auto]` a `.evi.toml` may only set model/sampling preferences — see
 [Per-project config](../configuration.md#per-project-config--evitoml) for the
 full list. Ignored keys are named once per process in a warning (e.g. `eVi:
 ignoring these settings from project config <path>: auto.mode, …`); a file that
 can't be parsed is ignored as a whole, so it can never switch your own settings
-off. `--safe-mode` skips the file entirely.
+off. `--safe-mode` skips the file entirely. Changing a setting (`/model`,
+`/effort`, the web Settings page) writes only your own `config.toml` values plus
+that setting (for an inherited list, just the entries you added or removed),
+so a repository's or a profile's `[auto]` / `[tools]` values never become your
+global ones.
 
 ## Examples
 
@@ -472,20 +610,23 @@ turn returns to your normal policy.
   notes it's "acceptable for personal-assistant use on a trusted machine."
 - **Explicit `deny` always wins among the trust layers.** A `deny` rule beats
   `trusted_dirs`/`trusted_domains`. But note `yolo` mode short-circuits *before*
-  rules are evaluated — in `yolo`, even a `deny` rule is ignored. Don't expect a
-  deny-list to protect you while in `yolo`.
-- **`/auto on` overrides everything.** It forces allow for the whole session,
-  ignoring mode, rules, and trusted scopes. It resets when you `/auto off` or
+  rules are evaluated — in `yolo`, a `deny` rule is ignored (except that it
+  still turns a protected write's prompt into a denial). Don't expect a
+  deny-list to protect you while in `yolo`; use `hard_deny`.
+- **`/auto on` overrides the mode, rules and trusted scopes.** It acts as `yolo`
+  for the whole session; `hard_deny`, protected paths and the
+  destructive-command guard still apply. It resets when you `/auto off` or
   exit; it is not persisted to config.
 - **Categories, not individual tools, are auto-approved.** `auto_approve` works
   at the category granularity (`fs`, `code`, `web`, …). To approve or block a
   single tool, use a `rules` entry with the tool name. `shell`, `subagent`,
   `computer`, and `web` are intentionally left out of the defaults because they
   can act broadly or reach the network.
-- **Trusted-dir matching is path-resolved.** Arguments are `~`-expanded and
-  resolved to absolute paths before the sub-path check, so symlink/relative
-  tricks resolve to their real target. A non-string argument can't be matched by
-  an arg-glob; rules only see string-valued args.
+- **Trusted-dir matching is path-resolved.** Only path arguments are checked,
+  and each is `~`-expanded and resolved against the working folder to its real
+  path before the sub-path check, so symlink/relative tricks resolve to their
+  real target. A non-string argument can't be matched by an arg-glob; rules
+  only see string-valued args.
 - **Headless = strict.** In any context that can't prompt (scheduler, web
   background runs, federation, workflow steps), unattended agents deny anything
   not pre-approved — so make sure scheduled tasks rely only on `auto_approve` /
@@ -498,7 +639,11 @@ turn returns to your normal policy.
 
 ### Relevant source files
 
-- `C:\evi\evi\permissions.py` — the `decide()` policy and rule/trust matching.
+- `C:\evi\evi\permissions.py` — the `decide()` policy, rule/trust matching and
+  protected paths (`effective_protected_paths`, `protected_write`).
+- `C:\evi\evi\tools\base.py` — which arguments are paths (`Tool.path_args`) and
+  which tools only read (`READ_ONLY_TOOLS`).
+- `C:\evi\evi\configlint.py` — the `[auto]` checks `evi lint` runs.
 - `C:\evi\evi\shellsplit.py` — splits a shell line into the commands rules are
   matched against.
 - `C:\evi\evi\shell_guard.py` — the destructive-command guard.

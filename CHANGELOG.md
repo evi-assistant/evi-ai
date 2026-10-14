@@ -66,6 +66,86 @@ All notable user-visible changes to eVi. Format loosely follows
   its AppleScript from the title and body, escaping only `"`. They are now
   passed as arguments, and Linux `notify-send` gets `--` before them. eVi only
   sends fixed text today, so this is hardening.
+- **A repository's `.evi.toml` applies only in a folder you trust.** Opening a
+  repository applied its `.evi.toml` without asking (since 1.0.53 only the
+  allowlisted keys, but still unasked). Now the whole file is ignored until
+  you trust the folder, and again after any edit to it. `evi chat` (and
+  `evi sessions resume` / `continue` / `fork`) shows what the file sets and
+  asks `y/N` the first time; `evi trust [PATH]` trusts a folder up front
+  (`--status`, `--list`, `--revoke`, `--yes` for scripts) and refuses inside
+  an `evi chat` session, so the agent there can't trust its own folder. Trust
+  is per repository and shared by its worktrees; outside git it covers exactly
+  the folder you trusted. `evi run`, `evi batch`, the web UI and the scheduler
+  never ask: in an untrusted folder they log `eVi: not applying project config
+  …`, run with the project config off and exit as usual. `.evi.toml`, `EVI.md`
+  and `AGENTS.md` are now looked for only up to the repository's top level, so
+  one in a folder above it (a `~/AGENTS.md`) no longer applies inside it;
+  EVI.md and AGENTS.md still load in untrusted folders. The web API gains
+  `GET` / `POST /api/project/trust`. See "Trusting a folder" in
+  docs/configuration.md.
+- **Changing a setting no longer copies a repository's or a profile's values
+  into your `config.toml`.** eVi saved the whole merged config, so a `/model`,
+  `/effort` or web Settings change made inside a repository wrote its
+  `.evi.toml` values, and the active profile's, into `config.toml` for good.
+  Now eVi writes back your own file with only the setting you changed; for a
+  list you inherit entries of, only the entries you add or remove. Setting a
+  value you only inherit (the profile's model while that profile is active)
+  isn't saved; put it in `config.toml` to keep it.
+- **Protected paths guard eVi's instructions, hooks and CI in every mode.** A
+  prompt-injected agent could rewrite `EVI.md`, `AGENTS.md`, `.evi.toml`, a
+  git hook or a CI workflow without a prompt: protected paths covered only
+  file and code tools, and `yolo`, `/auto on`, `evi run -y` or an allow rule
+  skipped them. Now a write to a protected path asks in every mode, whatever
+  allow rule matches, and is denied when nothing can answer (plan mode or a
+  deny rule denies it too). On top of `[auto] protected_paths` (secret and
+  shell start-up files), eVi always protects `.evi.toml`, `EVI.md`,
+  `AGENTS.md`, `.evi/**`, `~/.evi/**` (and `EVI_HOME`), `.git/hooks/**`,
+  `.git/config`, the same under `.git/modules/`, `.github/workflows/**` and
+  `.vscode/tasks.json`. Every tool counts, MCP tools included; for a shell
+  line, so do its redirects (followed through `cd`) and the files `cp`, `mv`,
+  `tee`, `sed -i`, `Set-Content` and similar commands name, a destination
+  folder too (`cp x .git/hooks`). Paths are matched on their real path, so a
+  symlink or junction is caught. Reading a secret file (`.env`, a key) now
+  asks even with `fs` auto-approved. An `evi run -y` in CI that edits
+  AGENTS.md is now denied: un-protect an entry with the new
+  `[auto] protected_paths_remove`. See "Protected paths" in
+  docs/features/permissions-and-sandbox.md.
+- **`/auto on` no longer switches off `hard_deny`, and `a` approves one
+  call.** `/auto on` (and `evi run -y`) allowed every call before `hard_deny`
+  was checked, and a destructive-guard prompt skipped `hard_deny` and plan
+  mode. Now `/auto on` acts as `yolo`: `hard_deny`, protected paths and the
+  guard still apply, and a policy deny beats a guard prompt. At the CLI's
+  single-call prompt `a` turned on allow-all for the rest of the session,
+  while in the batch prompt it meant just those calls; now `y` or `a` approve
+  that call only. Session-wide approval is `s` in both prompts, and it asks
+  `allow EVERY tool call for the rest of this session (like /auto on)? y/N`
+  first; any answer but `y` turns nothing on and denies the call.
+- **Category rules work, and allow rules no longer clear the worst guard
+  hits.** `rules` and `hard_deny` entries matched only the tool name, so the
+  documented `deny shell rm*`, `deny fs *.env`, `allow web` and
+  `hard_deny = ["shell rm -rf*"]` silently did nothing. The tool-glob now
+  matches the tool name or its category (`shell` also covers `monitor`
+  commands), so they take effect: check any `allow shell` or `allow fs` rule
+  you wrote. No allow rule clears a block-severity guard hit any more
+  (`rm -rf ~`, a force-push, `curl … | sh`), so
+  `allow run_command git push --force-with-lease*` no longer clears that push:
+  use `destructive_allow`. A `destructive_allow` glob with a wildcard in its
+  command word (`*--force-with-lease*`, `git*`) is ignored, since it also
+  exempted `rm -rf ~ --force-with-lease`. `trusted_dirs` approves a file call
+  only when every path argument resolves inside a trusted folder; any string
+  argument used to count, so content naming the folder was enough, and
+  `run_python` passed when eVi ran inside one. Permission checks no longer
+  resolve a network path the model names (`\\host\share\…`), which connected
+  to that host before anyone approved the call.
+- **`evi mcp serve --http` can't be reached by a web page, or from the
+  network without a token.** A tokenless HTTP server answered any `Host`, so a
+  page using DNS rebinding could call eVi's tools through your browser, and
+  nothing stopped `--host 0.0.0.0` without `--token`. Without a token,
+  `evi mcp serve --http` and Settings → MCP → Serve now answer only loopback
+  `Host` / `Origin` headers (`421` / `403` otherwise), and a non-loopback
+  `--host` without `--token` exits with code 2 and `error: refusing to serve
+  MCP over HTTP on 0.0.0.0 without --token. Pass --token, or bind to
+  127.0.0.1.`
 
 ### Changed
 - **The `evi-run` GitHub Action approves no tools unless you say so.** It
@@ -86,6 +166,71 @@ All notable user-visible changes to eVi. Format loosely follows
   workflow that pastes `${{ }}` into a script, and a change that adds a CLI
   command or web route without touching `docs/` (label `docs-skip` to waive).
   See docs/releasing.md and TESTING.md.
+- **The `gemini` backend needs a Gemini API key or Vertex AI.** Since
+  2026-06-18 Google no longer serves Gemini CLI to free, Google AI Pro and
+  Google AI Ultra "Login with Google" accounts; those plans moved to Google's
+  Antigravity CLI, which eVi doesn't drive. Set `GEMINI_API_KEY` (from
+  https://aistudio.google.com/apikey) or Vertex AI
+  (`GOOGLE_GENAI_USE_VERTEXAI=true` plus `GOOGLE_CLOUD_PROJECT` and
+  `GOOGLE_CLOUD_LOCATION`, or `GOOGLE_API_KEY`); a Gemini Code Assist
+  Standard / Enterprise login still works. eVi's errors and `evi doctor`
+  explain the cut-off, a rejected key and a used-up quota. Settings → Model &
+  Backend now labels the kinds `gemini — Gemini API key / Vertex AI` and
+  `amp — Amp subscription`, and picking either shows its install command and
+  how it signs in.
+- **CLI-agent backends get the conversation on stdin, and Gemini no longer
+  runs in `yolo`.** `gemini`, `qwen` and `copilot` took the whole chat as a
+  command-line argument, which a Windows npm `.cmd` shim passes through
+  `cmd.exe`: a chat over 8191 characters, or one with quotes, `&`, `%`, `|` or
+  a newline, broke. They now read it from stdin, as `codex` and `amp` do.
+  `gemini` ran with `--approval-mode yolo`, so in a chat turn it could run
+  shell commands and write files on its own; it now runs with `default`, so
+  tools that need approval are denied in a headless turn, and `qwen` is pinned
+  to `default` too. Model ids are limited to letters, digits and
+  `. _ : / @ + = -`. Delegate backends still run their own tools outside eVi's
+  permission checks, unattended runs included.
+- **CLI-agent turns are time-bounded and leave nothing running.** `gemini`,
+  `codex` and `claude_agent` turns had no time limit, and where there was one,
+  only the direct child was killed: on Windows the `.cmd` shim's `node`
+  grandchild kept running and held the output open. Turns now end with a
+  clear error after 180 s for `gemini`, `qwen`, `copilot` and `amp`, and
+  600 s for `codex` and `claude_agent`, and eVi kills the CLI's whole process
+  tree. On Windows each run has its own Job Object, and the CLI only starts
+  once it is inside, so everything it launches is in it too. On macOS/Linux
+  the CLI leads its own session: Ctrl-C in the terminal no longer reaches it
+  directly, and one still running when eVi exits is killed. If a CLI answers
+  and exits but something it started still holds its output, that leftover
+  is killed after 2 s and the answer is kept.
+- **amp installs as `@ampcode/cli` and gains an `ultra` mode.** The docs and
+  `evi doctor` now name `npm i -g @ampcode/cli` (it replaced the Sourcegraph
+  package), and `--model ultra` (deepest reasoning, most credits) joins
+  `low` / `medium` / `high`.
+- **The managed llama.cpp runtime sizes its context window to your machine
+  and keeps `context_size` in step.** Its server always ran with a 4096-token
+  window while `[llm] context_size` kept its own value (32768 by default), so
+  eVi compacted far too late and the server rejected long prompts. It now
+  runs with 32768, 16384 or 8192 tokens, whatever fits next to the model in
+  VRAM or in about 70% of RAM, and setup, a model switch, the GPU switch and
+  every relaunch write that number into `config.toml`. Open web and desktop chats use the new window
+  from their next message. Switching to another backend from the web or
+  desktop app gives back the `context_size` you had before (or removes the
+  key, so the default applies), unless you changed it since; a switch made
+  with the CLI is given back at the next `evi web` or desktop start. A
+  profile's or a trusted repository's `context_size` is never written into
+  `config.toml`. `GET /api/runtime/status` and `GET /api/runtime/catalog`
+  report the window as `ctx`.
+- **The `[mcp]` extra needs mcp 1.30 or newer and admits up to 2.3.** The pin
+  moved from `>=1.0,<2.1` to `>=1.30,<2.4`, and a new CI job runs the MCP
+  tests on 1.30.x, 2.0.x and the newest allowed release, so installing or
+  upgrading `evi-assistant[mcp]` may upgrade an older `mcp`.
+- **Building the desktop shell needs Rust 1.90.** Tauri moved to 2.12.1 (wry
+  0.57, tao 0.37), and the update channel's `base64`, `sha2` and `zip` crates
+  to 0.23, 0.11 and 4. New tests check that a signed update still verifies,
+  that a real archive passes the hash check and extracts, that a tampered or
+  truncated one is refused, and that `../` entries can't escape. `toml` stays
+  on 0.8: 1.x would silently ignore `[desktop] sidecar_auto_update = false`.
+  Linux builds still carry `glib` 0.18.5 (RUSTSEC-2024-0429) until Tauri moves
+  to gtk-rs 0.20; nothing in the shell uses the affected API.
 
 ### Added
 - **`evi chat --mode chat|cowork|code`** (`-m`) picks the session's tool
@@ -98,6 +243,20 @@ All notable user-visible changes to eVi. Format loosely follows
   `--collect`. `scripts/dev-bootstrap.sh` / `.ps1` set up a dev venv outside
   the checkout and finish with this check; docs/self-build.md walks through
   the loop.
+- **`evi lint` checks your permission settings, and `evi doctor` shows the
+  protected paths in force.** `evi lint` reads `config.toml`'s own `[auto]`
+  section and warns about a malformed rule, a `rules` or `hard_deny` entry
+  whose tool-glob matches no tool name, category or configured MCP server, a
+  `hard_deny` entry that starts with `allow`, a `destructive_allow` glob the
+  guard ignores, a `destructive_disable_rules` id that names no rule, and a
+  `protected_paths_remove` entry that removes nothing. `evi doctor`'s new
+  `protected paths` check lists every pattern in force and warns when a
+  built-in one was removed.
+- **`evi doctor` checks CLI-agent backends and API keys.** For `claude_agent`,
+  `codex`, `gemini`, `amp`, `qwen` and `copilot` it checks the CLI is
+  installed (and names the install command), that amp is signed in and that
+  gemini has an API key or Vertex AI set up. For an HTTP backend it now sends
+  `[llm] api_key` and says when the server rejects it.
 
 ### Fixed
 - **An apostrophe no longer breaks a user slash command.** `/fix don't panic`
@@ -114,6 +273,30 @@ All notable user-visible changes to eVi. Format loosely follows
   1.0.32 and 1.0.35 are back (their notes had read as part of the next
   release), 0.32.0 has a reconstructed entry, and the dates of 1.0.10, 1.0.13
   and 1.0.43–1.0.46 match their tags.
+- **MCP servers with `transport: http` connect again.** eVi passed their
+  headers in a way current mcp SDKs reject, so every streamable-HTTP server
+  (the default when a `url` is set) failed to connect. The headers now ride on
+  the SDK's own HTTP client. A failed connect logs its real cause
+  (`HTTP 401 Unauthorized`, `ConnectError: …`) instead of "unhandled errors in
+  a TaskGroup" and no longer leaks what it opened, and a timed-out MCP tool
+  call is now cancelled on the server too. On mcp 2.x a remote tool's failure
+  reached the model as ordinary output; it is now marked `ERROR:` (once, so
+  an eVi-served failure no longer reads `ERROR: ERROR: …`), and the tools
+  `evi mcp serve` exposes set MCP's error flag when they fail.
+- **An unknown key in `config.toml` no longer stops eVi.** A typo, or a
+  setting from a newer eVi, made every command fail as it loaded the config.
+  It is now ignored with one warning (`eVi: unknown settings in …`) and kept
+  in the file. Saving also keeps keys eVi doesn't manage, nested tables and
+  dates, and a value with a newline in it (a stop sequence) no longer makes
+  the saved file unloadable.
+- **The managed runtime's model pick sees your real RAM.** It read a memory
+  figure that doesn't exist and always assumed 8 GB, so a bigger CPU-only
+  machine was offered a smaller model than it can run. With a GPU it still
+  goes by VRAM, now that of the card with the most.
+- **`evi worktree create` keeps its worktrees out of `git add`.** They live in
+  `<repo>/.worktrees/`, so `git add -A` in the main checkout staged each one
+  as an embedded repository. eVi now adds `/.worktrees/` to the repository's
+  `.git/info/exclude` (never its `.gitignore`).
 
 ## [1.0.53] — 2026-10-09
 

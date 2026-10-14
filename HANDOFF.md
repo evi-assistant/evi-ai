@@ -170,17 +170,19 @@ powershell -File scripts\build-desktop.ps1   # end-to-end
 
 PyInstaller does **not** cross-compile — each OS's installer must be built on that OS (the CI matrix handles this per-runner).
 
-### CI workflows (7 total in `.github/workflows/`)
+### CI workflows (9 total in `.github/workflows/`)
 
 | Workflow | Trigger | Notes |
 |---|---|---|
-| `ci.yml` | push/PR to main, weekly, dispatch | Lint + unit gate. Push→1 cheap ubuntu/3.13 job; full 3-OS matrix only on PR/weekly/dispatch (macOS bills ~10×). |
-| `release.yml` | `v*.*.*` tag, dispatch | PyPI Trusted Publishing + sigstore + GitHub release. |
-| `desktop-release.yml` | `desktop-v*` tag, dispatch | 3-OS Tauri matrix, non-draft, minisign-signed updater. |
-| `security.yml` | push/PR, weekly, dispatch | pip-audit, cargo-audit, gitleaks, CodeQL (python+js). |
-| `e2e.yml` | PR, weekly, dispatch | Playwright UI tests, Ubuntu only, fake in-thread backend. |
-| `docker.yml` | `v*.*.*` tag, dispatch | GHCR image (web+scheduler), push opt-in. |
-| `evi-run-example.yml` | — | Example workflow. |
+| `ci.yml` | push/PR to main, weekly, dispatch | Lint + unit gate. Push→1 cheap ubuntu/3.13 job; full 3-OS × py3.12/3.13 matrix only on PR/weekly/dispatch (macOS bills ~10×). Also: `mcp-sdk` (tests/test_mcp* on mcp 1.30.*, 2.0.* and the newest release the `[mcp]` pin allows; not on push), `rust` (cargo check + test of the desktop shell, every run), `rust-windows` (same on Windows; not on push), `actionlint`, and `workflow-injection` (zizmor + a strict no-`${{ }}`-in-scripts check). |
+| `release.yml` | `v*.*.*` tag, dispatch | Calls `e2e.yml` first; the CHANGELOG/tag check, then PyPI Trusted Publishing + sigstore + GitHub release. On a tag push it then calls `desktop-release.yml` and `docker.yml`. |
+| `desktop-release.yml` | called by `release.yml`, `desktop-v*` tag, dispatch | 3-OS Tauri matrix, non-draft, minisign-signed updater; the Windows leg runs the shell's tests first (and `tests/desktop_e2e` when `desktop_e2e` is set). |
+| `security.yml` | push/PR to main, weekly, dispatch | pip-audit, cargo-audit, gitleaks, CodeQL (python+js). |
+| `e2e.yml` | push/PR to main, weekly, dispatch, called by `release.yml` | Playwright UI tests, Ubuntu only, fake in-thread backend; quarantined tests run non-blocking. |
+| `docker.yml` | called by `release.yml`, dispatch | GHCR image (web+scheduler), published after PyPI; push opt-in on dispatch. |
+| `docs-freshness.yml` | PR (incl. label changes), push to main | Fails a change that adds a CLI command or web route without touching `docs/` (`docs-skip` label or `Docs-skip:` trailer waives). |
+| `docs-publish.yml` | push/PR touching docs or cookbook, dispatch | Builds and verifies the site docs and cookbook; publishes on push to main. |
+| `evi-run-example.yml` | dispatch | Example workflow for the `evi-run` action (tools off unless `auto_approve` is ticked). |
 
 Build backend: setuptools ≥68 + wheel. **21** optional-dependency extras (`email, web, mcp, scheduler, downloads, web-tools, computer, stt, pdf, index, calendar, rerank, ast, diarize, doc, telemetry, otel, moderation, e2e, build-desktop, dev`).
 
@@ -199,7 +201,7 @@ None block the 1.0 launch. Everything below is optional/hardening or forward-loo
   - **Contract:** the shell↔sidecar launch handshake (flags/port/`--check`) is versioned by `min_shell_abi`; bump it only on a breaking change so old shells refuse an incompatible sidecar and fall back.
   - **Wins:** core ships at PyPI cadence with only the cheap freeze+zip+sign per OS (no Tauri/installer/OS-signing); removes the `releases/latest` fragility; stays offline-safe (ships a working bundled sidecar). **Cost:** the ~one new module (download/verify/swap/rollback) + a `sidecar-release.yml`. Full shell `desktop-v*` rebuilds then only happen when the *shell itself* changes.
   - *(Runtime pip-managed core — bundle Python, `pip install -U evi-assistant` — was considered and rejected: fragile offline, native-wheel/platform friction, worse startup.)*
-- **Tracked — Dependabot alert #1: `glib` unsoundness** (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, medium). **Left open and tracked, not dismissed.** Transitive in `desktop/src-tauri/Cargo.lock` via `tauri 2.11.2 → webkit2gtk 2.0.2 → gtk-rs 0.18` (pins `glib 0.18.5`; vulnerable `< 0.20.0`). **No non-breaking fix exists** — `glib 0.20` needs the gtk-rs 0.20 generation, which Tauri's Linux webkitgtk binding doesn't use yet, so `cargo update -p glib` can't advance it (also why Dependabot hasn't opened a PR). Risk is low: Linux GTK-webview only (Windows=WebView2, macOS=WKWebView never exercise it), eVi's own Rust never calls `glib::VariantStrIter`, crash-class not RCE. **Unblock:** a Tauri release on gtk-rs 0.20 → `cargo update` + rebuild + retag `desktop-v*`. Recheck **by number**: `gh api repos/evi-assistant/evi-ai/dependabot/alerts/1 -q .state` (the list/GraphQL endpoints lag).
+- **Tracked — Dependabot alert #1: `glib` unsoundness** (RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g, medium). **Left open and tracked, not dismissed.** Transitive in `desktop/src-tauri/Cargo.lock` via `tauri 2.12.1 (wry 0.57) → webkit2gtk 2.0.2 → gtk-rs 0.18` (still pins `glib 0.18.5`, rechecked 2026-10; vulnerable `< 0.20.0`; status also noted in `desktop/src-tauri/Cargo.toml`). **No non-breaking fix exists** — `glib 0.20` needs the gtk-rs 0.20 generation, which Tauri's Linux webkitgtk binding doesn't use yet, so `cargo update -p glib` can't advance it (also why Dependabot hasn't opened a PR). Risk is low: Linux GTK-webview only (Windows=WebView2, macOS=WKWebView never exercise it), eVi's own Rust never calls `glib::VariantStrIter`, crash-class not RCE. **Unblock:** a Tauri release on gtk-rs 0.20 → `cargo update` + rebuild + retag `desktop-v*`. Recheck **by number**: `gh api repos/evi-assistant/evi-ai/dependabot/alerts/1 -q .state` (the list/GraphQL endpoints lag).
 - **Delete the local mirror backup** (`evi-backup.git`) once confident the scrubbed public history is clean — kept as a safety net for now.
 - **Native-desktop e2e is local-only (added 1.0.18).** `tests/desktop_e2e/` (opt-in `desktop` marker, Windows-only) drives the real `evi-desktop.exe` via `tauri-driver` + `msedgedriver`/WebView2, but CI doesn't run it (no driver + no built exe on the runners). To gate the desktop release on it, add a `windows-latest` step to `desktop-release.yml` after the build: `cargo install tauri-driver`, fetch `msedgedriver` matching the installed **WebView2 runtime** (not the Edge browser version) into `.webdrivers/`, `pip install selenium`, then `pytest tests/desktop_e2e -m desktop`. Locally it needs `.webdrivers/msedgedriver.exe` (gitignored) + `selenium` in the `.venv`.
 

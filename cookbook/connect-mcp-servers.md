@@ -52,6 +52,10 @@ For a **remote** server (streamable HTTP or SSE) instead of a spawned process:
 evi mcp add-http linear https://mcp.linear.app/mcp -H "Authorization=Bearer <token>"
 ```
 
+The `-H` headers go out on every request. If it doesn't connect, the log line
+`MCP server linear failed to start: …` names the cause, e.g. `HTTP 401
+Unauthorized` for a wrong token.
+
 Managing servers: `evi mcp list-servers`, `evi mcp enable <name>` / `disable <name>`,
 `evi mcp remove <name>`, and `evi mcp path` to print where `mcp.json` lives.
 
@@ -103,8 +107,11 @@ evi mcp serve --http --host 0.0.0.0 --port 8765 --token "$(openssl rand -hex 16)
 ```
 
 The server mounts at `/mcp`; clients must send `Authorization: Bearer <token>`.
-`--http` without `--token` prints a warning and leaves the endpoint
-unauthenticated — fine bound to `127.0.0.1`, never on `0.0.0.0`.
+A token is required off this machine: `--host 0.0.0.0` (or any non-loopback
+address) without `--token` refuses to start and exits with code 2. Without a
+token on `127.0.0.1` the server starts with a warning — any program on this
+machine can call the tools — and answers only loopback `Host` / `Origin`
+headers, so a web page can't reach it through DNS rebinding.
 
 ## Where to go next
 

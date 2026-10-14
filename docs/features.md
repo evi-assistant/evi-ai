@@ -183,6 +183,10 @@ write](features/permissions-and-sandbox.md#repositories-you-didnt-write).
 checks a development checkout instead (venv, git `safe.directory`, test and
 lint tools, `pytest --collect-only`, line endings) and prints fix commands
 without running them — see [self-build.md](self-build.md).
+**Folder trust** — `evi trust [PATH]` approves a repo's `.evi.toml` (exactly
+the version you saw), `--status` / `--list` / `--revoke` inspect or undo it;
+`evi chat` asks on first use, and untrusted folders ignore their project
+config — see [Permissions & sandbox](features/permissions-and-sandbox.md).
 **Fine-tune export** — `evi finetune export` → JSONL training set.
 
 ## Packaging & release

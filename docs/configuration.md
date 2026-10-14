@@ -15,6 +15,7 @@ model           = "qwen2.5-7b-instruct"       # current active model
 temperature     = 0.7                         # lower (0.3) is friendlier to tool calling
 max_tokens      = 4096
 request_timeout = 120.0
+context_size    = 32768                       # token window; the managed llama.cpp runtime sets it itself
 
 [comfy]
 base_url           = "http://localhost:8188"
@@ -51,6 +52,21 @@ transcripts = true     # write session JSONL for dreaming
 [auto]
 # Categories listed here run without prompting. `computer` is never here.
 auto_approve = ["fs", "code", "memory", "skills", "image"]
+# First-match "allow|deny <tool-name-or-category-glob> [arg-glob]"; "shell"
+# also matches monitor kind=command. e.g. "deny shell rm*", "allow web".
+rules = []
+# Denied before everything else, yolo and /auto on included. Same syntax.
+hard_deny = []
+# Secret and shell start-up files: writing one asks in every mode, reading one
+# asks even with fs auto-approved. eVi's built-in write-protected paths (EVI.md,
+# AGENTS.md, .evi.toml, .evi/**, ~/.evi/**, .git/hooks/**, .github/workflows/**,
+# …) always apply on top.
+protected_paths = [".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
+                   ".bashrc", ".zshrc", ".bash_profile", ".profile",
+                   "*.pem", "id_rsa", "id_ed25519"]
+# Protected-path entries to un-protect, by exact text (built-in or listed above).
+# config.toml or a profile only; a .evi.toml can't set it.
+protected_paths_remove = []
 
 # Curated destructive-command guard (on by default). Commands like `rm -rf ~`,
 # `git reset --hard`, `git push --force`, disk formats, `curl | sh`, secret
@@ -61,7 +77,8 @@ block_destructive = true
 # fnmatch globs that exempt a command from the guard. Each is matched against
 # every command in the line (`a && b` is two), never the whole line: a hit is
 # exempt only if every command it touches matches, and never on a line eVi
-# can't split.
+# can't split. A glob with a wildcard in its first word (`*--force*`, `git*`)
+# is ignored: name the command.
 destructive_allow = ["git push --force-with-lease*"]
 # Builtin rule ids to silence without disabling the guard (see evi/shell_guard.py).
 destructive_disable_rules = ["git-commit-amend"]
@@ -71,15 +88,60 @@ Everyday commands are deliberately *not* flagged — `rm -rf ./build`, `rm -rf
 node_modules`, `git reset --soft`, `git branch -d`, `chmod 644`, `terraform
 plan`, `apt remove <app>` all run as normal. Only genuinely destructive,
 hard-to-reverse forms match. An explicit, *specific* allow rule (one carrying an
-arg-glob, e.g. `allow run_command git push --force-with-lease*`) is honoured as
-intent and clears the guard, but only when it covers every command in the line,
-the line can be split and its redirects stay inside the working folder — so
-`allow run_command git*` does not clear `git log; rm -rf ~`. A broad
-`allow run_command` / `allow run_command *` never clears it. For the guard a
-rule may name the tool's category (`allow shell …`) as well as the tool; the
-permission rules themselves match the tool name only. Details in
+arg-glob, e.g. `allow run_command git reset --hard*`) is honoured as intent and
+clears a **prompt**-severity hit, but only when it covers every command in the
+line, the line can be split and its redirects stay inside the working folder —
+so `allow run_command git*` does not clear `git log; git reset --hard`. A broad
+`allow run_command` / `allow run_command *` never clears it, and no allow rule
+clears a **block**-severity hit (`rm -rf ~`, a force-push, `curl … | sh`): only a
+`destructive_allow` glob exempts one. Rules, here and in the permission policy,
+may name the tool (`run_command`) or its category (`shell`). Details in
 [Permissions & sandbox → Shell command
 lines](features/permissions-and-sandbox.md#shell-command-lines).
+
+Writes to protected paths ask in every mode and are denied when nothing can ask;
+see [Permissions & sandbox → Protected
+paths](features/permissions-and-sandbox.md#protected-paths). `evi lint` warns
+about `[auto]` entries that can never apply, and `evi doctor` lists the
+protected paths in force.
+
+### Unknown keys and how eVi saves `config.toml`
+
+A key eVi doesn't know — a typo, or a setting from a newer eVi — no longer
+stops eVi from starting. It is ignored with one warning per process
+(`eVi: unknown settings in <path> (or the active profile): … They are ignored
+but kept in the file`) and kept when eVi saves the file.
+
+eVi saves `config.toml` when you change a setting (`/model`, `/effort`, the web
+Settings page, a backend switch, …). It writes back your own file with only
+that setting changed: values from an active profile or a trusted `.evi.toml`
+are never copied in (see [Trusting a folder](#trusting-a-folder) for the
+details), and keys eVi doesn't use — top-level keys, nested or inline tables,
+dates — are kept. Comments are not kept. A value with a newline in it (a stop
+sequence, say) is written escaped, so the file still loads.
+
+### `context_size` and the managed llama.cpp runtime
+
+With eVi's managed llama.cpp runtime (first-run setup in the web or desktop
+app, or `evi runtime setup`), eVi owns `[llm] context_size`: it starts the
+server with a window sized to your machine — 32768, 16384 or 8192 tokens,
+whatever fits next to the model in VRAM (when the model runs on the GPU) or in
+about 70% of RAM — and writes the same number into `config.toml`. That happens on setup, on a model switch, on the
+GPU switch and on every relaunch. Web and desktop chats that are already open
+use the new window from their next message, with no reload. `GET
+/api/runtime/status` and `GET /api/runtime/catalog` report it as `ctx` (`null`
+when no server is running).
+
+Switching to another backend from the web or desktop UI (the backend switch or
+the model picker) gives `config.toml` back the `context_size` it had before the
+runtime took over, at once and in open chats too; if it had none, the key is
+removed and the default (32768) applies. A value you set yourself after the
+runtime took over is kept. A switch made outside the web app, such as with
+`evi backend use`, is given back at the next `evi web` or desktop start. A
+`context_size` from a profile or a trusted repository's `.evi.toml` is never
+written into `config.toml` and never what is given back; such a value still
+applies to sessions that read the config, but a web or desktop chat talking to
+the managed server always uses that server's window.
 
 ### `evi config show` prints the resolved config (with profile overlay).
 ### `evi config path` prints the file path.
@@ -144,48 +206,63 @@ evi backend add codex --kind codex     # or Settings → Model & Backend → kin
 evi backend use codex --model gpt-5-codex   # models: gpt-5-codex | gpt-5
 ```
 
-Under the hood eVi runs `codex exec --json` (read-only) and streams the answer.
+Under the hood eVi runs `codex exec --json -s read-only --ephemeral -` with the
+conversation on stdin and streams the answer.
 **Difference from `claude_agent`:** Codex is an *autonomous* agent that runs its
 **own** tools in its sandbox, so it's a **chat / delegate** provider — eVi's tools
 don't route through it, and it can't edit files during a chat turn. Both backends
 are built on the same shared CLI-agent shim (`evi/llm/cli_agent.py`), so they
 behave consistently and adding further subscription-login CLIs is cheap.
 
-### Google Gemini via the free login — `backend = "gemini"` (no API key)
+### Google Gemini via an API key or Vertex AI — `backend = "gemini"`
 
-The `gemini` backend uses the local **`gemini` CLI**: signing in with a Google
-account gives a **free tier (~1000 requests/day)** with no `GEMINI_API_KEY`.
+The `gemini` backend uses the local **`gemini` CLI** with a **Gemini API key** or
+**Vertex AI**. Since **2026-06-18** Google no longer serves Gemini CLI to free,
+Google AI Pro and Google AI Ultra "Login with Google" accounts: those plans moved
+to Google's closed **Antigravity** CLI, which eVi doesn't drive. (A Gemini Code
+Assist Standard / Enterprise login still works.)
 
 ```bash
 npm i -g @google/gemini-cli   # the `gemini` CLI
-gemini                        # run once and pick a Google login
+export GEMINI_API_KEY=…       # a key from https://aistudio.google.com/apikey
+# or Vertex AI: GOOGLE_GENAI_USE_VERTEXAI=true plus GOOGLE_CLOUD_PROJECT and
+# GOOGLE_CLOUD_LOCATION (or GOOGLE_API_KEY); pick the same auth in gemini's settings
 evi backend add gemini --kind gemini        # or Settings → Model & Backend → kind gemini
 evi backend use gemini --model gemini-2.5-flash   # models: gemini-2.5-pro | gemini-2.5-flash
 ```
 
-eVi runs `gemini -p … -o json` and streams the reply. Like `codex` it's a
-**chat / delegate** provider (Gemini drives its own tools; eVi's tools don't route
-through it), built on the same shared shim.
+An unpaid key gets a small daily quota; a paid key or Vertex AI lifts it. eVi runs
+`gemini -o json --approval-mode default -p "<fixed instruction>"` with the
+conversation on **stdin**, never on the command line, and reads the reply. The
+approval mode is `default`, never `yolo`: in a headless turn Gemini treats a tool
+that needs approval (shell, file writes) as denied, so a chat turn stays
+read-only like `codex`. Like `codex` it's a **chat / delegate** provider (Gemini
+drives its own tools; eVi's tools don't route through it), built on the same
+shared shim. When gemini reports the "Login with Google" cut-off, a rejected key
+or a used-up quota, eVi's error says what to do, and `evi doctor` checks for the
+key or Vertex AI setup.
 
-### Sourcegraph Amp via your subscription — `backend = "amp"` (no API key)
+### Amp via your subscription — `backend = "amp"` (no API key)
 
 The `amp` backend uses the local **`amp` CLI**, authenticated by `amp login` (an
 Amp subscription / credit balance) or an `AMP_API_KEY` access token — not a
 per-token model API key.
 
 ```bash
-npm i -g @sourcegraph/amp   # the `amp` CLI
-amp login                   # Amp subscription (or: set AMP_API_KEY)
+npm i -g @ampcode/cli   # the `amp` CLI (it replaced @sourcegraph/amp; or Amp's installer)
+amp login               # Amp subscription (or: set AMP_API_KEY)
 evi backend add amp --kind amp             # or Settings → Model & Backend → kind amp
-evi backend use amp --model medium         # modes: medium | low | high
+evi backend use amp --model medium         # modes: medium | low | high | ultra
 ```
 
-eVi runs `amp -x --stream-json` and streams the reply. Amp selects its model by
-**agent mode** (`low`/`medium`/`high`), not a model id. Like `codex`/`gemini` it's
-a **chat / delegate** provider, but note Amp is autonomous and *can* use tools
-(including file edits) per your configured `amp permissions` — restrict it there if
-you want a read-only chat. eVi **won't start Amp unauthenticated** (its login flow
-would block), and it bounds each turn with a timeout as a backstop.
+eVi runs `amp -x --stream-json --mode <mode>` with the conversation on stdin and
+streams the reply. Amp selects its model by **agent mode** (`low`/`medium`/`high`,
+or `ultra` for the deepest reasoning — slowest, most credits), not a model id.
+Like `codex`/`gemini` it's a **chat / delegate** provider, but note Amp is
+autonomous and *can* use tools (including file edits) per your configured `amp
+permissions` — restrict it there if you want a read-only chat. eVi **won't start
+Amp unauthenticated** (its login flow would block); `evi doctor` checks for the
+login too.
 
 ### Qwen Code via the free Qwen login — `backend = "qwen"` (no API key)
 
@@ -199,8 +276,11 @@ evi backend add qwen --kind qwen            # or Settings → Model & Backend �
 evi backend use qwen --model qwen3-coder-plus   # models: qwen3-coder-plus | qwen3-coder-flash
 ```
 
-eVi runs `qwen -p … -o json` (Claude-Code-style events) and streams the reply — a
-**chat / delegate** provider like `gemini`, on the same shared shim.
+eVi runs `qwen -o json --approval-mode default -p "<fixed instruction>"` with the
+conversation on **stdin** (Claude-Code-style events) and reads the reply — a
+**chat / delegate** provider like `gemini`, on the same shared shim. The approval
+mode is pinned to `default`, so qwen's own settings can't switch a chat turn to
+`yolo`.
 
 ### GitHub Copilot via your subscription — `backend = "copilot"` (no API key)
 
@@ -215,24 +295,55 @@ evi backend add copilot --kind copilot          # or Settings → Model & Backen
 evi backend use copilot --model auto            # models: auto | claude-sonnet-4.5 | gpt-5
 ```
 
-eVi runs `copilot -p … --output-format text -s` and streams the reply. `--model
-auto` lets Copilot pick; the exact set depends on your plan. A **chat / delegate**
-provider; unapproved tool calls are auto-denied in non-interactive mode, so a chat
-turn stays answer-only.
+eVi pipes the conversation to `copilot --output-format text -s` on **stdin** (no
+`-p`: copilot ignores piped input when `-p` is given) and reads the reply, adding
+`--no-ask-user` when the installed CLI has it. `--model auto` lets Copilot pick;
+the exact set depends on your plan. A **chat / delegate** provider; unapproved
+tool calls are auto-denied in non-interactive mode, so a chat turn stays
+answer-only.
 
 ### The CLI-agent backends at a glance
 
-| kind | CLI | Auth (no API key) | Tools |
-|---|---|---|---|
-| `claude_agent` | `claude` | Claude **Max/Pro** login | **eVi drives tools** (full parity) |
-| `codex` | `codex` | ChatGPT **Plus/Pro** login | delegate (Codex's own, read-only) |
-| `gemini` | `gemini` | Google **free** login | delegate (Gemini's own) |
-| `amp` | `amp` | Amp **subscription** (`amp login` / `AMP_API_KEY`) | delegate (Amp's own, per `amp permissions`) |
-| `qwen` | `qwen` | Qwen **free** OAuth login | delegate (Qwen's own) |
-| `copilot` | `copilot` | GitHub **Copilot** login | delegate (Copilot's own, auto-denied) |
+| kind | CLI | Install | Auth | Tools |
+|---|---|---|---|---|
+| `claude_agent` | `claude` | `pip install 'evi-assistant[claude-agent]'` (+ the `claude` CLI) | Claude **Max/Pro** login | **eVi drives tools** (full parity) |
+| `codex` | `codex` | `npm i -g @openai/codex` | ChatGPT **Plus/Pro** login | delegate (Codex's own, read-only) |
+| `gemini` | `gemini` | `npm i -g @google/gemini-cli` | Gemini **API key** or **Vertex AI** | delegate (Gemini's own; approval-gated tools denied) |
+| `amp` | `amp` | `npm i -g @ampcode/cli` | Amp **subscription** (`amp login` / `AMP_API_KEY`) | delegate (Amp's own, per `amp permissions`) |
+| `qwen` | `qwen` | `npm i -g @qwen-code/qwen-code` | Qwen **free** OAuth login | delegate (Qwen's own; approval-gated tools denied) |
+| `copilot` | `copilot` | `npm i -g @github/copilot` | GitHub **Copilot** login | delegate (Copilot's own, auto-denied) |
 
 All six are local-machine-only (they shell out to a CLI, so they don't work in
-the packaged desktop sidecar) and report clearly if their CLI isn't installed.
+the packaged desktop sidecar) and report clearly if their CLI isn't installed;
+`evi doctor` names the install command. For `gemini`, `qwen` and `copilot` the
+flags eVi passes are checked against the installed CLI's `--help`, so a CLI too
+old for them gets an "update it" error instead of failing mid-chat.
+
+**The conversation goes on stdin.** `codex`, `gemini`, `amp`, `qwen` and
+`copilot` all get the rendered conversation on stdin; the command line carries
+only fixed flags and a model id or mode, and a model id with anything but
+letters, digits and `. _ : / @ + = -` is refused. On Windows the npm-installed
+CLIs are `.cmd` shims that run their command line through `cmd.exe`, which would
+mangle quotes, `&`, `%`, `|` and newlines and stop at 8191 characters.
+
+**Every turn is time-bounded**: 180 s for `gemini`, `qwen`, `copilot` and `amp`,
+600 s for `codex` and `claude_agent`. A turn that runs over ends with an error
+saying so. For the CLIs eVi starts itself (all but `claude_agent`), the CLI's
+whole process tree is killed: on Windows each run gets its own Job Object (the
+CLI only starts running once it is in it, so everything it starts is in it too,
+unless a process explicitly asks to leave it); on macOS/Linux the CLI leads its
+own session (process group). If a CLI answers and exits but something it started
+still holds its output 2 s later, that leftover is killed and the answer is
+kept. On macOS/Linux, Ctrl-C in the terminal therefore doesn't reach the CLI
+directly; the turn is still bounded, and a CLI still running when eVi exits
+normally is killed.
+
+**Delegate backends run their own tools.** `codex`, `gemini`, `amp`, `qwen` and
+`copilot` run their tools under their own approval rules, outside eVi's
+permission checks, `hard_deny` list and protected paths, and that includes runs
+nobody is watching (a Telegram message, a scheduled task, a routine or workflow
+run, a federation / A2A request). Point `[llm] backend` and any
+`[models] *_backend` at a local or API backend on a machine that serves those.
 
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
@@ -261,15 +372,88 @@ rather than appending.
 ## Per-project config — `.evi.toml`
 
 A `.evi.toml` in a repository (the nearest one walking up from the working
-directory) is layered on top of `config.toml` + the active profile. Because it
-comes with the repo — including repos you merely cloned — it is **untrusted**:
-since 1.0.53 it is filtered through an allowlist, and everything not listed
-below is ignored. eVi names the ignored keys once per process in a warning
-(`eVi: ignoring these settings from project config <path>: …`; odd key names
-are shown escaped). A file that can't be used at all — not valid UTF-8 TOML,
-nested too deeply, or larger than 64 KB — is ignored as a whole and reported
-the same way; it never stops eVi from loading your own config.
-`--safe-mode` skips the file entirely.
+directory, stopping at the repository's top level) is layered on top of
+`config.toml` + the active profile. Because it comes with the repo — including
+repos you merely cloned — it is **untrusted**: it applies only in a folder
+you have **trusted**, and even then it is filtered through an allowlist
+(since 1.0.53) and everything not listed below is ignored.
+
+### Trusting a folder
+
+Until you trust the folder, eVi ignores its `.evi.toml` entirely — even the
+allowlisted keys — and says so once per process (`eVi: not applying project
+config <path>: this folder is not trusted. It sets: …`; key names only, never
+values).
+
+- **`evi chat`** asks the first time it starts in a folder with a
+  `.evi.toml`: it lists the keys the file sets, which of them would apply,
+  and which a `.evi.toml` can never set, then asks `Trust this folder …?
+  y/N`. The default is no. `evi sessions resume`, `continue` and `fork` ask
+  the same way. Without a terminal (piped input or output, or a command the
+  agent runs) it only shows the summary.
+- **`evi trust [PATH]`** trusts a folder up front (default: the current one):
+  it prints the same summary and asks you to confirm. In a script, pass
+  `--yes` to skip the question; without a terminal and without `--yes` it
+  refuses. It also refuses, even with `--yes`, inside an `evi chat` session —
+  a command the agent runs through its shell tool, or a `!` command in the
+  REPL — so a repository's instructions can't get the agent to trust its own
+  folder; run it in your own terminal. (That check relies on the
+  `EVI_INTERACTIVE=1` marker the REPL sets; the web and desktop apps don't set
+  it, so don't auto-approve shell commands for an agent working in a
+  repository you haven't reviewed.) `evi trust --status [PATH]` shows the state without changing
+  it, `evi trust --list` lists trusted folders and `evi trust --revoke [PATH]`
+  removes one.
+- **`evi run`, `evi batch`, the web UI and the scheduler never ask**: in an
+  untrusted folder they run with the project config off (fail closed) and
+  print the warning above. Trust the folder first with `evi trust` if a
+  scripted run should use it. The web API exposes the same state for a
+  session's working folder at `GET /api/project/trust?session_id=…`;
+  `POST /api/project/trust` with `{session_id, trust: true|false,
+  config_sha256}` records the answer (pass the `config_sha256` the GET
+  returned and a file that changed in between is refused with 409; in
+  multi-user mode only the owner may change it). For now the settings
+  themselves come from the folder eVi was started in — the web server's (and
+  `evi chat --cwd`'s) process folder — not a session's working folder.
+
+Trust is recorded **per repository**: inside git it is keyed by the
+repository's git common directory, so every worktree of a trusted repository
+is trusted too. (A `.git` *file* counts as a worktree of a repository only
+when that repository's own git directory holds a worktree record pointing
+back at it, so a folder can't borrow another repository's trust; a submodule
+is trusted on its own.) Outside git, trust covers exactly the folder you
+trusted, not its subfolders (an archive unpacked into a trusted folder later
+is not trusted), so starting eVi in a subfolder asks again. The list lives in
+`~/.evi/trusted_folders.json`.
+
+Trusting approves the `.evi.toml` **as it is now**. If the file changes
+afterwards, it stops applying until you trust the folder again (`evi chat`
+asks again; the warning says `it is new or changed since you trusted this
+folder` — also the case for a second `.evi.toml` deeper in a trusted
+repository, until you approve it too). A repository remembers the last few
+versions you approved, so worktrees on branches with different `.evi.toml`
+files don't keep asking. Editing EVI.md or AGENTS.md doesn't affect trust:
+those are instructions for the model, and they are loaded whether or not the
+folder is trusted — they can't run anything or change a setting.
+
+Settings commands (`/model`, `/effort`, the web Settings page, …) write only
+your own `config.toml` values plus the setting you changed: values that came
+from a `.evi.toml` or an active profile are never copied into `config.toml`.
+For a list you inherit entries of (a profile's `auto_approve`, a trusted
+repository's `hard_deny` or `protected_paths` entries), only the entries you
+add or remove are written to your own list. Undoing a change (setting it back
+to what it was) restores your own value. Setting a value you only inherit —
+for example choosing the profile's model while that profile is active — is
+not a change, so it isn't copied into `config.toml`; put it there yourself to
+keep it without the profile.
+
+### What a trusted `.evi.toml` can set
+
+eVi names the keys it ignores once per process in a warning (`eVi: ignoring
+these settings from project config <path>: …`; odd key names are shown
+escaped). A file that can't be used at all — not valid UTF-8 TOML, nested too
+deeply, or larger than 64 KB — is ignored as a whole and reported the same
+way; it never stops eVi from loading your own config. `--safe-mode` skips the
+file entirely.
 
 **Applied as-is** (model / sampling preferences only):
 
@@ -280,6 +464,11 @@ the same way; it never stops eVi from loading your own config.
   `reasoning_effort`, `parallel_tool_calls`, `cache_prompt`, `logprobs`,
   `top_logprobs`, `output_style`
 - `[worktree]` `base_ref`
+
+A `context_size` from a `.evi.toml` applies to sessions that read the config,
+but a web or desktop chat talking to eVi's managed llama.cpp server always uses
+that server's window (see [`context_size` and the managed llama.cpp
+runtime](#context_size-and-the-managed-llamacpp-runtime)).
 
 Values must have the field's type and contain no control characters, and
 anything else is ignored (the warning marks it `(invalid value)`):
@@ -333,9 +522,10 @@ rules     = ["deny run_command git push*"]  # skipped in yolo (the mode above ru
 hard_deny = ["run_command rm -rf*"]         # applies in every mode, even yolo
 ```
 
-`rules` and `hard_deny` entries match the **tool name** (`run_command`,
-`run_python`, `write_file`, `edit_file`, …), not the `[tools]` category: a rule
-such as `"deny shell rm*"` matches no tool and blocks nothing.
+`rules` and `hard_deny` entries match the tool name (`run_command`,
+`run_python`, `write_file`, `edit_file`, …) or its `[tools]` category, so
+`"deny shell rm*"` and `"deny fs *.env"` work too. A `.evi.toml` can add
+`protected_paths` entries but can't set `protected_paths_remove`.
 
 ## Memory — `~/.evi/memory/`
 

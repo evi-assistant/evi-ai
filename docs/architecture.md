@@ -66,8 +66,11 @@ dream agent. Prevents tool-call ping-pong loops.
 3. `## Available skills` — name + description of every
    `~/.evi/skills/<name>/SKILL.md`. The body is loaded on demand via the
    `invoke_skill` tool.
-4. `## Project context (<path>)` — full body of the nearest `EVI.md`
-   walking up from cwd.
+4. `## Project context (<path>)` — the `EVI.md` / `AGENTS.md` files from
+   the working folder up to the git top level (outside git, up to the
+   filesystem root), one per folder, outermost first. A file above the
+   repository never applies inside it. These load whether or not the folder
+   is trusted: they are instructions, not settings.
 
 Refreshed on `Agent.__init__` and `Agent.reset()`. Not refreshed mid-turn
 — if you edit memory while a session is running, the new state appears
@@ -98,20 +101,47 @@ effect, add a config toggle if you want one.
 
 `Agent.permission_callback: (name, args_json, category) → bool`.
 
-If the tool's category is in `auto.auto_approve` (or `auto_all` is set
-for the session), the callback is skipped. Otherwise it's invoked
-synchronously inside `_invoke_tool`. Returning `False` surfaces
-`"PERMISSION DENIED"` as the tool result; the model adapts on the next
-turn.
+Before any prompt, `Agent._permission_decision` asks `evi.permissions.decide()`
+for `allow` / `deny` / `ask`: hard-deny, then protected paths (a write to one
+asks in every mode), then the mode, the rules (matched on the tool name or
+category, per command for a shell line), secret reads, auto-approve categories
+and trusted scopes. `/auto on` (`auto_all`) is passed to `decide()` as `yolo`,
+so hard-deny and protected paths still apply under it. The
+destructive-command guard (`evi/shell_guard.py`) then turns anything but a
+`deny` into a prompt for a matching shell line. Only an `ask` reaches the
+callback, invoked synchronously while the turn's calls are
+gated. With no callback, an `ask` is allowed, except a protected write or a
+guard hit, which is denied. Returning `False` surfaces `"PERMISSION DENIED"`
+as the tool result; the model adapts on the next turn. Details:
+[Permissions & sandbox](features/permissions-and-sandbox.md).
 
-**CLI**: callback is `_cli_permission_prompt` which uses `console.input`.
+**CLI**: callback is `_cli_permission_prompt` which uses `console.input`
+(`y`/`a` this call, `n`, `s` the rest of the session after a y/N
+confirmation).
 
 **Web**: callback runs on a worker thread (the agent loop is sync). It
 generates a `decision_id`, pushes a `PermissionRequest` SSE event with
 it, and blocks on a `threading.Event`. The browser POSTs to
 `/api/decide`; the endpoint flips the event; the worker unblocks.
 
-**Scheduler / scripted runs**: no callback set → default-allow.
+**Scheduler / scripted runs**: no callback set → default-allow for an `ask`
+(a protected write or a destructive-guard hit is denied).
+
+## Config layers
+
+`Config.load()` merges three layers: `~/.evi/config.toml`, the active profile
+(`~/.evi/profiles/<name>.toml`), and a repository's `.evi.toml`, found from the
+working folder up to the git top level. The `.evi.toml` applies only when
+`evi/trust.py` says the folder is trusted and the file is the version that was
+approved; even then `evi/project.py` lets it set only model/sampling
+preferences and tighten `[tools]` / `[auto]`. `Config.load()` never prompts:
+`evi chat` asks before it loads the config, and every other surface runs with
+an untrusted project layer off. A key no section knows is warned about, not
+fatal.
+
+`Config.save()` writes the user layer only: `config.toml` as it is on disk,
+with the fields the caller changed patched in, so profile and project values
+never reach it.
 
 ## Backends
 
@@ -134,6 +164,7 @@ user to use `hf:<repo>` direct downloads instead.
 ```
 config.toml         primary config; profiles overlay this
 profiles/*.toml     per-machine overlays selected by EVI_PROFILE / --profile
+trusted_folders.json  folders / repositories whose .evi.toml applies (evi trust)
 memory/             markdown notes, .attic/ holds soft-deleted
 skills/<name>/      SKILL.md + skill-local assets
 commands/<name>.md  user-defined slash command templates with {args}
@@ -167,6 +198,20 @@ Web starts it inside the FastAPI lifespan context.
 **Scheduler** — CLI: `evi scheduler` runs as a foreground daemon. Web:
 also starts in the lifespan so `evi web` covers chat + scheduled jobs in
 one process.
+
+**Managed llama.cpp runtime** — `evi web` (which the desktop sidecar runs)
+relaunches it in the background at start (`evi.runtime.setup.ensure_running`).
+Setup, a model swap, the GPU switch and each relaunch write the server's
+window (`-c`) into `[llm] context_size`, and open web sessions pick it up on
+their next turn (`Agent.refresh_context_size`). If `[llm]` has moved to
+another backend, startup gives the earlier `context_size` back instead.
+
+**CLI-agent backends** — `codex`, `gemini`, `amp`, `qwen` and `copilot` run
+as child processes started by `evi.proc.spawn`, with the conversation on
+stdin. On Windows each run gets its own Job Object (the CLI is created
+suspended and resumed once inside it); on POSIX it leads its own session.
+`kill_tree` therefore ends the whole tree when a turn times out, and any
+still running when eVi exits are killed.
 
 **Tauri desktop** — Two modes:
 - Local (default): spawns `py -3.13 -m uvicorn evi.apps.web.server:app` as a
