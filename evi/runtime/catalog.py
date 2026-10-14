@@ -1,9 +1,10 @@
 """Curated GGUF model catalog for the managed llama.cpp runtime.
 
 Pure data + file helpers: load the catalog, resolve a model's on-disk path,
-download it (dep-free, HF `resolve` URL), remove it, and pick a hardware-fit
-default. Server orchestration (start/swap/config) lives in `setup.py`, which
-imports this — one direction, no cycle.
+download it (dep-free, HF `resolve` URL), remove it, pick a hardware-fit
+default, and size the server's context window to the machine. Server
+orchestration (start/swap/config) lives in `setup.py`, which imports this —
+one direction, no cycle.
 
 Each entry pins an HF commit (`revision`) and the GGUF's `sha256`; a download
 that doesn't match is discarded before it is ever loaded. A file already at a
@@ -158,16 +159,15 @@ def remove(entry: dict) -> bool:
 
 
 def _memory_gb() -> tuple[float, float]:
-    """(ram_gb, vram_gb) for this machine — 0 vram when no GPU. Best-effort."""
+    """(ram_gb, vram_gb) for this machine: total RAM (8 GB if it can't be
+    read) and the VRAM of its largest GPU (0 when there is none). Best-effort."""
     try:
         from evi.hardware import detect
 
         hw = detect()
-        ram = float(getattr(hw, "ram_gb", 0) or 0) or 8.0
-        vram = 0.0
-        gpus = getattr(hw, "gpus", None) or []
-        if gpus:
-            vram = float(getattr(gpus[0], "vram_total_mb", 0) or 0) / 1024.0
+        ram = float(hw.ram_total_gb or 0) or 8.0
+        gpu = hw.primary_gpu
+        vram = float(gpu.vram_total_mb or 0) / 1024.0 if gpu else 0.0
         return ram, vram
     except Exception:  # noqa: BLE001
         return 8.0, 0.0
@@ -187,3 +187,44 @@ def recommended_id() -> str:
     )
     chosen = fits[-1] if fits else min(generals, key=lambda m: m.get("params_b", 99))
     return chosen["id"]
+
+
+# The managed server's context window (llama-server -c). eVi's system prompt and
+# tool schemas alone take a few thousand tokens, so 8K is the floor; 32K holds a
+# long agent session before compaction. The KV cache grows with the window, so
+# the budget steps down until it fits next to the weights.
+CTX_PREFERRED = (32768, 16384)
+CTX_FLOOR = 8192
+_NATIVE_CTX = 32768        # every catalog model is trained for at least this
+_RUNTIME_OVERHEAD_GB = 0.5  # compute buffers + the runtime itself
+
+
+def native_ctx(entry: dict) -> int:
+    """The model's trained context window: the entry's `native_ctx`, else 32K."""
+    return int(entry.get("native_ctx") or _NATIVE_CTX)
+
+
+def _kv_gb(entry: dict, ctx: int) -> float:
+    """Estimated f16 KV cache for `ctx` tokens. The real size depends on layers
+    and KV heads (12-192 KiB/token across the catalog's models); 32 KiB per
+    billion params + 16 stays at or above every one of them, so the estimate
+    errs toward a smaller window, never an out-of-memory start. An entry can
+    pin its exact figure as `kv_kib_per_token`."""
+    kib = entry.get("kv_kib_per_token") or 32 * float(entry.get("params_b") or 1) + 16
+    return ctx * float(kib) / (1024 * 1024)
+
+
+def context_budget(entry: dict, *, on_gpu: bool = False) -> int:
+    """llama-server `-c` for `entry` on this machine: the first preferred window
+    (32K, then 16K) within the model's native one whose KV cache fits beside the
+    weights — in VRAM when the model is offloaded, else in ~70% of RAM (the
+    recommender's headroom; also unified memory on macOS, which reports no VRAM).
+    Never below 8K, unless the model's native window is smaller."""
+    ram, vram = _memory_gb()
+    pool = vram if (on_gpu and vram) else ram * 0.7
+    free = pool - float(entry.get("size_gb") or 0) - _RUNTIME_OVERHEAD_GB
+    native = native_ctx(entry)
+    for ctx in CTX_PREFERRED:
+        if ctx <= native and _kv_gb(entry, ctx) <= free:
+            return ctx
+    return min(CTX_FLOOR, native)

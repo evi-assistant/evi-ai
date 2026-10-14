@@ -11,6 +11,23 @@ from evi.runtime import llamacpp_runtime as rt_bin
 from evi.runtime import setup as rt_setup
 
 
+@pytest.fixture(autouse=True)
+def _config_in_tmp(monkeypatch, tmp_path):
+    """config.toml in tmp_path, and none of the ~/.evi dirs Config.save and the
+    web app create: several tests here save config (runtime.server_path), and
+    none may touch the real one."""
+    import evi.config
+
+    monkeypatch.setattr(evi.config, "CONFIG_PATH", tmp_path / "config.toml")
+    monkeypatch.setattr(evi.config, "ensure_dirs", lambda: None)
+    monkeypatch.setattr(rt_setup, "ensure_dirs", lambda: None)
+    try:
+        import evi.apps.web.server as server_mod
+    except ImportError:  # no web extra: those tests fail on their own import
+        return
+    monkeypatch.setattr(server_mod, "ensure_dirs", lambda: None)
+
+
 def test_cpu_asset_per_platform():
     v = rt_bin.LLAMACPP_VERSION
     assert rt_bin.cpu_asset("Windows", "AMD64") == f"llama-{v}-bin-win-cpu-x64.zip"
@@ -46,7 +63,8 @@ def test_ensure_runtime_unsupported_raises(monkeypatch, tmp_path):
 def test_setup_status_shape():
     s = rt_setup.status()
     for k in ("stage", "pct", "message", "running", "done", "error",
-              "server_running", "runtime_installed", "supported", "active_model_id"):
+              "server_running", "runtime_installed", "supported", "active_model_id",
+              "ctx"):
         assert k in s
 
 
@@ -357,11 +375,14 @@ def test_kick_resets_stale_state_before_returning():
         rt_setup._set(running=False, done=False, error="", stage="idle", pct=0, message="")
 
 
-def test_ensure_running_noop_when_not_llamacpp(monkeypatch):
+def test_ensure_running_noop_when_not_llamacpp(monkeypatch, tmp_path):
+    import evi.config
     from evi.config import Config
 
     c = Config()
     c.llm.backend = "ollama"
     monkeypatch.setattr(rt_setup, "Config", type("C", (), {"load": staticmethod(lambda: c)}))
+    # Where ensure_running looks for a context_size to give back: not ~/.evi.
+    monkeypatch.setattr(evi.config, "RUNTIME_DIR", tmp_path / "runtime")
     # backend != llamacpp -> returns immediately, never probes/spawns anything.
     assert rt_setup.ensure_running() is False

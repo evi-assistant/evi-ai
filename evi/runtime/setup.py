@@ -5,12 +5,17 @@ CUDA on request), download a catalog model, start/swap the server, and point
 One pollable progress state drives first-run setup (`start`), model switching
 (`use_model`), and the GPU upgrade (`enable_gpu`). Stdlib-only downloads (works
 in the frozen sidecar).
+
+`[llm].context_size` follows the server's window (`-c`) while `[llm]` points at
+it; `release_context_size` gives the earlier value back after a switch away.
 """
 
 from __future__ import annotations
 
+import json
 import platform
 import threading
+import tomllib
 from dataclasses import asdict, dataclass
 
 from evi.config import Config, ensure_dirs
@@ -118,6 +123,154 @@ def _pick_runtime(entry: dict, external: str = "") -> tuple:
     return llamacpp_runtime.ensure_runtime(), 0
 
 
+def _launch(entry: dict, external: str = "") -> llama_server.ManagedServer:
+    """Start (or swap) the managed server on `entry`: the external / GPU / CPU
+    build, with `-c` sized to the memory the model runs in (VRAM when it's
+    offloaded, else RAM)."""
+    server_bin, ngl = _pick_runtime(entry, external)
+    ctx = catalog.context_budget(entry, on_gpu=ngl > 0)
+    return llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl, ctx=ctx)
+
+
+def _ctx_record_path():
+    """Where setup remembers the `context_size` it replaced (see
+    `release_context_size`): runtime state, not a setting."""
+    from evi.config import RUNTIME_DIR
+
+    return RUNTIME_DIR / "llm_context.json"
+
+
+def _ctx_record() -> dict | None:
+    """{"ctx": the window setup last wrote, "previous": config.toml's own
+    `context_size` before that (None: it set none)}."""
+    try:
+        rec = json.loads(_ctx_record_path().read_text(encoding="utf-8"))
+        prev = rec["previous"]
+        return {"ctx": int(rec["ctx"]), "previous": None if prev is None else int(prev)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _drop_ctx_record() -> None:
+    try:
+        _ctx_record_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# context_size is read and written in config.toml itself (the USER layer), not
+# through the merged Config: a profile or a trusted repo's `.evi.toml` can set
+# it too, and their value is neither the user's to give back nor something to
+# copy into config.toml. Config.save can't do either write below — a field set
+# to the value an overlay already gives it isn't a change, and it never drops a
+# key config.toml has — so these patch that one key the way save() patches a
+# changed field: the file as it is on disk, everything else left as it is.
+
+
+def _own_context_size() -> int | None:
+    """config.toml's own `[llm].context_size`; None when it sets none. Raises
+    OSError / TOMLDecodeError when the file can't be read."""
+    from evi import config as _config
+
+    with _config.CONFIG_PATH.open("rb") as f:
+        llm = tomllib.load(f).get("llm")
+    value = llm.get("context_size") if isinstance(llm, dict) else None
+    return value if type(value) is int else None
+
+
+def _write_own_context_size(value: int | None) -> bool:
+    """Set config.toml's own `[llm].context_size`, or drop it (None) so the
+    default applies. False when config.toml can't be read or written."""
+    from evi import config as _config
+
+    try:
+        with _config.CONFIG_PATH.open("rb") as f:
+            data = tomllib.load(f)
+        llm = data.get("llm")
+        if not isinstance(llm, dict):
+            llm = data["llm"] = {}
+        if value is None:
+            llm.pop("context_size", None)
+        else:
+            llm["context_size"] = int(value)
+        _config.CONFIG_PATH.write_text(_config._to_toml(data), encoding="utf-8")
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return True
+
+
+def _remember_context_size(own: int | None, ctx: int) -> None:
+    """Record that config.toml's `context_size` goes from `own` to the managed
+    `ctx`. An `own` that is the window setup wrote last time (a swap, a
+    relaunch) keeps the value from before the runtime took over. Best-effort:
+    with no record the old value just isn't given back."""
+    rec = _ctx_record()
+    previous = rec["previous"] if rec and rec["ctx"] == own else own
+    new = {"ctx": int(ctx), "previous": previous}
+    if new == rec:
+        return
+    try:
+        path = _ctx_record_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(new), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def release_context_size(cfg: Config | None = None) -> int | None:
+    """Give `llm.context_size` back once `[llm]` has left the managed runtime.
+
+    `_point_llm_at` sets it to the server's `-c`, which is 8K or 16K for a big
+    model on a small machine; left behind, that figure would make the next
+    backend (a cloud model with a 200K window) compact at ~7K tokens. This puts
+    config.toml's own value from before the runtime took over back (or drops
+    the key, if it had none, so the default applies), unless the user has
+    changed it since. Call it once a backend switch is final, with the Config
+    that made it; `ensure_running` also does at startup. Returns the
+    context_size now in effect when it gave one back (a profile's or a trusted
+    repo's value still wins over config.toml's), else None."""
+    rec = _ctx_record()
+    if rec is None:
+        return None
+    cfg = cfg or Config.load()
+    if cfg.llm.backend == "llamacpp":
+        return None  # still the managed runtime: its window applies
+    try:
+        own = _own_context_size()
+    except (OSError, tomllib.TOMLDecodeError):
+        return None  # keep the record: the next start tries again
+    if own != rec["ctx"]:
+        _drop_ctx_record()  # changed since the switch: that value is the user's
+        return None
+    if not _write_own_context_size(rec["previous"]):
+        return None
+    _drop_ctx_record()
+    return int(Config.load().llm.context_size or 0)
+
+
+def _point_llm_at(srv: llama_server.ManagedServer, entry: dict, cfg: Config | None = None) -> None:
+    """Point `[llm]` at the managed server, with config.toml's `context_size` =
+    its `-c`: the agent compacts at a share of context_size, so a larger figure
+    than the server holds means the server rejects the prompt before compaction
+    runs. The value it replaces is remembered for `release_context_size`."""
+    cfg = cfg or Config.load()
+    ctx = int(srv.ctx)
+    try:
+        own = _own_context_size()
+    except (OSError, tomllib.TOMLDecodeError):
+        pass  # nothing to patch it into; the next start or swap does
+    else:
+        _remember_context_size(own, ctx)
+        if own != ctx:
+            _write_own_context_size(ctx)
+    want = {"backend": "llamacpp", "base_url": srv.base_url(), "model": entry["name"]}
+    if all(getattr(cfg.llm, k) == v for k, v in want.items()):
+        return
+    for k, v in want.items():
+        setattr(cfg.llm, k, v)
+    cfg.save()  # patches only these onto config.toml as it is now
+
+
 def _current_entry() -> dict | None:
     srv = llama_server.managed()
     if srv and srv.model_path:
@@ -156,6 +309,8 @@ def status() -> dict:
     d["gpu_available"] = on_mac or bool(llamacpp_runtime.gpu_plan(compute_cap=cc))
     d["gpu_installed"] = on_mac or llamacpp_runtime.gpu_installed()
     d["on_gpu"] = bool(srv and getattr(srv, "ngl", 0) and srv.ngl > 0)
+    # The managed server's context window (-c); None when there's no server.
+    d["ctx"] = int(srv.ctx) if srv else None
     return d
 
 
@@ -181,13 +336,8 @@ def _install_and_run(entry: dict) -> None:
                     pct=_pct(d, t), message=f"{entry['name']} {_mb(d)}/{_mb(t)} MB"),
             )
         _set(stage="starting", pct=0, message=f"Starting {entry['name']}…")
-        server_bin, ngl = _pick_runtime(entry, external)  # external / GPU / CPU
-        srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
-        cfg = Config.load()
-        cfg.llm.backend = "llamacpp"
-        cfg.llm.base_url = srv.base_url()
-        cfg.llm.model = entry["name"]
-        cfg.save()
+        srv = _launch(entry, external)
+        _point_llm_at(srv, entry)
         _set(stage="done", pct=100, message=f"{entry['name']} is ready.",
              running=False, done=True)
     except Exception as exc:  # noqa: BLE001
@@ -262,14 +412,9 @@ def _enable_gpu_run() -> None:
             catalog.download(entry, on_bytes=lambda d, t: _set(
                 pct=_pct(d, t), message=f"{entry['name']} {_mb(d)}/{_mb(t)} MB"))
         _set(stage="starting", pct=0, message=f"Starting {entry['name']} on your GPU…")
-        server_bin, ngl = _pick_runtime(entry, external)
-        srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
-        cfg = Config.load()
-        cfg.llm.backend = "llamacpp"
-        cfg.llm.base_url = srv.base_url()
-        cfg.llm.model = entry["name"]
-        cfg.save()
-        msg = (f"{entry['name']} is running on your GPU." if ngl
+        srv = _launch(entry, external)
+        _point_llm_at(srv, entry)
+        msg = (f"{entry['name']} is running on your GPU." if srv.ngl
                else f"{entry['name']} started, but couldn't offload to the GPU — running on CPU.")
         _set(stage="done", pct=100, message=msg, running=False, done=True)
     except Exception as exc:  # noqa: BLE001
@@ -283,12 +428,14 @@ def enable_gpu(*, background: bool = True) -> dict:
 
 def ensure_running() -> bool:
     """Re-launch the managed server on the configured (or first-installed) model
-    if `[llm]` is the managed runtime and nothing is answering. For startup —
-    blocking (waits for load); call off the main thread."""
+    if `[llm]` is the managed runtime and nothing is answering; if `[llm]` has
+    moved to another backend, `release_context_size`. For startup — blocking
+    (waits for load); call off the main thread."""
     from evi.portprobe import is_openai_server
 
     cfg = Config.load()
     if cfg.llm.backend != "llamacpp":
+        release_context_size(cfg)  # in case the switch itself didn't
         return False
     if is_openai_server(cfg.llm.base_url, api_key="llamacpp"):
         return True
@@ -303,12 +450,8 @@ def ensure_running() -> bool:
     if entry is None:
         return False
     try:
-        server_bin, ngl = _pick_runtime(entry, external)
-        srv = llama_server.use_model(server_bin, catalog.model_path(entry), ngl=ngl)
+        srv = _launch(entry, external)
     except Exception:  # noqa: BLE001
         return False
-    if cfg.llm.base_url != srv.base_url() or cfg.llm.model != entry["name"]:
-        cfg.llm.base_url = srv.base_url()
-        cfg.llm.model = entry["name"]
-        cfg.save()
+    _point_llm_at(srv, entry, cfg)
     return srv.is_running()

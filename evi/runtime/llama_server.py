@@ -19,6 +19,11 @@ from evi.config import RUNTIME_DIR
 from evi.portprobe import is_openai_server, port_open
 
 _API_KEY = "llamacpp"  # llama-server ignores it unless started with --api-key
+# -c when a caller doesn't size it. eVi's system prompt and tool schemas alone
+# take a few thousand tokens, so this is the smallest window a turn fits in;
+# setup sizes the real one per machine (catalog.context_budget, whose floor
+# this matches).
+DEFAULT_CTX = 8192
 
 
 def free_port(start: int = 8080, span: int = 20) -> int:
@@ -35,7 +40,9 @@ class ManagedServer:
     model_path: Path
     port: int
     ngl: int = 0  # 0 = CPU (Phase 1); GPU offload is Phase 3
-    ctx: int = 4096
+    # Context window (-c). Setup writes the same number into llm.context_size,
+    # so the agent compacts before the server would reject the prompt.
+    ctx: int = DEFAULT_CTX
     proc: subprocess.Popen | None = field(default=None, repr=False)
     log_path: Path | None = None
 
@@ -49,10 +56,9 @@ class ManagedServer:
             and is_openai_server(self.base_url(), api_key=_API_KEY)
         )
 
-    def start(self, *, ready_timeout: float = 120.0) -> None:
-        (RUNTIME_DIR / "logs").mkdir(parents=True, exist_ok=True)
-        self.log_path = RUNTIME_DIR / "logs" / "llama-server.log"
-        cmd = [
+    def command(self) -> list[str]:
+        """The llama-server argv for this model, port, offload and window."""
+        return [
             str(self.server_bin),
             "-m", str(self.model_path),
             "--host", "127.0.0.1",
@@ -60,6 +66,11 @@ class ManagedServer:
             "-c", str(self.ctx),
             "-ngl", str(self.ngl),
         ]
+
+    def start(self, *, ready_timeout: float = 120.0) -> None:
+        (RUNTIME_DIR / "logs").mkdir(parents=True, exist_ok=True)
+        self.log_path = RUNTIME_DIR / "logs" / "llama-server.log"
+        cmd = self.command()
         kwargs: dict = {}
         if os.name == "nt":
             kwargs["creationflags"] = 0x0800_0000  # CREATE_NO_WINDOW
@@ -97,13 +108,16 @@ class ManagedServer:
                 self.proc.kill()
         self.proc = None
 
-    def swap(self, model_path: Path, *, ngl: int | None = None) -> None:
+    def swap(self, model_path: Path, *, ngl: int | None = None, ctx: int | None = None) -> None:
         """Load a different model: stop, then restart on the SAME port with a new
-        ``-m``. (llama-server is one-model-per-process, so a switch is a restart.)"""
+        ``-m`` (and ``-c`` when given — each model gets its own window).
+        (llama-server is one-model-per-process, so a switch is a restart.)"""
         self.stop()
         self.model_path = Path(model_path)
         if ngl is not None:
             self.ngl = ngl
+        if ctx:
+            self.ctx = int(ctx)
         self.start()
 
 
@@ -115,8 +129,24 @@ def managed() -> ManagedServer | None:
     return _MANAGED
 
 
-def start_managed(server_bin, model_path, *, port: int | None = None, ngl: int = 0) -> ManagedServer:
-    """Start (or reuse) the single managed server. Idempotent while it's alive."""
+def ctx_for(base_url: str | None) -> int | None:
+    """The managed server's window (-c) when ``base_url`` is its address, else
+    None. Setup rewrites the saved ``llm.context_size`` on every start and swap,
+    but an open session holds its own copy of the config: reading the window
+    here keeps that session's compaction ceiling in step. No probe, so it's
+    cheap enough to call once per turn."""
+    srv = _MANAGED
+    if srv is None or not base_url:
+        return None
+    if base_url.strip().rstrip("/").lower() != srv.base_url().rstrip("/").lower():
+        return None
+    return int(srv.ctx)
+
+
+def start_managed(server_bin, model_path, *, port: int | None = None, ngl: int = 0,
+                  ctx: int | None = None) -> ManagedServer:
+    """Start (or reuse) the single managed server. Idempotent while it's alive —
+    a reused server keeps its own ``ctx``, so read the window off the result."""
     global _MANAGED
     with _LOCK:
         if _MANAGED is not None and _MANAGED.is_running():
@@ -126,23 +156,25 @@ def start_managed(server_bin, model_path, *, port: int | None = None, ngl: int =
             model_path=Path(model_path),
             port=port or free_port(),
             ngl=ngl,
+            ctx=int(ctx or DEFAULT_CTX),
         )
         srv.start()
         _MANAGED = srv
         return srv
 
 
-def use_model(server_bin, model_path, *, ngl: int = 0) -> ManagedServer:
-    """Start the managed server on ``model_path`` — or, if one is already up,
-    swap it (same port) to the new model. The single-server invariant holds."""
+def use_model(server_bin, model_path, *, ngl: int = 0, ctx: int | None = None) -> ManagedServer:
+    """Start the managed server on ``model_path`` with window ``ctx`` — or, if
+    one is already up, swap it (same port) to the new model and window. The
+    single-server invariant holds."""
     global _MANAGED
     with _LOCK:
         if _MANAGED is not None and _MANAGED.proc is not None:
-            _MANAGED.swap(Path(model_path), ngl=ngl)
+            _MANAGED.swap(Path(model_path), ngl=ngl, ctx=ctx)
             return _MANAGED
         srv = ManagedServer(
             server_bin=Path(server_bin), model_path=Path(model_path),
-            port=free_port(), ngl=ngl,
+            port=free_port(), ngl=ngl, ctx=int(ctx or DEFAULT_CTX),
         )
         srv.start()
         _MANAGED = srv

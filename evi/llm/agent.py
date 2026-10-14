@@ -738,6 +738,21 @@ class Agent:
         """
         return _approx_tokens(self.history), int(self.config.llm.context_size or 0)
 
+    def refresh_context_size(self) -> int:
+        """Bring the ceiling in step with eVi's managed llama.cpp server when
+        this session talks to it, and return it.
+
+        That server's window (-c) IS the ceiling, and a model swap or GPU
+        switch relaunches it with a new one after this session loaded its own
+        copy of the config. Any other server keeps `config.llm.context_size`.
+        No probe — cheap enough to call before every turn."""
+        from evi.runtime.llama_server import ctx_for
+
+        window = ctx_for(self.config.llm.base_url)
+        if window:
+            self.config.llm.context_size = window
+        return int(self.config.llm.context_size or 0)
+
     def _maybe_autocompact(self) -> None:
         """Compact history if either the message-count threshold is exceeded
         OR usage exceeds the configured percentage of the context window."""

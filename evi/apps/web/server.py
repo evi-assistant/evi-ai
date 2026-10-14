@@ -719,6 +719,19 @@ def _federation_lan_guard(request: "Request", cfg: Any) -> None:
 _MSG_LOG_CAP = 100  # keep the per-session inbox bounded
 
 
+def _follow_runtime_window(sess: "WebSession") -> None:
+    """Keep an open session's compaction ceiling at the managed llama.cpp
+    server's window: a model swap or GPU switch relaunches it with a new `-c`
+    after the session loaded its config (Agent.refresh_context_size). Guarded
+    so lightweight test doubles still work."""
+    refresh = getattr(sess.agent, "refresh_context_size", None)
+    if callable(refresh):
+        try:
+            refresh()
+        except Exception:  # noqa: BLE001 — the old ceiling beats a failed request
+            pass
+
+
 def _deliver_note(sess: "WebSession", source: str, text: str) -> bool:
     """Append a pushed-in message to a session's history + channel_log. Dedupes
     an identical (source, text) repeat of the most recent entry (loop guard) and
@@ -1335,6 +1348,7 @@ def create_app() -> FastAPI:
                 if isinstance(getattr(agent, "auto_approve_categories", None), set):
                     agent.auto_approve_categories.add("session")
             bucket[session_id] = sess
+        _follow_runtime_window(sess)  # every turn starts here
         return sess
 
     @app.get("/")
@@ -1664,7 +1678,7 @@ def create_app() -> FastAPI:
     @app.get("/api/runtime/catalog")
     def runtime_catalog() -> dict[str, Any]:
         """Curated local models (each flagged `installed`), the hardware-fit
-        recommendation, and which one is currently loaded."""
+        recommendation, and which one is currently loaded (and its window)."""
         from evi.runtime import catalog as _cat
         from evi.runtime import setup as _rt_setup
 
@@ -1679,6 +1693,7 @@ def create_app() -> FastAPI:
             "gpu_installed": st.get("gpu_installed"),
             "on_gpu": st.get("on_gpu"),
             "gpu_name": st.get("gpu_name"),
+            "ctx": st.get("ctx"),  # the running server's window (-c), None if none
         }
 
     @app.post("/api/runtime/model/use")
@@ -2021,12 +2036,19 @@ def create_app() -> FastAPI:
                         "backend": cfg.llm.backend, "base_url": cfg.llm.base_url,
                         "model": cfg.llm.model}
 
+        # The switch is final (a failed verify above keeps the managed runtime
+        # and its window): leaving that runtime gives context_size back.
+        from evi.runtime import setup as _rt_setup
+
+        context_size = _rt_setup.release_context_size(cfg)
         # Apply to every live session (rebuild the client for the new backend).
         for sess in _all_sessions():
             sess.agent.config.llm.backend = cfg.llm.backend
             sess.agent.config.llm.base_url = cfg.llm.base_url
             sess.agent.config.llm.api_key = cfg.llm.api_key
             sess.agent.config.llm.model = cfg.llm.model
+            if context_size is not None:
+                sess.agent.config.llm.context_size = context_size
             try:
                 sess.agent.client = make_client(cfg.llm)
             except Exception:  # noqa: BLE001
@@ -2042,6 +2064,7 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             return {"used": 0, "ceiling": 0}
+        _follow_runtime_window(sess)
         used, ceiling = sess.agent.token_usage()
         return {"used": used, "ceiling": ceiling}
 
@@ -2053,6 +2076,7 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             return context_breakdown([], 0)
+        _follow_runtime_window(sess)
         return context_breakdown(
             sess.agent.history, sess.agent.config.llm.context_size or 0
         )
@@ -2166,6 +2190,7 @@ def create_app() -> FastAPI:
 
         sess_list = []
         for sid, s in _my_sessions().items():
+            _follow_runtime_window(s)
             try:
                 used, ceiling = s.agent.token_usage()
             except Exception:
@@ -2433,6 +2458,11 @@ def create_app() -> FastAPI:
         if req.fast_mode is not None:
             cfg.llm.fast_mode = bool(req.fast_mode)
         cfg.save()
+        context_size = None
+        if req.backend is not None:  # leaving the managed runtime gives it back
+            from evi.runtime import setup as _rt_setup
+
+            context_size = _rt_setup.release_context_size(cfg)
         # Push into every live session so the current chat reflects the new
         # settings on the next turn.
         for sess in _all_sessions():
@@ -2440,6 +2470,8 @@ def create_app() -> FastAPI:
             sess.agent.config.llm.base_url = cfg.llm.base_url
             sess.agent.config.llm.api_key = cfg.llm.api_key
             sess.agent.config.llm.model = cfg.llm.model
+            if context_size is not None:
+                sess.agent.config.llm.context_size = context_size
             sess.agent.config.llm.fast_model = cfg.llm.fast_model
             sess.agent.config.llm.reasoning_effort = cfg.llm.reasoning_effort
             sess.agent.config.llm.fast_mode = cfg.llm.fast_mode
