@@ -36,9 +36,13 @@ updates:
       prefix: "build"
       include: "scope"
 
-  # GitHub Actions used across the workflows
+  # GitHub Actions used across the workflows ("/" covers .github/workflows) and
+  # inside the composite actions under .github/actions/, which "/" alone misses
+  # (that is how evi-run sat on actions/setup-python@v5).
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"

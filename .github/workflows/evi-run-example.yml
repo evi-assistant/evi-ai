@@ -16,6 +16,14 @@ on:
         description: "chat | cowork | code"
         required: false
         default: "code"
+      # The action approves no tool by default, so in cowork/code mode the
+      # model's file and code tools are denied unless this is ticked. Tick it
+      # only for your own prompts, never for untrusted text.
+      auto_approve:
+        description: "Approve every tool call (evi run --yes)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Run eVi
         id: evi
@@ -33,13 +43,21 @@ jobs:
           prompt: ${{ inputs.prompt }}
           format: text
           mode: ${{ inputs.mode }}
+          auto_approve: ${{ inputs.auto_approve }}
           backend: openai_compat
           base_url: ${{ secrets.LLM_BASE_URL }}
           api_key: ${{ secrets.LLM_API_KEY }}
           model: ${{ secrets.LLM_MODEL }}
 
+      # Model output is untrusted: read it through env:, never as ${{ }} in the
+      # script, and stop workflow-command parsing while printing it.
       - name: Show result
+        env:
+          RESULT: ${{ steps.evi.outputs.result }}
         run: |
+          stop="stop-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
           echo "::group::eVi answer"
-          printf '%s\n' "${{ steps.evi.outputs.result }}"
+          echo "::stop-commands::$stop"
+          printf '%s\n' "$RESULT"
+          echo "::$stop::"
           echo "::endgroup::"

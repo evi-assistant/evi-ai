@@ -193,7 +193,7 @@ open repos you didn't write.
   bundled core is never shadowed by an older staged one (version-guarded in
   `staged_sidecar`), so a full app update always takes effect.
 
-## [1.0.46] — 2026-08-09
+## [1.0.46] — 2026-08-16
 
 ### Fixed
 - **Managed runtime — no orphaned `llama-server` on a hard exit (Phase 4).** The
@@ -205,7 +205,7 @@ open repos you didn't write.
   reused on next launch via the port check. Completes the managed-runtime series
   (Phases 1–4).
 
-## [1.0.45] — 2026-08-09
+## [1.0.45] — 2026-08-16
 
 ### Added
 - **GPU acceleration for the managed runtime (Phase 3).** When a supported GPU is
@@ -222,7 +222,7 @@ open repos you didn't write.
   - New endpoint `POST /api/runtime/gpu`; CLI `evi runtime gpu`. Runtime status now
     reports `gpu_available` / `gpu_installed` / `on_gpu` / `gpu_name`.
 
-## [1.0.44] — 2026-08-09
+## [1.0.44] — 2026-08-16
 
 ### Added
 - **Local model catalog — managed runtime (Phase 2).** Settings → Model & Backend
@@ -240,7 +240,7 @@ open repos you didn't write.
   - New endpoints `GET /api/runtime/catalog`, `POST /api/runtime/model/{use,remove}`;
     CLI `evi model list/use/remove`.
 
-## [1.0.43] — 2026-08-09
+## [1.0.43] — 2026-08-16
 
 ### Added
 - **Zero-config local AI — managed llama.cpp runtime (Phase 1).** A fresh user
@@ -370,6 +370,8 @@ open repos you didn't write.
   marker-gated so it no longer breaks a `pip install 'evi-assistant[ast]'` on
   3.12 — eVi falls back to stdlib `ast.walk` there.
 
+## [1.0.35] — 2026-08-09
+
 ### Added
 - **Federation preflight.** `evi peer doctor` (CLI) and a **Run federation
   preflight** button in Settings → Peers run a one-click checklist that explains
@@ -434,6 +436,8 @@ open repos you didn't write.
 - README now carries **Docker (GHCR) pull-count badges** (ghcr-badge; pkgbadge
   documented as a self-host option), and the agents docs cover session messaging.
 
+## [1.0.32] — 2026-08-07
+
 ### Added
 - **A "needs setup" badge in Settings → Tools** shows when a tool won't work in
   this install because its dependency or binary is missing — e.g. `computer`
@@ -445,6 +449,8 @@ open repos you didn't write.
   probe delivered on `/api/config`. This closes the gap where enabling a tool
   whose dependency isn't present (like web search before 1.0.31) failed silently
   at call time with no forewarning.
+
+## [1.0.31] — 2026-08-07
 
 ### Fixed
 - **Web search now works in the desktop app.** In the frozen desktop build,
@@ -483,6 +489,8 @@ open repos you didn't write.
   An image you paste/attach now re-renders in the transcript when you switch
   away and back (or reopen the session later), served from a new
   `/uploads/<session>/<name>` route, instead of vanishing on the next render.
+
+## [1.0.29] — 2026-08-06
 
 ### Fixed
 - **No more redundant/failed `describe_image` call after a pasted image is
@@ -791,7 +799,7 @@ can't quietly come back.
   deliberately keep working — in safe mode you need them to find the culprit.
   See *Troubleshooting → Safe mode* for the full matrix.
 
-## [1.0.13] — 2026-07-13
+## [1.0.13] — 2026-07-19
 
 ### Added
 - **Destructive-command guard for the shell tool — on by default.** eVi shipped
@@ -845,7 +853,7 @@ can't quietly come back.
   `[ultracode]` **fan-out master toggles** (the per-backend fan-out flag no longer
   does nothing without them), and the `[federation] a2a` interop-endpoint toggle.
 
-## [1.0.10] — 2026-07-11
+## [1.0.10] — 2026-07-12
 
 ### Added
 - **Desktop: sidecar update channel.** The desktop app can now update its frozen
@@ -1003,6 +1011,8 @@ can't quietly come back.
   adapts the SDK's async agent loop into the OpenAI `chat.completions` streaming
   surface the agent loop already speaks, so CLI / web / headless / ultracode /
   subagents all use it unchanged.
+
+## [1.0.2] — 2026-07-10
 
 ### Added
 - **Multiple model backends at once.** eVi now keeps a registry of backends
@@ -1308,6 +1318,79 @@ Closes the buildable small/medium gaps from the
 
 - Desktop **0.2.15** shipped separately (updater ACL fix + federation LAN-bind);
   install it manually once — 0.2.14's updater can't self-update.
+
+## [0.32.0] — 2026-06-16
+
+No entry was written when this version shipped. This one is reconstructed from
+all 75 of its commits (`git log v0.31.0..v0.32.0`), grouped by area; it covers
+roadmap phases 79–94 and everything after them up to the tag. Desktop → 0.2.14.
+
+### Added
+- **Agent SDK** (`evi.sdk`) — `build_agent` plus curated re-exports.
+- **Ultracode** — an exhaustive multi-agent pipeline (`evi ultracode` / `/ultra`)
+  with per-stage model routing for cheaper fan-out.
+- **Agent teams** — a shared, claimable task list with a lead and teammates.
+- **Dynamic workflows and an agent dispatch view** (Phases 85–86); plugins can
+  ship subagent profiles, run through a generic delegate tool.
+- **Agent tooling** — `edit_file`, recovery of tool calls a model writes out as
+  text, `read_file` pagination, `find_files` / `search_files` (glob / grep),
+  `evi agents new` for custom subagents, and tool search at scale (the long tail
+  deferred behind `search_tools`).
+- **Structured outputs** — answers constrained to a JSON Schema via `/schema`,
+  `evi run --schema` and `output_schema` on `/api/chat`.
+- **Headless batches and evals** — `evi batch` runs many prompts to JSONL;
+  `evi eval` regression-tests prompts, skills and models, with LLM-as-judge
+  assertions, and eval suites can run on a cron (scheduled evals, for drift).
+- **Usage analytics** — `evi stats`, local usage stats from transcripts.
+- **Hooks** — lifecycle events (`user_prompt_submit`, `before_compact`, `stop`),
+  an HTTP hook type (Phase 81), a hooks editor and `evi hooks list/test`.
+- **Plugins** — plugins bundle hooks and MCP servers, not just commands and
+  skills (Phase 80), and a marketplace index searches and installs plugins by
+  name.
+- **Skills** — import Claude skills (their bundled files are exposed to the
+  model), plus `evi skill show` and `evi skill remove`.
+- **Guardrails** — semantic LLM-judge rules alongside regex, and an offline ML
+  classifier rule type (`[[classifier]]`).
+- **Web server** — opt-in multi-user logins with per-user tokens and per-user
+  workspaces (sessions, transcripts and memory kept apart); channels that push
+  an external alert into a live session (Phase 83); cross-device session
+  handoff (Phase 87).
+- **Federation** — eVi-to-eVi delegation over the web transport, and a Peers
+  panel with LAN scan.
+- **Responses API** — server-side built-in tools on the Responses API path.
+- **MCP** — an HTTP/SSE client transport for remote servers, and server
+  management from the CLI and Settings → MCP.
+- **Models** — online provider presets with env-var API keys, a fast/small
+  model tier with a recommender (`evi models use --fast`), and long-context
+  awareness in the model registry.
+- **Web UI** — Settings panels for Guardrails, Plugins, Usage, Evals and
+  Routes & Recipes; live agent-watch (an SSE dispatch stream and busy
+  indicator); a working-status indicator; a route indicator on the model chip;
+  and a context-window breakdown (`/context` and a chip popover, Phase 88).
+- **CLI and REPL** — configurable keybindings in `keybindings.toml` (Phase 82)
+  with `evi keybindings list/path`, `evi command list/new`, `/recent`, and
+  `evi://` deep links.
+- **Self-build** — develop and build eVi with eVi (the self-build bootstrap).
+- **Observability and data** — opt-in OpenTelemetry traces and metrics
+  (Phase 89), and export of transcripts to a JSONL fine-tune dataset (Phase 90).
+- **Voice** — pluggable TTS engines: system, Coqui, F5 and Piper (Phase 91).
+- **Desktop** — an in-app update progress toast (Phase 79).
+- **CI and supply chain** — the `evi-run` composite action for headless runs in
+  GitHub Actions (Phase 84); gitleaks secret scanning and CodeQL (Phase 92); a
+  GHCR container image built on version tags (Phase 93); keyless sigstore
+  signing of the release artifacts (Phase 94).
+- **Docs and tests** — a feature catalog (`docs/features.md`) with per-feature
+  guides, skills and slash-command guides, sample configs with a validity test,
+  an end-to-end suite that drives the real `evi` CLI, and an e2e sweep of every
+  Settings screen with a CLI ↔ web ↔ desktop parity matrix.
+
+### Fixed
+- `reasoning_effort` is only sent to thinking-capable models.
+- The model recommender compares GPU compute capability numerically.
+- Ultracode matches small models on word boundaries, and its stage runner no
+  longer crashes the pipeline.
+- Chats persist and revive, so the desktop app no longer reopens to a blank
+  chat.
 
 ## [0.31.0] — 2026-06-08
 

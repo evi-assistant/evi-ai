@@ -1,0 +1,48 @@
+name: "Workflow guard"
+description: "Fail on GitHub Actions expressions interpolated into run:/script: (template injection), with a strict local check plus zizmor."
+author: "eVi"
+
+# Used by ci.yml. Checks the repo's own workflows (.github/workflows) and
+# composite actions (.github/actions/*/action.yml) plus any `extra` files:
+#
+#   - a strict check (workflow_guard.py): NO `${{ ... }}` inside a `run:` script
+#     or another script input (github-script `script:`, nick-fields/retry
+#     `command:`, a docker:// step's `args:`) — values reach scripts via `env:`;
+#   - zizmor (pedantic persona): its template-injection findings fail the job,
+#     everything else it reports is printed as advisory.
+#
+# zizmor is pinned to an exact release: the guard parses its `json-v1` output
+# (test_workflow_guard.py checks the parser against that schema), so a new
+# release is taken deliberately, not picked up by the next CI run.
+#
+# Run the strict check (and its tests) locally with:
+#   python .github/actions/workflow-guard/workflow_guard.py
+#   python -m pytest .github/actions/workflow-guard
+
+inputs:
+  extra:
+    description: "Space-separated extra workflow files or globs to check (e.g. examples/github/*.yml)."
+    required: false
+    default: ""
+  zizmor-version:
+    description: "pip requirement specifier for zizmor (an exact pin; json-v1 needs >= 1.6)."
+    required: false
+    default: "zizmor==1.30.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Install the guard's tools
+      shell: bash
+      env:
+        ZIZMOR_SPEC: ${{ inputs.zizmor-version }}
+      run: python -m pip install --quiet pyyaml "$ZIZMOR_SPEC"
+
+    - name: Check workflows for template injection
+      shell: bash
+      env:
+        GUARD_EXTRA: ${{ inputs.extra }}
+      run: |
+        # Globs in `extra` are expanded by the guard itself, not the shell.
+        read -r -a extra <<< "$GUARD_EXTRA"
+        python "$GITHUB_ACTION_PATH/workflow_guard.py" --zizmor "${extra[@]}"

@@ -2,21 +2,39 @@ name: release
 
 on:
   push:
+    # Final releases only: the CHANGELOG check below fails any tag that is not
+    # exactly vX.Y.Z, so a pre-release tag (v1.1.0rc1) is refused rather than
+    # published. Pre-releases are not supported by this pipeline.
     tags:
       - "v*.*.*"
   # Manual re-publish (e.g. when a tag's release run failed before the publish
   # step). Builds + publishes whatever version is in pyproject on the chosen ref.
   workflow_dispatch: {}
 
+# Least privilege by default; the jobs that write ask for it themselves.
 permissions:
-  contents: write   # for the GitHub release
-  id-token: write   # PyPI Trusted Publishing
+  contents: read
 
 jobs:
+  # The browser e2e suite gates the publish. Until this existed, release.yml
+  # ran only the unit suite, which is how 1.0.49 reached PyPI with a dead
+  # button. A failed (or cancelled) e2e run skips build-and-publish, and with
+  # it the desktop release and the Docker image that need it.
+  e2e:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/e2e.yml
+
   build-and-publish:
+    needs: e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # for the GitHub release
+      id-token: write   # PyPI Trusted Publishing
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v7
         with:
@@ -30,6 +48,17 @@ jobs:
           initver=$(python -c "import re, pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('evi/__init__.py').read_text()).group(1))")
           [ "$tag" = "$pyver" ] || (echo "tag $tag != pyproject $pyver"; exit 1)
           [ "$pyver" = "$initver" ] || (echo "pyproject $pyver != evi/__init__.py $initver — bump both files"; exit 1)
+
+      # The CHANGELOG must carry this release: its newest entry is the tag's
+      # version, dated within a day of the tagged commit, and the file lints
+      # clean (tests/test_changelog_lint.py, which also tests this check). It
+      # needs only pytest, so it runs before anything is built. Like the version
+      # check above it needs a tag, so a manual re-publish skips it.
+      - name: CHANGELOG entry matches the tag
+        if: github.event_name == 'push'
+        run: |
+          python -m pip install --quiet pytest
+          python -m tests.test_changelog_lint --tag "$GITHUB_REF_NAME" --date "$(git log -1 --format=%cI)"
 
       - name: Install build deps
         run: python -m pip install --upgrade pip build
@@ -45,10 +74,10 @@ jobs:
       # running ruff, and it does not block release.yml — which is how 1.0.14
       # published to PyPI with two E702 errors on main.
       - name: Ruff
-        run: python -m ruff check evi tests scripts
+        run: python -m ruff check evi tests scripts .github/actions
 
       - name: Run the test suite
-        run: pytest -q --timeout=30
+        run: pytest -q --timeout=30 tests .github/actions
 
       # Trusted Publishing also generates PEP 740 (sigstore) attestations for
       # the uploaded files on PyPI by default.
@@ -96,3 +125,14 @@ jobs:
     with:
       release_tag: desktop-${{ github.ref_name }}
     secrets: inherit
+
+  # The GHCR image is published from here, after PyPI, rather than by its own
+  # tag trigger, so it waits for the same e2e and CHANGELOG gates: a tag cut
+  # while e2e fails publishes no image either.
+  docker:
+    needs: build-and-publish
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write   # push to GHCR
+    uses: ./.github/workflows/docker.yml

@@ -118,9 +118,23 @@ def test_single_level_unchanged(tmp_path: Path) -> None:
 
 
 def test_config_load_applies_project_overlay(tmp_path: Path, monkeypatch) -> None:
+    import evi.config as config_mod
+    from evi import profiles, safemode
     from evi.config import Config
 
-    (tmp_path / ".evi.toml").write_text("[llm]\ntemperature = 0.123\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    # Isolate from the real ~/.evi: without a user config.toml, Config.load()
+    # writes one there and returns defaults without the overlay, and a real
+    # config, an active profile or safe mode would change the result too.
+    user_config = tmp_path / "home" / "config.toml"
+    user_config.parent.mkdir()
+    user_config.write_text("[llm]\ntemperature = 0.5\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", user_config)
+    monkeypatch.delenv(profiles.ENV_VAR, raising=False)
+    monkeypatch.delenv(safemode.ENV_VAR, raising=False)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".evi.toml").write_text("[llm]\ntemperature = 0.123\n", encoding="utf-8")
+    monkeypatch.chdir(project)
     cfg = Config.load()
-    assert cfg.llm.temperature == 0.123  # project overlay wins
+    assert cfg.llm.temperature == 0.123  # project overlay wins over the user's 0.5

@@ -28,6 +28,11 @@ on:
         description: "Tag to publish a release to (e.g. desktop-v1.0.0). Leave blank for an artifacts-only build."
         required: false
         default: ""
+      desktop_e2e:
+        description: "Run the native-desktop smoke tests (tests/desktop_e2e) on Windows before publishing."
+        type: boolean
+        required: false
+        default: false
   # Called by release.yml so every PyPI `v*` release ALSO cuts the matching
   # desktop release (bundling the freshly-frozen core) — this is what keeps the
   # desktop channel from drifting behind PyPI. The desktop version is synced to
@@ -39,6 +44,11 @@ on:
         description: "desktop-vX.Y.Z tag to publish to (drives the app version)."
         required: true
         type: string
+      desktop_e2e:
+        description: "Run the native-desktop smoke tests (tests/desktop_e2e) on Windows before publishing."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write   # create the GitHub release + upload installers
@@ -60,6 +70,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -72,9 +84,11 @@ jobs:
       - name: Resolve release tag
         id: tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          TAG="${{ inputs.release_tag }}"
-          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+          TAG="$RELEASE_TAG"
+          if [ -z "$TAG" ] && [ "$GITHUB_EVENT_NAME" = "push" ]; then
             TAG="${GITHUB_REF#refs/tags/}"
           fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
@@ -86,6 +100,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+
+      # The shell's unit tests on Windows, where its Windows-only branches (the
+      # 1.0.53 open_external fix that keeps links away from cmd.exe) compile and
+      # run. ci.yml runs them on PRs only; releases mostly land as direct pushes
+      # to main, so this is what gates them (same command as ci.yml). Before
+      # the version sync below, so the tests see the committed Cargo files.
+      - name: Desktop shell unit tests (Windows)
+        if: runner.os == 'Windows'
+        working-directory: desktop/src-tauri
+        run: cargo test
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -135,7 +159,7 @@ jobs:
         if: steps.tag.outputs.name != ''
         shell: bash
         run: |
-          case "${{ runner.os }}" in
+          case "$RUNNER_OS" in
             Windows) plat=windows-x86_64 ;;
             Linux)   plat=linux-x86_64 ;;
             macOS)   if [ "$(uname -m)" = "arm64" ]; then plat=darwin-aarch64; else plat=darwin-x86_64; fi ;;
@@ -163,8 +187,10 @@ jobs:
       - name: Sync desktop version to the release tag
         if: steps.tag.outputs.name != ''
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
         run: |
-          ver="${{ steps.tag.outputs.name }}"
+          ver="$RELEASE_TAG"
           ver="${ver#desktop-v}"
           ver="${ver#v}"
           python scripts/set-desktop-version.py "$ver"
@@ -190,6 +216,56 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # Native-desktop smoke (tests/desktop_e2e), behind a flag: tick
+      # `desktop_e2e` on a manual run, or set the repository variable
+      # EVI_DESKTOP_E2E=true to run it on every desktop release. It drives the
+      # evi-desktop.exe the warm-up build above produced through tauri-driver +
+      # msedgedriver against the real WebView2 runtime — the only layer that
+      # proves the shell itself works — and runs BEFORE the publish step, so a
+      # failure keeps this OS's installers out of the release. Flag on and the
+      # exe, a driver or a test missing (or skipped) is a failure, not a pass.
+      - name: Desktop e2e — install tauri-driver + msedgedriver
+        if: runner.os == 'Windows' && (inputs.desktop_e2e || vars.EVI_DESKTOP_E2E == 'true')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true  # a failing exe stops the step
+          cargo install tauri-driver --locked --version "^2"
+          # msedgedriver must match the WebView2 *runtime* (not the Edge
+          # browser), which registers its version under EdgeUpdate.
+          $client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $ver = $null
+          foreach ($root in @("HKLM:\SOFTWARE\WOW6432Node\$client", "HKLM:\SOFTWARE\$client", "HKCU:\Software\$client")) {
+            $item = Get-ItemProperty -Path $root -Name pv -ErrorAction SilentlyContinue
+            if ($item -and $item.pv) { $ver = $item.pv; break }
+          }
+          if (-not $ver) { throw "WebView2 runtime version not found in the registry" }
+          Write-Host "WebView2 runtime $ver"
+          New-Item -ItemType Directory -Force .webdrivers | Out-Null
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$ver/edgedriver_win64.zip" -OutFile .webdrivers\edgedriver.zip
+          Expand-Archive .webdrivers\edgedriver.zip -DestinationPath .webdrivers -Force
+          .\.venv-build\Scripts\python.exe -m pip install selenium pytest pytest-timeout
+
+      - name: Desktop e2e — run tests/desktop_e2e
+        if: runner.os == 'Windows' && (inputs.desktop_e2e || vars.EVI_DESKTOP_E2E == 'true')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true  # a failing exe stops the step
+          $env:EVI_DESKTOP_EXE = Join-Path $PWD 'desktop\src-tauri\target\release\evi-desktop.exe'
+          $env:EVI_TAURI_DRIVER = Join-Path $HOME '.cargo\bin\tauri-driver.exe'
+          $env:EVI_MSEDGEDRIVER = Join-Path $PWD '.webdrivers\msedgedriver.exe'
+          foreach ($p in @($env:EVI_DESKTOP_EXE, $env:EVI_TAURI_DRIVER, $env:EVI_MSEDGEDRIVER)) {
+            if (-not (Test-Path $p)) { throw "desktop e2e: missing $p (did the warm-up build fail?)" }
+          }
+          .\.venv-build\Scripts\python.exe -m pytest tests/desktop_e2e -m desktop --timeout=300 -p no:cacheprovider -rs --junitxml=desktop-e2e.xml
+          # The harness skips when a piece is missing; with the flag on, a skip
+          # would be a silent pass, so count it as a failure.
+          $suite = ([xml](Get-Content desktop-e2e.xml)).testsuites.testsuite
+          if ([int]$suite.tests -eq 0 -or [int]$suite.skipped -gt 0) {
+            throw "desktop e2e: $($suite.tests) tests ran, $($suite.skipped) skipped — none may skip"
+          }
 
       - name: Build app + (maybe) publish release
         uses: tauri-apps/tauri-action@v1
@@ -259,6 +335,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -269,9 +347,11 @@ jobs:
       - name: Resolve version
         id: ver
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          TAG="${{ inputs.release_tag }}"
-          if [ -z "$TAG" ] && [ "${{ github.event_name }}" = "push" ]; then
+          TAG="$RELEASE_TAG"
+          if [ -z "$TAG" ] && [ "$GITHUB_EVENT_NAME" = "push" ]; then
             TAG="${GITHUB_REF#refs/tags/}"
           fi
           ver="${TAG#desktop-v}"; ver="${ver#v}"
@@ -289,15 +369,16 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SIDECAR_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          shas=""
+          shas=()
           for f in sidecar-in/*.sha256; do
             plat="$(basename "$f" .sha256)"; plat="${plat#sidecar-}"
-            shas="$shas --sha $plat=$(cat "$f")"
+            shas+=(--sha "$plat=$(cat "$f")")
           done
           python scripts/build-sidecar-manifest.py \
-            --version "${{ steps.ver.outputs.version }}" \
-            --repo "${{ github.repository }}" $shas --out sidecar-latest.json
+            --version "$SIDECAR_VERSION" \
+            --repo "$GITHUB_REPOSITORY" "${shas[@]}" --out sidecar-latest.json
           echo "== manifest =="; cat sidecar-latest.json
           # Sign with the SAME minisign key as the app updater (reads the env vars).
           # Produces sidecar-latest.json.sig (base64 of the .minisig); the Rust

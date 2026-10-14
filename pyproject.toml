@@ -175,6 +175,8 @@ dev = [
     # code (that's what 0.16 did — +703 findings, mostly import sorting). With
     # the rules named in config the ceiling can track majors safely.
     "ruff>=0.4,<0.17",
+    # The CI workflow-guard and release-shape tests parse the workflow YAML.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

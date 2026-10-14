@@ -1,0 +1,57 @@
+name: docs-freshness
+
+# A change that adds a CLI command (Typer) or a web route (FastAPI) under evi/
+# must also change something under docs/, or the feature ships undocumented.
+# scripts/check_docs_freshness.py reads the diff and fails it otherwise.
+#
+# It runs on PRs (the diff against the target branch) AND on pushes to main
+# (the pushed range, github.event.before..github.sha): releases have mostly
+# landed as direct pushes to main, which a PR-only check never sees.
+#
+# Escape hatches: label the PR `docs-skip`, or put a `Docs-skip: <reason>`
+# trailer in one of the commits (the only option for a direct push), for an
+# internal route, a rename, or docs landing in a follow-up. The label events
+# below re-run the check when the label is added or removed. Its own workflow,
+# rather than a ci.yml job, so a label change doesn't re-run the test matrix.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs-freshness:
+    name: docs freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the merge base / the pushed range
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: New CLI commands and web routes come with docs
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          EVI_PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          elif [ -n "$PUSH_BEFORE" ] && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            base="$PUSH_BEFORE"
+          else
+            # A new branch (before = 000...0) or a force-push whose old tip is
+            # gone: check the newest commit on its own.
+            echo "::warning::no usable push base ($PUSH_BEFORE); checking HEAD~1..HEAD"
+            base="HEAD~1"
+          fi
+          python scripts/check_docs_freshness.py --base "$base"

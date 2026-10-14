@@ -1,14 +1,18 @@
 name: docker
 
-# Build + publish the eVi container image (Phase 93). Runs on version tags and
-# on manual dispatch; pushes to GHCR as ghcr.io/<owner>/<repo>. The Dockerfile
-# is two-stage and ships the web server + scheduler extras (no LLM backend —
-# point the container at your own).
+# Build + publish the eVi container image (Phase 93). Pushes to GHCR as
+# ghcr.io/<owner>/<repo>. The Dockerfile is two-stage and ships the web server +
+# scheduler extras (no LLM backend — point the container at your own).
+#
+# Release images are published by release.yml, which calls this workflow after
+# the e2e suite, the CHANGELOG check and the PyPI publish have passed; there is
+# deliberately no tag trigger here, so a tag cut while e2e fails publishes no
+# image. Under that call `github.event_name` is the caller's `push`, so the
+# image is pushed with its semver and `latest` tags. Manual dispatch builds
+# (and optionally pushes) on its own.
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_call:
   workflow_dispatch:
     inputs:
       push:
@@ -25,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # QEMU lets the amd64 runner cross-build the arm64 image. Most deps ship
       # arm64 wheels (pydantic-core, uvloop, httptools, watchfiles), so this is

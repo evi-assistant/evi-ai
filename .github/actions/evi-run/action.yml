@@ -7,12 +7,30 @@ branding:
 
 # A reusable composite action wrapping `evi run` (Phase 84). It installs
 # evi-assistant from PyPI, writes a throwaway config pointing at your backend,
-# and runs one headless prompt with tools auto-approved.
+# and runs one headless prompt.
 #
 # eVi is the *app*, not the model — give it a backend via the `backend` /
 # `base_url` / `api_key` / `model` inputs (any OpenAI-compatible endpoint, or a
-# reachable Ollama). If you omit them, pre-populate $EVI_HOME/config.toml
-# yourself before this step. See docs/configuration.md.
+# reachable Ollama). If you omit them, set EVI_HOME and pre-populate
+# $EVI_HOME/config.toml yourself before this step. See docs/configuration.md.
+#
+# Safety, for prompts that carry untrusted text (a PR diff, an issue body):
+#   - with the backend inputs set, the config this action writes approves NO
+#     tool category (`[auto] auto_approve = []`, see evi_run_config.py), and
+#     `evi run` without `--yes` denies every call that needs approval, so the
+#     model can't read or write files or run code unless you set
+#     `auto_approve: "true"` (which approves every call). If you bring your own
+#     $EVI_HOME config instead, its `[auto] auto_approve` list applies; eVi's
+#     default pre-approves fs, code, memory, skills and image;
+#   - for reviews of untrusted input use `mode: chat`, which has no file, shell
+#     or code tools, and put the text in the prompt (`prompt_file`) rather than
+#     the workspace;
+#   - the backend config (with your API key) is written owner-only under
+#     $RUNNER_TEMP rather than the workspace. That keeps it out of artifacts
+#     and caches; it does not hide it from file or code tools you approve,
+#     which can read any path the runner user can;
+#   - the `result` output is model text: read it through `env:` and never paste
+#     it into a `run:` or `script:` as an expression.
 #
 # Example:
 #   - uses: <owner>/evi-ai/.github/actions/evi-run@main
@@ -20,17 +38,25 @@ branding:
 #     with:
 #       prompt: "Summarise the changes in this PR."
 #       format: json
-#       mode: code
+#       mode: chat
 #       backend: openai_compat
 #       base_url: ${{ secrets.LLM_BASE_URL }}
 #       api_key: ${{ secrets.LLM_API_KEY }}
 #       model: ${{ secrets.LLM_MODEL }}
-#   - run: echo '${{ steps.triage.outputs.result }}'
+#       python-version: ${{ matrix.python }}   # optional; default 3.13
+#   - env:
+#       TRIAGE: ${{ steps.triage.outputs.result }}
+#     run: printf '%s\n' "$TRIAGE"
 
 inputs:
   prompt:
-    description: "The prompt to run. Required."
-    required: true
+    description: "The prompt to run. Set this or prompt_file."
+    required: false
+    default: ""
+  prompt_file:
+    description: "Read the prompt from this file instead (e.g. instructions plus a PR diff)."
+    required: false
+    default: ""
   format:
     description: "Output format: text | json."
     required: false
@@ -39,6 +65,10 @@ inputs:
     description: "Tool preset: chat | cowork | code (blank = default toolset)."
     required: false
     default: ""
+  auto_approve:
+    description: "true approves every tool call (evi run --yes). false (default): the written config approves no tool, so tool calls are denied. Leave false for untrusted input."
+    required: false
+    default: "false"
   backend:
     description: "LLM backend: lmstudio | ollama | llamacpp | openai_compat."
     required: false
@@ -56,7 +86,7 @@ inputs:
     required: false
     default: ""
   version:
-    description: "evi-assistant version spec (e.g. 0.31.0). Blank = latest."
+    description: "evi-assistant version to install (e.g. 1.2.3). Blank = latest."
     required: false
     default: ""
   extras:
@@ -64,19 +94,19 @@ inputs:
     required: false
     default: "web,mcp,web-tools"
   python-version:
-    description: "Python version."
+    description: "Python for actions/setup-python: 3.12 or newer. Pass your matrix's version to test several."
     required: false
     default: "3.13"
 
 outputs:
   result:
-    description: "The stdout of `evi run` (the answer, or the JSON object)."
+    description: "The stdout of `evi run` (the answer, or the JSON object). Untrusted model text."
     value: ${{ steps.run.outputs.result }}
 
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -87,49 +117,65 @@ runs:
         EVI_EXTRAS: ${{ inputs.extras }}
       run: |
         python -m pip install --upgrade pip
+        # Extras go before the version: `evi-assistant[web]==1.2.3`
+        # (`evi-assistant==1.2.3[web]` is not a valid requirement).
         spec="evi-assistant"
-        [ -n "$EVI_VERSION" ] && spec="${spec}==${EVI_VERSION}"
-        python -m pip install "${spec}[${EVI_EXTRAS}]"
+        if [ -n "$EVI_EXTRAS" ]; then spec="${spec}[${EVI_EXTRAS}]"; fi
+        if [ -n "$EVI_VERSION" ]; then spec="${spec}==${EVI_VERSION}"; fi
+        python -m pip install "$spec"
 
     - name: Configure backend
+      id: config
       shell: bash
       env:
-        EVI_HOME_DIR: ${{ github.workspace }}/.evi-ci
-        IN_BACKEND: ${{ inputs.backend }}
-        IN_BASE_URL: ${{ inputs.base_url }}
-        IN_API_KEY: ${{ inputs.api_key }}
-        IN_MODEL: ${{ inputs.model }}
-      run: |
-        mkdir -p "$EVI_HOME_DIR"
-        # Persist EVI_HOME for the following step (composite step env doesn't carry over).
-        echo "EVI_HOME=$EVI_HOME_DIR" >> "$GITHUB_ENV"
-        # Only write config when a backend was supplied; otherwise trust an
-        # $EVI_HOME the caller set up themselves.
-        if [ -n "$IN_BACKEND" ] || [ -n "$IN_BASE_URL" ]; then
-          esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-          {
-            echo "[llm]"
-            [ -n "$IN_BACKEND" ]  && echo "backend = \"$(esc "$IN_BACKEND")\""
-            [ -n "$IN_BASE_URL" ] && echo "base_url = \"$(esc "$IN_BASE_URL")\""
-            [ -n "$IN_API_KEY" ]  && echo "api_key = \"$(esc "$IN_API_KEY")\""
-            [ -n "$IN_MODEL" ]    && echo "model = \"$(esc "$IN_MODEL")\""
-          } > "$EVI_HOME_DIR/config.toml"
-        fi
+        EVI_CFG_BACKEND: ${{ inputs.backend }}
+        EVI_CFG_BASE_URL: ${{ inputs.base_url }}
+        EVI_CFG_API_KEY: ${{ inputs.api_key }}
+        EVI_CFG_MODEL: ${{ inputs.model }}
+      # Writes $RUNNER_TEMP/evi-ci/config.toml (owner-only, outside the
+      # workspace) only when a backend or base URL was supplied; otherwise the
+      # caller's own $EVI_HOME applies. The written config approves no tool
+      # category, so tool calls fail closed (evi_run_config.py).
+      run: python "$GITHUB_ACTION_PATH/evi_run_config.py" "$RUNNER_TEMP/evi-ci"
 
     - name: Run prompt
       id: run
       shell: bash
       env:
         EVI_PROMPT: ${{ inputs.prompt }}
+        EVI_PROMPT_FILE: ${{ inputs.prompt_file }}
         EVI_FORMAT: ${{ inputs.format }}
         EVI_MODE: ${{ inputs.mode }}
+        EVI_AUTO_APPROVE: ${{ inputs.auto_approve }}
+        EVI_CI_HOME: ${{ steps.config.outputs.home }}
       run: |
-        args=(run "$EVI_PROMPT" --format "$EVI_FORMAT" --yes)
-        [ -n "$EVI_MODE" ] && args+=(--mode "$EVI_MODE")
-        out="$(evi "${args[@]}")"
+        if [ -n "$EVI_CI_HOME" ]; then export EVI_HOME="$EVI_CI_HOME"; fi
+        args=(run --format "$EVI_FORMAT")
+        case "$EVI_AUTO_APPROVE" in
+          true) args+=(--yes) ;;
+          false|"") ;;
+          *) echo "::error::auto_approve must be true or false"; exit 2 ;;
+        esac
+        if [ -n "$EVI_MODE" ]; then args+=(--mode "$EVI_MODE"); fi
+        if [ -n "$EVI_PROMPT" ] && [ -n "$EVI_PROMPT_FILE" ]; then
+          echo "::error::set prompt or prompt_file, not both"; exit 2
+        elif [ -n "$EVI_PROMPT_FILE" ]; then
+          # No prompt argument: `evi run` reads it from stdin.
+          out="$(evi "${args[@]}" < "$EVI_PROMPT_FILE")"
+        elif [ -n "$EVI_PROMPT" ]; then
+          # `--` so a prompt starting with "-" is not read as an option.
+          out="$(evi "${args[@]}" -- "$EVI_PROMPT")"
+        else
+          echo "::error::the prompt or prompt_file input is required"; exit 2
+        fi
+        # Random tokens, so model text can neither issue workflow commands while
+        # it is printed nor close the output heredoc early to forge outputs.
+        token="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+        echo "::stop-commands::stop-$token"
         printf '%s\n' "$out"
+        echo "::stop-$token::"
         {
-          echo "result<<__EVI_EOF__"
+          echo "result<<EVI_EOF_$token"
           printf '%s\n' "$out"
-          echo "__EVI_EOF__"
+          echo "EVI_EOF_$token"
         } >> "$GITHUB_OUTPUT"
