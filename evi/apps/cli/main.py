@@ -1395,9 +1395,28 @@ def chat(
         help="Working folder for this session (relative file ops resolve here; "
              "EVI.md is discovered from it). Default: the current directory.",
     ),
+    mode: str = typer.Option(
+        "", "--mode", "-m",
+        help="Tool preset for the session: chat | cowork | code (the web UI's "
+             "modes). Default: the tools enabled in your config.",
+    ),
 ) -> None:
     """Start an interactive chat session with the local model."""
+    from evi.modes import MODES, mode_tools
+
+    if mode and mode not in MODES:
+        console.print(f"[red]unknown mode:[/red] {mode} (choose: {' | '.join(MODES)})")
+        raise typer.Exit(2)
     agent = _build_agent()
+    if mode:
+        # Same as `evi run --mode`: the preset replaces the tool list before the
+        # first turn, so it is fixed for the whole session. mode_tools() reads
+        # the whole registry, so safe mode's cut (build_agent drops these
+        # categories) is applied again here.
+        tools = mode_tools(mode)
+        if _safe_mode():
+            tools = [t for t in tools if t.category not in ("memory", "skills", "mcp")]
+        agent.tools = {t.name: t for t in tools}
     if cwd.strip():
         from pathlib import Path as _Path
 
@@ -1510,13 +1529,40 @@ def doctor(
     strict: bool = typer.Option(
         False, "--strict", help="Exit non-zero if any check fails.",
     ),
+    dev: bool = typer.Option(
+        False, "--dev",
+        help="Check a development checkout instead: venv, git safe.directory, "
+             "ruff, pytest --collect-only, Playwright browsers, line endings. "
+             "Prints fix commands; never runs them.",
+    ),
+    repo: str = typer.Option(
+        "", "--repo", help="With --dev: the checkout to check (default: around the cwd).",
+    ),
+    venv: str = typer.Option(
+        "", "--venv", help="With --dev: the venv to validate (default: the running one).",
+    ),
+    collect: bool | None = typer.Option(
+        None, "--collect/--no-collect",
+        help="With --dev: run `pytest --collect-only` (the slowest check). By "
+             "default it runs only for the eVi checkout in use, since it imports "
+             "the checkout's conftest.py.",
+    ),
 ) -> None:
     """Diagnose the local environment: paths, config, backend, deps, binaries."""
     from rich.markup import escape
 
-    from evi.doctor import run_checks, summarize
+    from evi.doctor import run_checks, run_dev_checks, summarize
 
-    checks = run_checks()
+    if dev:
+        from pathlib import Path as _Path
+
+        checks = run_dev_checks(
+            _Path(repo).expanduser() if repo else None,
+            venv=_Path(venv).expanduser() if venv else None,
+            collect=collect,
+        )
+    else:
+        checks = run_checks()
     glyph = {"ok": "[green]✓[/green]", "warn": "[yellow]⚠[/yellow]", "fail": "[red]✗[/red]"}
     for c in checks:
         # Escape name/detail — they can contain `[...]` (e.g. extras like
@@ -1525,6 +1571,9 @@ def doctor(
             f"  {glyph.get(c.status, '?')} "
             f"[bold]{escape(c.name)}[/bold] [dim]{escape(c.detail)}[/dim]"
         )
+        for cmd in c.fix:
+            # Unwrapped and unstyled, so the command copies and pastes intact.
+            console.print(f"      {cmd}", markup=False, highlight=False, soft_wrap=True)
     ok, warn, fail = summarize(checks)
     console.print(
         f"\n[green]{ok} ok[/green] · [yellow]{warn} warn[/yellow] · [red]{fail} fail[/red]"
@@ -6623,7 +6672,9 @@ def worktree_chat(branch: str) -> None:
     os.chdir(path)
     console.print(f"[dim]cwd → {path}[/dim]")
     # Reuse the regular chat command. It'll pick up EVI.md from the new cwd.
-    chat()
+    # Pass every option: called directly, a Typer command gets OptionInfo
+    # objects, not values, for the ones left out.
+    chat(cwd="", mode="")
 
 
 profile_app = typer.Typer(help="Manage config profiles for different machines.")

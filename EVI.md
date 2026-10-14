@@ -1,93 +1,84 @@
-# EVI.md — project context for developing eVi *with* eVi
+# EVI.md - the implementer contract
 
-This file is auto-loaded as project context when you run eVi from this repo
-(`evi/project.py` reads `EVI.md` at the tree root). It's the **bootstrap doc**:
-it teaches eVi's own agent how to navigate, change, test, and build this
-codebase — so future updates can go through eVi instead of an external tool.
+Auto-loaded as project context in this repo (`evi/project.py`). You are the
+**implementer**: you change eVi inside one task's scope. The **director**
+assigns tasks, reviews, commits, merges and releases. Procedures:
+[docs/self-build.md](docs/self-build.md).
 
-> You are working **on eVi itself**, at `C:\evi`. Prefer eVi's own conventions
-> below over generic habits. When in doubt, read the relevant
-> `docs/features/<area>.md` guide first.
+## Never
 
-## What eVi is
+- Commit to `main`, push, tag, release, or set a task's status.
+- Edit `.github/workflows/`, the version (`pyproject.toml`, `evi/__init__.py`)
+  or a released CHANGELOG entry unless the task says so.
+- Touch `~/.evi` or `$EVI_HOME`; tests use `tmp_path` + `monkeypatch`.
+- Work outside your worktree, edit files outside the task's scope, or widen
+  your own permissions (no `-y`, no `/auto on`).
 
-Local-first, single-user, privacy-first personal AI assistant. One Python core
-(`evi/`) behind three frontends: **CLI** (`evi`, Typer/Rich), **Web** (FastAPI +
-SSE), **Desktop** (Tauri 2 wrapping the web UI). Talks to local LLM backends
-(LM Studio / Ollama / llama.cpp / any OpenAI-compatible). Full subsystem map:
-[docs/features.md](docs/features.md); per-area deep dives in
-[docs/features/](docs/features/README.md).
+## Workflow
 
-## Repo map (start here)
+1. **Claim**: the task brief is your scope: files, acceptance criteria,
+   tests. Anything else goes in the hand-off.
+2. **Worktree**: until the Phase 1 task loop lands, the director runs
+   `scripts/dev-bootstrap --worktree <branch>` and you work only in the
+   worktree it names (`.worktrees/<branch>`, `/` as `__`), via `python -m evi`
+   and `python -m pytest` from there.
+3. **Edit** with `edit_file`; match the surrounding style.
+4. **Test**: every change ships a test. Agent-loop change: an
+   `Agent.chat`-level test on a fake LLM. UI or `/api` change: a Playwright
+   test in `tests/e2e/`. CLI change: `tests/cli_e2e/`. Security fix: an
+   exploit regression test.
+5. **Run the subset** covering the files you touched:
+   `python -m pytest -q -n auto <test files>`,
+   `python -m ruff check <files>`, and for UI or `/api`
+   `python -m pytest -q -m e2e --timeout=180 tests/e2e/<file>`.
+6. **record_fix** every bug you resolve (symptom, cause, fix).
+7. **Evidence**: exit codes, test counts, diffs. Never "should work".
+8. **Hand-off**: files changed; each acceptance criterion met or not, with
+   evidence; commands run and results; concerns as `file:line`; the draft
+   commit message below.
 
-- `evi/config.py` — the config spine; everything hangs off `Config`.
-- `evi/llm/agent.py` — the `Agent` tool-calling loop (the heart).
-- `evi/backends/` — model backends (`factory.py` picks one).
-- `evi/tools/` — the tool registry (`base.py`) + each tool.
-- `evi/apps/cli/main.py` — every CLI command (Typer).
-- `evi/apps/web/server.py` + `static/index.html` — web/desktop UI + `/api/*`.
-- `desktop/` — the Tauri shell (Rust + `src-tauri/tauri*.conf.json`).
-- `tests/` — unit (`test_*.py`), CLI e2e (`cli_e2e/`), browser e2e (`e2e/`).
-- `docs/` — user docs (mirrored to the public wiki); `examples/` — drop-in samples.
+## Facts are commands
 
-## Environments — two venvs, never conflate
+Never hand-type a number into docs or a hand-off. Run:
 
-- **`.venv`** (`py -3.13`, ALL extras) — run the app + tests. Use
-  `.venv\Scripts\python.exe` (Windows) / `.venv/bin/python` (POSIX).
-- **`.venv-build`** — *only* for freezing the desktop sidecar. NEVER add
-  torch/stt/computer/rerank here (PyInstaller `--collect-submodules evi` would
-  balloon the sidecar from ~75 MB to >1 GB).
+- test count: `python -m pytest --collect-only -q` (last line)
+- version: `python -c "import evi; print(evi.__version__)"`
+- environment: `evi doctor --dev`
+- branch state: `git log --oneline -5` and `git status --short`
 
-## Build / test / lint (the loop)
+## Commit message (the director commits)
 
-```bash
-# unit (fast; e2e auto-excluded via addopts -m 'not e2e')
-.venv/Scripts/python.exe -m pytest -q
-.venv/Scripts/python.exe -m ruff check evi tests scripts
+```
+<type>(<area>): <what changed>
 
-# CLI end-to-end (real `evi` subprocess; no browser)
-.venv/Scripts/python.exe -m pytest tests/cli_e2e -m e2e --timeout=120
+<the bug or need, and why this fixes it>
 
-# Browser end-to-end (needs the [e2e] extra + chromium once)
-.venv/Scripts/python.exe -m pytest tests/e2e -m e2e --timeout=120
+- <area>: <change>
 
-# Build the desktop app (sidecar + Tauri) — the "eVi builds itself" entrypoint
-powershell -File scripts\build-desktop.ps1     # Windows
-bash scripts/build-desktop.sh                  # POSIX
+Verified: <commands and their results>
 ```
 
-See [docs/self-build.md](docs/self-build.md) for the full self-development loop
-and [TESTING.md](TESTING.md) for the four test layers.
+Types: feat, fix, test, docs, refactor, chore. Write it to a file
+(`git commit -F`); shells mangle quotes in multi-line `-m`.
 
-## Conventions (follow these)
+## CHANGELOG voice
 
-- **Tests are mandatory.** Every change ships with a test. Any UI/`/api/*` change
-  ships an e2e test in `tests/e2e/`; any CLI change is covered in
-  `tests/cli_e2e/`. "A feature without a test is assumed broken."
-- **Commits**: Conventional Commits (`feat(web): …`, `fix:`, `test:`, `docs:`).
-  Multi-line messages via `git commit -F <file>` (PowerShell/bash heredocs mangle
-  apostrophes/pipes). Don't push or release unless asked.
-- **Docs ↔ wiki**: user-facing docs live in `docs/`; when you change them, mirror
-  the touched files to the `evi-assistant/evi-ai` wiki (see self-build.md).
-- **DRY**: extract shared setup into a helper rather than copy >5 lines between
-  two entry points.
-- **Windows/PowerShell gotcha**: don't pipe a native exe's stderr with `*>>` /
-  `2>&1` under `$ErrorActionPreference='Stop'` (it wraps stderr as a terminating
-  error — e.g. PyInstaller's INFO banner). Use cmd/bash OS redirection.
-- **Encoding**: keep CLI output ASCII-safe where practical (Windows console is
-  cp1252); Rich handles em-dashes, but avoid box-drawing/✓/→ in plain prints.
+Add to `## [Unreleased]` only, under `### Added|Changed|Fixed|Security`
+(each heading once). Write for users: a bold sentence saying what now works
+or no longer goes wrong, then plain detail. Internal names only if a user
+types them.
 
-## Current state (keep in mind)
+## Line endings
 
-- Releases are **PAUSED** on a GitHub Actions billing block (account-level; a
-  human-only fix — do **not** touch billing or try to release). Local `main` is
-  far ahead of the last published release; keep building locally.
-- The test suite is green (`pytest -q` ≈ 980+ passing). Keep it that way.
+`.gitattributes`: LF everywhere except `*.ps1` (CRLF, and ASCII-only for
+Windows PowerShell 5.1). Never mass-convert files. When `evi doctor --dev`
+reports a mismatch, run the command it prints (a re-checkout, or
+`git add --renormalize .` when the index is wrong).
 
-## How to make a change (suggested flow)
+## Map
 
-1. Read the relevant `docs/features/<area>.md` + the module(s) it names.
-2. Make the change with eVi's file tools.
-3. Add/extend tests; run `pytest -q` (and the matching e2e suite).
-4. `ruff check`. Update the feature doc + `examples/` if behavior changed.
-5. Commit with a Conventional Commit message (only if asked to commit).
+`evi/llm/agent.py` (loop), `evi/tools/`, `evi/apps/cli/main.py` (CLI),
+`evi/apps/web/server.py` + `static/index.html` (UI and `/api`), `desktop/`
+(Tauri), `docs/features/<area>.md` (read first). Desktop build:
+`scripts/build-desktop.{ps1,sh}`; the sidecar freeze uses `.venv-build`
+(never add torch there).
