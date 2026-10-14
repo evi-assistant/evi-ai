@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from evi.mcp.bridge import MCPBridge
-from evi.mcp.manager import MCPManager, _flatten_content, _truncate
+from evi.mcp.manager import MCPManager, _describe_error, _flatten_content, _truncate
 from evi.mcp.servers import MCPServer, load_servers, save_servers
 from evi.tools.base import REGISTRY
 
@@ -184,21 +184,40 @@ class _FakeTransportSession:
         return type("R", (), {"tools": [tool]})()
 
 
+class _FakeHttpClient:
+    def __init__(self, headers=None):
+        self.headers = headers
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        self.closed = True
+        return False
+
+
 def test_manager_connects_http_transport(monkeypatch) -> None:
+    # The fakes keep the SDK's real signatures: the new `streamable_http_client`
+    # takes NO headers (they ride on the http_client), so passing headers= to it
+    # fails here as it does against the real SDK. tests/test_mcp_sdk_compat.py
+    # covers the same path against a real server.
     import mcp
     import mcp.client.streamable_http as sh
 
     captured: dict = {}
 
-    def fake_http(url, headers=None):
+    def fake_client_factory(headers=None, timeout=None, auth=None):
+        captured["client"] = _FakeHttpClient(headers)
+        return captured["client"]
+
+    def fake_http(url, *, http_client=None, terminate_on_close=True):
         captured["url"] = url
-        captured["headers"] = headers
+        captured["http_client"] = http_client
         return _FakeStreams(3)
 
-    # mcp 2.0 renamed streamablehttp_client -> streamable_http_client; the
-    # manager imports whichever exists, so patch both names.
     monkeypatch.setattr(sh, "streamable_http_client", fake_http, raising=False)
-    monkeypatch.setattr(sh, "streamablehttp_client", fake_http, raising=False)
+    monkeypatch.setattr(sh, "create_mcp_http_client", fake_client_factory, raising=False)
     monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
 
     mgr = MCPManager([MCPServer(
@@ -209,10 +228,40 @@ def test_manager_connects_http_transport(monkeypatch) -> None:
         mgr.start()
         assert "remote.ping" in mgr.registered_tool_names()
         assert captured["url"] == "https://x/mcp"
-        assert captured["headers"] == {"Authorization": "Bearer t"}
+        assert captured["http_client"] is captured["client"]
+        assert captured["client"].headers == {"Authorization": "Bearer t"}
     finally:
         mgr.stop()
     assert "remote.ping" not in REGISTRY  # cleaned up on stop
+    assert captured["client"].closed  # the HTTP client is closed with the session
+
+
+def test_manager_http_falls_back_to_the_old_client_name(monkeypatch) -> None:
+    # An SDK with only the deprecated `streamablehttp_client` (it takes headers).
+    import mcp
+    import mcp.client.streamable_http as sh
+
+    captured: dict = {}
+
+    def fake_old_http(url, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeStreams(3)
+
+    monkeypatch.delattr(sh, "streamable_http_client", raising=False)
+    monkeypatch.setattr(sh, "streamablehttp_client", fake_old_http, raising=False)
+    monkeypatch.setattr(mcp, "ClientSession", _FakeTransportSession)
+
+    mgr = MCPManager([MCPServer(
+        name="old", transport="http", url="https://x/mcp",
+        headers={"Authorization": "Bearer t"},
+    )])
+    try:
+        mgr.start()
+        assert "old.ping" in mgr.registered_tool_names()
+        assert captured == {"url": "https://x/mcp", "headers": {"Authorization": "Bearer t"}}
+    finally:
+        mgr.stop()
 
 
 def test_manager_stdio_injects_session_env(monkeypatch) -> None:
@@ -296,6 +345,47 @@ def test_flatten_error_result() -> None:
     out = _flatten_content(r)
     assert out.startswith("ERROR:")
     assert "bad thing" in out
+
+
+def test_flatten_error_result_sdk2_field_name() -> None:
+    # mcp 2.x names the field `is_error`; reading only `isError` missed it.
+    @dataclass
+    class _Result2:
+        content: list[object]
+        is_error: bool = False
+
+    out = _flatten_content(_Result2(content=[_TextItem("bad thing")], is_error=True))
+    assert out.startswith("ERROR:") and "bad thing" in out
+    assert _flatten_content(_Result2(content=[_TextItem("fine")])) == "fine"
+
+
+def test_flatten_error_result_that_already_says_error() -> None:
+    # `evi mcp serve` flags its own "ERROR: ..." results; the agent must see a
+    # single prefix, not "ERROR: ERROR: ...".
+    r = _Result(content=[_TextItem("ERROR: git timed out after 15.0s")], isError=True)
+    assert _flatten_content(r) == "ERROR: git timed out after 15.0s"
+    # ...while a flagged message without it still gets one.
+    r = _Result(content=[_TextItem("ERRORS: 3")], isError=True)
+    assert _flatten_content(r) == "ERROR: ERRORS: 3"
+
+
+def test_describe_error_unwraps_task_groups_and_names_http_status() -> None:
+    class _Resp:
+        status_code = 401
+        reason_phrase = "Unauthorized"
+
+    class _HTTPStatusError(Exception):
+        response = _Resp()
+
+    nested = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)", [
+        ExceptionGroup("inner", [_HTTPStatusError("Client error '401 Unauthorized' ...")]),
+        ConnectionError("All connection attempts failed"),
+    ])
+    assert _describe_error(nested) == (
+        "HTTP 401 Unauthorized; ConnectionError: All connection attempts failed"
+    )
+    assert _describe_error(TimeoutError()) == "TimeoutError: timed out"
+    assert _describe_error(RuntimeError()) == "RuntimeError"
 
 
 def test_flatten_empty() -> None:

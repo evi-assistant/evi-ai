@@ -21,6 +21,7 @@ can still run the rest of eVi.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
@@ -122,21 +123,36 @@ class MCPManager:
         from mcp import ClientSession
 
         transport = (server.transport or "stdio").lower()
+        # HTTP error statuses seen while connecting, for the failure message.
+        http_errors: list[str] = []
 
         async def _open_streams(stack: AsyncExitStack):
             """Open the right client transport and return (read, write)."""
             if transport == "http":
-                # mcp 2.0 renamed streamablehttp_client -> streamable_http_client.
-                try:
-                    from mcp.client.streamable_http import streamable_http_client
-                except ImportError:  # mcp 1.x
-                    from mcp.client.streamable_http import (  # type: ignore[no-redef]
-                        streamablehttp_client as streamable_http_client,
-                    )
+                from mcp.client import streamable_http as sh
 
-                ctx = await stack.enter_async_context(
-                    streamable_http_client(server.url, headers=server.headers or None)
-                )
+                # The new `streamable_http_client` (late 1.x and all of 2.x) takes
+                # no headers: they ride on the HTTP client it is handed. Build that
+                # with the SDK's own factory, which returns the client type this
+                # SDK speaks (httpx on 1.x, httpx2 on 2.x). Only an SDK without the
+                # new name falls back to the deprecated `streamablehttp_client`,
+                # which takes headers itself.
+                new_client = getattr(sh, "streamable_http_client", None)
+                if new_client is not None:
+                    make_http = getattr(sh, "create_mcp_http_client", None)
+                    if make_http is None:
+                        from mcp.shared._httpx_utils import create_mcp_http_client as make_http
+                    http_client = await stack.enter_async_context(
+                        make_http(headers=server.headers or None)
+                    )
+                    _record_http_errors(http_client, http_errors)
+                    ctx = await stack.enter_async_context(
+                        new_client(server.url, http_client=http_client)
+                    )
+                else:  # older 1.x
+                    ctx = await stack.enter_async_context(
+                        sh.streamablehttp_client(server.url, headers=server.headers or None)
+                    )
                 return ctx[0], ctx[1]  # (read, write, [get_session_id]) — SDK-version-safe
             if transport == "sse":
                 from mcp.client.sse import sse_client
@@ -170,15 +186,31 @@ class MCPManager:
 
         async def setup() -> tuple[AsyncExitStack, Any, list[Any]]:
             stack = AsyncExitStack()
-            read, write = await _open_streams(stack)
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            tools_resp = await session.list_tools()
+            try:
+                read, write = await _open_streams(stack)
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+                tools_resp = await session.list_tools()
+            except BaseException:
+                # Failed, or timed out (MCPBridge.run cancels this task): close
+                # what was opened (a spawned server, the HTTP client) instead of
+                # leaking it.
+                await stack.aclose()
+                raise
             return stack, session, list(tools_resp.tools)
 
         # Remote transports may be slower to hand-shake than a local spawn.
         connect_timeout = 30 if transport == "stdio" else 45
-        stack, session, tools = self.bridge.run(setup(), timeout=connect_timeout)
+        try:
+            stack, session, tools = self.bridge.run(setup(), timeout=connect_timeout)
+        except Exception as exc:
+            # The SDK wraps transport errors in task-group exceptions, and 2.x
+            # turns an HTTP error into a bare "Server returned an error
+            # response": name the real cause (a wrong token is "HTTP 401").
+            reason = _describe_error(exc)
+            if http_errors and http_errors[-1] not in reason:
+                reason += f" ({http_errors[-1]})"
+            raise RuntimeError(reason) from exc
         live = _LiveServer(name=server.name, session=session, stack=stack)
         for mcp_tool in tools:
             evi_tool = self._wrap_tool(server.name, session, mcp_tool)
@@ -199,10 +231,9 @@ class MCPManager:
         full_name = f"{server_name}.{tname}"
 
         def call(**kwargs: Any) -> str:
-            async def _call() -> Any:
-                return await session.call_tool(tname, kwargs)
-
-            result = bridge.run(_call(), timeout=timeout)
+            # A timeout cancels this task (MCPBridge.run), which ends the wait
+            # here; _call_tool then tells the server to stop the work as well.
+            result = bridge.run(_call_tool(session, tname, kwargs), timeout=timeout)
             return _truncate(_flatten_content(result), cap)
 
         # mcp 2.0 renamed the field inputSchema -> input_schema (the wire key
@@ -220,6 +251,72 @@ class MCPManager:
             func=call,
             category="mcp",
         )
+
+
+async def _call_tool(session: Any, name: str, arguments: dict[str, Any]) -> Any:
+    """`session.call_tool`, plus a `notifications/cancelled` when it's abandoned.
+
+    mcp 2.x sends that courtesy cancel itself when the calling task is cancelled.
+    mcp 1.x never does, so a timed-out call would keep running on the server;
+    there we send it ourselves. 1.x numbers requests from `session._request_id`
+    and reads it before its first await, so the value read just before the call
+    is the id this call goes out with. 2.x sessions have no such attribute.
+    """
+    request_id = getattr(session, "_request_id", None)
+    try:
+        return await session.call_tool(name, arguments)
+    except asyncio.CancelledError:
+        if isinstance(request_id, int) and not isinstance(request_id, bool):
+            await _send_cancelled(session, request_id)
+        raise
+
+
+async def _send_cancelled(session: Any, request_id: int) -> None:
+    """Best effort: tell an mcp 1.x server to stop request `request_id`."""
+    try:
+        import mcp.types as types
+
+        note = types.ClientNotification(
+            types.CancelledNotification(
+                params=types.CancelledNotificationParams(
+                    requestId=request_id, reason="timed out in eVi"
+                )
+            )
+        )
+        # Bounded: on shutdown the transport may already be gone.
+        await asyncio.wait_for(session.send_notification(note), timeout=2)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not send an MCP cancellation for request %s: %s", request_id, exc)
+
+
+def _record_http_errors(client: Any, sink: list[str]) -> None:
+    """Keep the latest HTTP error status `client` receives in `sink`, e.g.
+    "HTTP 401 Unauthorized" (best effort: httpx and httpx2 both take hooks)."""
+
+    async def _note(response: Any) -> None:
+        if response.status_code >= 400:
+            reason = getattr(response, "reason_phrase", "") or ""
+            sink[:] = [f"HTTP {response.status_code} {reason}".strip()]
+
+    try:
+        hooks = dict(client.event_hooks)
+        client.event_hooks = {**hooks, "response": [*hooks.get("response", []), _note]}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not watch MCP HTTP statuses: %s", exc)
+
+
+def _describe_error(exc: BaseException) -> str:
+    """One line naming why a connect failed: the leaf errors inside the SDK's
+    exception groups, with the HTTP status of an HTTP error."""
+    if isinstance(exc, BaseExceptionGroup):
+        leaves = [_describe_error(sub) for sub in exc.exceptions]
+        return "; ".join(dict.fromkeys(leaves))
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        reason = getattr(exc.response, "reason_phrase", "") or ""  # type: ignore[attr-defined]
+        return f"HTTP {status} {reason}".strip()
+    text = str(exc) or ("timed out" if isinstance(exc, TimeoutError) else "")
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -248,6 +345,10 @@ def _flatten_content(result: Any) -> str:
             continue
         kind = getattr(item, "type", type(item).__name__)
         parts.append(f"[{kind} omitted]")
-    if getattr(result, "isError", False):
-        return "ERROR: " + ("\n".join(parts) if parts else "(no error message)")
+    # mcp 2.x renamed the field isError -> is_error (the wire key is unchanged).
+    if getattr(result, "is_error", None) or getattr(result, "isError", False):
+        text = "\n".join(parts) if parts else "(no error message)"
+        # A server that follows eVi's own convention (`evi mcp serve`) already
+        # says so; don't stutter "ERROR: ERROR: ...".
+        return text if text.startswith("ERROR:") else "ERROR: " + text
     return "\n".join(parts) if parts else "(no content)"

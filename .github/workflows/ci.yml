@@ -56,6 +56,49 @@ jobs:
       - name: Pytest
         run: python -m pytest -q --timeout=30 tests .github/actions
 
+  mcp-sdk:
+    # eVi's MCP layer must work on every SDK release the [mcp] pin admits, and
+    # the SDK changes APIs between releases (2.0 replaced the server decorators,
+    # renamed fields and moved the HTTP client to httpx2). tests/test_mcp* hold
+    # a real streamable-HTTP round trip, a cancelled call and the DNS-rebinding
+    # guard; run them on the pin's floor line, the 2.0 line and the newest
+    # release the pin allows (what a fresh install gets). A PR that raises the
+    # ceiling runs the new release here before it ships. Like the full test
+    # matrix: PRs, the weekly sweep and manual dispatch. A push to main keeps
+    # its one cheap job, whose unpinned install already runs tests/test_mcp*
+    # on the newest allowed release.
+    name: mcp SDK ${{ matrix.mcp }}
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mcp: ["1.30.*", "2.0.*", "newest allowed"]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        env:
+          MCP_LINE: ${{ matrix.mcp }}
+        run: |
+          python -m pip install --upgrade pip
+          if [ "$MCP_LINE" = "newest allowed" ]; then
+            python -m pip install -e ".[dev,web,mcp]"
+          else
+            python -m pip install -e ".[dev,web,mcp]" "mcp==$MCP_LINE"
+          fi
+          python -c "import importlib.metadata as m; print('mcp', m.version('mcp'))"
+
+      - name: MCP tests
+        run: python -m pytest -q --timeout=60 tests/test_mcp*.py
+
   rust:
     # The Tauri desktop shell was NOT covered by CI: every cargo dependency PR
     # showed "all checks green" while nothing ever compiled the Rust. A breaking

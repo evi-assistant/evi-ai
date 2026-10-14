@@ -14,8 +14,9 @@ What's exposed (all from eVi's own single sources of truth):
 - **Prompts** — your saved slash-command templates (`~/.evi/commands/*.md`).
 
 Transports: **stdio** (default; what a desktop MCP client spawns) and
-**streamable HTTP** (`--http`, with an optional bearer `--token` for
-remote/untrusted clients).
+**streamable HTTP** (`--http`, with a bearer `--token` for remote/untrusted
+clients; required for a non-loopback `--host`, and without one only loopback
+Host/Origin headers are answered).
 
 Run it with `evi mcp serve` (see also `evi mcp serve-config`).
 """
@@ -81,6 +82,15 @@ def dispatch(by_name: dict[str, Tool], name: str, arguments: dict | None) -> str
     if blocked is not None:
         return blocked
     return tool.call(arguments or {})
+
+
+def is_error_text(text: str) -> bool:
+    """True for a `dispatch` result that reports a failure: eVi's `ERROR: ...`
+    convention (unknown tool, a tool that raised or reported an error; the
+    agent reads tool results the same way) or a destructive-command guard
+    block. Served to MCP clients with isError set. Output that merely begins
+    with the word (a file whose first line is "ERROR codes") is not a failure."""
+    return text.startswith(("ERROR:", "BLOCKED by the destructive-command guard"))
 
 
 # MCP has no interactive permission prompt, so a matched destructive command is
@@ -181,6 +191,11 @@ def expand_command_prompt(name: str, arguments: dict | None) -> str | None:
 # --- server construction -------------------------------------------------
 
 
+def _field_name(model, new: str, old: str) -> str:
+    """The name `model` declares for a field mcp 2.x renamed from `old` to `new`."""
+    return new if new in getattr(model, "model_fields", {}) else old
+
+
 def build_server(
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
     allow: tuple[str, ...] | None = None,
@@ -199,11 +214,28 @@ def build_server(
     server: Server = Server("evi", version=__version__)
 
     # --- version-independent handler bodies ------------------------------
-    # `types.Tool(**s)` accepts the "inputSchema" key on both mcp 1.x (the
-    # field) and 2.0 (the pydantic alias for the renamed `input_schema`), and
-    # the wire key stays "inputSchema" either way, so specs are unchanged.
+    # mcp 2.x renamed the pydantic fields `inputSchema` -> `input_schema` and
+    # `isError` -> `is_error` (the wire keys are unchanged). Build models by
+    # whichever field name this SDK declares rather than leaning on the alias.
+    schema_field = _field_name(types.Tool, "input_schema", "inputSchema")
+    error_field = _field_name(types.CallToolResult, "is_error", "isError")
+
     def _tool_list() -> list[types.Tool]:
-        return [types.Tool(**s) for s in specs]
+        return [
+            types.Tool(name=s["name"], description=s["description"],
+                       **{schema_field: s["inputSchema"]})
+            for s in specs
+        ]
+
+    async def _call_result(name: str, arguments: dict | None) -> types.CallToolResult:
+        # A failure the model should read and react to (unknown tool, the
+        # destructive-command guard, a tool's own ERROR) is a tool result with
+        # the error flag set, never a protocol error, on both SDK lines.
+        text = await anyio.to_thread.run_sync(lambda: dispatch(by_name, name, arguments))
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=text)],
+            **{error_field: is_error_text(text)},
+        )
 
     def _resource_list() -> list[types.Resource]:
         return [types.Resource(**s) for s in memory_resource_specs()]
@@ -236,9 +268,8 @@ def build_server(
             return _tool_list()
 
         @server.call_tool()
-        async def _ct(name: str, arguments: dict | None) -> list[types.TextContent]:
-            text = await anyio.to_thread.run_sync(lambda: dispatch(by_name, name, arguments))
-            return [types.TextContent(type="text", text=text)]
+        async def _ct(name: str, arguments: dict | None) -> types.CallToolResult:
+            return await _call_result(name, arguments)
 
         @server.list_resources()
         async def _lr() -> list[types.Resource]:
@@ -267,10 +298,7 @@ def build_server(
             return types.ListToolsResult(tools=_tool_list())
 
         async def _ct(_ctx, params) -> types.CallToolResult:
-            text = await anyio.to_thread.run_sync(
-                lambda: dispatch(by_name, params.name, params.arguments)
-            )
-            return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+            return await _call_result(params.name, params.arguments)
 
         async def _lr(_ctx, _params) -> types.ListResourcesResult:
             return types.ListResourcesResult(resources=_resource_list())
@@ -306,15 +334,75 @@ def build_server(
 
 # --- HTTP transport ------------------------------------------------------
 
+# The names a tokenless HTTP server answers to, on any port.
+_LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost", "[::1]")
+
+
+def loopback_security_settings(bind_host: str = ""):
+    """The SDK's DNS-rebinding guard, limited to loopback Host and Origin.
+
+    A web page can make the browser send requests to 127.0.0.1 under its own
+    hostname (DNS rebinding), but it can't forge the Host header, so a request
+    for `evil.example` is refused (421), as is a browser Origin that isn't a
+    loopback page (403). Non-browser clients send no Origin and pass. A
+    loopback `bind_host` the defaults don't name (127.0.0.2, an expanded ::1)
+    is answered to as well, or its own clients would be refused."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    names = list(dict.fromkeys([*_LOOPBACK_HOSTS, *_host_header_names(bind_host)]))
+    hosts = [h for name in names for h in (name, f"{name}:*")]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"{scheme}://{h}" for scheme in ("http", "https") for h in hosts],
+    )
+
+
+def _loopback_ip(host: str):
+    """`host` as a loopback ip_address, "localhost" as is, else None."""
+    import ipaddress
+
+    h = (host or "").strip().lower()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    if h == "localhost":
+        return h
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:  # a hostname, or "" (all interfaces)
+        return None
+    return ip if ip.is_loopback else None
+
+
+def _host_header_names(host: str) -> list[str]:
+    """How a client names a loopback bind `host` in its Host header (IPv6 in
+    brackets, as written and compressed); [] for anything else."""
+    ip = _loopback_ip(host)
+    if ip is None:
+        return []
+    if isinstance(ip, str) or ip.version == 4:  # "localhost", or an IPv4 address
+        return [str(ip)]
+    written = (host or "").strip().lower().strip("[]")
+    return list(dict.fromkeys([f"[{written}]", f"[{ip.compressed}]"]))
+
+
+def is_loopback_bind(host: str) -> bool:
+    """True if binding to `host` keeps the server on this machine."""
+    return _loopback_ip(host) is not None
+
 
 def build_http_app(
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
     allow: tuple[str, ...] | None = None,
     token: str = "",
+    bind_host: str = "",
 ):
     """Build a Starlette ASGI app serving the MCP server over streamable HTTP
     at `/mcp`. If `token` is set, requests must carry `Authorization: Bearer
-    <token>` — the recommended gate for any non-localhost exposure."""
+    <token>` — the recommended gate for any non-localhost exposure. Without a
+    token the app only answers to loopback Host/Origin headers (see
+    `loopback_security_settings`), which a tokenless server is bound to;
+    `bind_host` is the address it is served on, when that isn't 127.0.0.1."""
     import secrets as _secrets
     from contextlib import asynccontextmanager
 
@@ -326,7 +414,13 @@ def build_http_app(
     from starlette.routing import Mount
 
     server = build_server(categories, allow)
-    manager = StreamableHTTPSessionManager(app=server, json_response=True)
+    # Tokenless, the Host/Origin check is all that keeps a DNS-rebinding page
+    # away from these tools (the web server guards itself the same way). With a
+    # token, the token is the control, and a LAN or proxy hostname must work.
+    security = None if token else loopback_security_settings(bind_host)
+    manager = StreamableHTTPSessionManager(
+        app=server, json_response=True, security_settings=security
+    )
 
     async def handle_mcp(scope, receive, send):
         await manager.handle_request(scope, receive, send)
@@ -362,12 +456,20 @@ def serve(
 ) -> None:
     """Run the eVi MCP server. Default transport is **stdio** (what a desktop
     MCP client spawns). With `http=True`, serve streamable HTTP on host:port
-    (optionally bearer-token gated)."""
+    (optionally bearer-token gated). Raises ValueError for a non-loopback
+    `host` without a `token`: anyone who can reach the port could call the
+    exposed tools."""
     if http:
+        if not token and not is_loopback_bind(host):
+            raise ValueError(
+                f"refusing to serve MCP over HTTP on {host!r} without a token: anyone "
+                "who can reach it could call eVi's tools. Pass --token, or bind to "
+                "127.0.0.1."
+            )
         import uvicorn
 
-        uvicorn.run(build_http_app(categories, allow, token), host=host, port=port,
-                    log_level="warning")
+        uvicorn.run(build_http_app(categories, allow, token, bind_host=host), host=host,
+                    port=port, log_level="warning")
         return
 
     import anyio

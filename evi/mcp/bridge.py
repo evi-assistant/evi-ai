@@ -75,9 +75,16 @@ class MCPBridge:
         """Submit a coroutine to the bridge loop and block until it returns.
 
         Raises whatever the coroutine raised, plus `concurrent.futures.TimeoutError`
-        if it doesn't finish within `timeout` seconds.
+        if it doesn't finish within `timeout` seconds. A timed-out (or
+        interrupted) wait cancels the task on the loop, so an abandoned MCP call
+        stops instead of running on, and the SDK session can tell the server.
         """
         if not self.is_running or self._loop is None:
             raise RuntimeError("MCPBridge not started")
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return fut.result(timeout=timeout)
+        try:
+            return fut.result(timeout=timeout)
+        except BaseException:
+            # No-op when the coroutine itself raised (the future is done).
+            fut.cancel()
+            raise

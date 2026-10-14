@@ -150,6 +150,19 @@ def test_dispatch_unknown_tool_returns_error():
     assert out.startswith("ERROR: unknown tool")
 
 
+def test_is_error_text_flags_failures_only():
+    # Failures are served to MCP clients with isError set (see build_server).
+    assert publish.is_error_text(publish.dispatch({}, "nope", {}))
+    assert publish.is_error_text("ERROR: ValueError: kaput")
+    assert publish.is_error_text("BLOCKED by the destructive-command guard: rm -rf. Not run.")
+    assert not publish.is_error_text("got hi")
+    assert not publish.is_error_text("no ERROR here")
+    # Successful output that merely starts with the word (git_show of a file
+    # whose first line is "ERROR codes") is not a failure.
+    assert not publish.is_error_text("ERROR codes reference\n404 not found")
+    assert not publish.is_error_text("ERRORS: none")
+
+
 def test_dispatch_tolerates_none_arguments():
     # The fake tool requires `x`; missing args surface as a tool ERROR, not a crash.
     out = publish.dispatch({"echo": _fake_tool("echo")}, "echo", None)
@@ -312,3 +325,45 @@ async def _assert_round_trip(client) -> None:
     name = next((t.name for t in listed.tools if _no_required(t)), listed.tools[0].name)
     result = await client.call_tool(name, {})
     assert isinstance(result.content, list), "call_tool returned no content list"
+
+
+# --- `evi mcp serve` (the CLI) ---------------------------------------------
+
+
+@pytest.fixture
+def serve_cli(monkeypatch, tmp_path):
+    """The CLI with an isolated config and a stubbed `publish.serve`; returns
+    (invoke(args) -> result, the serve() calls)."""
+    from typer.testing import CliRunner
+
+    import evi.apps.cli.main as cli_main
+
+    monkeypatch.setattr("evi.config.HOME", tmp_path)
+    monkeypatch.setattr("evi.config.CONFIG_PATH", tmp_path / "config.toml")
+    calls: list[dict] = []
+    monkeypatch.setattr(publish, "serve", lambda *a, **k: calls.append(k))
+    return (lambda args: CliRunner().invoke(cli_main.app, ["mcp", "serve", *args])), calls
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.5", ""])
+def test_cli_refuses_a_tokenless_non_loopback_http_host(host, serve_cli):
+    # Re-review: the CLI printed a stale "Bind to localhost only" warning, then
+    # serve() raised ValueError and Typer printed a Rich traceback.
+    invoke, calls = serve_cli
+    r = invoke(["--http", "--host", host])
+    assert r.exit_code == 2, r.output
+    lines = [ln for ln in r.output.splitlines() if ln.strip()]
+    assert len(lines) == 1, r.output
+    assert lines[0].startswith("error: refusing to serve MCP over HTTP") and "--token" in lines[0]
+    assert "Traceback" not in r.output and "Bind to localhost" not in r.output
+    assert not calls
+
+
+def test_cli_serves_tokenless_on_loopback_and_with_a_token_anywhere(serve_cli):
+    invoke, calls = serve_cli
+    r = invoke(["--http"])
+    assert r.exit_code == 0, r.output
+    assert "Bind to localhost" not in r.output and "--token" in r.output
+    r = invoke(["--http", "--host", "0.0.0.0", "--token", "s3cret"])
+    assert r.exit_code == 0, r.output
+    assert [(c["host"], c["token"]) for c in calls] == [("127.0.0.1", ""), ("0.0.0.0", "s3cret")]

@@ -7004,8 +7004,24 @@ def mcp_serve(
     cats = tuple(c.strip() for c in categories.split(",") if c.strip())
     allow = tuple(t.strip() for t in tools.split(",") if t.strip()) or None
     if http and not token:
-        console.print("[yellow]⚠ --http without --token: the server is unauthenticated. "
-                      "Bind to localhost only, or pass --token.[/yellow]")
+        from rich.markup import escape
+
+        from evi.mcp.publish import is_loopback_bind
+
+        if not is_loopback_bind(host):
+            # serve() refuses this too; say it in one line, not a traceback.
+            console.print(
+                f"[red]error:[/red] refusing to serve MCP over HTTP on "
+                f"{escape(host or '(all interfaces)')} without --token. Pass --token, or "
+                "bind to 127.0.0.1.",
+                soft_wrap=True, highlight=False,
+            )
+            raise typer.Exit(2)
+        console.print(
+            "[yellow]⚠ --http without --token: any program on this machine can call "
+            "these tools. Pass --token to require one.[/yellow]",
+            soft_wrap=True,
+        )
     serve(cats, allow, http=http, host=host, port=port, token=token)
 
 

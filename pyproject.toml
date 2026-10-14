@@ -68,20 +68,21 @@ web = [
     "python-multipart>=0.0.9",
 ]
 mcp = [
-    # eVi's MCP layer (evi/mcp/manager.py + publish.py) is dual-compatible with
-    # the 1.x and 2.0 SDK lines — 2.0.0 (2026-07-28) was a breaking major
-    # (`Tool.inputSchema` -> `input_schema`, `streamablehttp_client` renamed).
-    # VERIFIED by running the mcp tests against both: mcp 1.28.1 and mcp 2.0.0
-    # are green.
+    # eVi's MCP layer (evi/mcp/manager.py + publish.py) works with the 1.x and
+    # 2.x SDK lines. 2.0.0 (2026-07-28) was a breaking major: the low-level
+    # `Server` decorators gave way to `add_request_handler`, pydantic fields
+    # were renamed (`inputSchema` -> `input_schema`, `isError` -> `is_error`),
+    # and the streamable-HTTP client takes an httpx2 client instead of
+    # `headers=`. eVi probes for each of these rather than assuming a line.
     #
-    # The ceiling is <2.1, NOT <3: mcp 2.1.0 moved the API again — the low-level
-    # `Server` decorators (`@server.list_tools()` etc.) were replaced outright by
-    # `add_request_handler`, and `Tool.inputSchema` is gone rather than aliased.
-    # eVi fails 4 mcp tests on 2.1.0, so allowing it would let a fresh
-    # `pip install evi-assistant[mcp]` silently break MCP for users — exactly the
-    # trap the original <2 pin existed to prevent. Raise this only with a real
-    # 2.1 migration (publish.py -> add_request_handler) behind passing tests.
-    "mcp>=1.0,<2.1",
+    # The range is what CI runs: the `mcp-sdk` job in .github/workflows/ci.yml
+    # runs tests/test_mcp* (a real HTTP server and client, a cancelled call,
+    # the DNS-rebinding guard) on 1.30.x, 2.0.x and the newest release this
+    # pin admits. Verified green locally on 1.30.0, 2.0.1, 2.1.0, 2.1.1, 2.2.0
+    # and 2.3.0. The SDK changes APIs in minor releases, so the ceiling is the
+    # next untested minor, NOT <3: raise it in a PR, where the matrix tests the
+    # new release before a fresh `pip install evi-assistant[mcp]` can get it.
+    "mcp>=1.30,<2.4",
 ]
 scheduler = [
     "apscheduler>=3.10",
