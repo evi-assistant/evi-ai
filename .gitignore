@@ -28,6 +28,10 @@ Thumbs.db
 
 # Local agent / tooling scratch dirs
 .rstk/
+# Repo-local git worktrees (<repo>/.worktrees/<branch>), made by `evi worktree
+# create` (evi/worktree.py) and scripts/dev-bootstrap --worktree. In any other
+# repo both keep them out of `git add` through .git/info/exclude instead.
+.worktrees/
 # Claude Code local config (settings.local.json, session locks, local rules)
 .claude/
 

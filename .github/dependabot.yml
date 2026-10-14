@@ -20,7 +20,11 @@ updates:
       prefix: "build"
       include: "scope"
 
-  # Rust — the Tauri desktop crate
+  # Rust — the Tauri desktop crate. Majors of base64/sha2/zip/minisign-verify
+  # change the sidecar update channel's signature, hash and extraction code, and
+  # `cargo test` (the CI desktop job) runs its real-archive and hostile-archive
+  # tests: merge those only when that job is green. toml stays on 0.8 for now
+  # (see the note in desktop/src-tauri/Cargo.toml).
   - package-ecosystem: "cargo"
     directory: "/desktop/src-tauri"
     schedule:

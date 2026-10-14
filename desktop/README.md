@@ -7,7 +7,8 @@ close the child server is killed.
 
 ## Prerequisites
 
-- Rust toolchain (`rustup`, stable, 1.77+)
+- Rust toolchain (`rustup`, stable, 1.90+ — the floor of the locked Tauri 2.12
+  crates)
 - Node 18+ (only used to invoke the Tauri CLI)
 - Python 3.13+ with the eVi package installed in editable mode:
   `pip install -e '.[web]'` from the repo root

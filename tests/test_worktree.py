@@ -58,6 +58,20 @@ def test_create_and_list(repo: Path) -> None:
     assert "feature/x" in branches
 
 
+def test_create_keeps_worktrees_out_of_git_add(repo: Path) -> None:
+    """`.worktrees/` lives inside the checkout; without an exclude entry a
+    `git add -A` there stages every managed worktree as an embedded repo."""
+    from evi.worktree import create_worktree
+
+    create_worktree("one")
+    create_worktree("two")
+    exclude = (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert exclude.count("/.worktrees/") == 1  # written once, not per create
+    _git("add", "-A", cwd=repo)
+    staged = _git("diff", "--cached", "--name-only", cwd=repo)
+    assert ".worktrees" not in staged
+
+
 def test_find_worktree_for(repo: Path) -> None:
     from evi.worktree import create_worktree, find_worktree_for
 

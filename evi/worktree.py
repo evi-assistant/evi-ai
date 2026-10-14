@@ -255,7 +255,37 @@ def create_worktree(
     else:
         args += [*gitsafe.end_of_options(), str(dest), branch]
     _git(*args, cwd=root)
+    _exclude_worktrees_dir(root)
     return dest
+
+
+_EXCLUDE_LINE = "/.worktrees/"
+
+
+def _exclude_worktrees_dir(root: Path) -> None:
+    """Keep `.worktrees/` out of `git add -A` in the user's repo.
+
+    The managed worktrees live inside the checkout, so without an ignore entry
+    a `git add -A` there stages each one as an embedded repository. Written to
+    `.git/info/exclude` (local, never committed) rather than the repo's own
+    .gitignore. Best effort: a failure here must not undo a created worktree.
+    """
+    try:
+        raw = _git("rev-parse", "--git-common-dir", cwd=root).strip()
+        common = _git_path(raw)
+        if not common.is_absolute():
+            common = root / common
+        exclude = common / "info" / "exclude"
+        existing = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+        lines = {ln.strip() for ln in existing.splitlines()}
+        if lines & {_EXCLUDE_LINE, ".worktrees/", ".worktrees", "/.worktrees"}:
+            return
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        sep = "" if not existing or existing.endswith("\n") else "\n"
+        with exclude.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(f"{sep}# eVi managed worktrees (evi worktree create)\n{_EXCLUDE_LINE}\n")
+    except (OSError, WorktreeError):
+        pass
 
 
 def resolve_worktree_path(branch_or_path: str, *, start: Path | None = None) -> Path:

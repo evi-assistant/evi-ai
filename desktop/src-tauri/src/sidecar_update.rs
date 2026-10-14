@@ -111,6 +111,11 @@ fn effective_current(active: Option<String>, bundled: &str) -> String {
 /// `sig_b64` is the `.sig` produced by `tauri signer sign` — base64 of the raw
 /// minisign `.minisig` file text (same key/format as the Tauri app updater).
 fn verify_signature(data: &[u8], sig_b64: &str) -> bool {
+    verify_signature_with(PUBKEY, data, sig_b64)
+}
+
+/// `verify_signature` against an explicit public key (tests use a known vector).
+fn verify_signature_with(pubkey_b64: &str, data: &[u8], sig_b64: &str) -> bool {
     use base64::Engine;
     use minisign_verify::{PublicKey, Signature};
     let decoded = match base64::engine::general_purpose::STANDARD.decode(sig_b64.trim()) {
@@ -121,7 +126,7 @@ fn verify_signature(data: &[u8], sig_b64: &str) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
-    let pk = match PublicKey::from_base64(PUBKEY) {
+    let pk = match PublicKey::from_base64(pubkey_b64) {
         Ok(p) => p,
         Err(_) => return false,
     };
@@ -198,6 +203,31 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// sha256-check a downloaded sidecar zip against the digest the signed manifest
+/// pins, then extract it into `<root>/<version>`. `None` on any failure, with
+/// nothing left behind.
+fn stage_archive(evi_home: &Path, version: &str, zip_bytes: &[u8], sha256: &str) -> Option<()> {
+    if sha256_hex(zip_bytes) != sha256.to_lowercase() {
+        eprintln!("evi: sidecar zip sha256 mismatch — ignoring");
+        return None;
+    }
+    let dest = root(evi_home).join(version);
+    // Extract into a temp dir first, then rename into place (atomic-ish).
+    let tmp = root(evi_home).join(format!(".staging-{version}"));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).ok()?;
+    if extract_zip(zip_bytes, &tmp).is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return None;
+    }
+    let _ = std::fs::remove_dir_all(&dest);
+    if std::fs::rename(&tmp, &dest).is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return None;
+    }
+    Some(())
+}
+
 /// Remove staged version dirs other than `keep` (best-effort housekeeping).
 fn prune_old(evi_home: &Path, keep: &str) {
     if let Ok(entries) = std::fs::read_dir(root(evi_home)) {
@@ -244,23 +274,7 @@ fn check_and_stage(evi_home: &Path, bundled_version: &str) -> Option<String> {
     let bin = dest.join("evi-server").join(sidecar_bin());
     if !bin.is_file() {
         let zip_bytes = http_get_bytes(&entry.url)?;
-        if sha256_hex(&zip_bytes) != entry.sha256.to_lowercase() {
-            eprintln!("evi: sidecar zip sha256 mismatch — ignoring");
-            return None;
-        }
-        // Extract into a temp dir first, then rename into place (atomic-ish).
-        let tmp = root(evi_home).join(format!(".staging-{}", manifest.version));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).ok()?;
-        if extract_zip(&zip_bytes, &tmp).is_err() {
-            let _ = std::fs::remove_dir_all(&tmp);
-            return None;
-        }
-        let _ = std::fs::remove_dir_all(&dest);
-        if std::fs::rename(&tmp, &dest).is_err() {
-            let _ = std::fs::remove_dir_all(&tmp);
-            return None;
-        }
+        stage_archive(evi_home, &manifest.version, &zip_bytes, &entry.sha256)?;
     }
 
     // Prove the new sidecar actually runs before making it active (rollback = do nothing).
@@ -368,6 +382,124 @@ mod tests {
     #[test]
     fn bad_signature_rejected() {
         assert!(!verify_signature(b"data", "not a real minisig"));
+    }
+
+    // minisign-verify's own prehashed test vector (key, signature over b"test").
+    // `tauri signer sign` writes this .minisig text base64-encoded as the .sig.
+    const TEST_PUBKEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+    const TEST_MINISIG: &str = "untrusted comment: signature from minisign secret key
+RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=
+trusted comment: timestamp:1556193335\tfile:test
+y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+    // The same vector's legacy (non-prehashed) signature, which we refuse.
+    const TEST_LEGACY_MINISIG: &str = "untrusted comment: signature from minisign secret key
+RWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=
+trusted comment: timestamp:1555779966\tfile:test
+QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfNQUaOAA==";
+
+    #[test]
+    fn tauri_signer_signature_verifies() {
+        use base64::Engine;
+        let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+        let sig = b64(TEST_MINISIG);
+        assert!(verify_signature_with(TEST_PUBKEY, b"test", &sig));
+        // A .sig file read from disk may carry a trailing newline.
+        assert!(verify_signature_with(TEST_PUBKEY, b"test", &format!("{sig}\n")));
+        // Tampered data, the release key, or a legacy signature: all refused.
+        assert!(!verify_signature_with(TEST_PUBKEY, b"Test", &sig));
+        assert!(!verify_signature(b"test", &sig));
+        assert!(!verify_signature_with(TEST_PUBKEY, b"test", &b64(TEST_LEGACY_MINISIG)));
+    }
+
+    // A real sidecar archive and its digest, both written by scripts/zip-sidecar.py
+    // (regenerate with tests/fixtures/sidecar-update/make_fixtures.py). It holds
+    // evi-server/evi-server and evi-server.exe, so it stages on every platform.
+    const REAL_ZIP: &[u8] =
+        include_bytes!("../tests/fixtures/sidecar-update/sidecar-windows-x86_64.zip");
+    const REAL_SHA256: &str =
+        include_str!("../tests/fixtures/sidecar-update/sidecar-windows-x86_64.sha256");
+    const HOSTILE_ZIP: &[u8] = include_bytes!("../tests/fixtures/sidecar-update/hostile.zip");
+
+    fn fresh_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("evi-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn real_archive_hash_checks_extracts_and_stages() {
+        let home = fresh_dir("e2e-real");
+        // Our hex digest matches hashlib's for the published archive (the
+        // manifest's sha256 comes from that .sha256 file); upper case is fine too.
+        assert_eq!(sha256_hex(REAL_ZIP), REAL_SHA256.trim());
+        let pinned = REAL_SHA256.trim().to_uppercase();
+        assert!(stage_archive(&home, "1.0.99", REAL_ZIP, &pinned).is_some());
+
+        let dir = root(&home).join("1.0.99").join("evi-server");
+        let lines: String = (0..64).map(|i| format!("eVi sidecar fixture line {i:03}\n")).collect();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("_internal").join("base_library.txt")).unwrap(),
+            lines
+        );
+        assert_eq!(
+            std::fs::read(dir.join("_internal").join("lib").join("data.bin")).unwrap(),
+            (0..=255u8).collect::<Vec<u8>>()
+        );
+        assert!(!root(&home).join(".staging-1.0.99").exists());
+
+        // Flip the pointer as check_and_stage does: launch now picks it up.
+        std::fs::write(root(&home).join("active"), "1.0.99").unwrap();
+        assert_eq!(staged_sidecar(&home, "1.0.53"), Some(dir.join(sidecar_bin())));
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn tampered_or_corrupt_archive_stages_nothing() {
+        let home = fresh_dir("e2e-bad");
+        // One flipped byte fails the pinned-hash check.
+        let mut tampered = REAL_ZIP.to_vec();
+        let mid = tampered.len() / 2;
+        tampered[mid] ^= 0x01;
+        assert!(stage_archive(&home, "1.0.99", &tampered, REAL_SHA256.trim()).is_none());
+        assert!(!root(&home).join("1.0.99").exists());
+
+        // A truncated download whose hash matches (a bad manifest) still fails
+        // closed at extraction and leaves no staging dir behind.
+        let truncated = &REAL_ZIP[..REAL_ZIP.len() / 2];
+        assert!(stage_archive(&home, "1.0.99", truncated, &sha256_hex(truncated)).is_none());
+        assert!(!root(&home).join("1.0.99").exists());
+        assert!(!root(&home).join(".staging-1.0.99").exists());
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn hostile_archive_entries_stay_inside_the_staging_dir() {
+        let base = fresh_dir("e2e-hostile");
+        let dest = base.join("stage");
+        std::fs::create_dir_all(&dest).unwrap();
+        extract_zip(HOSTILE_ZIP, &dest).unwrap();
+
+        // `../escape.txt` and `evi-server/../../escape2.txt` would land in `base`.
+        assert!(!base.join("escape.txt").exists());
+        assert!(!base.join("escape2.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("evi-server").join("ok.txt")).unwrap(),
+            "inside\n"
+        );
+        let bin = dest.join("evi-server").join("evi-server");
+        assert!(bin.is_file());
+        #[cfg(unix)]
+        {
+            // The unix mode from the archive survives, so the binary can launch.
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&bin).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

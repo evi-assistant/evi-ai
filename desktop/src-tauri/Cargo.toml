@@ -5,7 +5,7 @@ description = "eVi — desktop shell"
 authors = ["eVi"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.90"  # floor of the locked tauri 2.12 / tauri-plugin-* crates
 
 # Desktop-only binary crate — the whole app is in src/main.rs. (No [lib]
 # target: that's the create-tauri-app mobile template's lib split, which we
@@ -17,21 +17,30 @@ tauri-build = { version = "2.0", features = [] }
 [dependencies]
 # tray-icon: system tray; image-png: load the tray icon; devtools: keep
 # View → Toggle Developer Tools available in release builds too.
+# RUSTSEC-2024-0429 (glib 0.18.5, unsound VariantStrIter, fixed in glib 0.20):
+# Linux only, via tauri → wry/webkit2gtk → gtk-rs 0.18. Nothing in our tree calls
+# Variant::array_iter_str/VariantStrIter, and glib can't move until Tauri adopts
+# gtk-rs 0.20. Rechecked at tauri 2.12.1 (2026-10): still 0.18.5.
 tauri = { version = "2.0", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-shell = "2.0"
 tauri-plugin-updater = "2.0"
 tauri-plugin-deep-link = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Held at 0.8: toml 1.x's `Value::from_str` parses one value, not a document, so
+# the config.toml reads in main.rs and sidecar_update.rs would silently fall back
+# to their defaults. Move both to `toml::Table` before taking 1.x.
 toml = "0.8"   # read [federation] bind_lan from config.toml at spawn
 ureq = "3"
 url = "2"
 # Sidecar update channel (sidecar_update.rs): verify the minisign-signed manifest,
-# sha256-check the zip, and extract the onedir into a writable dir.
+# sha256-check the zip, and extract the onedir into a writable dir. A major bump
+# of these needs its tests green (signature, real-archive hash + extract, hostile
+# archive).
 minisign-verify = "0.2"
-sha2 = "0.10"
-base64 = "0.22"  # decode the tauri-signer manifest signature before minisign-verify
-zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.11"
+base64 = "0.23"  # decode the tauri-signer manifest signature before minisign-verify
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
