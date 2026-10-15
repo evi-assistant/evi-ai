@@ -29,6 +29,58 @@ ROOT = Path(__file__).resolve().parents[2]
 FAKE_REPLY = "Hello from the fake backend! This is a streamed reply."
 
 
+def pytest_configure(config) -> None:
+    # e2e.yml's gate runs `-m "e2e and not quarantine"` and TESTING.md tells
+    # authors to mark a known-flaky UI test with it; registered so that mark
+    # doesn't warn (or fail the run under --strict-markers).
+    config.addinivalue_line(
+        "markers",
+        "quarantine: known-flaky UI e2e test, run by e2e.yml in a non-blocking step",
+    )
+
+# Prompt markers the fake backend reacts to, so a UI test can shape a turn
+# without a real model. They count only in a STREAMED request whose last
+# message is the user's, so the step after the tool call and the one-shot
+# (non-streamed) title call get the plain canned reply.
+HOLD_MARKER = "[e2e-hold]"    # answer nothing until the test releases the turn
+TOOL_MARKER = "[e2e-tool]"    # answer with one call to FAKE_TOOL instead of text
+FAKE_TOOL = "list_memories"   # read-only, and `memory` is auto-approved: no prompt
+
+
+class FakeLLMControl:
+    """The test's handle on the fake backend: `held` is set when a HOLD_MARKER
+    request arrives (the turn is now in flight server-side), and the request
+    answers once the test sets `release`. Tests get the markers from here
+    (via the `fake_llm` fixture): importing conftest would load a second copy."""
+
+    HOLD = HOLD_MARKER
+    TOOL = TOOL_MARKER
+    TOOL_NAME = FAKE_TOOL
+
+    def __init__(self) -> None:
+        self.held = threading.Event()
+        self.release = threading.Event()
+        self.release.set()    # nothing holds outside a test using `fake_llm`
+
+    def reset(self) -> None:
+        self.held.clear()
+        self.release.clear()
+
+
+# One per process — and so one per xdist worker, like the session server.
+FAKE_LLM = FakeLLMControl()
+
+
+def _last_user_text(messages: list) -> str:
+    last = messages[-1] if messages else {}
+    if not isinstance(last, dict) or last.get("role") != "user":
+        return ""
+    content = last.get("content")
+    if isinstance(content, list):   # multipart: [{type: text, text}, …]
+        return " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+    return str(content or "")
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -39,7 +91,8 @@ def _free_port() -> int:
 
 def _make_fake_llm_app():
     """A minimal OpenAI-compatible backend: /v1/models + streaming and
-    non-streaming /v1/chat/completions."""
+    non-streaming /v1/chat/completions (see HOLD_MARKER / TOOL_MARKER)."""
+    import asyncio
     import json
 
     from starlette.applications import Starlette
@@ -64,6 +117,27 @@ def _make_fake_llm_app():
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": FAKE_REPLY}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             })
+
+        said = _last_user_text(body.get("messages") or [])
+        if HOLD_MARKER in said:
+            FAKE_LLM.held.set()
+            # Bounded, so a test that never releases can't wedge the server.
+            await asyncio.to_thread(FAKE_LLM.release.wait, 60)
+
+        if TOOL_MARKER in said:
+            async def gen_tool():
+                call = {"index": 0, "id": "call_e2e", "type": "function",
+                        "function": {"name": FAKE_TOOL, "arguments": "{}"}}
+                chunk = {"id": "x", "object": "chat.completion.chunk", "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "tool_calls": [call]},
+                     "finish_reason": None}]}
+                yield f"data: {json.dumps(chunk)}\n\n"
+                done = {"id": "x", "object": "chat.completion.chunk",
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+                yield f"data: {json.dumps(done)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(gen_tool(), media_type="text/event-stream")
 
         async def gen():
             for i, word in enumerate(FAKE_REPLY.split(" ")):
@@ -121,10 +195,29 @@ def _spawn_evi(home: Path):
 
 
 @pytest.fixture(scope="session")
-def evi_base_url(tmp_path_factory):
+def evi_home(tmp_path_factory) -> Path:
+    """The isolated EVI_HOME the `evi_base_url` server runs against, for tests
+    that seed state the server reads per request (pairing queue, plugins,
+    the runtime log). Always a pytest tmp dir."""
+    return tmp_path_factory.mktemp("evi-home")
+
+
+@pytest.fixture
+def fake_llm(evi_base_url):
+    """FAKE_LLM, reset for this test and released afterwards, so a failing test
+    can't leave a held turn behind for the next one."""
+    FAKE_LLM.reset()
+    try:
+        yield FAKE_LLM
+    finally:
+        FAKE_LLM.release.set()
+
+
+@pytest.fixture(scope="session")
+def evi_base_url(evi_home):
     import uvicorn
 
-    home = tmp_path_factory.mktemp("evi-home")
+    home = evi_home
     fake_port = _free_port()
     (home / "config.toml").write_text(
         "[llm]\n"
