@@ -621,15 +621,30 @@ url     = "https://example.com/evi-hook"   # POST instead of spawning a command
 
 Env vars set in the child process (command hooks):
 
-- `EVI_HOOK_EVENT` — `before_tool_call` or `after_tool_call`
-- `EVI_HOOK_TOOL` — fully-qualified tool name
-- `EVI_HOOK_ARGS_JSON` — JSON of the call arguments
+- `EVI_HOOK_EVENT` — the event (`before_tool_call`, `user_prompt_submit`, …)
+- `EVI_HOOK_TOOL` — fully-qualified tool name (the event name for lifecycle
+  events)
+- `EVI_HOOK_ARGS_JSON` — JSON of the call arguments (the prompt for
+  `user_prompt_submit`, the finish reason for `stop`), whole up to the OS limit
+  for one environment variable (about 32,000 characters on Windows, 128 KiB on
+  Linux)
+- `EVI_HOOK_ARGS_FILE` — path of a temp file holding the whole payload, set
+  when `EVI_HOOK_ARGS_JSON` was cut and always for a hook with
+  `args_via_file = true`; deleted when the hook exits
+- `EVI_HOOK_ARGS_TRUNCATED` — `1` when `EVI_HOOK_ARGS_JSON` was cut
 - `EVI_HOOK_RESULT` — tool output (after-hooks only, capped at 4 KB)
+- `EVI_EFFORT` — the active reasoning effort
+- `EVI_CWD` — the session working folder; the hook also runs in it
+
+A guard (`veto_on_nonzero = true`) is never run on a cut payload: the action
+is blocked instead, unless the hook sets `args_via_file = true` and reads
+`EVI_HOOK_ARGS_FILE`. See [Hooks → Big
+payloads](features/hooks.md#big-payloads).
 
 A hook uses either `command` (argv, spawned) **or** `url` (HTTP POST of
-`{event, tool, args_json, result}`). For a url hook a 2xx response means
-success; any other status becomes the exit code, so `veto_on_nonzero` still
-gates the call.
+`{event, tool, args_json, effort, cwd, result}`). For a url hook a 2xx
+response means success; any other status becomes the exit code, so
+`veto_on_nonzero` still gates the call.
 
 Besides the tool events, hooks fire on **lifecycle events** (use `match = "*"`):
 
@@ -803,6 +818,35 @@ delegate_a2a(url="https://some-agent.example/a2a", task="research X", token="…
 
 (category `federation`, off by default — enable the tool to let the model use it).
 
+## Web access — `[web]` in `config.toml`
+
+Who the web server (`evi web`, the desktop app, the Docker image) answers, and
+how long it waits on a permission prompt:
+
+```toml
+[web]
+auth_token         = ""      # access token; empty = only this machine can connect
+multi_user         = false   # per-person logins from ~/.evi/users.json (below)
+decision_timeout_s = 300.0   # an unanswered permission prompt is denied after this
+```
+
+- **No token** (`auth_token` empty, no `EVI_WEB_AUTH_TOKEN`, no users): the
+  server answers only loopback clients on this machine, and
+  `evi web --host 0.0.0.0` refuses to start.
+- **`auth_token`** set: every client needs it, this machine's too.
+  `evi web-config token rotate` sets a new one (in effect at once, no restart),
+  `evi web-config token show` prints the token clients need, and
+  `evi web-config token clear` removes it.
+- **`EVI_WEB_AUTH_TOKEN`** (the launch token): an environment variable of the
+  server process that gates other machines only. The desktop app sets it when
+  LAN access is on, and so does the Docker image when no token is configured.
+- **`decision_timeout_s`**: `EVI_DECISION_TIMEOUT_S` overrides it; anything
+  that isn't a positive number means 300.
+
+The full request rules (browsers and `X-Evi-Client`, proxies, the desktop
+app's LAN token, containers, owner-only routes) are in
+[security.md](security.md).
+
 ## Multi-user web — `~/.evi/users.json`
 
 Opt-in (`[web] multi_user = true`): each person logs in with their own revocable
@@ -815,8 +859,12 @@ token instead of sharing `auth_token`.
 Manage with `evi web-config users add/list/remove`. Each user gets an **isolated
 workspace** — their web sessions, transcripts, and memory live under
 `~/.evi/users/<name>/` and aren't visible to other users. Drop a user from the
-file to revoke access. (Skills/plugins/config stay shared — they're capabilities,
-not personal data.)
+file to revoke access. Skills and installed plugins stay shared, but the routes
+that act on the host (settings, hooks, plugins, channels, peers, the runtime,
+MCP, backends, checkpoints and rewind, and host-level runs) are owner-only:
+they need `[web] auth_token` (or the launch token), and a login gets 403. A
+login named `owner` can't sign in, since that name is the owner's workspace.
+Details in [security.md](security.md#multi-user-mode).
 
 ## Guardrails — `~/.evi/guardrails.toml`
 
@@ -926,3 +974,10 @@ evi scheduler          # foreground daemon, or just run `evi web`
 | `EVI_PYTHON`       | Tauri desktop: Python interpreter to spawn (default `py -3.13`) |
 | `EVI_REPO_ROOT`    | Tauri desktop: pin the repo root rather than auto-detecting    |
 | `EVI_REMOTE_URL`   | Tauri desktop: thin-client mode — skip spawn, navigate to URL  |
+| `EVI_REMOTE_TOKEN` | Tauri desktop: the access token for the `EVI_REMOTE_URL` server |
+| `EVI_WEB_AUTH_TOKEN` | Web server: launch token that gates other machines ([Web access](#web-access--web-in-configtoml)) |
+| `EVI_DECISION_TIMEOUT_S` | Web server: permission-prompt deadline in seconds; overrides `[web] decision_timeout_s` |
+
+The web server's other variables (`EVI_ALLOW_ANY_HOST`,
+`EVI_ALLOW_CROSS_ORIGIN`, `EVI_TRUSTED_PROXY`) are listed in
+[security.md](security.md#environment-variables).

@@ -1,362 +1,228 @@
 # Roadmap
 
-Forward plan for eVi. **Shipped** work lives in `CHANGELOG.md` + project
-memory; this file is what's *next* and why. Items carry a rough size
-(S = an afternoon, M = a day, L = a phase) and a one-line rationale.
+What eVi builds next, in order, and why. This replaces the phase-numbered
+backlog that ran up to 1.0: everything shipped is in
+[CHANGELOG.md](../CHANGELOG.md), and this page is the plan from 1.0.53 on.
 
-- Vendor-SDK feature parity ideas → [sdk-coverage.md](sdk-coverage.md)
-- Third-party app/service integrations → [future-integrations.md](future-integrations.md)
-- Release mechanics → [releasing.md](releasing.md)
+The plan has 69 items in six phases, ordered by risk first and value
+second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
+implement well-specified fixes to itself under review; Phases 2 to 5 are
+the features, each behind the foundations it needs.
 
-_Last rewritten 2026-06-06 (post-Phase-48). Supersedes the old v0.11.0-era
-backlog — most of those "next phase candidates" have since shipped._
+**Status (2026-10-14):** 1 item shipped in 1.0.53 and 13 more are
+done for the next release (Phase 0 batches 1 and 2); the rest are
+planned. Each item ships with its own tests and docs, and each release lists
+what it contains in the CHANGELOG.
 
-## Reality check — shipped through Phase 48 (v0.22.0)
+- Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
+- Owner: **director** (a human-reviewed core change: the agent loop, server
+  threading, security posture), **evi-frontier** (docs, UI and multi-file
+  plumbing done by eVi on a frontier model) or **evi-local** (small, exactly
+  scoped fixes done by eVi on a local model). See [EVI.md](../EVI.md) and
+  [self-build.md](self-build.md).
+- Related: [future-integrations.md](future-integrations.md) (integration
+  ideas), [sdk-coverage.md](sdk-coverage.md) (vendor SDK features),
+  [releasing.md](releasing.md) (how a release is cut).
 
-The old roadmap's headline candidates are **done**: self-update (`evi update`,
-P29), citations + local rerank (P30), `evi review` (P31), conversation grep
-(P32), plus memory/MCP/skills/scheduler/multi-backend/hooks/worktrees/dream/
-voice(STT+TTS)/vision/OCR/PDF/SQLite/calendar/routing/auth, the FastAPI+SSE web
-UI, and the standalone Tauri desktop bundle (onedir sidecar + "no LLM backend"
-UX, P48). CI is green; the desktop-release pipeline exists.
+## Principles
 
-So the backlog below is genuinely forward-looking.
+- Security and correctness before features. Exploitable one-line bugs ship first as a hotfix. No new browser-reachable or remote surface (widgets, MCP Apps, terminal, live attach, pairing) until Origin/CSRF checks, the sanitizer and CSP, loopback-or-token enforcement and decision deadlines have shipped.
+- Gate first, then change: the CI/release gate (e2e on main, release needs e2e, actionlint, workflow-injection checks, docs freshness) lands before any Phase 0 behaviour change. Each item ships its own regression tests and doc pages in the same release.
+- Fail closed for anything unattended. A missing UI callback means deny, and every unattended entry point names a policy. Implementer runs use the named 'implementer' policy, never -y or unattended_policy=allow. Widening a scope takes a user config edit, never an agent tool call.
+- Everything loaded from a repo goes through the folder-trust gate, and project config can only tighten security. Trust is keyed per repo (git common-dir), so worktrees inherit it, and project discovery stops at the git toplevel. Config.save writes only the user layer.
+- Build each foundation once and reuse it: ToolContext/agent-bound tools, tool side-effect annotations, Agent.cancel and evi/proc.py, the tool-result pipeline, evi/redact.py, the versioned event schema (SSE = stream-json = ACP), and the user-input service. Per-session state is never carried in ContextVars written from tool threads. Each piece of work has exactly one owning item.
+- Prefix stability is a design constraint: volatile content goes in the tail or the latest user message; the tool list changes only at session start or /reload; restrictions are enforced at dispatch; tools are never renamed twice; a prefix-hash regression test guards all of this.
+- Prefer deterministic evidence (exit codes, check results, git diffs) over a small model judging itself. Goals and verification read check results first.
+- Testing rules: every agent-loop change ships an Agent.chat-level test using the shared fake-LLM fixture; every UI or /api change ships a Playwright e2e test; every security fix ships an exploit regression test; prompt, repair and catalog changes are gated by pass rates against evals/self/baseline.json on the recorded reference local model.
+- Who implements what:
+  - evi-local: small, pure-module tasks with exact function/line scope;
+  - evi-frontier: UI-heavy, docs or multi-file plumbing;
+  - director: anything that changes _run_inference_loop control flow, server threading or security posture.
+  Mixed items are split into a director core and an evi-frontier periphery. Before the Phase 1 loop exists, evi-frontier works only in a director-created git worktree under the EVI.md contract.
+- eVi never commits to main, tags, releases, or marks a task verified. The director credential lives outside the agent's reach. Verified-by and Review-rounds trailers come only from director tooling, so provenance metrics cannot be self-reported.
+- Local-first: any cloud-reaching path (advisor, cloud critic, CLI-agent profile) is opt-in, with egress disclosure and per-session consent.
+- Facts in EVI.md and HANDOFF are generated by commands, not hand-typed numbers. This roadmap is published as docs/roadmap.md.
 
-## Planned phases (proposed sequence)
+## Phase 0 — Foundations and fixes
 
-This is a *proposed* order, weighted toward finishing the distribution story
-(so new users have a smooth install → first-chat → stay-updated path) before
-expanding surface area.
+Close every verified critical and high security issue, starting with a hotfix, and gate every release on the browser e2e suite. Fix the correctness bugs that would silently defeat later work (session state in the agent loop, a tool context, the managed runtime's context size, history validity) and clear the high-severity loose ends: the EVI.md implementer contract, the MCP SDK 2.1+ migration, docs, e2e backfill and repo hygiene. Ships as 1.0.53 (the hotfix) and then 1.0.54 onward, or as 1.1.0 given the changed defaults.
 
-### Phase 49 — Supply-chain hygiene / vuln checking — **✅ shipped (0.23.0)**
+Progress: 14 of 25 items shipped or done.
 
-Make dependency vulnerabilities visible and gated in CI.
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `fix-security-hotfix` | 1.0.53 security hotfix: upload paths, cross-site requests, untrusted project config, TTS, plugin/skill removal, opening links | S | director | — | Shipped in 1.0.53 |
+| `loose-ci-release-gates` | Release gating first: e2e on main, release needs e2e, actionlint, workflow-injection checks, docs freshness | M | director | — | Done (Phase 0 batch 1, unreleased) |
+| `loose-evi-md-implementer-contract` | Rewrite EVI.md as the implementer contract, fix self-build.md, add a dev bootstrap | S | director | — | Done (Phase 0 batch 1, unreleased) |
+| `fix-web-request-hardening` | Web request hardening: host and LAN rules, one turn per session, multi-user scoping, a desktop access token | M | director | `fix-security-hotfix`, `loose-ci-release-gates` | Planned |
+| `fix-ui-render-and-desktop-ipc` | Sanitize rendered model output and narrow the desktop IPC | M | director | `fix-web-request-hardening` | Planned |
+| `safety-project-trust-gate` | Folder trust gate and tighten-only project config | M | director | `fix-security-hotfix` | Done (Phase 0 batch 2, unreleased) |
+| `fix-shell-segment-split` | Shell segment splitting for allow rules and guard decisions | S | director | — | Done (Phase 0 batch 1, unreleased) |
+| `fix-permission-engine` | Make permission rules mean what the docs say, and protect instruction files | M | director | `fix-shell-segment-split` | Done (Phase 0 batch 2, unreleased) |
+| `fix-loop-state-propagation` | Session state (working folder, skill scope, hooks) applies inside the agent loop | M | director | `loose-ci-release-gates` | Planned |
+| `fix-tool-context-binding` | ToolContext and agent-bound tools (the foundation later items assume), including per-user memory | M | director | `fix-loop-state-propagation` | Planned |
+| `safety-unattended-default-deny` | Unattended agents fail closed and route through build_agent | M | director | `fix-web-request-hardening` | Planned |
+| `safety-code-exec-parity` | Code execution gets its own approval (asks unless sandboxed) | S | director | `fix-permission-engine`, `safety-unattended-default-deny` | Planned |
+| `safety-channel-ceiling` | Telegram gets its own policy, DM-only by default, and recall-only memory | S | director | `safety-unattended-default-deny` | Planned |
+| `safety-git-hardening` | Hardened internal git invocations and ref validation | S | director | — | Done (Phase 0 batch 1, unreleased) |
+| `fix-command-file-inline` | @file inlining only from command templates, and no 500 on bad quoting | S | director | — | Done (Phase 0 batch 1, unreleased) |
+| `safety-ssrf-netguard` | web_fetch redirect and private-address guard | M | director | — | Done (Phase 0 batch 1, unreleased) |
+| `fix-cli-agent-drivers` | CLI-agent drivers: transcript over stdin, no gemini yolo, timeouts and tree kill, current install and auth hints | M | director | — | Done (Phase 0 batch 2, unreleased) |
+| `fix-runtime-download-integrity` | Integrity-pinned runtime downloads, filtered extraction and escaped notifications | S | director | — | Done (Phase 0 batch 1, unreleased) |
+| `fix-managed-runtime-ctx` | Size the managed llama.cpp context to the machine and tell the agent | S | evi-frontier | `loose-evi-md-implementer-contract`, `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
+| `fix-history-validity` | Keep conversation history valid for strict backends | M | director | `fix-loop-state-propagation` | Planned |
+| `fix-transcript-fidelity` | Persist web edits, truncation, branches and CLI forks; merge sessions across midnight | M | evi-frontier | `fix-history-validity`, `loose-evi-md-implementer-contract` | Planned |
+| `extensibility-interop-mcp-sdk2-migration` | MCP on current SDKs: working HTTP transport, hardened serve, cancellation, CI matrix | M | director | `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
+| `loose-repo-hygiene` | Repo hygiene: cargo major bumps, stale branches and remotes, advisories | S | director | `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
+| `loose-e2e-backfill` | Playwright backfill for the 1.0.37-1.0.52 UI | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Planned |
+| `loose-docs-catch-up` | Docs catch-up for 1.0.37-1.0.52, generated HANDOFF facts, and this roadmap as docs/roadmap.md | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Planned |
 
-- `pip-audit` (OSV-backed) CI job for the Python deps.
-- `cargo-deny check advisories` (RustSec) for the desktop crate.
-- `.github/dependabot.yml` for pip + cargo + github-actions (weekly, grouped,
-  Conventional-Commit prefixes).
-- Enable GitHub-native **Dependabot alerts + security updates** (free on
-  private repos). NOTE: CodeQL code-scanning and secret-scanning are **not**
-  free on private repos (need paid GitHub Advanced Security) — deferred; a
-  self-hosted `gitleaks`/CodeQL-CLI step is a possible later add.
+## Phase 1 — The eVi-fixes-eVi loop
 
-### Phase 50 — Frictionless first run (time-to-first-chat) — **✅ shipped (0.23.0)**
+Make delegation routine and safe. The director files a task with acceptance criteria. eVi claims it, implements it in an isolated, trusted worktree under the scoped implementer policy, runs the checks, and stops with a machine-readable report and a redacted evidence bundle. Only the director's credential can mark a task verified or produce Verified-by trailers.
 
-A fresh user has no LLM backend → today they hit the "no backend" banner.
-**Decision (from research): do NOT bundle a runtime** — the multi-GB *model*
-download is the real blocker, bundling balloons the installer 5–10×, and eVi
-is already built around Ollama. Instead:
+**Why now:** Phases 2-5 contain about 40 delegable items, but delegation needs run reports, worktree isolation, cancel, a scoped policy that lets unattended runs execute tests without yolo, verify gates, an attestation eVi cannot forge, and a task queue. Secret redaction comes first because reports and evidence carry tool arguments and transcripts. The two shakedown batches prove the loop on 16 small verified bugs before any feature depends on it.
 
-- True **one-click Ollama install** in `/api/backend/start` (winget /
-  silent installer on Windows, cask/dmg on macOS, official `install.sh` on
-  Linux) → existing auto-`serve` → existing `pull_model` SSE progress.
-- **First-run wizard**: detect hardware via `recommend(hw)`, auto-pull a small
-  sensible default (`qwen2.5:3b-instruct-q4_K_M`, ~1.9 GB — best local
-  tool-calling at that size), "running on CPU (slow)" hint, "upgrade to 7B
-  later" as a secondary action. Chat unblocks the moment the pull finishes.
-- **vLLM: excluded** for first-run (GPU/CUDA/Linux server-grade; not a desktop
-  fit). It already works as a *remote* OpenAI endpoint via the generic
-  `openai_compat` backend — no work needed.
-- (If we ever do bundle: ship llama.cpp's `llama-server` **Vulkan** build —
-  small, clean MIT, one binary for cross-vendor GPU + CPU; avoid the 373 MB
-  CUDA pack and Ollama's redistribution notice debt.)
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `safety-secret-redaction` | evi/redact.py: secret redaction for reports, evidence, transcripts and displays | S | director | `fix-transcript-fidelity` | Planned |
+| `loop-run-report` | `evi run` run report, stream-json events and resume flags on one versioned event schema | M | evi-frontier | `fix-loop-state-propagation`, `fix-history-validity`, `safety-project-trust-gate`, `safety-secret-redaction` | Planned |
+| `loop-agent-cancel` | Agent cancel primitive, process-tree-safe command execution and REPL Ctrl+C | M | director | `fix-history-validity`, `fix-tool-context-binding`, `fix-cli-agent-drivers` | Planned |
+| `loop-worktree-isolation` | Worktree-isolated runs that inherit repo trust and load exactly one project context | M | evi-frontier | `fix-loop-state-propagation`, `loop-run-report`, `safety-project-trust-gate` | Planned |
+| `loop-implementer-policy` | Named 'implementer' policy: worktree-confined writes, a test-command allowlist, no network | M | director | `safety-unattended-default-deny`, `fix-permission-engine`, `fix-shell-segment-split`, `loop-worktree-isolation` | Planned |
+| `loop-director-attestation` | Director-only verification: a keyring credential, HMAC-signed transitions, Verified-by only from director tooling | M | director | `fix-permission-engine` | Planned |
+| `loop-task-queue` | Repo-tracked task queue with acceptance criteria and a director handoff API | L | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-agent-cancel`, `extensibility-interop-mcp-sdk2-migration`, `loop-implementer-policy`, `loop-director-attestation` | Planned |
+| `loop-verify-gate` | Verify-before-done: blocking stop hooks and detected project checks | M | director | `fix-loop-state-propagation`, `loop-run-report`, `safety-unattended-default-deny`, `safety-project-trust-gate`, `loop-implementer-policy` | Planned |
+| `loop-evidence-provenance` | Evidence bundles and provenance trailers | M | evi-frontier | `loop-run-report`, `loop-verify-gate`, `loop-task-queue`, `safety-secret-redaction`, `loop-director-attestation` | Planned |
+| `loop-eval-gates` | Behavioral evals as regression gates, with a recorded reference model and baseline | M | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-implementer-policy` | Planned |
+| `loop-shakedown-batch-1` | Loop shakedown batch 1: 8 pure-module fixes through evi-local | M | evi-local | `loop-task-queue`, `loop-evidence-provenance`, `loop-implementer-policy`, `loose-evi-md-implementer-contract` | Planned |
+| `loop-shakedown-batch-2` | Loop shakedown batch 2: 8 multi-function fixes through evi-local | M | evi-local | `loop-shakedown-batch-1` | Planned |
 
-### Phase 51 — Desktop auto-update against GitHub releases — **✅ shipped (desktop 0.2.0)**
+## Phase 2 — Context economy and small-model reliability
 
-The CLI/pip path already self-updates (`evi update` → PyPI). The **desktop**
-app (not pip-installed) needs its own updater pointed at the
-`desktop-release.yml` GitHub releases we now build.
+Make 8-32K local models reliable in the agent loop. Every budget comes from the true context window. Tool output cannot flood the window. Malformed or looping tool calls are repaired or stopped. Edits recover from near misses. Compaction keeps the plot. The prompt prefix stays byte-stable for KV reuse. Streams survive local-server hiccups. Entry criterion: evals/self/baseline.json is recorded (loop-eval-gates).
 
-- Adopt Tauri 2's **`@tauri-apps/plugin-updater`** + `tauri-plugin-process`:
-  checks a release endpoint, downloads, verifies, relaunches.
-- Requires an **updater signing keypair** (Tauri minisign — free, separate
-  from OS code-signing). `desktop-release.yml` gains the signing step + a
-  `latest.json` manifest attached to releases.
-- Pairs with — but does not require — **OS code-signing** (Authenticode /
-  Apple Developer ID) to silence SmartScreen/Gatekeeper. Code-signing needs
-  paid certs → track separately; the updater works unsigned-by-OS today.
+**Why now:** These are the highest-scored candidates: context-window truth 5.0, spill 4.67, loop detection 4.67, and repair, edit recovery and resilience at 4.33. They are also foundations later features consume. With the Phase 1 loop, the periphery work is delegable; loop control-flow cores stay with the director, and eval gates against the recorded baseline guard against regressions.
 
-### Phase 52 — Crash / error reporting — **✅ shipped (0.23.0)**
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned |
+| `models-ops-token-budget-recovery` | Real-token budgeting checked every round, and overflow compact-and-retry | M | director | `models-ops-context-window-probe`, `fix-history-validity` | Planned |
+| `tool-result-pipeline` | Tool-result pipeline: budget and spill, stale masking, untrusted envelopes | L | director | `models-ops-token-budget-recovery`, `loop-agent-cancel`, `fix-tool-context-binding`, `safety-secret-redaction` | Planned |
+| `loop-tools-tool-call-repair` | Tool-call repair: tolerant parsing, coercion, aliases and tagged-text recovery | M | evi-frontier | `loop-eval-gates` | Planned |
+| `loop-tools-loop-guard-step-budget` | Loop detection and a graceful step budget | M | director | `loop-eval-gates`, `loop-tools-tool-call-repair`, `loop-agent-cancel` | Planned |
+| `loop-tools-edit-recovery` | Forgiving, safe edits: near-miss recovery, already-applied detection, read-before-edit, atomic writes | M | evi-local | `loop-shakedown-batch-1`, `fix-loop-state-propagation`, `fix-tool-context-binding` | Planned |
+| `tool-schema-safe-names` | Provider-safe tool names and schema normalization for local grammars | M | evi-frontier | `extensibility-interop-mcp-sdk2-migration`, `loop-eval-gates` | Planned |
+| `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Planned |
+| `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names` | Planned |
+| `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Planned |
+| `stream-loop-resilience-reasoning` | Resilient streaming and a native reasoning channel | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair` | Planned |
 
-Opt-in, privacy-first telemetry so we learn about crashes.
+## Phase 3 — Safe autonomy: effects, policy, approvals, plans and goals
 
-- `sentry-sdk` behind a thin **`Reporter`** abstraction (swappable backend via
-  one DSN/config value), pointed at **self-hosted GlitchTip** (OSS,
-  Sentry-API-compatible) — or hosted Sentry free tier for zero-infra start.
-- Hooks: CLI `sys.excepthook`, FastAPI exception handler, Tauri Rust panic
-  handler (+ community `tauri-plugin-sentry`); the frozen sidecar reuses the
-  CLI path.
-- **Opt-in (default OFF)** config flag + env override; a **shared scrubber**
-  (`before_send`) that strips home/user paths, env (allowlist only),
-  API keys, hostnames, and — critically for an AI app — **prompt/exception
-  content + frame locals**.
-- "Open a GitHub issue on crash" stays a documented **Plan B** behind the same
-  interface — only viable via a token-holding serverless relay (no shippable
-  token), and re-implements dedup/rate-limit/scrub that Sentry gives free.
+Let eVi work longer without supervision, and without trading away safety. Every tool declares its side effects. One policy object generalizes the Phase 1 implementer policy. Approvals become durable and explained. Plan mode does real read-only research. Goals iterate on deterministic evidence. Long processes run in the background.
 
-### Phase 56 — Desktop UX: settings, menus, tray, in-app docs — **✅ shipped (0.25.0 / desktop 0.2.5)**
+**Why now:** Phases 0-1 made unattended runs fail closed and built cancel, verify, the implementer policy and evidence. Side-effect annotations replace Phase 0's pinned read-only lists and are prerequisites for plan mode, the policy object and durable approvals, so they come first.
 
-A Claude-Desktop-style control surface (the "UI enhancements" detour).
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `loop-tools-side-effect-annotations` | Tool side-effect annotations driving concurrency, read-only modes and schema hiding | M | director | `fix-permission-engine`, `safety-unattended-default-deny`, `safety-code-exec-parity`, `extensibility-interop-mcp-sdk2-migration`, `fix-tool-context-binding` | Planned |
+| `agent-policy-and-profiles` | One policy object with named profiles, enforceable agent profiles and a governor | L | director | `loop-tools-side-effect-annotations`, `safety-project-trust-gate`, `loop-implementer-policy` | Planned |
+| `approvals-v2` | Durable scoped approvals, reasons and deny-with-guidance | M | director | `fix-permission-engine`, `fix-shell-segment-split`, `loop-tools-side-effect-annotations` | Planned |
+| `plan-mode-and-todo-core` | Plan mode with read-only research and an Implement handoff, plus an agent-bound todo list | M | director | `loop-tools-side-effect-annotations`, `fix-history-validity`, `fix-tool-context-binding` | Planned |
+| `plan-todo-ui` | Todo dock, REPL todo segment and editable plan view | M | evi-frontier | `plan-mode-and-todo-core` | Planned |
+| `loop-tools-goal-loop` | Goal loop judged on evidence, with budgets and advisor escalation | M | director | `loop-verify-gate`, `loop-agent-cancel`, `plan-mode-and-todo-core`, `loop-tools-loop-guard-step-budget` | Planned |
+| `loop-tools-background-processes` | Background processes: start, tail, await, stop, notify | M | evi-frontier | `loop-agent-cancel`, `tool-result-pipeline`, `loop-tools-side-effect-annotations`, `fix-tool-context-binding` | Planned |
 
-- **Settings screen** (⚙ / Ctrl+, / File→Settings) backed by `GET/POST /api/config`
-  (masked secrets; section-patch that hot-reloads live sessions).
-- **Native menus** (File/Edit/View/Help + accelerators, dev tools) and **system
-  tray** with **minimize-to-tray**; **force-update** via Help→Check for Updates.
-- **In-app docs** (`/api/docs` + dependency-free `mdlite.py`, bundled offline) and
-  **diagnostics** (`/api/doctor`); **light theme** toggle.
-- Public docs **wiki** mirror on `evi-assistant/evi-ai`; Playwright e2e for the lot.
+## Phase 4 — Live sessions, phone and review surfaces
 
-## Larger backlog (unsequenced — L unless noted)
+Turns outlive browser tabs and connections. Approvals and questions reach whichever surface the user is on. Stop, steer and queue work everywhere, with documented behaviour per backend. The director reviews diffs in a changes panel. Telegram becomes a real phone surface. Editors get eVi through ACP.
 
-- ✅ **MCP-server-publish** — **shipped (0.24.0, Phases 53–54)**: `evi mcp serve`
-  exposes eVi's tools (memory/index/calendar/git by default) **+ memory
-  resources + command prompts** as an MCP server for Claude Desktop / Cursor /
-  Cline / Continue. Transports: stdio + streamable **HTTP** (`--http`, bearer
-  `--token`); per-tool allow-list (`--tools`). Remaining nice-to-haves: an
-  OAuth flow for HTTP (vs static token), and exposing index/calendar data as
-  resources too.
-- ✅ **Responses API** — **shipped as opt-in (0.24.0, Phase 55)**, NOT a
-  migration: `[llm] api = "responses"` (default `"chat"`) routes the agent loop
-  through OpenAI's Responses API for endpoints that support it, via a stream
-  adapter that keeps the loop unchanged. Local backends stay on Chat
-  Completions. Remaining: verify against a live Responses endpoint; extend the
-  compaction/variant helpers (still chat-only — fine for OpenAI cloud).
-- ✅ **Cross-machine sync** of `~/.evi/` — **shipped (0.26.0, Phase 57)**:
-  `evi sync init/push/pull/status` over a git remote. Syncs
-  memory/skills/profiles/commands/routes/mcp/hooks; a managed `.gitignore` keeps
-  per-machine config, secrets, and large/rebuildable data local.
-- ✅ **`evi recipe`** — **shipped (0.26.0, Phase 58)**: saved multi-turn
-  workflows under `~/.evi/recipes/*.toml`, run through one shared conversation
-  (`evi recipe new/list/show/run`, `--yes` for unattended).
-- ✅ **Memory tags** — **shipped (0.26.0, Phase 59)**: tags + `recall_by_tag`
-  (invisible marker, backward-compatible with untagged memories).
-- ✅ **Background tool execution** — **shipped (0.26.0, Phase 60)**: ToolProgress
-  heartbeats for slow tools (CLI + web) instead of an apparent hang; `long=True`
-  tools announce immediately.
-- ✅ **Parallel multi-agent research** — **shipped (0.27.0, Phase 61)**:
-  `parallel_research(tasks)` fans out up to 6 read-only Explore subagents
-  concurrently and combines their findings (`run_subagents_parallel`).
-- ✅ **Claude-Code-style slash commands** — **shipped (0.27.0, Phase 62)**:
-  `~/.evi/commands/*.md` now support frontmatter (description/argument-hint/
-  model), `$ARGUMENTS` + positional `$1..$9`, `@file` refs, and subdir
-  namespacing (`/git:commit`). See [commands.md](commands.md).
-- **Plugin loader** (`~/.evi/plugins/`) — **M**; drop-in user tools.
+**Why now:** This phase depends on Phase 0 web hardening, Phase 1 cancel and the event schema, and Phase 3 policies. Server-owned turns are the foundation that the user-input service, channels (including /attach) and ACP reuse, so they come first. Phase 0 resolved pending decisions by deadline only, so reattach needs no reversal.
 
-### Phase 56b — desktop/settings polish — **✅ shipped (0.27.0 / desktop 0.2.7)**
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `server-owned-turns-and-input` | Server-owned turns with resumable event streams and one user-input service | L | director | `fix-web-request-hardening`, `loop-run-report`, `loop-agent-cancel`, `fix-tool-context-binding` | Planned |
+| `steer-stop-surfaces` | Stop, interrupt and queue in every surface, plus attention signals | M | evi-frontier | `loop-agent-cancel`, `server-owned-turns-and-input` | Planned |
+| `ux-surfaces-changes-panel` | Changes panel: per-turn and per-session diff review with revert and comment-back | L | evi-frontier | `fix-web-request-hardening`, `fix-ui-render-and-desktop-ipc`, `safety-git-hardening`, `fix-tool-context-binding`, `loop-shakedown-batch-1` | Planned |
+| `channel-runtime-core` | Channel runtime core: adapter contract, per-chat sessions and workers, durable inbox, ceiling, command router, /attach | L | director | `agent-policy-and-profiles`, `fix-history-validity`, `safety-channel-ceiling`, `server-owned-turns-and-input` | Planned |
+| `channel-telegram-port` | Telegram port to the runtime: rich outbound, attachments, config migration and the Channels panel | M | evi-frontier | `channel-runtime-core` | Planned |
+| `channel-approvals-core` | In-chat approvals and questions bound to the owner, plus /stop | M | director | `channel-runtime-core`, `server-owned-turns-and-input`, `loop-agent-cancel` | Planned |
+| `channel-progress-media-delivery` | Phone-grade channel UX: typing and progress, inbound media, home-channel delivery | M | evi-frontier | `channel-runtime-core`, `channel-telegram-port`, `tool-result-pipeline` | Planned |
+| `acp-server` | `evi acp`: eVi as an Agent Client Protocol agent | L | evi-frontier | `loop-run-report`, `loop-agent-cancel`, `server-owned-turns-and-input`, `fix-loop-state-propagation`, `fix-history-validity` | Planned |
 
-- Fixed File→Settings (and all native-menu→webview actions): the Rust bridge now
-  `eval`s `window.eviUI.handleMenu(id)` directly instead of emitting an event
-  the remote page wasn't listening for.
-- Settings → Model & Backend: a **System** panel (OS, GPU, VRAM, RAM,
-  driver/CUDA cc, inference mode) via `/api/system`, plus the
-  hardware-recommended model with an Ollama **Pull** button + progress bar.
-- Help → Check for Updates shows clear states (checking / up to date /
-  downloading).
+## Phase 5 — Memory, skills and ecosystem, behind trust and review
 
-### Phase 63 — session modes (Chat / Cowork / Code) — **✅ shipped (0.28.0 / desktop 0.2.8)**
+Sessions resume faithfully and become searchable. What eVi learns is staged for review, with provenance and per-session capture policy. Instructions and skills from other tools work inside trusted folders. Extensions and remote MCP servers are installed and connected with pinning, scanning, confirmation and OAuth.
 
-A header segmented control (à la Claude Desktop) that gates a session's tool
-set: **Chat** (memory + skills), **Cowork** (+ files/web/calendar/images/pdf),
-**Code** (+ code/shell/git/subagents). Hot-swaps the live agent's tools; the
-choice persists and follows tab switches. `evi/modes.py` + `/api/modes` +
-`/api/session/{id}/mode`.
-- **Multi-user web mode** — per-user auth/paths/permissions for small teams.
-- **Federation / inter-agent protocol** — eVi-to-eVi delegation across machines
-  (pairs with profiles + remote backend).
-- Smaller: long-context model awareness in the registry; `/recent` prompt
-  history in the REPL.
+**Why now:** Every item here loads more content from repos or the internet, or makes eVi learn on its own. Each depends on the Phase 0 trust gate, fail-closed policy and tool binding, and on the Phase 1-2 redaction and envelopes. That keeps learning from becoming a persistent injection or exfiltration path.
 
-## Claude Code parity phases — ✅ all shipped (0.29.0 / desktop 0.2.9)
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `faithful-resume-and-session-recall` | Faithful resume with recap, and read-only session search tools | M | evi-frontier | `fix-history-validity`, `fix-transcript-fidelity`, `memory-sessions-structured-compaction`, `tool-result-pipeline`, `fix-tool-context-binding` | Planned |
+| `memory-learning-inbox` | Reviewable learning: memory inbox, capture policy, provenance and a Memory panel | M | evi-frontier | `safety-unattended-default-deny`, `safety-channel-ceiling`, `tool-result-pipeline`, `faithful-resume-and-session-recall` | Planned |
+| `skill-drafting-curator` | Skill drafting into the inbox, with a usage curator | M | evi-frontier | `memory-learning-inbox` | Planned |
+| `instructions-and-skills-interop` | Instruction layering and cross-tool skills behind folder trust | M | evi-frontier | `safety-project-trust-gate`, `fix-loop-state-propagation`, `prompt-prefix-and-kv`, `loop-worktree-isolation` | Planned |
+| `ecosystem-extension-supply-chain` | Install safely: extension lockfile, pinning, advisory scan, explicit confirmation, PATH and env hardening | M | director | `safety-project-trust-gate`, `tool-result-pipeline` | Planned |
+| `mcp-oauth-and-secrets` | MCP OAuth with PKCE and keyring-backed secret references | M | director | `extensibility-interop-mcp-sdk2-migration`, `safety-secret-redaction` | Planned |
 
-A pass over the [Claude Code docs](https://code.claude.com/docs/en/overview)
-surfaced these gaps; **all eight shipped in 0.29.0** (see CHANGELOG for details).
-Each was a genuine *net-new* capability (eVi already had the agentic loop,
-subagents + parallel research, MCP client/publish, hooks, scheduler, skills,
-memory + tags, worktrees, routing, guardrails, vuln scanning, voice,
-computer-use, custom commands, recipes, and session modes).
+## Not doing this cycle
 
-- **Phase 64 — File checkpointing + rewind** — **M**. Snapshot files before each
-  tool edit; `/rewind` (CLI + web) restores files and/or the conversation to a
-  prior point. eVi has conversation edit/branch/reroll but **no file-state undo**
-  — the biggest safety gap vs Claude Code's checkpointing.
-- **Phase 65 — Headless / print mode** — **M**. `evi -p "prompt"
-  [--output-format json|text] [--mode code]` for one-shot scripted/CI/cron use,
-  reusing the agent loop. JSON envelope = final text + tool trace + usage. The
-  foundation for any eVi automation story (and a thin SDK later).
-- **Phase 66 — Granular permissions + permission modes** — **M**. Beyond
-  category auto-approve: modes (ask / accept-edits / plan / yolo) and rule-based
-  allow/deny (per tool, per path glob, per shell-command prefix, per domain),
-  with a `/permissions` view in Settings.
-- **Phase 67 — Sandboxed shell** — **M/L**. Run the shell/code-exec tools in a
-  sandbox (read-only FS outside the project, no network) by default, opt-out per
-  call. OS-specific (bubblewrap/seccomp · sandbox-exec · restricted job object).
-  Hardens the riskiest tool.
-- **Phase 68 — Plugins + local marketplace** — **L** *(supersedes the pending
-  "plugin loader")*. A plugin bundles commands + skills + hooks + subagent
-  profiles + optional MCP servers; `evi plugin add <git-url|dir>` + a manifest +
-  a curated index. Subsumes much of the integrations backlog.
-- **Phase 69 — Output styles** — **S/M**. Switchable response personas (concise /
-  explanatory / teacher / reviewer) layered on the system prompt, independent of
-  the Chat/Cowork/Code *tool* modes. `~/.evi/styles/*.md` + a picker.
-- **Phase 70 — Multi-agent code review** — **M**. Upgrade `evi review` to fan out
-  parallel reviewers (correctness / security / perf / tests) via the new
-  `run_subagents_parallel`, then synthesize — a local take on Claude Code's
-  multi-agent review.
-- **Phase 71 — Session resume / fork (CLI)** — **S/M**. `evi --continue`,
-  `evi --resume <id>`, `evi --fork <id>` off the transcript store; list saved
-  sessions in the web tab bar. Completes session management.
+Considered and deliberately left out, with the reason. Several are deferred, not rejected.
 
-✅ **Shipped in 0.30.0:** customizable **status line** (Phase 72 — format
-template or custom command in the CLI REPL); **routines/triggers** (Phase 73 —
-`POST /api/routine/<token>` runs a recipe headless); **project-level config**
-(Phase 74 — repo-local `.evi.toml` overlay + AGENTS.md recognition).
+- **MCP Apps hosting and agent-built widgets/artifacts (extensibility-interop-mcp-apps, ux-surfaces-mcp-apps-host, ux-surfaces-widgets-artifacts).** They would run untrusted third-party or model-written HTML/JS on the same origin as an API that runs tools, and they add nothing for small local models, which also produce unreliable HTML/Vega specs. Revisit after Phase 0 only if an opaque-origin sandbox and CSP are in place.
+- **Embedded terminal tab (ux-surfaces-embedded-terminal).** A shell reachable from a browser tab is a cross-site hijacking target unless it gets its own origin and token checks, and the user already has a terminal.
+- **Programmatic tool calling over local RPC (loop-tools-programmatic-tool-calling).** L-sized, and nested tool calls would bypass permissions. Small local models write weak orchestration scripts.
+- **Per-turn routing tiers and judge cascades (models-ops-routing-tiers-cascade).** Changing models every turn destroys the KV cache and forces reloads on a single GPU, and the judge pass doubles latency. Per-profile model routing captures most of the value.
+- **Event triggers, scheduling tool, standing orders, heartbeat, session loops, subscriptions, condition gates (agents-automation-*).** Deferred, not rejected. These are the largest injection and persistence surfaces. Revisit once fail-closed policy, least-privilege profiles, untrusted envelopes and the learning inbox have shipped. Scheduler correctness bugs are fixed in shakedown batch 2, and result delivery ships in channel-progress-media-delivery.
+- **Deterministic workflow steps (run=, gate=, retry_until=) for implement-test-fix loops.** Deferred. The verify gate (detected checks with N fix rounds) plus the evidence-judged goal loop cover implement->test->fix this cycle. Adding step kinds to saved workflows would also widen a path that auto-approves tools. Revisit after agent-policy-and-profiles gives workflows a named policy.
+- **A2A message/stream, push notifications, OAuth2/mTLS/signed cards and file/data parts (HANDOFF section 5 A2A gaps).** Deferred. The director handoff goes through the MCP 'agent' category in loop-task-queue, and editors use ACP. The shared versioned event schema (loop-run-report) makes A2A streaming a thin follow-up next cycle, once a real A2A consumer exists.
+- **PR autopilot and GitHub comment/label dispatch on self-hosted runners.** PR comments are attacker-controlled text; letting them drive an unattended agent that holds push credentials is a known way to compromise self-hosted runners. The task queue plus director attestation covers eVi-fixes-eVi.
+- **Model-authored workflows and best-of-N arenas.** Small models cannot author orchestration, and saved workflows auto-approve every tool. Best-of-N takes N times the wall time on one GPU. Revisit after worktree isolation and the governor prove out.
+- **Background subagents, subagent steer/stop/schema and an agents dashboard.** Deferred until the governor shows slot handling works. On a single llama.cpp slot, background children thrash the KV cache. Background processes and goal loops cover the near-term need.
+- **Slack/Discord bots, Matrix/Signal/SimpleX, email channel, forge notifications.** No second channel until channel-runtime-core has shipped and the user picks one (open question). Slack and Discord need WebSocket stacks that break the stdlib-only sidecar rule, and email and forge text are high-risk injection inputs.
+- **Remote access features: live session attach from browsers, Tailscale Serve, QR pairing, PWA, multi-server desktop.** Deferred until tokens are mandatory and server-owned turns exist. Channel /attach is the only attach path this cycle, and it depends on server-owned-turns-and-input.
+- **Cloud-egress PII masking (safety-cloud-egress-pii).** Masking names and paths breaks coding tasks and gives a false sense of privacy. Locality chips (shakedown batch 2) and per-session consent ship instead.
+- **In-process Python middleware and drop-in Python tools.** Arbitrary in-process code with no trust store, and request mutation breaks prefix caching. The hook JSON protocol plus MCP covers realistic needs.
+- **Skills over MCP (SEP-2640) and MCP async events/Tasks.** Built on an unverified SEP and an experimental SDK API. Remote skills would be persistent injection. Revisit once the 2.x SDK ships them stably.
+- **Active recall and a shared 'main session' across phone and desktop.** Cue-triggered recall has false positives and re-injects untrusted content every turn; explicit search_sessions is safer. A shared Agent without re-entrancy protection is rejected. Channel /attach is allowed only through server-owned turns, under the channel ceiling and the busy guard.
+- **Sandbox breadth: Windows AppContainer, network allowlist proxy, sandbox expansion prompts, container/SSH execution backends.** All L-sized, and Windows cannot enforce bwrap-style policies. This cycle ships Job Object tree kill, env scrubbing, fail-closed policies and the implementer policy. A container backend is a candidate for next cycle.
+- **Local-judge auto-review approval mode (safety-auto-review-judge).** A small local judge is not a security boundary and is itself injectable, and it adds a model call per tool call. Segment-aware rules and durable grants remove most prompts deterministically.
+- **Managed-runtime breadth: Vulkan/ROCm/Linux CUDA builds, 2026 model catalog refresh, router mode, model manager, speculative decoding, runtime self-update.** This cycle fixes runtime correctness (context sizing, RAM probe, true window, download integrity). The new families and flags are unverified, would need a pin bump from b10453, and are L-sized. They belong to a dedicated runtime cycle.
+- **ACP client backend and running vendor CLI agents on local models.** The chat.completions shim does not map cleanly onto ACP-driven agents, and vendor harnesses assume 100K+ windows. Phase 0 makes the existing drivers safe and current.
+- **UI-heavy single-file refactors: split panes/pop-out, app preview picker, quick-chat overlay, document pane, next-edit prediction, watch-comments, session library/browser, command palette, transcript density.** Poor cost/benefit in the single-file web UI, and poor tasks for small-model implementers. ACP gives editors a better integration.
+- **Personal-assistant breadth: email/IMAP tools, Gmail/Drive plugins, office documents, browser automation preset, voice (barge-in, talk mode, dictation, meeting notes), image editing, video attachments.** Mail plus web fetch plus send is the classic exfiltration chain, and voice work involves unsolved echo cancellation. The voice-loop engine/mic bug is fixed in shakedown batch 2, and inbound voice notes ship in channel-progress-media-delivery.
+- **Usage ledger with cost budgets, friction reports, trajectory export, Hermes-4 preset.** Partly covered: the run report sums usage, goal and governor budgets cap runaway runs, and history validity makes exports pairable. The rest is lower value this cycle.
 
-Still open: **plugin component types beyond commands** (skills/hooks/MCP/subagent
-profiles in a plugin) and the integrations backlog below.
+## Open questions
 
-**Explicitly not adopting** (philosophy mismatch): cloud/enterprise backends
-(Bedrock/Vertex/Foundry), org admin / managed settings, cloud Ultrareview /
-Ultraplan, S3/Redis session storage, usage analytics dashboards, and the agentic
-browser (already deferred in favour of MCP browser servers). A full public Agent
-SDK is deferred too — headless mode (Phase 65) covers the automation need without
-committing to a stable library surface.
+Decisions the maintainer still has to make; items that depend on them say so.
 
-## Next planned phases (79+)
+1. Second channel: after channel-runtime-core ships, should eVi add Matrix, Signal (user-run signal-cli), email (IMAP/SMTP), or nothing beyond Telegram for now?
+2. Code signing: finish SignPath Foundation signing for the Windows installers (code-signing.md tracks the rollout), and pay the $99/yr Apple Developer ID for macOS notarization?
+3. Gemini backend: keep gemini as API-key/Vertex only with the Phase 0 driver fixes, replace all vendor CLI drivers with one ACP client next cycle, or drop gemini (and possibly qwen/copilot)?
+4. Behaviour-changing safety defaults: is it acceptable that code execution asks unless sandboxed, unattended runs deny by default, Telegram memory becomes recall-only and desktop shells need an update (SHELL_ABI 2)? Should the post-hotfix train be versioned 1.1.0?
+5. Trust-gate scope: in an untrusted repo, should EVI.md/AGENTS.md text still load (prompt content only, no config) to reduce prompt fatigue?
+6. Desktop token: once a shell-injected token is mandatory with LAN binding and the default on desktop, is that acceptable, given that 'Open in browser' and `evi web-config token show` carry it?
+7. Multi-user web mode: invest in a real owner/admin model, per-user checkpoints and memory, or deprecate it in favour of single-user plus device tokens?
+8. Release process: switch from direct-to-main release commits to one PR per task (worktree branch -> PR -> e2e gate -> director attestation, merge and tag)? Should the task queue live in main (.evi/tasks) or on a dedicated branch?
+9. Implementer models: which local coder model, quantization and machine become the reference recorded in evals/self/baseline.json (required before Phase 2)? Is claude_agent (your Claude subscription through the local CLI) acceptable as the evi-frontier backend?
+10. Director credential: is the OS keyring (with a user-only file fallback) enough, or should verification run as a separate OS user so an agent under your account cannot reach the key at all?
+11. Managed runtime next cycle: prioritize Vulkan/ROCm/Linux-CUDA builds and a 2026 model catalog?
+12. Editor strategy: once `evi acp` ships, keep maintaining the VS Code extension beyond the approval-handling fix, or deprecate it in favour of ACP-capable editors?
 
-Releases are paused on a GitHub Actions billing block; these are building
-locally and ship once that clears.
+## Before this roadmap
 
-- **Phase 79 — in-app update progress toast** — **✅ shipped (local)**: the
-  silent auto-updater now shows a progress toast (downloading % → installing).
-- **Phase 80 — full plugin components** — **✅ shipped (local)**: plugins now
-  bundle hooks (`hooks.toml`) and MCP servers (`mcp.json`, namespaced
-  `<plugin>:<name>`) on top of commands + skills. Subagent profiles in plugins
-  remain the one planned component type (code-defined dict — a larger change).
-- **Phase 81 — HTTP hooks** — **✅ shipped (local)**: a hook can POST its event
-  to a `url` instead of spawning a command; non-2xx vetoes a before-hook.
-- **Phase 82 — keybindings** — **✅ shipped (local)**: `~/.evi/keybindings.toml`
-  maps a key to a slash command in the REPL (press → run).
-- **Phase 83 — channels** — **✅ shipped (local)**: `POST /api/session/{id}/channel`
-  injects an external alert as a `[channel:<source>]` system note so the
-  assistant sees it on its next turn (`GET` lists recent pushes for a UI badge).
-  Routines cover inbound webhook→recipe; this is push-into-live. *(live UI toast
-  is a follow-up; the inject + history mechanism is complete.)*
-- **Phase 84 — packaged CI action** — **✅ shipped (local)**: a composite action
-  `.github/actions/evi-run` installs eVi, writes a backend config, and runs one
-  `evi run` headless prompt (output `result`); `evi-run-example.yml` demos it.
-- **Phase 85 — agent dispatch view** — **✅ shipped (local)**: a 🗂 Dispatch
-  panel (and `GET /api/dispatch`) lists every live session with its state
-  (mode / messages / context / pending / channels) — click to open — plus the
-  runnable workflows; `POST /api/dispatch/workflow/{name}` launches one
-  server-side and shows the per-step output.
-- **Phase 86 — dynamic workflows** — **✅ shipped (local)**:
-  `~/.evi/workflows/<name>.toml` orchestrates multi-step, multi-agent runs —
-  each step its own headless agent, contiguous `parallel = true` steps run
-  concurrently, and prompts interpolate earlier outputs/vars via `{step_id}` /
-  `{var}`. `evi workflow new/list/show/run` (+ the dispatch panel). Engine is
-  LLM-decoupled (`run_step` callable) so it's fully tested.
-- **Phase 87 — cross-device session handoff** — **✅ shipped (local)**: `evi
-  sessions handoff` + `POST /api/session/{id}/handoff` return resume
-  affordances; the web UI opens `/?session=<id>`. Sync (`evi sync`) the
-  per-turn transcript, then resume on the other device (CLI or URL).
-- **Phase 88 — context-window visualization** — **✅ shipped (local)**: `/context`
-  (`/ctx`) in the REPL and a click-the-chip popover in the web UI break tokens
-  down by system / you / assistant / tools (`/api/session/{id}/context`).
-- **Phase 89 — OpenTelemetry / metrics** — **✅ shipped (local)**: opt-in
-  `[telemetry] traces/metrics` + `otlp_endpoint` (or `EVI_OTLP_ENDPOINT`) export
-  spans around tool calls + tool counters/durations via OTLP. No-op unless the
-  `[otel]` extra is installed and an endpoint is set; `evi/otel.py` wraps
-  `_dispatch_run`. Configurable in Settings → General (telemetry).
-- **Lighter/later items** — **✅ shipped (local)**: subagent profiles in plugins
-  (`agents.toml` + the `delegate` tool / `evi agents`) · `evi://` deep links
-  (`evi/deeplinks.py`, Tauri `evi` scheme, `evi link`) · plugin marketplace index
-  (`evi/marketplace.py`, `evi plugin search/install/index`, `[plugins]
-  index_urls`).
-- **Final small items** — **✅ shipped (local)**: long-context awareness in the
-  model registry (`ModelRec.context_window` + `recommend.context_window_for()`;
-  surfaced in `evi models info` and a nudge on `evi models use`) · `/recent`
-  REPL command (lists recent sessions). **The roadmap is now fully cleared.**
+Phases 1 to 94 (0.1 to 0.40) and the 1.0.x releases built what eVi is today:
+the agent loop and tools, the CLI, web and desktop apps, memory, skills,
+hooks, MCP in both directions, federation and A2A, ultracode and workflows,
+evals, the CLI-agent backends, the managed llama.cpp runtime, the Telegram
+channel and session import. [CHANGELOG.md](../CHANGELOG.md) has each release.
+Two earlier decisions still shape the plan:
 
-### OpenAI / Claude-Code parity additions (post-roadmap review)
-
-From a review of developers.openai.com + code.claude.com — the genuinely-new,
-local-friendly gaps — **✅ shipped (local)**:
-
-- **Structured Outputs** — JSON-Schema-constrained output (`/schema`,
-  `evi run --schema`, `evi/structured.py`) beyond `/json`.
-- **Batch mode** — `evi batch <file>` runs many prompts headless → JSONL
-  (`evi/batch.py`); the local analog of the Batch API.
-- **Expanded hook lifecycle events** — `user_prompt_submit` (veto blocks the
-  prompt), `before_compact`, `stop`, on top of before/after-tool.
-- **Evals harness** — `evi eval` runs prompt→assertion suites with a pass-rate
-  (`evi/evals.py`); gates CI on failures.
-
-Follow-on additions from the same review — **✅ shipped (local)**:
-
-- **LLM-as-judge evals** — a `judge` rubric assertion graded by a model.
-- **Web structured outputs** — `/api/chat output_schema` (JSON-Schema constrained).
-- **Local `evi stats`** — usage/tool/session analytics from transcripts.
-- **Scheduled evals** — `evi schedule add --eval <suite>` (drift watch).
-- **Federation** — `evi peer run` / `delegate_peer` tool / `POST /api/federate`:
-  delegate a task to a trusted peer eVi (peers in `~/.evi/peers.json`;
-  `[federation] serve` to answer).
-- **Fuller Responses API** — `[llm] responses_tools` enables OpenAI hosted tools
-  (web_search/code_interpreter/file_search) on the Responses path.
-- **Multi-user web (opt-in)** — `[web] multi_user` + `~/.evi/users.json`
-  (`evi web-config users …`): per-user revocable tokens **and isolated
-  workspaces** — each user's web sessions, transcripts, and memory live under
-  `~/.evi/users/<name>/` (a ContextVar-scoped per-user session registry +
-  per-user data roots; cross-user leakage is covered by a test).
-
-### Previously-deferred, now planned
-
-- **Phase 90 — fine-tune from transcripts** — **✅ shipped (local)**: `evi
-  finetune export` turns stored sessions into a JSONL chat dataset (one
-  conversation per line; `--days/--session/--min-turns/--system/--include-tools`).
-  Training stays off-device — feed the JSONL to your trainer of choice.
-- **Phase 91 — voice engines / cloning** — **✅ shipped (local, neural engines
-  unverified — heavyweight optional installs)**: `[voice] engine` selects
-  system / Coqui XTTS / F5-TTS / Piper (switchable in Settings → Voice + `evi
-  voice engines`). Cloning engines take a `clone_sample` WAV; all lazy-import
-  and error cleanly if deps are absent. AutoSpeaker threads the engine through.
-- **Phase 92 — CodeQL / secret-scanning** — **✅ shipped (local, untested until
-  CI billing clears)**: `security.yml` gained a gitleaks job (pinned binary +
-  `.gitleaks.toml` allowlist) and a CodeQL job (python + javascript,
-  `upload: false` → SARIF artifact, so no GHAS needed on the private repo).
-- **Phase 93 — Docker image push** — **✅ shipped (local)**: new `docker.yml`
-  builds the existing two-stage `Dockerfile` and pushes to GHCR on `v*` tags
-  (semver + `latest` tags, buildx + gha cache).
-- **Phase 94 — sigstore wheel signing** — **✅ shipped (local)**: `release.yml`
-  signs the sdist + wheel with keyless sigstore after the PyPI upload and
-  attaches the `*.sigstore.json` bundles to the GitHub Release (PyPI also gets
-  PEP 740 attestations via Trusted Publishing).
-
-## Integrations backlog
-
-A large, separately-tracked list (Home Assistant, Notion, Spotify, Slack,
-native GitHub tool, generic IMAP/SMTP email, RSS, weather, Wikipedia,
-YouTube transcripts, Todoist, …) lives in
-[future-integrations.md](future-integrations.md). Many become trivial once
-**MCP-server-publish** lands (consume existing MCP servers instead of building
-each tool by hand).
-
-## Explicitly deferred
-
-- **Agentic browser via Playwright** — deprioritised in favour of MCP browser
-  servers (big surface area).
-- **Fine-tune eVi from transcripts** — niche; dream engine already curates.
-- **Voice cloning for AutoSpeaker** (Bark/Tortoise/F5-TTS) — heavy deps + huge
-  models.
-- **CodeQL / secret-scanning on the private repo** — not free; revisit if the
-  repo goes public or GHAS is purchased (or self-host gitleaks).
-- **Docker image push** in `release.yml`; **sigstore** wheel signing (post-1.0).
-
-## Prioritisation note
-
-Distribution polish (49→51) is the current focus: a new user should install,
-get to first chat without a manual backend setup, and stay updated — all
-without us hand-holding. After that, **MCP-server-publish** is the single
-highest-leverage feature (it subsumes much of the integrations backlog).
-Beyond that, gather real usage via transcripts + `evi dream` before piling on
-more surface area.
+- **No runtime in the installer** (Phase 50, 0.23.0): the model download is
+  the real first-run cost, and bundling would multiply the installer size.
+  The managed runtime (1.0.43) keeps that rule by downloading the runtime and
+  a model after install, on request.
+- **Local-first**: anything that reaches a cloud service is opt-in and says
+  so; see the principles above.

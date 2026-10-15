@@ -29,7 +29,7 @@ GROUPS: list[tuple[str, list[str]]] = [
     (
         "Guides",
         [
-            "architecture", "sdk", "sdk-coverage", "multi-machine", "self-update",
+            "architecture", "sdk", "sdk-coverage", "multi-machine", "security", "self-update",
             "self-build", "development", "releasing", "desktop-bundling",
             "code-signing", "cli-parity", "claude-code-comparison",
             "future-integrations", "roadmap",

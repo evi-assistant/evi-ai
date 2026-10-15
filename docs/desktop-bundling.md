@@ -21,6 +21,31 @@ The Rust shell (`desktop/src-tauri/src/main.rs`) decides at launch:
 So the *same* app binary works as a thin shell over system Python **and**
 as a standalone app — it just depends on whether a sidecar was bundled.
 
+Who can reach the server ([security.md](security.md) has the details):
+
+- **Local** binds `127.0.0.1`, where no access token is needed. With
+  `[federation] bind_lan = true` it binds `0.0.0.0` instead, always with a
+  token: `[web] auth_token` if set, else one the app generates once, keeps in
+  `~/.evi/desktop-token` and passes to the server as `EVI_WEB_AUTH_TOKEN`. If
+  no token can be had, it stays on loopback. The app injects the token it uses
+  into its window, so the UI signs itself in.
+- **Remote** sends `EVI_REMOTE_TOKEN`, or the token `~/.evi/peers.json` keeps
+  for a peer at that address, to the server; never this machine's own
+  `[web] auth_token`.
+
+## Core-only updates and `SHELL_ABI`
+
+The app can update its Python core (the sidecar) without a full reinstall,
+from a signed manifest that `scripts/build-sidecar-manifest.py` builds in the
+release workflow. A shell stages a core only when the manifest's
+`min_shell_abi` is at most its own `SHELL_ABI`
+(`desktop/src-tauri/src/sidecar_update.rs`). The token handshake above is
+shell ABI 2, and the script's default `min_shell_abi` is 2, so an older shell
+keeps its bundled core and gets the new one only through a full app update.
+When a change breaks how the shell launches the core, bump `SHELL_ABI` and that
+default together. `tests/test_web_hardening.py` fails if the manifest the
+script builds would reach an ABI-1 shell or be refused by the current one.
+
 ## Default build (thin client / dev — no sidecar)
 
 ```

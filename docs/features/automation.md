@@ -47,6 +47,10 @@ The scheduler (`evi/scheduler.py`) wraps APScheduler's `BackgroundScheduler`:
 
 ### Channels
 
+These are *session* channels: alerts into a web session. Messaging eVi from
+your phone is a different feature, the Telegram chat channel; see
+[channels.md](channels.md).
+
 Channels are the lightest mechanism. `POST /api/session/<id>/channel` with a JSON body `{"text": "...", "source": "..."}` appends a system note (`[channel:<source>] <text>`) to that live session's history so the assistant sees it on its next turn, and records it in the session's channel log. The matching `GET` returns recent channel messages (for a UI badge). The sender authenticates with the **normal web token** (unlike routines). Channel context is **live-session only** — it is **not** persisted across reloads.
 
 ## Setup

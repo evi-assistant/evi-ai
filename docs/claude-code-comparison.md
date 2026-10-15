@@ -1,9 +1,11 @@
 # eVi vs Claude Code — feature comparison
 
 How eVi's capabilities line up against the full [Claude Code docs](https://code.claude.com/docs/en/overview)
-surface (reviewed 2026-06-16, eVi 0.33.0). eVi is **local-first, single-user, privacy-first**,
+surface. The Claude Code column was reviewed on 2026-06-16 (eVi 0.33.0); the eVi
+column was re-checked against eVi's code on 2026-10-14 (eVi 1.0.53 plus the
+Phase 0 work done for the next release). eVi is **local-first, single-user, privacy-first**,
 so a number of Claude Code's cloud/enterprise features are intentionally out of
-scope rather than "missing".
+scope rather than "missing". What eVi plans next is in [roadmap.md](roadmap.md).
 
 **Legend:** ✅ have · ⚠️ partial · ❌ gap (buildable, on the roadmap) · 🚫 not
 planned (philosophy mismatch / separate big track).
@@ -12,11 +14,11 @@ planned (philosophy mismatch / separate big track).
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
-| Agentic loop + built-in tools | `evi/llm/agent.py`; 20+ tools | ✅ |
+| Agentic loop + built-in tools | `evi/llm/agent.py`; dozens of built-in tools (count in HANDOFF.md's generated facts) | ✅ |
 | Common workflows (explore/fix/refactor/test) | chat, `evi review`, recipes | ✅ |
 | Interactive mode + keyboard shortcuts | `prompt_toolkit` REPL (tab-complete, history, `keybindings.toml`) | ✅ |
 | Goals | `/goal`, `agent.goal` | ✅ |
-| Scheduled tasks | scheduler (APScheduler), `evi scheduled` | ✅ |
+| Scheduled tasks | scheduler (APScheduler), `evi schedule` / `evi scheduler` | ✅ |
 | Voice dictation | STT + voice loop | ✅ |
 
 ## Sessions & conversation
@@ -26,15 +28,19 @@ planned (philosophy mismatch / separate big track).
 | Name / resume / branch / switch | `evi sessions` (list/show/resume/continue/fork/title); edit/branch/reroll | ✅ |
 | Checkpointing (rewind edits + convo) | file rewind (Ph 64) + convo edit/branch/reroll | ✅ |
 | Continue / resume / fork | `evi sessions continue` / `fork` (Ph 71) | ✅ |
-| Remote control (drive from a phone) | remote-backend mode + multi-machine | ⚠️ no cross-device session handoff |
-| Deep links (open from a URL) | — | 🚫 niche |
+| Remote control (drive from a phone) | Telegram chat channel (paired senders, own narrow toolset; [channels.md](features/channels.md)) + `evi sessions handoff` + remote-backend mode | ⚠️ one message = one turn; no live attach to a running session |
+| Send a message while it works | steering: queued, applied at the turn's next step ([steering.md](features/steering.md)) | ✅ web/desktop; no stop button yet |
+| Import history from other tools | `evi sessions import` (Claude Code + Codex logs → eVi sessions) | ✅ eVi-unique |
+| Deep links (open from a URL) | `evi://session/<id>`, `evi://workflow/<name>`, `evi link` | ✅ |
 
 ## Permissions & safety
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
 | Permission modes (ask/accept-edits/plan/yolo) | `auto.mode` (Ph 66) | ✅ |
-| Fine-grained allow/deny rules | `auto.rules` (Ph 66) | ✅ |
+| Fine-grained allow/deny rules | `auto.rules`, matched per command in a shell line; category rules (`allow shell`) | ✅ |
+| Workspace trust (trust a folder before using its config) | `evi trust`; an untrusted repo's `.evi.toml` is ignored, and a trusted one can only tighten security | ✅ |
+| Protected files (instructions, settings, CI) | built-in protected paths ask in every mode (`EVI.md`, `.evi.toml`, `.github/workflows/**`, …) | ✅ |
 | Auto-mode config (trusted dirs / domains) | `auto.trusted_dirs` + `trusted_domains` (Ph 77) | ✅ |
 | Sandboxed bash/code | `[tools] sandbox` (Ph 67) | ✅ |
 | Security / vuln review | guardrails, `security.yml` (pip/cargo audit), `review --multi` | ✅ |
@@ -52,7 +58,7 @@ planned (philosophy mismatch / separate big track).
 | Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop/**session_start**/**session_end**; **conditional `arg_match`**) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
 | Keybindings | `keybindings.toml` + `evi keybindings` (Ph 82) | ✅ |
-| Skills tool-scoping (allowed/disallowed-tools) | SKILL.md `allowed-tools`/`disallowed-tools` → `evi/skillscope.py` scopes the toolset while a skill is active | ✅ |
+| Skills tool-scoping (allowed/disallowed-tools) | SKILL.md `allowed-tools`/`disallowed-tools` are read; don't rely on them to restrict a skill yet | ⚠️ being completed in Phase 0 ([roadmap.md](roadmap.md)) |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
 | Nested skills (subfolders) | recursive `SKILL.md` scan | ✅ |
 | `/add-dir` (extra working dirs) | `/add-dir` → session trusted_dirs | ✅ |
@@ -78,11 +84,11 @@ planned (philosophy mismatch / separate big track).
 | Desktop app | Tauri desktop (menus/tray/updater) | ✅ |
 | Web | FastAPI + SSE web UI | ✅ |
 | Headless / print mode | `evi run` (Ph 65) | ✅ |
-| VS Code / JetBrains extensions | — | 🚫 separate track |
-| Mobile / web cloud platform | — | 🚫 local-first |
+| VS Code / JetBrains extensions | VS Code extension (`editors/vscode/`: local ghost-text completion + a chat panel); JetBrains via `evi mcp serve` | ⚠️ VS Code only |
+| Mobile / web cloud platform | Telegram channel for the phone; no hosted platform | ⚠️ phone via Telegram; 🚫 cloud |
 | Computer use | `computer` tool | ✅ |
 | Chrome / browser automation | — | 🚫 deferred for MCP browser servers |
-| Slack integration | — | ❌ integrations backlog |
+| Slack integration | — (Telegram is the one chat channel) | ❌ not before the channel runtime ([roadmap.md](roadmap.md)) |
 
 ## Review · planning · orchestration
 
@@ -116,8 +122,10 @@ planned (philosophy mismatch / separate big track).
 | Extended thinking on/off | `reasoning_effort` off/low/medium/high/max (`/effort`) | ✅ |
 | Transcript retention (cleanupPeriodDays) | `tools.cleanup_period_days` + `evi sessions purge` | ✅ |
 | Prompt caching | `cache_prompt` | ✅ |
-| Context window display | usage chip + status line | ⚠️ no interactive sim |
-| Cloud backends (Bedrock/Vertex/Foundry) | `openai_compat` (covers gateways/proxies) | 🚫 by design |
+| Context window display | usage chip + status line + `/context` per-bucket breakdown | ⚠️ no interactive sim |
+| Cloud backends (Bedrock/Vertex/Foundry) | `openai_compat` (covers gateways/proxies); `gemini` via an API key or Vertex AI | 🚫 no native Bedrock/Foundry, by design |
+| Use a subscription instead of an API key | CLI-agent backends: `claude_agent` (Claude Max/Pro), `codex` (ChatGPT), `amp`, `qwen`, `copilot` | ✅ eVi-unique |
+| Run a local model with no setup | managed llama.cpp runtime: `evi runtime setup`, model catalog, GPU switch ([runtime.md](features/runtime.md)) | ✅ eVi-unique |
 | Cost management / analytics dashboards | token usage shown | 🚫 local = free |
 
 ## SDK & programmatic
@@ -138,7 +146,7 @@ planned (philosophy mismatch / separate big track).
 | Permissions SDK | permission policy (Ph 66) | ✅ |
 | Public Agent SDK (library) | `evi.sdk` — curated re-export + `build_agent()` + examples ([sdk.md](sdk.md)) | ✅ |
 | Session storage (S3/Redis) | local JSONL transcripts | 🚫 local-first |
-| OpenTelemetry / monitoring | opt-in crash reporting (Sentry-compatible) | ⚠️ no metrics/traces |
+| OpenTelemetry / monitoring | opt-in OpenTelemetry traces + metrics (`[telemetry]`, `[otel]` extra) + crash reporting (Sentry-compatible) | ✅ opt-in |
 | Tool search (1000s of tools) | `[tools] tool_search` defers the long tail behind a `search_tools` meta-tool | ✅ opt-in |
 
 ## Org / enterprise / compliance
@@ -148,6 +156,33 @@ planned (philosophy mismatch / separate big track).
 | Admin setup, server-managed settings, team onboarding | — | 🚫 single-user |
 | Authentication (accounts/SSO) | web auth token; local backends need none | 🚫 local |
 | ZDR / legal / data-usage | private by design (everything local) | 🚫 N/A |
+
+## Summary — since 1.0 (1.0.1 → 1.0.53, plus unreleased Phase 0 work)
+
+Released in 1.0.1 to 1.0.53:
+
+- **CLI-agent backends** — six backends route a turn through a coding CLI you
+  already have, on its own subscription or login (Claude Code, Codex, Gemini
+  CLI, Amp, Qwen Code, GitHub Copilot CLI).
+- **Zero-config local AI** — the managed llama.cpp runtime: download, catalog,
+  GPU, your own build.
+- **First run that proves it works** — ranked options, a verified switch with
+  rollback, starter prompts.
+- **Phone and history** — the Telegram chat channel; `evi sessions import`
+  from Claude Code and Codex; steering a running turn.
+- **Security fixes** — 1.0.53 is a security release (see
+  [CHANGELOG.md](../CHANGELOG.md)).
+
+Done for the next release (Phase 0, under `[Unreleased]` in the CHANGELOG):
+
+- **Safety** — folder trust for project config, per-command shell rules,
+  protected paths, SSRF-guarded `web_fetch`, hardened git calls, pinned
+  runtime downloads, and releases gated on the browser e2e suite.
+- **Correctness** — the managed runtime sizes its context window to the
+  machine; the CLI-agent drivers were reworked, and Gemini CLI now needs a
+  Gemini API key or Vertex AI.
+
+The rest of the Phase 0 work is listed in [roadmap.md](roadmap.md).
 
 ## Summary — specialty SLMs + opencode/Cursor gleanings (0.34.0)
 
@@ -171,9 +206,9 @@ Beyond Claude Code, eVi pulled in the genuinely-local wins from **opencode** and
   Bugbot-style review (`.evi/BUGBOT.md` + `evi review-remember` + severity).
   (`evi edit` already existed.) Cursor's cloud bits (Cloud Agents, remote PR
   Bugbot, Design Mode, Slack, enterprise) remain out by the local-first rule.
-- **Deferred (need a separate client / deeper work):** a VS Code/LSP extension
-  to render the FIM completions as ghost-text; a full language-server
-  integration (eVi ships the lighter check_file/format-on-edit instead).
+- **Deferred (deeper work):** a full language-server integration (eVi ships
+  the lighter check_file/format-on-edit instead). The VS Code extension that
+  renders the FIM completions as ghost-text has since shipped (`editors/vscode/`).
 
 ## Summary — S/M parity batch (0.33.0)
 
@@ -202,10 +237,11 @@ gitleaks, Docker→GHCR, sigstore signing), plus `evi://` deep links, the plugin
 marketplace index, and the public **Agent SDK** (`evi.sdk`; see [sdk.md](sdk.md)).
 
 ⚠️ **Deferred (need an architectural addition or are low-value), not philosophy gaps:**
-- **Skill tool-scoping** (`allowed-tools`/`disallowed-tools` in skill frontmatter) — needs a persistent "active-skill" mode in the agent loop (skills are currently one-shot instruction packets).
+- **Skill tool-scoping** (`allowed-tools`/`disallowed-tools` in skill frontmatter) — the frontmatter is read, and applying it in the agent loop is being completed in Phase 0 ([roadmap.md](roadmap.md)).
 - **Nested subagent spawning** (subagents that spawn subagents) — deliberately gated as a runaway-cost guard.
 - **Custom REPL themes** — terminal colour themes (output styles already cover response persona).
 
-🚫 **Not planned (by design):** cloud/enterprise backends (Bedrock/Vertex/Foundry),
-IDE extensions, mobile, agentic browser, hosted session storage, cost/analytics
-dashboards, accounts/SSO/admin — eVi is local-first and single-user.
+🚫 **Not planned (by design):** native cloud/enterprise backends (Bedrock/Foundry),
+a JetBrains plugin, a mobile app (the phone path is the Telegram channel), an
+agentic browser, hosted session storage, cost/analytics dashboards,
+accounts/SSO/admin — eVi is local-first and single-user.

@@ -146,6 +146,73 @@ All notable user-visible changes to eVi. Format loosely follows
   `--host` without `--token` exits with code 2 and `error: refusing to serve
   MCP over HTTP on 0.0.0.0 without --token. Pass --token, or bind to
   127.0.0.1.`
+- **Without an access token, eVi's web server answers only this computer.**
+  A server with no token checked only the `Host` header, which curl or a
+  script on the network sets freely, so `evi web --host 0.0.0.0`, the desktop
+  app's LAN access (`[federation] bind_lan`) or a container without a token
+  let anyone who could reach the port drive eVi and its tools. Now a server
+  with no `[web] auth_token`, launch token (`EVI_WEB_AUTH_TOKEN`) or
+  multi-user logins answers `403` to every connection that doesn't come from
+  this machine. A request a reverse proxy forwarded (`X-Forwarded-For`,
+  `Forwarded`, `X-Real-IP`) counts as another machine's, so a proxy on the
+  same machine needs a token too. `EVI_ALLOW_ANY_HOST=1` still relaxes the
+  `Host` check but no longer lets other machines in. Routine webhooks
+  (`/api/routine/<token>`), whose URL is the credential, are exempt. `evi web`
+  with a non-loopback `--host` and no token refuses to start (exit 1) and says
+  how to set one (`evi web-config token rotate`). See "What changed for
+  existing setups" in docs/security.md.
+- **Browser calls to eVi's API must come from eVi's own pages.** A browser's
+  `POST`, `PUT`, `PATCH` or `DELETE` to `/api/…` now needs an `X-Evi-Client`
+  header unless it carries the access token. eVi's web UI and desktop app
+  send it; another site can't add it without a CORS preflight, which eVi
+  never answers. This backs up 1.0.53's cross-site check and still holds when
+  `EVI_ALLOW_CROSS_ORIGIN=1` turns that check off. A request counts as a
+  browser's only when it has an `Origin` or a `Sec-Fetch-Site` header, so the
+  CLI, peers, curl and the VS Code extension (older builds too) are
+  unaffected. A side-effecting `GET` (`/api/backend/pull`, which starts a
+  model download) started by another site or another local port is refused
+  even with `EVI_ALLOW_CROSS_ORIGIN=1`. A script calling the API from a
+  browser page should send `X-Evi-Client: 1`.
+- **In multi-user mode, a users.json login can use only its own chats.** Any
+  login could change the host's settings, hooks, plugins, channels, peers,
+  managed runtime, MCP servers and backends, run its workflows, recipes and
+  evals, take federated and A2A tasks, and list or rewind every user's file
+  checkpoints. Those routes are now owner-only (`403` for a login), and the
+  owner is whoever holds `[web] auth_token` or the launch token. `/model <id>`
+  in a chat, which saves to the host's `config.toml`, is owner-only too. A
+  login named `owner` shared the owner's sessions, transcripts and memory; it,
+  and any name that lands in the same folder (`Owner`, `owner.`), can no
+  longer sign in, and `evi doctor` names it with the command to remove it
+  (`evi web-config users add` still accepts the name). See "Multi-user mode"
+  in docs/security.md.
+- **A chat nobody is watching no longer approves tools by itself.** A channel
+  push with `run: true` (`POST /api/session/<id>/channel`) runs a turn with
+  no one to ask: in a session that hadn't chatted yet, every tool that would
+  ask was approved, and in one that had, the turn waited forever on a prompt
+  sent to a stream long closed. A session with no client attached now denies
+  any tool that would ask, and the push returns.
+- **Your hooks now guard the desktop and web app, the Telegram bridge and
+  subagents.** `hooks.toml` ran only where the CLI built the agent, although
+  the docs said every front end: web and desktop chats; the workflow, recipe,
+  routine and ultracode runs the web app starts; federated and A2A tasks;
+  Telegram turns; and the subagents a chat spawns all ran without it, so a
+  "never write outside this folder" guard didn't hold there. They all load it
+  now (safe mode still turns hooks off), and a subagent works in the folder
+  of the chat that spawned it. The web and desktop app share one copy, so a
+  Save in Settings → Hooks, or installing or removing a plugin, applies to
+  every open chat at once, without a restart. A subagent gets only the tool
+  hooks (`before_tool_call`, `after_tool_call`), so `user_prompt_submit` and
+  `stop` still fire once per turn. Eval runs skip hooks, so scores don't
+  depend on the machine, and in multi-user mode every login's chats run the
+  owner's `hooks.toml`. A hook you wrote for the CLI now also sees desktop
+  chats and prompts sent from Telegram: check it before you update.
+- **Desktop on Windows opens links and folders with the system's own
+  `rundll32.exe` and `explorer.exe`.** They were started by bare name, which
+  Windows looks up in the app's own folder first, so a `rundll32.exe` planted
+  next to the app would have run instead. They now run by full path under
+  `%SystemRoot%`.
+- **Voice transcription uploads stop at 32 MB** (`413`), like attachments;
+  `/api/transcribe` wrote whatever it was sent to disk.
 
 ### Changed
 - **The `evi-run` GitHub Action approves no tools unless you say so.** It
@@ -231,6 +298,96 @@ All notable user-visible changes to eVi. Format loosely follows
   on 0.8: 1.x would silently ignore `[desktop] sidecar_auto_update = false`.
   Linux builds still carry `glib` 0.18.5 (RUSTSEC-2024-0429) until Tauri moves
   to gtk-rs 0.20; nothing in the shell uses the affected API.
+- **Serving the network needs an access token, and the desktop app and the
+  Docker image make their own.** With LAN access on (`[federation]
+  bind_lan`), the desktop app generates a 256-bit token once, keeps it in
+  `~/.evi/desktop-token` (readable only by you on macOS and Linux), hands it
+  to its server and signs its own window in, so nothing changes on this
+  machine. Peers and clients on other machines must send it
+  (`evi web-config token show` prints it), and if no token can be made the
+  app stays on loopback. A `[web] auth_token` you set is used instead, and
+  the desktop window now signs itself in with that too. The Docker image's
+  new entrypoint does the same when neither `EVI_WEB_AUTH_TOKEN` nor
+  `[web] auth_token` is set: it keeps the token in the state volume as
+  `container-token` and never logs it (print it with
+  `docker exec <container> evi web-config token show`). Without one, the
+  published port would refuse even your own browser, which reaches eVi
+  through the Docker network. A token handed over at launch like these
+  (`EVI_WEB_AUTH_TOKEN`) gates only other machines, so the image's own health
+  check, and on the desktop an older VS Code extension, work without it; the
+  server removes it from its environment so the tools it runs never see it.
+  In thin-client mode (`EVI_REMOTE_URL`) the desktop app signs in with
+  `EVI_REMOTE_TOKEN`, or with the token `peers.json` keeps for that server.
+- **Desktop core-only updates need the latest desktop app.** The desktop app
+  now hands its server the LAN token at launch (shell ABI 2), and cores
+  published from this release on require that (`min_shell_abi = 2`). An
+  older desktop app keeps the core it has and gets newer ones only after a
+  full app update.
+- **One turn per chat: a message sent mid-turn becomes a follow-up.** Two
+  turns could run on one chat at once and interleave its history: a re-roll
+  during a turn, a reload or a second window, or a slash command sent
+  mid-turn (which also cleared the page's "turn running" state).
+  `POST /api/chat` on a busy session now answers `409` naming
+  `POST /api/session/<id>/steer`, and the web UI turns a plain message into a
+  follow-up there. Re-roll, edit, truncate, `/api/reset` and every slash
+  command except `/help`, `/tools` and `/model`, `/goal` or `/auto` without
+  an argument also answer `409` until the turn ends. Scripts that call
+  `/api/chat` should expect the `409`.
+- **A permission prompt nobody answers is denied after 5 minutes.** The turn
+  used to wait forever, leaving the chat busy. An unanswered prompt is now
+  denied after 300 s (`[web] decision_timeout_s`, or `EVI_DECISION_TIMEOUT_S`,
+  which overrides it): the stream sends a new `PermissionExpired` event, and
+  the web UI closes the prompt and says so (`PermissionRequest` carries
+  `timeout_s`). A closed tab doesn't deny early. The answer now goes to the
+  chat that asked, so switching tabs while a prompt is open no longer loses
+  it.
+- **VS Code extension: a chat per window, and prompts you can answer.** Every
+  window shared one server session (`vscode`), so two windows raced the same
+  chat; each window now has its own, kept across reloads. A tool that needs
+  approval shows Approve and Deny buttons (the extension ignored the prompt,
+  so the turn waited), and errors and the "still working" `409` are shown.
+  With `evi.authToken` unset, it signs in to a server on this machine with
+  the desktop app's `~/.evi/desktop-token`.
+- **Hooks run in the session folder, and a guard never judges a cut-off
+  input.** A command hook now runs in the session folder (`/cd`, `--cwd`, the
+  web folder chip) and gets it as `EVI_CWD` (a URL hook gets `cwd`), so a
+  "stay in this folder" guard resolves a relative path the way the tool
+  does; a hook that relied on the folder eVi started in sees the session
+  folder when one is set. Its stdin is the null device, so a hook that reads
+  stdin no longer waits until its timeout. `EVI_HOOK_ARGS_JSON` holds a
+  payload whole up to what one environment variable can (about 32,000
+  characters on Windows, 120 KiB elsewhere). Past that, a guard
+  (`veto_on_nonzero`) isn't run and the action is blocked, while other hooks
+  get a shortened copy with `EVI_HOOK_ARGS_TRUNCATED=1` and the whole payload
+  in the temp file `EVI_HOOK_ARGS_FILE` names. The new `args_via_file = true`
+  key always writes that file, so a guard can check input of any size. eVi
+  used to pass a payload whole however big, so on Windows a guard like the
+  `no-system-writes` example in `examples/hooks.toml` now blocks a
+  `write_file` over about 32,000 characters until you add `args_via_file`
+  and read the file. A guard also blocks when eVi's hook runner itself
+  fails, and a NUL character, which let a prompt past its guard or crashed
+  the turn, reaches the hook as `\u0000`; a hook that only observes never
+  blocks. See "Big payloads" in docs/features/hooks.md.
+- **A skill's `allowed-tools` and `disallowed-tools` now take effect.** eVi
+  read them but never applied them. After `invoke_skill`, a call outside the
+  skill's scope is refused (`not allowed by the active skill's scope`) for
+  the rest of the turn, including calls in the same batch as `invoke_skill`
+  and subagents the turn spawns, and the refused call is never put to a
+  permission prompt. The tool list the model sees doesn't change. A second
+  skill can only narrow the scope, and the next turn (or a re-roll) starts
+  without one. Claude Code tool names in imported skills are mapped to eVi's
+  (`Read` → `read_file`, `Bash(…)` → `run_command`, `Grep` →
+  `search_files`, …), and an allow-list that names no tool eVi knows
+  (`TodoWrite`) is ignored rather than locking out every tool.
+- **`evi web-config token show` prints the token a server here uses.** It
+  printed only `[web] auth_token`; when that is unset it now falls back to
+  `EVI_WEB_AUTH_TOKEN`, then the Docker image's `container-token`, then the
+  desktop app's `desktop-token`. Only the token goes to stdout, so
+  `$(evi web-config token show)` works; where it came from goes to stderr.
+  `token rotate` no longer asks for a restart: a running server re-reads
+  `config.toml` on every request, so the old `[web] auth_token` stops working
+  at once (a launch token stays valid until its server restarts). `evi web`
+  no longer suggests the nonexistent `evi web token rotate`.
 
 ### Added
 - **`evi chat --mode chat|cowork|code`** (`-m`) picks the session's tool
@@ -257,6 +414,22 @@ All notable user-visible changes to eVi. Format loosely follows
   installed (and names the install command), that amp is signed in and that
   gemini has an API key or Vertex AI set up. For an HTTP backend it now sends
   `[llm] api_key` and says when the server rejects it.
+- **`evi doctor` checks who can reach your web server.** A new `web access`
+  check says whether a token gates the server and, for LAN access
+  (`bind_lan`) or federation and A2A serving without one, what to do now that
+  a server with no token answers only this machine. In multi-user mode it
+  warns when logins exist but no owner token is set (then nobody can reach
+  the owner-only routes) and names any login the server refuses because its
+  name is reserved for the owner.
+- **Docs for everything since 1.0.37, and a page on who can reach eVi.** New
+  pages cover the managed llama.cpp runtime (docs/features/runtime.md), the
+  Telegram channel (channels.md), first run (onboarding.md) and steering
+  (steering.md); sessions.md covers `evi sessions import`, and
+  docs/configuration.md gains a `[web]` section. docs/security.md explains
+  access tokens, LAN, Docker and desktop setups, browser requests,
+  permission deadlines and multi-user mode. docs/roadmap.md is now the plan
+  from 1.0.53 on, and the README states Python 3.12+ and links the security
+  page.
 
 ### Fixed
 - **An apostrophe no longer breaks a user slash command.** `/fix don't panic`
@@ -297,6 +470,29 @@ All notable user-visible changes to eVi. Format loosely follows
   `<repo>/.worktrees/`, so `git add -A` in the main checkout staged each one
   as an embedded repository. eVi now adds `/.worktrees/` to the repository's
   `.git/info/exclude` (never its `.gitignore`).
+- **File and shell tools work in the folder you chose.** `/cd`,
+  `evi chat --cwd` and the web folder chip set the session folder, but tools
+  run on their own threads, which never saw it, so they read, wrote and ran
+  commands in the folder eVi was started in while permission checks looked
+  at the session folder. Every tool call now runs in the session folder, and
+  so do the subagents a chat spawns and the agents `/ultra` and workflows
+  build after a `/cd`.
+- **The `stop` hook fires.** It was set to run after a turn's last event, but
+  every front end stops reading at that event, so it never ran. It now fires
+  once per completed turn, just before it ends, with the finish reason
+  (`stop`, `length`, `max_turns_reached`) in `EVI_HOOK_ARGS_JSON`. A re-roll
+  fires it once; a prompt blocked by a hook or guardrail, or a turn that ends
+  in an LLM error, doesn't fire it.
+- **A follow-up sent as a turn ends is no longer lost.** A follow-up the turn
+  never got to apply came back after the turn's `Done` event, which the web
+  UI could miss when it arrived in a later read, leaving the message marked
+  "queued" and never sent. It now comes back (`Steering` with
+  `applied: false`) before `Done`, which is always the last event, and a
+  re-roll, which can now take follow-ups, hands them back the same way. Two
+  races that lost one are closed too: a new tab's first two requests could
+  each build a session, leaving the running turn on one nobody could reach
+  (so `/steer` answered "not busy"), and a follow-up sent the instant a turn
+  ended could be queued on the finished turn.
 
 ## [1.0.53] — 2026-10-09
 

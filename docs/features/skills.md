@@ -209,15 +209,17 @@ evi skill import path/to/claude-skill --rewrite-paths   # also fix relative refs
 What carries over and what doesn't:
 
 - ✅ **`name` + `description` frontmatter** → eVi's skill index. Extra Claude keys
-  (`license`, `allowed-tools`, `metadata`, …) are read but **ignored** — they
-  don't break anything.
+  (`license`, `metadata`, …) are read but **ignored** — they don't break
+  anything.
 - ✅ **The instruction body** is used verbatim as the `invoke_skill` payload.
 - ✅ **Bundled files** (a `reference.md`, a `scripts/` dir, assets) are copied in,
   and when the model invokes the skill their **absolute paths are appended** to
   the loaded text — so the model can `read_file` / run them on its own (it needs
   the relevant tools enabled).
-- ⚠️ **`allowed-tools` is not enforced.** eVi gates tools through its own
-  permissions/modes, not the skill's frontmatter.
+- ⚠️ **`allowed-tools` / `disallowed-tools` are not enforced yet.** Don't rely
+  on them to restrict a skill: eVi gates tools through its own
+  permissions/modes. Applying them in the agent loop is being completed in
+  Phase 0 (see the [roadmap](../roadmap.md)).
 - ⚠️ **Frontmatter is single-line `key: value`** (not full YAML). A multi-line
   folded/literal `description:` would be truncated — keep it on one line.
 - `--rewrite-paths` rewrites standalone relative references in `SKILL.md` (e.g.

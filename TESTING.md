@@ -17,7 +17,7 @@ a standing rule: **every UI-affecting change ships with an e2e test.**
 | **Unit** | `pytest` (`tests/*.py`, plus the composite actions' tests in `.github/actions/`) | fast (run `pytest --collect-only -q` for the live count) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push and PR (CI `ci.yml`), every release, + locally |
 | **E2E (CLI)** | subprocess (`tests/cli_e2e/`) | medium (~100 s, no browser) | the real `evi` CLI per subsystem — arg parsing, config wiring, file I/O, output (the offline commands) | opt-in (`-m e2e`) |
 | **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs, pushes to main, weekly, dispatch, and every release before it publishes (CI `e2e.yml`) |
-| **E2E (desktop)** | tauri-driver + msedgedriver (`tests/desktop_e2e/`) | slow (needs a built `evi-desktop.exe`, Windows) | the native shell: the built app launches and renders the UI, the Tauri bridge is there, the native menu opens Settings | opt-in (`-m desktop`); in `desktop-release.yml` behind a flag (see [CI gates](#ci-gates)) |
+| **E2E (desktop)** | tauri-driver + msedgedriver (`tests/desktop_e2e/`) | slow (needs a built `evi-desktop.exe`, Windows) | the native shell: the built app launches and renders the UI, the Tauri bridge is there, the native menu opens Settings, LAN access starts with a generated token, thin-client mode signs in with its token | opt-in (`-m desktop`); in `desktop-release.yml` behind a flag (see [CI gates](#ci-gates)) |
 | **Manual** | a human + the desktop app | slow | things no harness reaches: the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
 
 The web UI **is** the desktop UI (the Tauri shell wraps the same server +
@@ -42,6 +42,11 @@ python -m playwright install chromium
 .venv/Scripts/python -m pytest tests/e2e -m e2e --timeout=120
 ```
 
+`tests/test_web_hardening.py` runs the Docker image's entrypoint
+(`scripts/docker-entrypoint.sh`) under a POSIX `sh` (dash when present, as in
+the image) and skips those tests when there is none on `PATH` (on Windows, put
+Git for Windows' `usr\bin` on `PATH`).
+
 E2E is opt-in: both suites are marked `e2e` and excluded from the default run via
 `addopts = -m "not e2e"`. `tests/e2e/conftest.py` (UI) skips its dir when
 Playwright isn't installed; `tests/cli_e2e/` (CLI) has no browser dependency, so
@@ -50,13 +55,37 @@ it runs anywhere Python + the package are installed.
 ### How the e2e harness works (`tests/e2e/conftest.py`)
 
 - A **fake OpenAI-compatible backend** (Starlette, in-thread) streams a canned
-  chat-completion — so e2e needs **no Ollama/LM Studio** and runs in CI.
+  chat-completion — so e2e needs **no Ollama/LM Studio** and runs in CI. It
+  serves two models, `fake` and `fake-o1`, with different capability chips.
 - The **real eVi web server** runs as a subprocess with an isolated `EVI_HOME`
-  whose `config.toml` points at the fake backend.
+  whose `config.toml` points at the fake backend (`evi_base_url`, one per
+  session and per xdist worker).
 - **Playwright** (headless chromium) drives the page like a user.
 
 This exercises the full path — agent → `sse-starlette` → browser fetch/parse →
 DOM render — which is exactly where the 0.24.2 bug lived.
+
+Fixtures and markers a UI test can use:
+
+- **`evi_home`**: that server's `EVI_HOME` (a pytest tmp dir). Seed state the
+  server reads on every request there, such as the Telegram pairing queue
+  (`channels/telegram.json`), a plugin, or the managed runtime's log.
+- **`fake_llm`**: the test's handle on the fake backend, reset before the test
+  and released after it, so a failing test can't leave a turn held. Put a
+  marker in the prompt to shape the turn:
+  - `[e2e-hold]` (`fake_llm.HOLD`): the backend answers nothing until the test
+    sets `fake_llm.release`; `fake_llm.held` is set once the request arrives,
+    so the turn is really in flight server-side (`test_ui_steering.py`).
+  - `[e2e-tool]` (`fake_llm.TOOL`): the backend answers with one call to
+    `list_memories` (`fake_llm.TOOL_NAME`), which is read-only and
+    auto-approved, so the turn gets a next step without a permission prompt.
+
+  The markers count only in a streamed request whose last message is the
+  user's, so the step after the tool call and the title request get the plain
+  canned reply. Take them from the fixture: importing `conftest` loads a
+  second copy of the control object.
+- **`@pytest.mark.quarantine`** is registered in `tests/e2e/conftest.py` (see
+  [CI gates](#ci-gates)); `tests/e2e/test_e2e_harness.py` checks that it is.
 
 ### How the CLI e2e harness works (`tests/cli_e2e/conftest.py`)
 
@@ -134,14 +163,17 @@ backlog — fill the ⬜ rows as you touch each area.
 | Citations rendering (P30) | ⬜ |
 | Token/usage indicator updates | ⬜ |
 
-### Backends / first-run (Phase 48, 50, 0.24.1)
+### Backends / first-run (Phase 48, 50, 0.24.1, 1.0.49, 1.0.50)
 | Feature | Status |
 |---|---|
 | Configured backend reachable → no banner | ✅ `test_backend_configured_hides_banner` |
-| No backend → setup wizard banner | ⬜ (fake a dead backend) |
-| "Use <backend>" switch action (`/api/backend/use`) | 🧪 unit · ⬜ e2e |
+| No backend → full-screen setup ranks what the machine has | ✅ `test_ui_onboarding.py::test_setup_screen_ranks_what_the_machine_already_has` |
+| "Use <backend>" switch action (`/api/backend/use`), verified | 🧪 unit · ✅ `test_ui_onboarding.py::test_verified_switch_reports_chat_and_tools` |
+| Failed switch rolls back; Run diagnostics works | ✅ `test_ui_onboarding.py::test_failed_switch_rolls_back_and_changes_nothing`, `::test_failed_switch_run_diagnostics_button_works` |
+| "Set up local AI" card: what it installs, its steps, log + diagnostics on failure | ✅ `test_ui_runtime_setup.py` (`test_first_run_download_option_opens_the_card`, `test_card_lists_what_it_will_put_on_the_machine`, `test_setup_names_its_steps`, `test_failure_offers_the_log_and_diagnostics`) |
 | Install/start/pull wizard flow | 👤 (real Ollama) |
-| Model picker / switcher (`/api/model-picker`) | 🧪 unit · ⬜ e2e |
+| Model picker / switcher (`/api/model-picker`) | 🧪 unit · ✅ `test_ui_model_switch.py` |
+| Starter prompts in an empty chat | ✅ `test_ui_starter_prompts.py` (`test_empty_chat_offers_three_starters`, `test_starter_sends_its_prompt_and_gives_way`, `test_starters_survive_when_nothing_answers`, `test_new_chat_gets_starters_a_restored_one_does_not`) |
 
 ### Sessions & navigation (Phase 4, 13)
 | Feature | Status |
@@ -165,11 +197,24 @@ backlog — fill the ⬜ rows as you touch each area.
 | Image generation result render (P3) | 👤 |
 | Voice TTS / STT controls | 👤 (audio device) |
 
+### Steering a running turn (1.0.52)
+| Feature | Status |
+|---|---|
+| Send becomes Queue while a turn runs | ✅ `test_ui_steering.py::test_send_becomes_queue_while_a_turn_runs` |
+| Follow-up shows "queued", then "applied" at the next step | ✅ `test_ui_steering.py::test_follow_up_is_queued_then_applied_at_the_next_step[chromium-prompt-steer]` / `[chromium-late-steer]` |
+| Turn ends first → the follow-up is sent as a normal message | ✅ `test_ui_steering.py::test_follow_up_is_resent_when_the_turn_ends_first[…]` |
+| …when the server's leftover-steering frame arrives after `Done` | ⚠ strict xfail `test_follow_up_is_resent_when_its_frame_comes_after_done[…]` (known bug: remove the xfail once fixed) |
+| A message to a busy session (409) becomes a follow-up | ✅ `tests/e2e/test_web_hardening.py::test_a_busy_session_turns_the_message_into_a_follow_up` |
+
 ### Other surfaces
 | Feature | Status |
 |---|---|
-| Auth token login overlay (P9) | ⬜ |
+| Auth token login overlay (P9) | ✅ `tests/e2e/test_web_hardening.py::test_a_stale_injected_token_never_replaces_a_working_one` (signs in through the overlay), `::test_injected_token_signs_the_ui_in` |
+| UI sends `X-Evi-Client`; a browser POST without it is refused | ✅ `tests/e2e/test_web_hardening.py::test_ui_requests_carry_the_client_header`, `::test_browser_post_without_the_header_is_refused` |
+| Launch token (desktop LAN / container) spares this machine | ✅ `tests/e2e/test_web_hardening.py::test_launch_token_spares_this_machine` |
+| Cross-site / cross-alias requests refused | ✅ `test_ui_security.py` |
 | Permission prompt dialog | ⬜ |
+| Settings → Channels: approve / revoke Telegram senders | ✅ `test_ui_channels.py` (`test_approve_then_revoke_a_sender`, `test_channel_is_off_and_unknown_codes_pair_nobody`) |
 | MCP tools available (P7) | 🧪 |
 | Memory / index / calendar / git tools | 🧪 |
 
@@ -179,6 +224,9 @@ backlog — fill the ⬜ rows as you touch each area.
 | Settings screen opens (⚙ / Ctrl+, / File→Settings) | ✅ `test_settings_opens_and_renders` |
 | Setting change saves via `/api/config` (round-trip) | ✅ `test_settings_persists_change` · 🧪 unit |
 | Secret fields masked (api_key/auth_token/dsn) | 🧪 unit |
+| Sections grouped (Assistant / This computer / Extend / App, "More"); active one scrolled into view | ✅ `test_ui_settings_groups.py` (`test_sections_are_grouped`, `test_ungrouped_section_lands_under_more`, `test_active_section_is_scrolled_into_view`) |
+| "How this works" explainers + live health banners (backend, integrations, voice, guardrails, plugins) | ✅ `test_ui_settings_health.py` |
+| Unsaved-changes cue; a banner moves only after Save | ✅ `test_ui_settings_unsaved.py` (`test_unsaved_cue_then_green_saved_and_red_failure`, `test_banner_moves_only_after_save`) |
 | In-app docs render offline (`/api/docs`, mdlite) | ✅ `test_docs_dialog_renders` |
 | Diagnostics panel (`/api/doctor`) | ✅ `test_diagnostics_dialog_renders` |
 | Theme toggle (system/dark/light) | 👤 (verified via preview) |
@@ -207,4 +255,5 @@ Before announcing a `desktop-v*` release, on a clean machine:
 Automating 1–4 needs a windowed CI runner + a real backend; until then it's a
 human gate. Items 2–3's *logic* is covered by e2e against the web server, and
 the opt-in desktop e2e (`EVI_DESKTOP_E2E=true`) checks that the built app
-launches, renders the UI and opens Settings from its native menu.
+launches, renders the UI and opens Settings from its native menu, and that
+LAN access and thin-client mode sign in with their tokens.

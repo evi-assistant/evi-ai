@@ -4,10 +4,12 @@
 
 eVi ships the same assistant in three skins: a Typer **CLI**, a **web UI** (FastAPI + Server-Sent Events), and a **Tauri desktop app** that wraps that web UI in a native window with a menu bar, system tray, and a signed auto-updater. This page covers the cross-cutting "shell" concerns of the web/desktop surface:
 
-- **Settings** — editing your whole `config.toml` from a browser panel, with most changes hot-applied to live chats.
+- **Settings** — editing your whole `config.toml` from a browser panel, with most changes hot-applied to live chats; sections are grouped, each explains itself, and the ones with live state show a health banner.
 - **Auth & multi-user** — an optional bearer token to gate `evi web`, plus opt-in per-user logins where each person gets an isolated workspace.
 - **Deep links** — the `evi://` URL scheme that focuses the desktop app (or a browser tab) on a specific session or workflow.
-- **Updater** — the desktop app's background self-update against signed GitHub releases.
+- **Updater** — the desktop app's update check against signed GitHub releases, which asks before it installs anything, plus a core-only update channel.
+
+First run (connecting a backend) has its own page, [onboarding.md](onboarding.md); the managed llama.cpp runtime is [runtime.md](runtime.md); typing while a turn runs is [steering.md](steering.md); the Telegram channel is [channels.md](channels.md).
 
 You'd use the web UI when you want a richer chat surface than the terminal (tabs, settings screen, drag-drop uploads, dispatch dashboard) while keeping everything local. You'd use the desktop app for a one-click, always-warm assistant that survives window-close (it hides to the tray) and keeps itself up to date. Everything is local-first: the desktop app spawns the Python server on `127.0.0.1` and there is no cloud component.
 
@@ -40,10 +42,33 @@ The settings panel reads `GET /api/config` and writes `POST /api/config` with a 
 - **Secrets are masked.** `[llm] api_key`, `[web] auth_token`, and `[telemetry] dsn` come back as the sentinel `********`. POSTing the sentinel back means "leave unchanged" so re-saving the form never wipes a token you never saw. An empty string still clears the value.
 - **Unknown sections/keys are ignored** (forward-compatible with newer configs).
 - **Hot-apply.** Touched sections in `llm`, `auto`, `tools`, `telemetry`, `comfy`, `web`, `google`, `microsoft`, `obsidian` are pushed onto every live session so changes take effect on the next turn without a new chat. The LLM client is rebuilt when `[llm]` changes. `tools` and `auto` only fully bind at session creation, so the response flags them as `deferred` ("applies to new chats").
+- **Unsaved changes are obvious.** Editing a field shows an amber **● Unsaved changes — click Save to apply**; the save status turns green on success and red on failure. Fields and banners show *saved* config, so a value you typed but didn't save does nothing yet.
+
+### Settings groups, explainers and health banners
+
+The sections are sorted under four headings: **Assistant** (model and backend, tools, editing, sampling, context, specialty models, multi-agent), **This computer** (permissions, guardrails, voice, notifications, desktop, server), **Extend** (integrations, channels, plugins, MCP, hooks, automation, peers, ultracode) and **App** (general, status line, stats, evals, about). A section that belongs to none of them appears under **More**, so none can go missing.
+
+Every section has a collapsible **How this works** panel: what it controls, when you'd change it, and the main gotcha.
+
+Sections with live state show a banner in the same ✓ / ⚠ / ✕ language, refreshed after each save:
+
+| Section | The banner checks | Backed by |
+|---|---|---|
+| Model & Backend | the configured backend answers | `GET /api/backend/status` |
+| Tools | which tool categories lack an installed dependency | `GET /api/config` (`availability`) |
+| Server | an open surface (A2A, multi-user or LAN binding) with no access token | the saved config |
+| Permissions | reduced safety: yolo mode, or the destructive-command guard off | the saved config |
+| Integrations | ComfyUI answers; SearXNG too when it is the search engine | `GET /api/integrations/status` |
+| Voice | the selected TTS engine is installed | `GET /api/voice/status` |
+| Specialty models | each configured OCR, vision and guard backend answers; the speech-to-text dependency | `GET /api/specialty/status` |
+| Guardrails | the guard model answers while the filter is on (it would fail open otherwise) | the specialty probe |
+| Plugins | plugins that failed to load (an unreadable manifest) | `GET /api/plugins` (`failed`) |
+
+Email OAuth is deliberately not probed: there is no token store to check.
 
 ### Auth & multi-user
 
-A FastAPI middleware guards every `/api/*` route. Auth fires only when `[web] auth_token` is set **or** `[web] multi_user = true` with users present; otherwise access is open (fine for localhost-only). When active, a request must carry `Authorization: Bearer <token>` **or** `?token=<token>` (the query form covers `<img>` src and SSE streams that can't set headers). A few paths self-bootstrap and stay public: `/`, `/static/*`, `/images/*`, `/api/health`, `/api/auth/check`, `/api/backend/status`, and routine webhooks (`/api/routine/*`, which authenticate via their own unguessable path token).
+A FastAPI middleware guards every `/api/*` route. Token auth applies when `[web] auth_token` (or a launch token, `EVI_WEB_AUTH_TOKEN`) is set **or** `[web] multi_user = true` with users present. Without a token the server answers only this machine (loopback clients), and `evi web` refuses a non-loopback `--host` — see [Security](../security.md). When active, a request must carry `Authorization: Bearer <token>` **or** `?token=<token>` (the query form covers `<img>` src and SSE streams that can't set headers). A few paths self-bootstrap and stay public: `/`, `/static/*`, `/images/*`, `/api/health`, `/api/auth/check`, `/api/backend/status`, and routine webhooks (`/api/routine/*`, which authenticate via their own unguessable path token).
 
 In **multi-user** mode, `~/.evi/users.json` holds `{name, token}` entries. Any user token authenticates and the request is scoped to that user; the owner's `auth_token` still works and resolves to the user `"owner"`. Each user gets an **isolated workspace** — sessions, transcripts (`~/.evi/users/<name>/transcripts`), and memory (`~/.evi/users/<name>/memory`) — that other users can't see. Skills, plugins, and config stay shared (capabilities, not personal data). Drop a user from the file to revoke access.
 
@@ -61,7 +86,9 @@ The desktop app registers the `evi://` scheme (via `tauri.conf.json`, plus a bes
 
 ### Updater
 
-`spawn_update_check()` queries eVi's signed GitHub releases (`latest.json` published by `desktop-release.yml`). If a newer version exists it downloads, installs, and restarts — on the async runtime, so it never blocks the window. The updater **only accepts bundles signed with eVi's key** (pubkey baked into `tauri.conf.json`), so a tampered release can't be installed. Before installing, the sidecar is killed first (Windows keeps onedir DLLs locked while `evi-server` runs). Progress surfaces as an in-app toast polled via the `update_status_cmd` Tauri command; **Help → Check for Updates** triggers it on demand via `check_for_update_cmd`.
+The desktop app checks eVi's signed GitHub releases (`latest.json` published by `desktop-release.yml`) at launch and from **Help → Check for Updates**. **Nothing downloads or restarts without your OK:** when a newer version exists, eVi shows an **Update available** dialog with **Update & Restart** and **Not now**. On **Update & Restart** it downloads, installs and restarts, on the async runtime so it never blocks the window. The updater **only accepts bundles signed with eVi's key** (pubkey baked into `tauri.conf.json`), so a tampered release can't be installed. Before installing, the sidecar is killed first (Windows keeps onedir DLLs locked while `evi-server` runs).
+
+Separately, the **sidecar update channel** can fetch a newer *core* (the Python server) in the background from the `sidecar-latest` release: a signed manifest plus a SHA-256 per platform, staged for the next launch. Closing the window only hides eVi to the tray, so when a core update is staged eVi shows **Core update ready — Restart now**, which restarts cleanly onto the new core. A freshly installed app is never shadowed by an older staged core. Any change to the native shell itself still needs a full app update.
 
 ## Setup
 
@@ -85,7 +112,7 @@ Multi-user logins file, `~/.evi/users.json` (managed by the CLI — see below):
 pip install 'evi-assistant[web]'
 ```
 
-**Defaults:** `evi web` binds `127.0.0.1:8000`. The desktop app prefers port **8473**. Auth is **off** by default. Multi-user is **off** by default. Auto-update is **on** in packaged desktop builds.
+**Defaults:** `evi web` binds `127.0.0.1:8000`. The desktop app prefers port **8473**. Auth is **off** by default. Multi-user is **off** by default. The update check is **on** in packaged desktop builds and asks before installing.
 
 **Environment variables (desktop):**
 
@@ -95,7 +122,8 @@ pip install 'evi-assistant[web]'
 | `EVI_REMOTE_URL` | Thin-client mode: skip the local spawn and navigate to this URL |
 | `EVI_PYTHON` | Interpreter to spawn in a source checkout (default `py -3.13`) |
 | `EVI_REPO_ROOT` | Pin the repo root instead of auto-detecting it |
-| `EVI_AUTO_UPDATE` | Set to `0` / `false` to disable the background self-update |
+| `EVI_AUTO_UPDATE` | Set to `0` / `false` to disable the background update check |
+| `EVI_SIDECAR_UPDATE` | Set to `0` to turn off the core-only (sidecar) update channel (or set `[desktop] sidecar_auto_update = false`) |
 | `EVI_TESSERACT_CMD` | Set automatically when a bundled `tesseract` ships next to the sidecar |
 
 ## Usage
@@ -122,12 +150,14 @@ Note the asymmetry: you *launch* the server with `evi web`, but its auth/helpers
 - **Settings:** click the ⚙ button or press **Ctrl+,**. Edit any config section; secret fields show `********` and are left untouched on save unless you type a new value.
 - **Open a session/workflow:** visit `/?session=<id>` to open or resume a tab, or `/?workflow=<name>` to open the dispatch panel.
 - **Keyboard:** Enter sends, Shift+Enter newline, Ctrl+N new chat, Ctrl+I switch model, Ctrl+F find, Esc closes a dialog.
+- **Empty chat:** a new tab offers three starter prompts (*Say hi*, *What can you do?*, *Give me a quick tour*).
+- **While a turn runs:** Send becomes **Queue**; what you type is applied at the turn's next step ([steering.md](steering.md)).
 
 ### Desktop app
 
 - **Menu bar:** File (New Chat, Open File, Export Chat, Undo File Change, Settings, Exit), Edit, View (zoom, toggle theme, devtools), Help (Documentation, Keyboard Shortcuts, Check for Updates, Run Diagnostics, Open Logs Folder, Get Support, About).
 - **Tray:** left-click shows the window; menu has Show, New Chat, Check for Updates, Quit.
-- **Check for Updates:** Help → Check for Updates (or the tray item) checks immediately and, if an update exists, downloads + installs in the background and restarts.
+- **Check for Updates:** Help → Check for Updates (or the tray item) checks immediately and, if an update exists, asks before it downloads, installs and restarts.
 
 ## Examples
 
@@ -219,17 +249,19 @@ Launch the desktop app: it skips the Python spawn, waits for `http://gpu-box:847
 - **Multi-user isolation covers personal data only** (sessions/transcripts/memory). Skills, plugins, and the single shared `config.toml` are common to everyone — don't treat a user token as a sandbox boundary for capabilities.
 - **Routine webhooks bypass web auth** by design: `/api/routine/<token>` authenticates with its own unguessable path token, so external callers don't need the web token. Federation (`/api/federate`) is a separate opt-in (`[federation] serve = true`) and runs non-interactively (non-auto-approved tools are denied).
 - **Settings: deferred sections.** Changing `[tools]` or `[auto]` won't affect existing chats — those bind at session creation, so they apply to new chats only (the UI hints this).
-- **Updater is desktop-only and signature-pinned.** It will not install an unsigned or wrongly-signed bundle. The CLI/web package updates the ordinary way: `pip install -U evi-assistant`. Auto-update is skipped entirely in `EVI_REMOTE_URL` mode and when `EVI_AUTO_UPDATE=0`.
+- **Updater is desktop-only and signature-pinned.** It will not install an unsigned or wrongly-signed bundle. The CLI/web package updates the ordinary way: `pip install -U evi-assistant` (or `evi update`). The update check is skipped entirely in `EVI_REMOTE_URL` mode and when `EVI_AUTO_UPDATE=0`.
+- **Installers are not OS-code-signed yet.** The update signature (minisign) protects in-app updates; a first download can still trigger SmartScreen or Gatekeeper warnings. See [code-signing.md](../code-signing.md).
 - **Update install kills the sidecar first.** On Windows the installer would otherwise fail with "Error opening file for writing" because the running `evi-server` locks its onedir DLLs. This is automatic; just let it restart.
 - **Deep links fail safe.** Any malformed or unknown `evi://` route resolves to `/` rather than erroring — so a bad link opens the home view instead of breaking the shell.
 - **Stable-port caveat.** A second desktop instance can't take port 8473 and falls back to a random port, which means that second launch starts with a fresh webview origin (empty `localStorage` — no remembered tabs).
 
 ## Relevant source files
 
-- `C:\evi\evi\apps\web\server.py` — FastAPI app, auth middleware, `/api/config`, multi-user scoping, session/SSE endpoints.
-- `C:\evi\evi\apps\web\static\index.html` — single-page UI: login overlay, settings panel, `?session=`/`?workflow=` handling, desktop menu bridge, update toast.
-- `C:\evi\evi\deeplinks.py` — `build_link`, `parse_link`, `to_web_path` for the `evi://` scheme.
-- `C:\evi\desktop\src-tauri\src\main.rs` — Tauri shell: port pick, server/sidecar spawn, menu/tray, deep-link routing, signed auto-updater.
-- `C:\evi\evi\apps\cli\main.py` — `evi web`, `evi web-config token/users`, `evi link` commands.
-- `C:\evi\evi\config.py` — `WebSettings` (`auth_token`, `multi_user`) and other config sections.
-- `C:\evi\docs\configuration.md` — concise companion reference (multi-user, deep links, env vars).
+- `evi/apps/web/server.py` — FastAPI app, auth middleware, `/api/config`, the status probes behind the health banners, multi-user scoping, session/SSE endpoints.
+- `evi/apps/web/static/index.html` — single-page UI: login overlay, settings panel (groups, explainers, banners), `?session=`/`?workflow=` handling, desktop menu bridge, update prompts.
+- `evi/deeplinks.py` — `build_link`, `parse_link`, `to_web_path` for the `evi://` scheme.
+- `desktop/src-tauri/src/main.rs` — Tauri shell: port pick, server/sidecar spawn, menu/tray, deep-link routing, signed updater.
+- `desktop/src-tauri/src/sidecar_update.rs` — the core-only (sidecar) update channel.
+- `evi/apps/cli/main.py` — `evi web`, `evi web-config token/users`, `evi link` commands.
+- `evi/config.py` — `WebSettings` (`auth_token`, `multi_user`) and other config sections.
+- `docs/configuration.md` — concise companion reference (multi-user, deep links, env vars).

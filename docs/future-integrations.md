@@ -2,8 +2,29 @@
 
 A scratch list of third-party app/service integrations eVi could grow.
 Nothing here is committed; the point is to capture ideas as they come
-up so we don't lose them. When we pick one up, it gets its own phase
-entry in `CHANGELOG.md` and the project memory.
+up so we don't lose them. When we pick one up, it becomes an item in
+[roadmap.md](roadmap.md) and ships with a `CHANGELOG.md` entry.
+
+## Shipped since this list started
+
+| App | What shipped |
+|---|---|
+| **Telegram** | A chat channel (1.0.51): message eVi from your phone through your own bot, with pairing and a narrow toolset. Stdlib Bot API client, no `python-telegram-bot`. See [channels.md](features/channels.md). |
+| **VS Code** | A VS Code extension (`editors/vscode/`): local ghost-text completion through `/api/complete` and a chat panel through `/api/chat`. |
+| **eVi as an MCP server** | `evi mcp serve` (stdio and streamable HTTP) publishes curated tools, memory resources and command prompts to Claude Desktop, Cline, Continue, Cursor and JetBrains' MCP client. See [mcp.md](features/mcp.md). |
+| **Obsidian** | `evi obsidian` syncs memory with a vault. |
+| **Claude Code / Codex history** | `evi sessions import` (1.0.51). See [sessions.md](features/sessions.md). |
+| **GitHub Copilot, Claude Code, Codex, Gemini CLI, Amp, Qwen Code** | CLI-agent backends (1.0.3 to 1.0.5): eVi routes a turn through the CLI you already use. See [configuration.md](configuration.md#the-cli-agent-backends-at-a-glance). |
+
+## Chat channels: what decides the next one
+
+The roadmap adds **no second chat channel** until the channel runtime (per-chat
+sessions, a durable inbox, in-chat approvals) has shipped and a channel is
+chosen (an open question in [roadmap.md](roadmap.md)). Slack and Discord need
+WebSocket client stacks that break the stdlib-only desktop sidecar, and email
+and forge notifications are untrusted text arriving at a tool-capable agent.
+Matrix, Signal (through a user-run `signal-cli`) and IMAP/SMTP email are the
+candidates on that question.
 
 Each entry has a one-line sketch of the integration shape: which eVi
 surfaces would expand (tool category + maybe a CLI subcommand) and what
@@ -20,9 +41,8 @@ chose to defer in favour of calendar reading first.
 | **Notion** | Read pages + databases, append notes | Official `notion-client`. OAuth or integration token. Tools: `notion_search(query)`, `notion_get_page(id)`, `notion_append(parent, content)`. |
 | **Spotify** | Now-playing, search, queue + playback control | `spotipy` + OAuth (refresh-token flow). Tools: `spotify_now_playing()`, `spotify_search(q, type)`, `spotify_play(uri)`, `spotify_queue(uri)`. |
 | **Plex** | Library search, what's playing, history | `plexapi`. Server URL + token (Plex.tv). Tools: `plex_search(q)`, `plex_recently_added(days)`, `plex_playback_state()`. |
-| **Slack** | Read DMs/channels, search history, send messages | `slack_sdk` bot token or user token. Tools: `slack_search(q)`, `slack_read_channel(id, n)`, `slack_send(channel, text)`. Permission-gated send. |
-| **VS Code** | Open files, see what user is editing, run tasks | Two paths: (a) eVi MCP server consumed by Cline/Continue, (b) VS Code extension that posts cursor + active-file context to eVi. Probably (a). |
-| **JetBrains** | Same as VS Code | JetBrains has Beta MCP support; (a) above covers it. |
+| **Slack** | Read DMs/channels, search history, send messages | `slack_sdk` bot token or user token. Tools: `slack_search(q)`, `slack_read_channel(id, n)`, `slack_send(channel, text)`. Permission-gated send. As a chat channel, see "Chat channels" above. |
+| **JetBrains** | Use eVi from the IDE | `evi mcp serve` through JetBrains' MCP client covers tools today; editors with ACP support get eVi as an agent once `evi acp` ships ([roadmap.md](roadmap.md), Phase 4). |
 
 ## Other candidates (not yet asked, but reasonable)
 
@@ -31,8 +51,7 @@ they're fresh.
 
 | App | Use case | Sketch |
 |---|---|---|
-| **Discord** | DMs + server messages | `discord.py` (bot user) + opt-in audit log. Read-only tools first; send under permission. |
-| **Telegram** | DMs + bots | `python-telegram-bot`. Bot token only — user-account TG is more invasive. |
+| **Discord** | DMs + server messages | `discord.py` (bot user) + opt-in audit log. Read-only tools first; send under permission. As a chat channel, see "Chat channels" above. |
 | **GitHub** | Issues, PRs, code search, releases | `PyGithub` or raw REST + PAT. Already covered partially by MCP github server — could ship a native tool too. |
 | **GitLab** | Same as GitHub | `python-gitlab`. |
 | **Linear** | Issue tracking | REST + API key. Tools: `linear_search`, `linear_issue(id)`, `linear_create_issue(...)`. |
@@ -47,7 +66,7 @@ they're fresh.
 | **Twitter / X** | API now restrictive | Skip unless user has paid API tier. |
 | **Hacker News** | Read top stories, comments | Free API; no auth. Pairs well with morning briefings. |
 | **Anki** | Spaced repetition for memorisation | `anki-connect` (HTTP plugin) or raw `.anki2` files. |
-| **Obsidian** | Already shipped via sync. Possibly add a live-vault tool for in-conversation lookups. |
+| **Obsidian** | Live-vault lookups | Sync already shipped (`evi obsidian`). A read tool for in-conversation lookups would be a thin addition. |
 | **Logseq** | Same shape as Obsidian, different file layout. |
 | **iMessage / SMS** | Read recent messages | macOS only: `~/Library/Messages/chat.db`. SQLite read tool already exists — would be a thin wrapper. |
 | **Apple Reminders** | Read + create tasks | macOS only: AppleScript bridge via `osascript`. |
@@ -79,7 +98,7 @@ they're fresh.
 | **News headlines** | NewsAPI / GDELT | API key needed for most. RSS is the no-key fallback. |
 | **Wikipedia** | Article excerpts | `wikipedia-api`. No key. Useful retrieval target. |
 | **arXiv / Semantic Scholar** | Paper search + abstracts | Both have free REST APIs. |
-| **GitHub Copilot / Cursor / Cody** | AI-to-AI bridge | If you have a paid Copilot/Cursor seat, the bridge is mostly novelty — you already have eVi. |
+| **Cursor / Cody** | AI-to-AI bridge | Copilot is already a backend (`copilot`); for the rest the bridge is mostly novelty: you already have eVi. |
 | **Vault / 1Password CLI / Bitwarden CLI** | Secret retrieval | `op` / `bw` CLIs. Permission-gated heavily. Useful for hooks that need credentials. |
 | **Browser history** | What did I look at yesterday | SQLite reads against Chromium / Firefox profiles. Privacy considerations. |
 | **Browser bookmarks** | Search saved links | Same shape as history. |
@@ -88,14 +107,11 @@ they're fresh.
 
 ## Bridges (eVi as MCP server)
 
-Rather than building N integrations one at a time, we could publish an
-eVi MCP server that exposes eVi's tools (memory, index, calendar, etc.)
-so that *other* agents — Claude Desktop, Cline, Continue, Cursor — can
-consume them. This flips the integration story: you don't bridge into
-eVi from each editor, the editor's agent reaches out to eVi's tool
-surface.
-
-Tracked separately as a possible Phase 31-ish item.
+Shipped: `evi mcp serve` publishes eVi's curated tools, memory and command
+prompts so that *other* agents (Claude Desktop, Cline, Continue, Cursor) can
+use them, which covers many "integrate with editor X" requests without a
+plugin per editor. Next on that path is `evi acp`, eVi as an Agent Client
+Protocol agent for editors ([roadmap.md](roadmap.md), Phase 4).
 
 ## How to add to this list
 

@@ -1,4 +1,4 @@
-# Sessions, Resume, Handoff, Checkpoints
+# Sessions, Resume, Handoff, Import, Checkpoints
 
 ## Overview
 
@@ -7,6 +7,7 @@ eVi keeps a durable record of your conversations and the file changes it makes, 
 - **Sessions / transcripts** — every chat is written to disk as a JSONL file, one file per session per day. You can list, view, export, and reopen them.
 - **Resume / continue / fork** — reopen a past session and keep talking in the same file, jump back into the most recent session, or branch a copy into a brand-new session while leaving the original untouched.
 - **Handoff** — print the exact command + URL to pick a session up on another device after syncing.
+- **Import** — bring the conversations you already had in Claude Code and Codex into eVi's store, where they become searchable, resumable and exportable.
 - **Checkpoints / rewind** — every file eVi writes via its `write_file` tool is journalled with the file's prior contents, so a bad edit can be rolled back.
 
 Why you'd use it: nothing is lost when you close the terminal or browser, you can move a conversation between machines, you keep an auditable record of what was said, and you can undo file writes eVi made without reaching for `git`.
@@ -84,10 +85,37 @@ evi sessions continue                        # resume the most recently active s
 evi sessions fork <session_id>               # branch into a NEW session, original intact
 evi sessions handoff [session_id]            # print resume cmd + URL for another device
 evi sessions title <session_id>              # LLM-generated short title for a session
+evi sessions search <query> [--days N]       # full-text search across transcripts
+evi sessions purge [--older-than N] [-y]     # delete transcripts older than N days
+evi sessions import [--source claude-code|codex] [--write]   # see "Importing" below
 ```
 
 - `list` defaults to the last **7** days and **20** entries; `export` defaults to `md` and prints to stdout unless you pass `--out/-o`.
 - `handoff` defaults to the most recent session when no id is given.
+
+### Importing from Claude Code and Codex — `evi sessions import`
+
+eVi drives Claude Code and Codex as backends, so it knows where they keep
+their logs. `evi sessions import` reads them and writes each conversation into
+eVi's own transcript store:
+
+| Source | Read from |
+|--------|-----------|
+| `claude-code` | `~/.claude/projects/<project>/<session>.jsonl` |
+| `codex` | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` |
+
+```text
+evi sessions import                      # list what would be imported (a dry run; the default)
+evi sessions import --write              # import it
+evi sessions import --source codex --limit 10 --write   # only the 10 newest Codex sessions
+evi sessions import --min-turns 1        # include one-question sessions (default: at least 2 turns)
+```
+
+- **Read-only with respect to the source.** Nothing in `~/.claude` or `~/.codex` is changed or deleted.
+- **Dry run by default.** Without `--write` it prints each session it found (source, date, turns, messages and a label such as the Claude Code project) and how many it would import.
+- **What comes across:** your messages and the assistant's text replies, with their original timestamps. Thinking blocks and Codex's own system prompt are dropped. Tool calls are kept as a `[used: tool, …]` note on the reply rather than as tool calls, so an imported session resumes cleanly on any backend.
+- **Session ids** are the source plus its id (`claude-code-<uuid>`, `codex-rollout-…`), so an import is always distinguishable from a native conversation. Then `evi sessions list`, `show`, `search`, `resume`, `fork` and `export` work on it like any other session.
+- **Import each conversation once.** A second `--write` of the same source session appends its messages to the same eVi session again.
 
 ### CLI — `evi rewind` (checkpoints)
 
@@ -179,6 +207,7 @@ transcripts = true
 - **Transcripts must be on.** With `transcripts = false` there is nothing to list, show, resume, fork, continue, or hand off. The CLI hints at this when the list is empty.
 - **resume/continue write back to the original file; fork does not.** Use `fork` when you want to explore a branch without altering the source session.
 - **Handoff relies on sync.** The on-disk copy is only as current as the last completed turn, and the other device only sees it after `evi sync pull`. Always `evi sync push` from the source first.
+- **Imports keep the original dates.** An imported conversation is filed under the day(s) it happened, so `evi sessions list` (last 7 days by default) may not show an old one; use `--days` or `search`.
 - **Checkpoints are best-effort and fail-open.** A checkpoint failure never blocks the actual write — so in rare cases a write may not be undoable.
 - **5 MiB snapshot cap.** Writes over 5 MiB are journalled as `skip` and **cannot** be rewound (the listing shows them, but rewind reports "could not restore (not snapshotted)").
 - **Rewind is destructive and not itself undoable.** It overwrites current file contents with the saved prior bytes (or deletes newly created files) and trims the journal, so undone entries are gone; there is no "redo."

@@ -2,7 +2,9 @@
 
 A review of which OpenAI Chat Completions features we've wired up,
 which are still useful and unbuilt, and what we could borrow from other
-vendors' SDKs (Anthropic, Google, Bedrock, Cohere, xAI).
+vendors' SDKs (Anthropic, Google, Bedrock, Cohere, xAI). Re-checked against
+the code on 2026-10-14 (eVi 1.0.53). For what's planned next, see
+[roadmap.md](roadmap.md).
 
 Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 
@@ -37,7 +39,7 @@ Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 | ✅ **Audio input content parts** | Shipped Phase 37 (0.19.0): `evi/audio_input.py` builds `input_audio` parts for omni models (`model_supports_audio`); `Agent.chat(audio=...)`, web `ChatRequest.audio`, CLI `/audioraw`. Non-omni models degrade to local Whisper transcription folded into the text. | Shipped. |
 | ✅ **`max_completion_tokens`** | Shipped Phase 35 (0.17.0): config `[llm] max_completion_tokens` (0=unset). When >0 we send it INSTEAD of `max_tokens` (reasoning models reject the latter). | Shipped. |
 | ✅ **`parallel_tool_calls=false`** flag | Shipped Phase 35 (0.17.0): config `[llm] parallel_tool_calls` (default True) + per-turn `Agent.chat(parallel_tool_calls=...)` + web field. Only forwarded when False AND tools are present. | Shipped. |
-| **Responses API** (`responses.create`) | OpenAI's new shape replacing chat completions. Cleaner streaming + tool model. Some local backends starting to expose it. Big migration but future-proofs the core. | Large. |
+| ✅ **Responses API** (`responses.create`) | Shipped as an opt-in path: `[llm] api = "responses"` (`evi/llm/responses.py`) adapts the Responses stream to the events the agent loop already consumes, and `[llm] responses_tools` turns on OpenAI's hosted tools (web search, code interpreter, …). Local backends stay on Chat Completions. | Shipped. |
 
 ### ❌ Not relevant for local-first
 
@@ -45,11 +47,11 @@ Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 |---|---|
 | Realtime API (websocket voice) | Cloud-only; we have a local voice loop. |
 | Files / Assistants / Threads / Vector Stores | Cloud-only state; we have local memory + index. |
-| Batch API | Cloud-only. |
-| Moderation API | Cloud-only. See "Guardrails" below for a local alternative. |
-| Built-in tools (code interpreter, web search, file search) | Cloud-hosted; we have local equivalents (`run_python`, `web_search`, `find_in_project`). |
+| Batch API | Cloud-only. Locally, `evi batch` runs a JSONL file of prompts. |
+| Moderation API | Cloud-only. See "Guardrails" below for the local alternative. |
+| Built-in tools (code interpreter, web search, file search) | Cloud-hosted; we have local equivalents (`run_python`, `web_search`, `find_in_project`). Reachable opt-in through `[llm] responses_tools` when you point eVi at OpenAI. |
 | DALL-E image generation | Cloud; we use ComfyUI. |
-| Fine-tuning | Cloud-side; local users fine-tune via llama-factory / unsloth. |
+| Fine-tuning | Cloud-side; `evi finetune export` writes your transcripts as a JSONL training set for llama-factory / unsloth. |
 | `service_tier`, `store`, `user` flags | Cloud-only billing knobs. |
 
 ## Other vendors — what's worth borrowing
@@ -72,8 +74,8 @@ Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 |---|---|
 | System instructions | ✅ Have. |
 | `response_schema` (Pydantic → JSON schema) | ✅ Have via `response_format`. |
-| **Safety settings** (harassment/hate/sexual/dangerous content filters) | ✅ **Shipped Phase 37 (0.19.0)** as the local guardrails layer (`evi/guardrails.py`, `~/.evi/guardrails.toml`). Regex block/redact rules over input + output; off by default. |
-| **Explicit caching** (`caching.create`) | ➕ Same as Anthropic's prompt caching. One concept, two SDKs. |
+| **Safety settings** (harassment/hate/sexual/dangerous content filters) | ✅ **Shipped Phase 37 (0.19.0)** as the local guardrails layer (`evi/guardrails.py`, `~/.evi/guardrails.toml`), since grown to regex block/redact rules, an LLM judge, an offline classifier and dedicated guard models (Llama Guard / ShieldGemma) over input + output; off by default. |
+| **Explicit caching** (`caching.create`) | ✅ Same concept as Anthropic's prompt caching: covered by `[llm] cache_prompt` (KV-cache reuse on llama.cpp / vLLM). |
 | Code execution | ❌ Sandboxed cloud-side Python; we have local `run_python`. |
 | File API | ❌ Cloud. |
 | Live API (bidirectional voice/video) | ❌ Cloud; we have voice loop locally. |
@@ -87,7 +89,7 @@ Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 | Converse API (unified shape) | ✅ Equivalent — our `Backend` protocol. |
 | Knowledge bases (managed RAG) | ❌ We have local `find_in_project`. |
 | Agents | ✅ Have it. |
-| **Guardrails** (request/response content filters + PII detection) | ✅ **Shipped Phase 37 (0.19.0)** — local regex guardrails layer. See Gemini row. |
+| **Guardrails** (request/response content filters + PII detection) | ✅ **Shipped Phase 37 (0.19.0)** — the local guardrails layer (regex, LLM judge, classifier, guard models). See Gemini row. |
 | Prompt management (versioned templates) | ➕ Borrow lightly. We have skills + slash commands which is half of this. A `~/.evi/prompts/` versioned store could fill the rest. |
 | Provisioned throughput / inference profiles | ❌ Cloud-only. |
 
@@ -117,8 +119,6 @@ covered under OpenAI features above.
 
 Ranked by user value, smallest delta first:
 
-| # | Feature | Source | Effort | Value |
-|---|---|---|---|---|
 | # | Feature | Source | Status | Value |
 |---|---|---|---|---|
 | 1 | ✅ `prediction` (speculative decoding) | OpenAI | shipped 0.16.0 | High (code edits) |
@@ -132,11 +132,11 @@ Ranked by user value, smallest delta first:
 | 9 | ✅ `logprobs` / `top_logprobs` + confidence surfacing | OpenAI | shipped 0.19.0 | Medium |
 | 10 | ✅ Audio content input parts (+ STT degrade) | OpenAI | shipped 0.19.0 | Medium |
 | 11 | ✅ Guardrails layer (regex content filter) | Bedrock/Gemini | shipped 0.19.0 | Medium (shared installs) |
-| 12 | ⬜ eVi-as-MCP-server publish | cross-cutting | L | High (integration story) |
-| 13 | ⬜ Responses API migration | OpenAI | XL | High (future-proof) |
+| 12 | ✅ eVi-as-MCP-server publish (`evi mcp serve`, stdio + HTTP) | cross-cutting | shipped | High (integration story) |
+| 13 | ✅ Responses API (opt-in `[llm] api = "responses"`) | OpenAI | shipped | High (future-proof) |
 
-**Score: 11 / 13 shipped.** Only the two big-ticket items remain:
-MCP-server-publish (L) and the Responses API migration (XL).
+**Score: 13 / 13 shipped.** The one open idea above is a versioned prompt
+store (Bedrock-style prompt management).
 
 S=small (≤200 LOC), M=medium (≤500 LOC), L=large (≤1000 LOC), XL=larger.
 

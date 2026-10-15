@@ -42,13 +42,21 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[web,mcp,scheduler]'
 ```
 
-Tell eVi to use Ollama and start the web server bound to your LAN:
+Tell eVi to use Ollama, give the web server an access token, and start it
+bound to your LAN:
 
 ```bash
 evi models backend ollama                       # auto-bumps base_url to :11434/v1
 evi models use qwen2.5:32b-instruct-q4_K_M
+evi web-config token rotate                     # prints the token; keep it
 evi web --host 0.0.0.0 --port 8000              # listens on the LAN
 ```
+
+Without a token eVi answers only the machine it runs on, so `evi web` refuses
+to start on a LAN address until one is set. The token is saved as
+`[web] auth_token` in `config.toml`; `evi web-config token show` prints it
+again. Sign in with it once in each browser, and give it to the other
+machines' clients (see [Security](#security)).
 
 For "always on", run it as a systemd service:
 
@@ -73,6 +81,10 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl enable --now evi-web
 ```
+
+The service reads its token from the `evi` user's eVi home
+(`~evi/.evi/config.toml`), so set it as that user before the first start:
+`sudo -u evi /opt/evi/.venv/bin/evi web-config token rotate`.
 
 The scheduler boots automatically inside the FastAPI lifespan; any
 `evi schedule add` tasks fire from this machine.
@@ -139,8 +151,13 @@ The Tauri desktop app can run in **remote mode**, skipping the Python
 spawn entirely. The webview points at the AI server directly:
 
 ```bash
-EVI_REMOTE_URL=http://ai-server.local:8000 evi-desktop.exe
+EVI_REMOTE_URL=http://ai-server.local:8000 EVI_REMOTE_TOKEN=<token> evi-desktop.exe
 ```
+
+`EVI_REMOTE_TOKEN` is the server's access token (`evi web-config token show`
+on the server). Without it the app uses the token `~/.evi/peers.json` keeps for
+a peer at the same address, and without either the window shows the sign-in
+prompt. A phone or tablet browser signs in with the same token.
 
 That's the laptop's nicest experience: no Python required for chat, just
 a webview against your home server.
@@ -161,24 +178,31 @@ fallback altogether and just always use the server.
 
 ## Security
 
+Without an access token eVi answers only the machine it runs on: the
+client's address must be loopback, whatever `Host` header it sends. So
+serving the LAN, as this page does, needs a token on the AI server
+(`evi web-config token rotate`), and `evi web --host 0.0.0.0` refuses to start
+without one. Every client on another machine signs in with it: browsers once,
+the desktop app through `EVI_REMOTE_TOKEN`, peers through their `peers.json`
+entry. The full rules are in [docs/security.md](security.md).
+
 `evi web --host 0.0.0.0` binds to **every** interface. If your AI server
-is on a network you don't control, you should:
+is on a network you don't control, also:
 
 - Bind to a specific interface (`--host 10.0.0.5`) or only localhost
-  (`--host 127.0.0.1`) and tunnel via SSH or Tailscale.
+  (`--host 127.0.0.1`) and tunnel via SSH or Tailscale. Through an SSH tunnel
+  clients reach eVi from the server's loopback, but still set a token if
+  anyone else can log in to that machine.
 - Put it behind a reverse proxy that does auth (nginx + basic auth, or
-  Cloudflare Access). The proxy must pass the browser's `Host` through
-  (nginx: `proxy_set_header Host $host;`, Apache: `ProxyPreserveHost On`).
-  Since 1.0.53 eVi refuses state-changing requests whose `Origin` doesn't match
-  the host it was reached on, so a proxy that rewrites `Host` (nginx's default)
-  gets `403 Refusing a cross-site request` on every chat. If you can't keep the
-  `Host`, have the proxy send `X-Forwarded-Host` (and `X-Forwarded-Port`) and
-  start eVi with `EVI_TRUSTED_PROXY=1`.
-- Or just keep it on a LAN you trust.
-
-Set an access token (`evi web-config token`) whenever eVi is reachable from
-another machine: without one, eVi only answers requests addressed to a
-loopback hostname.
+  Cloudflare Access), **and** keep eVi's own token: a request the proxy
+  forwards (it carries `X-Forwarded-For`, `Forwarded` or `X-Real-IP`) never
+  counts as this machine's, even when the proxy runs here. The proxy must pass
+  the browser's `Host` through (nginx: `proxy_set_header Host $host;`, Apache:
+  `ProxyPreserveHost On`). eVi refuses state-changing requests whose `Origin`
+  doesn't match the host it was reached on, so a proxy that rewrites `Host`
+  (nginx's default) gets `403 Refusing a cross-site request` on every chat. If
+  you can't keep the `Host`, have the proxy send `X-Forwarded-Host` (and
+  `X-Forwarded-Port`) and start eVi with `EVI_TRUSTED_PROXY=1`.
 
 ## Syncing your state across machines (`evi sync`)
 

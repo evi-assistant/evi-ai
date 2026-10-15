@@ -1,10 +1,12 @@
 # eVi feature reference
 
 A catalog of everything eVi does — what each feature is, how to use it from the
-CLI / REPL / Web, and where to configure it. Setup-heavy items link to
+CLI / REPL / Web, and where to configure it. Each area has a deep-dive guide in
+[features/](features/README.md); setup-heavy items link to
 [configuration.md](configuration.md); surface coverage is in
 [cli-parity.md](cli-parity.md); the Claude-Code comparison is in
-[claude-code-comparison.md](claude-code-comparison.md).
+[claude-code-comparison.md](claude-code-comparison.md); what comes next is in
+[roadmap.md](roadmap.md).
 
 > Conventions: **CLI** = `evi <cmd>`; **REPL** = a `/slash` command inside
 > `evi chat`; **Web** = the browser/desktop UI. Everything is local-first and
@@ -31,9 +33,39 @@ its own agent), optional parallelism. Input is `.jsonl`/`.json` objects
 
 **Variants** — `evi variants "prompt" -n 3` — N independent takes on one prompt.
 
+**Steering** (Web) — type while a turn runs: Send becomes **Queue** and the
+message is applied at the turn's next step instead of interrupting it
+(`POST /api/session/{id}/steer`). If the turn ends first, it is sent as a normal
+message. [Guide](features/steering.md).
+
+## Models & backends
+
+**First run** (Web/desktop) — when nothing answers yet, a first-run screen
+offers what the machine already has, cheapest first: an AI coding CLI that is
+installed, a local server that is running, an API key in the environment, then
+a model download. Picking one is a **verified switch**: eVi sends a real
+completion (and one with a tool), shows *Chat ✓ · Tools ✓*, and rolls the
+switch back if it doesn't answer (`POST /api/backend/use` with `verify`,
+`POST /api/backend/verify`). [Guide](features/onboarding.md).
+
+**Managed local runtime** — eVi downloads a pinned llama.cpp build and a small
+GGUF model, runs `llama-server` on loopback and points `[llm]` at it: no
+Ollama, no account, no admin rights. `evi runtime setup|status|stop|gpu`;
+`evi model list|use|remove` for the catalog; Web: Settings → Model & Backend →
+Local models, with **Use your GPU** (CUDA on Windows/NVIDIA, Metal on macOS)
+and support for your own `llama-server` (`[runtime] server_path`).
+[Guide](features/runtime.md).
+
+**Backends** — LM Studio, Ollama, llama.cpp, any OpenAI-compatible endpoint
+(presets: `evi models preset`), and six CLI-agent backends that drive a CLI you
+already use (`claude_agent`, `codex`, `gemini`, `amp`, `qwen`, `copilot`).
+`evi backend add|list|use|remove` registers several and switches between them;
+see [configuration.md](configuration.md#the-cli-agent-backends-at-a-glance).
+
 ## Tools
 
-20+ built-in tools, each gated by a `[tools]` toggle in `config.toml` (Web:
+Dozens of built-in tools (the exact count is in HANDOFF.md's generated facts),
+grouped in categories that each have a `[tools]` toggle in `config.toml` (Web:
 Settings → Tools): `fs`, `code` (`run_python`, sandboxable), `shell`, `web`
 (search/fetch), `image` (ComfyUI), `vision`, `memory`, `pdf`, `sqlite`, `index`
 (semantic search), `git`, `ocr`, `calendar`, `computer`, `voice`, `mcp`,
@@ -69,9 +101,12 @@ Web: click the usage chip. `/compact` forces it.
 ## Sessions
 
 Per-day JSONL transcripts (`tools.transcripts`). `evi sessions list|show|resume|
-fork|continue|handoff`; REPL `/recent`. **Cross-device handoff**: `evi sessions
-handoff` → resume on another machine after `evi sync` (or open `/?session=<id>`).
-**Checkpoints/rewind**: `evi rewind` (Web: rewind dialog) undoes file writes.
+fork|continue|handoff|search|export|purge`; REPL `/recent`. **Cross-device handoff**:
+`evi sessions handoff` → resume on another machine after `evi sync` (or open
+`/?session=<id>`). **Import**: `evi sessions import [--write]` brings your Claude
+Code and Codex conversations into eVi's store (read-only on the source; a dry
+run until `--write`). **Checkpoints/rewind**: `evi rewind` (Web: rewind dialog)
+undoes file writes. [Guide](features/sessions.md).
 
 ## Skills, commands, styles
 
@@ -125,8 +160,16 @@ synthesize pipeline ([guide](features/ultracode.md)).
 **Recipes** — `evi recipe` saved multi-turn flows. **Routines** — webhook →
 recipe (`evi routine`, `POST /api/routine/{token}`). **Scheduled tasks** —
 `evi schedule add --cron … (--prompt | --eval <suite>)`; runs on cron, incl.
-**scheduled evals** for drift watch. **Channels** — push an external alert into a
-live web session (`POST /api/session/{id}/channel`).
+**scheduled evals** for drift watch. **Session channels** — push an external
+alert into a live web session (`POST /api/session/{id}/channel`).
+
+**Chat channels (Telegram)** — message eVi from your phone through a bot you
+create. Off until enabled; an unknown sender gets a pairing code and no agent
+turn until you approve it (`evi channel approve <code>` or Settings →
+Channels); approved senders get their own narrow toolset (`[channels]
+telegram_tools`, memory + skills by default) and permission prompts are
+denied. `evi channel status|approve|revoke|serve`.
+[Guide](features/channels.md).
 
 ## Structured output & evals
 
@@ -145,12 +188,26 @@ attach images (`/image`, Web 📎) to VLM models. **Image gen** — ComfyUI via 
 
 ## Web & desktop
 
-**Settings** — full screen over `config.toml` (9 sections). **Multi-user** —
+**Settings** — full screen over `config.toml`, its sections grouped under
+Assistant / This computer / Extend / App, each with a **How this works**
+explainer and, where there is live state, a health banner (backend answering,
+missing tool dependencies, unreachable integrations or specialty models, an
+open server surface). [Guide](features/web-desktop.md). **Access** — without
+an access token the server answers only this machine; `evi web-config token
+rotate` / `show` manage the token, and the desktop app (LAN access) and the
+Docker image generate their own. A browser's state-changing request must come
+from eVi's own pages (or carry the token), one turn runs per session, and an
+unanswered permission prompt is denied after `[web] decision_timeout_s`.
+[Security](security.md). **Multi-user** —
 `[web] multi_user` + `~/.evi/users.json`; each user gets an **isolated
-workspace** (sessions/transcripts/memory under `~/.evi/users/<name>/`).
+workspace** (sessions/transcripts/memory under `~/.evi/users/<name>/`), and
+host-level settings are owner-only.
 **Deep links** — `evi://session/<id>` / `evi://workflow/<name>`; `evi link`.
-**Desktop** — native menus, tray, **silent auto-updater** (with in-app progress),
-first-run wizard. **Status line** — customizable REPL status (`[statusline]`).
+**Desktop** — native menus, tray, an **updater that asks before it installs**
+(Update & Restart / Not now), a core-only update channel with **Restart now**,
+and the first-run screen. **Empty chat** — three starter prompts (Say hi / What
+can you do? / Give me a quick tour). **Status line** — customizable REPL status
+(`[statusline]`).
 
 ## Observability
 
