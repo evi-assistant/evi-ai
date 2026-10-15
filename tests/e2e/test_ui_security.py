@@ -198,29 +198,34 @@ def test_ui_own_model_pull_stream_still_opens(page: Page, evi_base_url: str) -> 
     page.evaluate("() => window.__es.close()")
 
 
-def test_loopback_alias_page_can_post_to_its_own_port(
+def test_loopback_alias_page_works_but_cannot_post_across_aliases(
     page: Page, evi_base_url: str
 ) -> None:
-    """eVi's own UI opened as http://localhost:<port> posting to
-    http://127.0.0.1:<port> — the same server, so allowed — although Chromium
-    labels that request `Sec-Fetch-Site: cross-site` (a different site)."""
+    """eVi's own UI opened as http://localhost:<port> works: its requests are
+    same-origin there and carry X-Evi-Client. A no-cors POST from it to
+    http://127.0.0.1:<port> (the same server by its other name) passes the
+    Origin check — a loopback alias, although Chromium labels it
+    `Sec-Fetch-Site: cross-site` — but a no-cors request can't carry
+    X-Evi-Client, so it is refused like any browser request without it."""
     legit = _same_origin_upload(page, evi_base_url, "e2e-sec-legit")
     uploads = Path(legit["body"]["path"]).parent.parent
     port = evi_base_url.rsplit(":", 1)[1]
-    page.goto(f"http://localhost:{port}/")
-    expect(page.locator("#input")).to_be_visible()
-    with page.expect_response(lambda r: r.url.endswith("/api/upload")) as resp:
+    alias = f"http://localhost:{port}"
+    own = _same_origin_upload(page, alias, "e2e-sec-alias")
+    assert own["status"] == 200, own
+    assert (uploads / "e2e-sec-alias" / "legit.txt").read_text(encoding="utf-8") == "legit"
+    with page.expect_response(lambda r: r.url == evi_base_url + "/api/upload") as resp:
         page.evaluate(
             """async (target) => {
               const fd = new FormData();
-              fd.append('session_id', 'e2e-sec-alias');
+              fd.append('session_id', 'e2e-sec-alias2');
               fd.append('file', new Blob(['alias'], { type: 'text/plain' }), 'alias.txt');
               await fetch(target + '/api/upload', { method: 'POST', mode: 'no-cors', body: fd });
             }""",
             evi_base_url,
         )
-    assert resp.value.status == 200, resp.value.status
-    assert (uploads / "e2e-sec-alias" / "alias.txt").read_text(encoding="utf-8") == "alias"
+    assert resp.value.status == 403, resp.value.status
+    assert not (uploads / "e2e-sec-alias2").exists()
 
 
 def test_same_origin_traversal_id_is_rejected(page: Page, evi_base_url: str) -> None:

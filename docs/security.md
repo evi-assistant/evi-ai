@@ -1,0 +1,350 @@
+# Security: who can reach eVi's web server
+
+`evi web` and the desktop app serve the same FastAPI app. Behind it sit tools
+that read and write files and run commands, so every request is checked before
+it reaches a handler. This page is the reference for those checks: who gets in,
+what a browser has to send, how the desktop app's LAN token works, and what
+changed for existing setups.
+
+## The request matrix
+
+| Request | No access token | Access token set |
+|---|---|---|
+| From another machine (LAN, container network) | **403**, whatever `Host` it claims | Needs the token (401 without) |
+| From this machine, `Host` names another site (DNS rebinding) | **403** | Needs the token |
+| Browser page on another site (`Origin` / `Sec-Fetch-Site` say so) | **403** for anything that changes state | **403** for anything that changes state |
+| Browser, state-changing `/api` call without `X-Evi-Client` | **403** | Allowed when it carries the token |
+| Non-browser client on this machine (CLI, VS Code extension, curl, peers on loopback) | Allowed | Needs the token |
+
+"No access token" means `[web] auth_token` is empty, no launch token was
+passed (`EVI_WEB_AUTH_TOKEN`, below), and multi-user mode has no users. In that
+mode eVi answers **only this machine**: the TCP peer must be a loopback
+address. The `Host` header alone proves nothing, because curl or any script on
+the LAN can send `Host: localhost`.
+
+When the launch token is the only credential (the desktop app's LAN token, a
+container's), it gates other machines only. Requests from this machine are
+handled as in the "No access token" column, so clients that predate the token,
+such as an older VS Code extension, keep working on loopback. A
+`[web] auth_token` or multi-user logins gate this machine too.
+
+A request that a proxy forwarded (it carries `X-Forwarded-For`, `Forwarded`
+or `X-Real-IP`) never counts as coming from this machine, even when the proxy
+runs here. See [Serving the network](#serving-the-network).
+
+A request counts as coming from a browser when it has an `Origin` header, or a
+`Sec-Fetch-Site` header naming the page that sent it (any value but `none`).
+Every current browser sends one of them on the requests this matters for.
+`Sec-Fetch-Mode` alone doesn't count: Node's `fetch`, which the VS Code
+extension host uses, sends `Sec-Fetch-Mode: cors` and nothing else. curl, the
+CLI and peers send none of these headers.
+
+### Browser requests and `X-Evi-Client`
+
+A page on another site can make your browser send requests to
+`127.0.0.1`. Two rules stop it from driving eVi:
+
+1. **Origin check.** A state-changing request (POST/PUT/PATCH/DELETE, and the
+   one side-effecting GET, `/api/backend/pull`) is refused unless its `Origin`
+   is eVi's own, a loopback alias of the same port, or the desktop shell's
+   loading page. `EVI_ALLOW_CROSS_ORIGIN=1` turns this check off. Behind a
+   reverse proxy that rewrites `Host`, have it send `X-Forwarded-Host` and
+   start eVi with `EVI_TRUSTED_PROXY=1`.
+2. **Client header.** A browser's state-changing `/api` request must also carry
+   an `X-Evi-Client` header (any value), unless it authenticates with the
+   access token. eVi's own pages add the header to every request. Another
+   page can't add a custom header to a cross-origin request without a CORS
+   preflight, and eVi never answers one.
+
+A script that calls the API from a browser page must send `X-Evi-Client: 1`
+or the access token. A `mode: 'no-cors'` fetch can't carry either, so it is
+always refused. Routine webhooks (`/api/routine/<token>`) are exempt: their
+path token is the credential.
+
+The side-effecting GET, `/api/backend/pull`, can't require the header,
+because the setup wizard opens it as an `EventSource`. Instead, one that the
+browser labels `Sec-Fetch-Site: cross-site` or `same-site` (another site, or
+another port on this machine) is refused, even with
+`EVI_ALLOW_CROSS_ORIGIN=1`.
+
+### Session ids
+
+A session id is a single path component: 1–96 letters, digits, `_` or `-`, and
+not a Windows device name. Every route that takes one checks it: in a body, in
+the `?session=` link parameter, and in `/api/session/<id>/…`. Anything else
+gets 400 before a handler runs.
+
+## Access tokens
+
+eVi accepts these as the owner's token:
+
+- **`[web] auth_token`** in `config.toml`. Set it with
+  `evi web-config token rotate`. The server re-reads it on every request, so a
+  rotation takes effect at once, with no restart: the previous token stops
+  working and signed-in browsers ask for the new one.
+- **The launch token**: the `EVI_WEB_AUTH_TOKEN` environment variable of the
+  server process. The desktop app passes its generated LAN token this way (see
+  below), and so does the Docker image (see [Containers](#containers)); a
+  service can do the same. The server reads it once at startup and removes it
+  from its environment, so the agent's tool subprocesses never inherit it. It
+  stays valid until that server restarts, even after you rotate
+  `[web] auth_token`. On its own it gates other machines only (see above); to
+  require a token from this machine too, set `[web] auth_token`.
+
+`evi web-config token show` prints the token a server on this machine signs
+clients in with: `[web] auth_token` if set, else `EVI_WEB_AUTH_TOKEN`, else
+the token a launcher generated and keeps in the eVi home (`container-token`
+from the Docker image, then the desktop app's `desktop-token`). Only the
+token goes to stdout, so `$(evi web-config token show)` works in a script;
+where it came from goes to stderr. With no token at all it prints nothing.
+
+Clients send the token as `Authorization: Bearer <token>`. EventSource and
+`<img>` can't set headers, so they use `?token=<token>`. Once the token is
+configured, every `/api` route requires it except `/api/health`,
+`/api/auth/check`, `/api/backend/status`, the agent card, and routine webhooks.
+
+### Serving the network
+
+Set a token before you serve the network, then share it with whoever needs
+access: peers that delegate tasks here, the VS Code extension on another
+machine, a phone's browser.
+
+`evi web` with a non-loopback `--host` (`0.0.0.0`, a LAN address) and no
+token refuses to start: it prints how to set one and exits with status 1.
+`[web] auth_token`, `EVI_WEB_AUTH_TOKEN` or multi-user logins all count. A
+server started some other way (`python -m uvicorn evi.apps.web.server:app
+--host 0.0.0.0`, say) still starts, but answers only this machine, and the 403
+it gives everyone else says how to fix it. When it starts, `evi web` prints a
+`web auth:` line saying who it will answer.
+
+Behind a reverse proxy, even one **on the same machine**, clients count as
+remote. A request that carries `X-Forwarded-For`, `Forwarded` or `X-Real-IP` is
+never treated as this machine's, and uvicorn (which runs eVi) also replaces
+the client address with the `X-Forwarded-For` one when the proxy runs on this
+machine. So give eVi a token when you put a proxy in front of it. A proxy that
+sends none of those headers relays every client as this machine, so don't
+expose one without a token.
+
+This also means `FORWARDED_ALLOW_IPS=*` (uvicorn's setting for trusting proxy
+headers from any address) can't make a LAN client look local in no-token mode:
+the `X-Forwarded-For` it would use for that gets the request refused.
+
+### Containers
+
+A published port reaches the container from the Docker bridge, not from
+loopback, so even your own browser on the host counts as another machine and
+needs the token. The image runs `evi web --host 0.0.0.0` through an
+entrypoint (`scripts/docker-entrypoint.sh`) that makes sure it has one:
+
+- If neither `EVI_WEB_AUTH_TOKEN` nor `[web] auth_token` is set, the
+  entrypoint generates a random 256-bit token on first start, keeps it in the
+  state volume as `/root/.evi/container-token` (mode 0600), and passes it to
+  `evi web` as `EVI_WEB_AUTH_TOKEN`. Restarts reuse it. The log says where it
+  is and how to show it, never the token itself:
+
+  ```sh
+  docker exec <container> evi web-config token show
+  docker compose exec evi evi web-config token show   # with docker-compose.yml
+  ```
+
+- To choose your own, pass `-e EVI_WEB_AUTH_TOKEN=<token>` to `docker run`, or
+  set `EVI_WEB_AUTH_TOKEN` under the `evi` service's `environment:` in
+  `docker-compose.yml`; the entrypoint then generates nothing.
+- `docker compose exec evi evi web-config token rotate` sets
+  `[web] auth_token` in the state volume. It takes effect at once, and unlike
+  the generated token it gates the container's own loopback too. The
+  generated token keeps working until the container restarts; after that the
+  entrypoint sees `[web] auth_token` and passes no launch token.
+
+Like the desktop app's LAN token, the generated token gates other machines
+only. The image's `HEALTHCHECK` calls `/api/health` over the container's
+loopback, which works with any token setup (`/api/health` is public). Sign in
+to the web UI with the token.
+
+## The desktop app
+
+### LAN access (`[federation] bind_lan`)
+
+With LAN access off, the desktop app's server binds `127.0.0.1` and runs
+without a token. With it on, the server binds `0.0.0.0` and always has a
+token:
+
+- If `[web] auth_token` is set, that token is used.
+- Otherwise the app generates a random 256-bit token the first time it needs
+  one. It is stored in `~/.evi/desktop-token`: mode 0600 on macOS and Linux,
+  and on Windows the user profile's permissions already restrict it to you.
+  The app passes the token to its server as `EVI_WEB_AUTH_TOKEN`. The same
+  token is reused on every launch, so peers keep working.
+- The app injects the token into its own window, only for the server's origin,
+  so the UI signs itself in with no prompt. The UI uses the injected token
+  only when it has none stored, or when the stored one stops working. The
+  injected value is read at launch, so after you rotate `[web] auth_token`
+  while the app runs, the new token you sign in with is kept.
+- If no token can be created (for example, the eVi home isn't writable), the
+  app stays on loopback instead of opening the LAN without one.
+
+Peers on other machines, and the VS Code extension pointed at this machine
+from elsewhere, need that token. Clients on this machine don't, because the
+generated token gates other machines only. The VS Code extension still sends
+`~/.evi/desktop-token` to a server on this machine when its `evi.authToken`
+setting is empty.
+
+Only the desktop app's own server uses `~/.evi/desktop-token`.
+`evi web --host 0.0.0.0` needs `[web] auth_token` or `EVI_WEB_AUTH_TOKEN` of
+its own, or it refuses to start, and the Docker image generates its own (see
+[Containers](#containers)). `evi web-config token show` prints the desktop
+token when no other token is set, so you can sign in from another machine,
+and notes when LAN access is off and the app isn't using it.
+
+### Thin-client mode (`EVI_REMOTE_URL`)
+
+`EVI_REMOTE_URL=http://ai-server:8000` points the app at another machine's
+server instead of starting one. If that server needs a token, set
+`EVI_REMOTE_TOKEN`. Without it, the app uses the token `~/.evi/peers.json`
+keeps for a peer at the same address (scheme, host and port), and without
+either the UI shows its sign-in prompt. The app never sends this machine's own
+`[web] auth_token` to another server. The token is injected only for the
+remote server's origin.
+
+### Shell and core versions (`SHELL_ABI` 2)
+
+The desktop shell and its Python core (the sidecar) update separately. The
+token handshake changed how the shell launches the core, so it carries shell
+ABI 2, and every core published from this change on declares
+`min_shell_abi = 2` in its update manifest: that is the default of
+`scripts/build-sidecar-manifest.py`, which the release workflow runs without
+`--min-shell-abi`. A shell only stages a core whose `min_shell_abi` is at most
+its own ABI, so an older shell keeps its bundled core until a full app update
+installs the new shell. `tests/test_web_hardening.py` fails if the manifest
+the script builds would reach an ABI-1 shell, or would be refused by the
+current one. **Release notes for this change must say that a full desktop
+update is needed.**
+
+### Opening links and folders
+
+On Windows the app opens links with `rundll32.exe url.dll,FileProtocolHandler`
+and folders with `explorer.exe`, both by absolute path under `%SystemRoot%`.
+A copy of either program placed next to `evi-desktop.exe` is never run.
+
+## One turn per session
+
+A session runs one turn at a time. While a turn runs:
+
+- Another `/api/chat` for that session gets **409** and a pointer to
+  `POST /api/session/<id>/steer`. A follow-up sent there joins the running turn
+  at its next step. The web UI does this for you: after a reload or from a
+  second window, a message to a busy session is queued as a follow-up.
+- Commands that rewrite history or settings wait for the turn to finish:
+  `/reset`, `/compact`, `/reload`, `/model <id>`, `/goal <text>`, `/auto on`,
+  `/plan`, user commands that start a turn, and the reset, truncate, edit and
+  re-roll routes. Read-only commands (`/help`, `/tools`, `/model`, `/goal`,
+  `/auto` with no argument) still answer.
+- A channel push with `run: true` falls back to a note.
+
+The VS Code extension uses one session per window. Earlier versions shared a
+single `vscode` session between all windows.
+
+## Permission prompts
+
+When a tool needs approval, the turn sends a `PermissionRequest` event and
+waits for `POST /api/decide`. The wait has a deadline:
+
+- After **300 seconds** with no answer, the request is **denied**, and the
+  stream says so with a `PermissionExpired` event. Set the deadline in seconds
+  with `[web] decision_timeout_s` in `config.toml` (read for each prompt, so
+  no restart is needed), or with `EVI_DECISION_TIMEOUT_S`, which overrides it.
+  A value that isn't a positive number means the default, so a prompt always
+  has a deadline. The `PermissionRequest` event carries the deadline as
+  `timeout_s`, and the UI closes its prompt when it passes.
+- A dropped connection (a closed or reloaded tab) does **not** deny. The
+  decision stays open until the deadline, and any of your tabs can answer it:
+  `/api/decide` looks for the decision id in all of your own sessions, never
+  another user's.
+- When no client is watching a session (between turns, or during a channel
+  `run: true`), a tool that would ask is denied immediately.
+
+The VS Code extension shows the prompt with Approve and Deny buttons.
+
+## Multi-user mode
+
+With `[web] multi_user = true`, each login in `~/.evi/users.json` gets its own
+sessions, transcripts and memory. Routes that act on the **host** are
+owner-only. Only the owner's token (`[web] auth_token` or the launch token) can
+use them, and a users.json login gets 403:
+
+- settings (`/api/config`), hooks, plugins, guardrails, model routes;
+- channels (Telegram pairing), peers (including LAN access), the managed
+  runtime, MCP servers and MCP serving, backends (`/api/backends`,
+  `/api/backend/*` except status), and switching the model (`POST
+  /api/model-picker`);
+- file checkpoints and rewind (`/api/checkpoints`, `/api/rewind`). One journal
+  records everyone's file writes, so only the owner can list or undo them;
+- folder trust (`POST /api/project/trust`);
+- host-level runs: workflows, ultracode, recipes and evals. These use the
+  host's own config and data directories, outside per-user isolation;
+- delegated tasks from peers and A2A agents (`/api/federate`, `/a2a`), which
+  run on the host's config and memory the same way. Peers send the owner's
+  token.
+
+The owner's own sessions, transcripts and memory live under the name `owner`.
+A users.json login whose name would map there (`owner` in any case, or a name
+like `owner.` or `-owner-` whose folder name is `owner`) can't sign in at all,
+so it never sees the owner's sessions.
+
+`evi doctor` warns when multi-user logins exist but no owner token is set,
+because then nobody can reach these routes. It also flags a login that can't
+sign in because of its name.
+
+## Uploads
+
+`/api/upload` and `/api/transcribe` stream to `~/.evi/uploads/<session>/` and
+stop at 32 MB with a 413. Nothing is left on disk.
+
+## What changed for existing setups
+
+- **No token means this machine only.** Other machines, and anything a
+  reverse proxy forwards, need a token. `EVI_ALLOW_ANY_HOST=1` no longer
+  opens a token-less server to them.
+- **`evi web --host 0.0.0.0` needs a token** (`evi web-config token rotate`)
+  or it refuses to start. A systemd unit or script that runs it that way
+  needs one before the upgrade.
+- **The Docker image generates a token** when you set none. Sign in with
+  `docker exec <container> evi web-config token show`.
+- **Desktop LAN access** (`[federation] bind_lan`) now runs with a token, and
+  peers on other machines must put it in their `peers.json` entry. This needs
+  a full desktop update; an older app keeps its bundled core.
+- **Thin-client mode** no longer sends this machine's `[web] auth_token` to
+  the remote server; set `EVI_REMOTE_TOKEN` or a `peers.json` entry.
+- **Browser scripts** that call the API must send `X-Evi-Client` or the
+  token.
+- **One turn per session**, a **300-second deadline** on permission prompts,
+  and a channel `run: true` that denies tools that would ask.
+- **Multi-user logins** lose settings, checkpoints and host-level runs, which
+  are owner-only now, and a login named `owner` can't sign in.
+
+## Checking your setup
+
+`evi doctor` reports the web access posture: loopback-only, token set, LAN
+access with the desktop's token, or LAN access that has no token yet. It
+prints the fix for each warning.
+
+`evi web` prints a `web auth:` line when it starts: a token is required (from
+every client, or from other machines only for a launch token), users.json
+logins, or no token, in which case only this machine can connect. With a
+non-loopback `--host` and no token it doesn't start at all (see
+[Serving the network](#serving-the-network)). The Docker image gives its
+server a token of its own (see [Containers](#containers)).
+
+`evi web-config token show` prints the token clients need (see
+[Access tokens](#access-tokens)).
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `EVI_WEB_AUTH_TOKEN` | Launch token for the server process. The desktop app sets it when LAN access is on, and the Docker image's entrypoint when no token is configured. |
+| `EVI_REMOTE_TOKEN` | Desktop thin-client mode: the token for the `EVI_REMOTE_URL` server (else the matching `peers.json` entry's). |
+| `EVI_DECISION_TIMEOUT_S` | Permission-prompt deadline in seconds; overrides `[web] decision_timeout_s` (default 300). |
+| `EVI_ALLOW_ANY_HOST=1` | No-token mode: accept any `Host` header (still loopback clients only). |
+| `EVI_ALLOW_CROSS_ORIGIN=1` | Turn off the cross-site `Origin` check. |
+| `EVI_TRUSTED_PROXY=1` | Trust `X-Forwarded-Host` / `X-Forwarded-Port` from a reverse proxy. |

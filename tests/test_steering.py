@@ -181,3 +181,89 @@ def test_steer_endpoint_reports_not_busy():
     r = _client().post("/api/session/s1/steer", json={"text": "hi"}).json()
     assert r["queued"] is False
     assert r["reason"] == "not busy"
+
+
+# --- handing a follow-up back on the stream ------------------------------------
+
+
+def _sse(text: str) -> list[dict]:
+    import json
+
+    return [json.loads(line[len("data:"):]) for line in text.splitlines()
+            if line.startswith("data:") and line[len("data:"):].strip()]
+
+
+def _steering_web(monkeypatch, tmp_path):
+    """The web app on a tmp home serving one real Agent (no tool calls, so a
+    single step). Set `steer_mid_step[0]` to have the model's step POST a
+    follow-up to /steer while it runs: that turn has no next step to apply it."""
+    from fastapi.testclient import TestClient
+
+    import evi.apps.web.server as server_mod
+    import evi.config as config_mod
+    import evi.sdk.builder as builder_mod
+    from evi import hooks as hooks_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(config_mod, "HOME", home)
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", home / "config.toml")
+    monkeypatch.setattr(config_mod, "ensure_dirs", lambda: None)
+    monkeypatch.setattr(server_mod, "ensure_dirs", lambda: None)
+    monkeypatch.setattr(server_mod, "IMAGE_DIR", tmp_path / "images")
+    monkeypatch.setattr(server_mod, "make_client", lambda *_: None)
+    monkeypatch.setattr(hooks_mod, "HOOKS_CONFIG_PATH", home / "hooks.toml")
+    monkeypatch.setattr("evi.plugins.plugin_dirs", lambda root=None: [])
+    monkeypatch.setattr("evi.sessions.find_session", lambda *a, **k: None)
+
+    agent = _make_agent(tool_call_first=False)
+    http = TestClient(server_mod.create_app())
+    steer_mid_step = [False]
+    verdicts: list[dict] = []
+    create = agent.client.chat.completions.create
+
+    def create_and_steer(**kw):
+        if steer_mid_step[0]:
+            verdicts.append(http.post("/api/session/s1/steer", json={"text": "too late"}).json())
+        return create(**kw)
+
+    agent.client.chat.completions.create = create_and_steer
+    monkeypatch.setattr(builder_mod, "build_agent", lambda **kw: agent)
+    return http, steer_mid_step, verdicts
+
+
+def test_chat_hands_an_unapplied_follow_up_back_before_done(monkeypatch, tmp_path):
+    """The UI stops reading at Done, so the hand-back must come first: after
+    Done it can land in a network read the browser never makes."""
+    http, steer_mid_step, verdicts = _steering_web(monkeypatch, tmp_path)
+    steer_mid_step[0] = True
+    events = _sse(http.post("/api/chat", json={"session_id": "s1", "message": "hi"}).text)
+    assert verdicts == [{"queued": True, "pending": 1}]
+    assert [e["kind"] for e in events][-2:] == ["Steering", "Done"]
+    assert events[-2]["text"] == "too late" and events[-2]["applied"] is False
+
+
+def test_reroll_hands_an_unapplied_follow_up_back_before_done(monkeypatch, tmp_path):
+    """A follow-up can be steered onto a re-roll too; it comes back the same way."""
+    http, steer_mid_step, verdicts = _steering_web(monkeypatch, tmp_path)
+    events = _sse(http.post("/api/chat", json={"session_id": "s1", "message": "hi"}).text)
+    assert "Steering" not in [e["kind"] for e in events]
+    steer_mid_step[0] = True
+    events = _sse(http.post("/api/session/s1/reroll").text)
+    assert verdicts == [{"queued": True, "pending": 1}]
+    assert [e["kind"] for e in events][-2:] == ["Steering", "Done"]
+    assert events[-2]["text"] == "too late" and events[-2]["applied"] is False
+
+
+def test_a_follow_up_is_never_queued_on_a_finished_turn():
+    """/steer's busy check and its queueing are one step against the turn's
+    end: once the turn has handed its leftovers back, a follow-up is refused
+    ('not busy', so the UI sends it normally), not queued where nothing reads it."""
+    from evi.apps.web.server import WebSession
+
+    sess = WebSession(agent=_make_agent(tool_call_first=False))
+    assert sess.begin_turn()
+    assert sess.steer("in time") is True
+    assert sess.finish_turn() == ["in time"]
+    assert sess.steer("too late") is None
+    assert sess.agent.pending_steering() == 0

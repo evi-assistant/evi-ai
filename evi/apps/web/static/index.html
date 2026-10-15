@@ -647,11 +647,28 @@
 // We monkeypatch `window.fetch` so the rest of the script (and any
 // future code) doesn't have to know about the token. If a request comes
 // back 401 we clear the cached token and pop the login overlay back up.
+//
+// Every same-origin request also carries `X-Evi-Client`: without a token the
+// server refuses a browser's state-changing request that lacks it, and a page
+// on another site can't add a custom header to a cross-origin request.
 
 const AUTH_KEY = 'evi.authToken';
 function getAuthToken() { return localStorage.getItem(AUTH_KEY) || ''; }
 function setAuthToken(t) { localStorage.setItem(AUTH_KEY, t); }
 function clearAuthToken() { localStorage.removeItem(AUTH_KEY); }
+
+// The desktop shell injects its access token (the generated LAN token, or
+// [web] auth_token) before this script runs, only for this server's origin —
+// so the app signs itself in with no login prompt. It is captured at launch,
+// so it can be stale (the token was rotated while the app ran): it fills in
+// only when nothing is stored, and bootstrapAuth falls back to it when the
+// stored token fails. A working stored token is never replaced.
+const INJECTED_TOKEN = (() => {
+  try {
+    return (typeof window.__EVI_TOKEN__ === 'string' && window.__EVI_TOKEN__) || '';
+  } catch { return ''; }
+})();
+try { if (INJECTED_TOKEN && !getAuthToken()) setAuthToken(INJECTED_TOKEN); } catch {}
 
 const _origFetch = window.fetch.bind(window);
 window.fetch = async function(input, init) {
@@ -660,10 +677,11 @@ window.fetch = async function(input, init) {
   // CDNs or external APIs.
   const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(location.origin);
   const tokUsed = sameOrigin ? getAuthToken() : '';
-  if (sameOrigin && tokUsed) {
+  if (sameOrigin) {
     init = init || {};
-    const h = new Headers(init.headers || {});
-    if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tokUsed);
+    const h = new Headers(init.headers || (typeof input !== 'string' && input && input.headers) || {});
+    if (!h.has('X-Evi-Client')) h.set('X-Evi-Client', 'web');
+    if (tokUsed && !h.has('Authorization')) h.set('Authorization', 'Bearer ' + tokUsed);
     init.headers = h;
   }
   const resp = await _origFetch(input, init);
@@ -747,6 +765,18 @@ document.getElementById('auth-form').addEventListener('submit', async (e) => {
     }
     const data = await r.json();
     if (data.required && !data.ok) {
+      // The stored token failed; the shell's injected one may still work.
+      if (INJECTED_TOKEN && INJECTED_TOKEN !== tok) {
+        const r2 = await _origFetch('/api/auth/check', {
+          headers: { 'Authorization': 'Bearer ' + INJECTED_TOKEN },
+        });
+        const d2 = r2.ok ? await r2.json() : {};
+        if (d2.ok) {
+          setAuthToken(INJECTED_TOKEN);
+          location.reload();  // re-bootstrap what already ran with the bad token
+          return;
+        }
+      }
       showAuthOverlay('');
     }
   } catch {
@@ -1104,8 +1134,10 @@ async function rerollFromBubble() {
 async function streamReroll() {
   send.disabled = true;
   let assistant = null;
+  const turnSid = sessionId;
   try {
-    const r = await fetch(`/api/session/${sessionId}/reroll`, { method: 'POST' });
+    const r = await fetch(`/api/session/${turnSid}/reroll`, { method: 'POST' });
+    if (r.status === 409) throw new Error('a turn is still running in this session');
     if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
     // Refresh history so any popped assistant/tool bubbles vanish.
     await rebuildHistory();
@@ -1127,7 +1159,7 @@ async function streamReroll() {
           const payload = line.slice(5).trim();
           if (!payload) continue;
           let ev; try { ev = JSON.parse(payload); } catch { continue; }
-          assistant = await handleEvent(ev, assistant);
+          assistant = await handleEvent(ev, assistant, turnSid);
           if (ev.kind === 'Done' || ev.kind === 'Error') done = true;
         }
       }
@@ -1283,8 +1315,9 @@ function renderMarkdownInto(bubble, src) {
   }
 }
 
-// Permission overlay: returns a Promise<boolean> for approve / deny.
-function askPermission({ decision_id, tool_name, args, category }) {
+// Permission overlay: returns a Promise<boolean> for approve / deny, or null
+// when the server's deadline (timeout_s) passes first — it has denied by then.
+function askPermission({ decision_id, tool_name, args, category, timeout_s }) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'perm-overlay';
@@ -1301,17 +1334,20 @@ function askPermission({ decision_id, tool_name, args, category }) {
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    const secs = Number(timeout_s);
+    const timer = secs > 0 ? setTimeout(() => { cleanup(); resolve(null); }, secs * 1000) : null;
     overlay.querySelector('.approve').onclick = () => { cleanup(); resolve(true); };
     overlay.querySelector('.deny').onclick = () => { cleanup(); resolve(false); };
-    function cleanup() { overlay.remove(); }
+    function cleanup() { if (timer) clearTimeout(timer); overlay.remove(); }
   });
 }
 
-async function postDecision(decision_id, approved) {
+// `sid` is the session the asking turn runs in, not whichever tab is active now.
+async function postDecision(decision_id, approved, sid) {
   await fetch('/api/decide', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, decision_id, approved }),
+    body: JSON.stringify({ session_id: sid || sessionId, decision_id, approved }),
   });
 }
 
@@ -2049,26 +2085,51 @@ async function sendMessage(text, images) {
   userBubble.textContent = text;
   attachMessageActions(userBubble, 'user');  // textContent above wiped the toolbar
   let assistant = null;  // built lazily on first TextDelta
-  turnInFlight = true;
-  send.textContent = 'Queue';
-  send.title = 'This turn is running — your message is applied at the next step';
-  workStatus.start();
+  // Only the call that STARTED a turn owns the in-flight state: a read-only
+  // slash command (/help) sent mid-turn must not reset it when it returns, or
+  // the next message would start a second turn instead of steering this one.
+  const ownsTurn = !turnInFlight;
+  // The session this turn runs in — permission answers go to it even if the
+  // user switches tabs meanwhile.
+  const turnSid = sessionId;
+  if (ownsTurn) {
+    turnInFlight = true;
+    send.textContent = 'Queue';
+    send.title = 'This turn is running — your message is applied at the next step';
+    workStatus.start();
+  }
   // The plan badge is one-shot — clear it once a turn starts.
   if (planArmed && !text.startsWith('/')) {
     planArmed = false;
     chipPlan.style.display = 'none';
   }
 
+  let steerInstead = false;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_id: sessionId,
+        session_id: turnSid,
         message: text,
         images: images && images.length ? images : null,
       }),
     });
+    if (res.status === 409) {
+      // The server is already running a turn in this session (started before
+      // a reload, or from another window). A plain message joins it as a
+      // follow-up; a command that would rewrite history waits for it.
+      const detail = await res.json().then(d => d && d.detail).catch(() => '');
+      if (!text.startsWith('/') && !(images && images.length)) {
+        // steerMessage draws its own bubble; give back this one's index.
+        if (userBubble.dataset.index === String(nextHistoryIndex - 1)) nextHistoryIndex -= 1;
+        userBubble.remove();
+        steerInstead = true;
+      } else {
+        addBubble('system').textContent = String(detail || 'A turn is still running in this session — try again when it finishes.');
+      }
+      return;
+    }
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
     const reader = res.body.getReader();
@@ -2093,7 +2154,7 @@ async function sendMessage(text, images) {
           if (!payload) continue;
           let ev;
           try { ev = JSON.parse(payload); } catch { continue; }
-          assistant = await handleEvent(ev, assistant);
+          assistant = await handleEvent(ev, assistant, turnSid);
           if (ev.kind === 'Done' || ev.kind === 'Error') done = true;
         }
       }
@@ -2101,14 +2162,17 @@ async function sendMessage(text, images) {
   } catch (err) {
     addBubble('error').textContent = `error: ${err.message}`;
   } finally {
-    turnInFlight = false;
-    send.textContent = 'Send';
-    send.title = '';
-    workStatus.stop();
-    send.disabled = false;
+    if (ownsTurn) {
+      turnInFlight = false;
+      send.textContent = 'Send';
+      send.title = '';
+      workStatus.stop();
+      send.disabled = false;
+    }
     input.focus();
     refreshUsage();
-    maybeAutoTitle();
+    if (steerInstead) steerMessage(text);
+    else maybeAutoTitle();
   }
 }
 
@@ -2135,7 +2199,7 @@ async function maybeAutoTitle() {
   } catch { /* best-effort; keep the first-message label */ }
 }
 
-async function handleEvent(ev, assistant) {
+async function handleEvent(ev, assistant, sid) {
   if (ev.kind === 'ThinkingDelta') {
     let bubble = log.lastElementChild;
     if (!bubble || !bubble.classList.contains('thinking') || !bubble.dataset.active) {
@@ -2193,7 +2257,12 @@ async function handleEvent(ev, assistant) {
     maybeRenderImages(b, ev.output);
   } else if (ev.kind === 'PermissionRequest') {
     const approved = await askPermission(ev);
-    await postDecision(ev.decision_id, approved);
+    // null = the prompt timed out; the server has already denied it.
+    if (approved !== null) await postDecision(ev.decision_id, approved, sid || sessionId);
+  } else if (ev.kind === 'PermissionExpired') {
+    const b = addBubble('system');
+    b.textContent = `Permission request for ${ev.tool_name || 'a tool'} expired after `
+      + `${Math.round(Number(ev.timeout_s) || 0)}s with no answer — denied.`;
   } else if (ev.kind === 'Steering') {
     if (ev.applied === false) {
       // The turn ended before there was a next step. Nothing was lost — resend
@@ -2945,11 +3014,16 @@ function flushSpeak(bubble) {
 }
 
 resetBtn.addEventListener('click', async () => {
-  await fetch('/api/reset', {
+  const r = await fetch('/api/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, message: '' }),
   });
+  if (r.status === 409) {
+    // A turn is still running: the history was NOT cleared, so keep the view.
+    addBubble('system').textContent = 'A turn is still running in this session — reset when it finishes.';
+    return;
+  }
   log.innerHTML = ''; renderEmptyState();
   nextHistoryIndex = 1;
   refreshUsage();  // the cleared session's context is back to ~0 — don't show the old count
@@ -3333,7 +3407,7 @@ resetBtn.addEventListener('click', async () => {
     model: `Picks where eVi sends your messages — backend kind, Base URL, model, API key — plus the generation defaults (temperature, context size, reasoning effort, fast mode, fallbacks, routing). Change it to point at a different local server or cloud endpoint, swap models, or dial thinking up or down. <b>Switching backend rebuilds the live connection.</b> The <code>claude_agent</code>/<code>codex</code>/<code>gemini</code>/<code>copilot</code>/<code>amp</code> kinds drive a local CLI that signs in itself (a subscription login; <code>gemini</code> needs a Gemini API key or Vertex AI) — they ignore Base URL and need their command on PATH, not a running server. Local backends ignore the API key; <code>reasoning_effort=off</code> fully disables extended thinking.`,
     tools: `Toggles which capability categories eVi may use — filesystem, code, shell, web, image, memory, MCP, git, sqlite, pdf, ocr, vision and more — plus the code sandbox, MCP allowlist, and tool-search threshold. Change it to grant or revoke a capability or to trim the toolset. <b>These apply to new chats only</b> — an open session keeps the tools it started with. The <b>⚠ marks risk</b> (a tool that acts outside eVi’s sandbox, like <code>shell</code> or <code>computer</code>), <i>not</i> unavailability — a tool that cannot run is instead missing an install dependency, shown in its own help.`,
     permissions: `Resolves every tool call to <b>allow</b> / <b>deny</b> / <b>ask</b> before it runs, in a fixed order: <code>hard_deny</code> (beats everything, even yolo), then <code>mode</code>, then first-match <code>rules</code>, then trusted dirs/domains, otherwise ask. Loosen it with trusted directories, trusted domains, or auto-approved categories; tighten it with <code>deny</code> rules, <code>hard_deny</code>, and <code>protected_paths</code>. Gotcha: <code>yolo</code> short-circuits <i>before</i> rules, so an ordinary <code>deny</code> rule won’t protect you there — only <code>hard_deny</code> and the destructive-command guard still fire. Changes here apply to new chats, not the turn you’re in.`,
-    server: `Gates who can reach the web UI and API. <b>Access token</b>: blank leaves localhost open; set it and the web UI requires that token. <b>Multi-user logins</b>: each person signs in with their own token from <code>~/.evi/users.json</code> on a shared workspace. <b>A2A interop</b> exposes <code>POST /a2a</code> so any standards-compliant external agent — not just trusted eVi peers — can delegate a task here. Gotcha: turning on A2A or multi-user (or binding to the LAN) while the access token is blank leaves an unauthenticated surface reachable off-box — set a token first.`,
+    server: `Gates who can reach the web UI and API. <b>Access token</b>: blank leaves localhost open; set it and the web UI requires that token. <b>Multi-user logins</b>: each person signs in with their own token from <code>~/.evi/users.json</code> on a shared workspace. <b>A2A interop</b> exposes <code>POST /a2a</code> so any standards-compliant external agent — not just trusted eVi peers — can delegate a task here. Gotcha: with the access token blank, eVi answers only this computer, so A2A, multi-user logins and LAN binding reach nobody else until you set one (the desktop app generates its own for LAN access).`,
     guardrails: `A fully-local content filter between you and the model: <code>[[rule]]</code> regex, <code>[[judge]]</code> LLM-graded, and <code>[[classifier]]</code> offline-ML rules, applied to your input <i>before</i> it reaches the LLM and to the reply <i>after</i> it streams. Off until you edit <code>~/.evi/guardrails.toml</code> to set <code>enabled = true</code> with at least one rule; <b>Save</b> validates the TOML server-side and won’t write a broken file. Gotcha: output rules run <i>post-stream</i> — they scrub the stored transcript and flag the turn, but can’t un-show text already on screen. The judge and classifier layers also <b>fail open</b>: a missing or erroring grader skips that rule rather than blocking the turn. Treat it as hygiene and shared-machine policy, not a hard security boundary.`,
     context: `Controls automatic <b>compaction</b> — when a conversation grows too large, eVi summarises its oldest turns into one note so the exchange still fits the model’s window. Compaction fires after <code>Compact after N messages</code> <i>or</i> once usage passes <code>Compact at % of context</code>; set both to <code>0</code> to turn it off entirely (<code>Keep recent turns</code> is internally floored at 2). Tighten these for small-window local models, relax them for large-context ones. Gotchas: the percent trigger only means anything if the model’s context window is set correctly in the Model panel, and compaction is <b>lossy</b> — summarised turns lose detail from the live context, though full transcripts stay on disk if transcripts are enabled. The summary is produced by your <i>same</i> backend in a one-shot call; if that call fails, history is left untouched rather than dropped.`,
     sampling: `Low-level generation parameters passed to your backend per request — sampling shape (<code>top-p</code>, presence / frequency penalties), determinism (<code>seed</code>, <code>stop sequences</code>), and plumbing (<code>request timeout</code>, the <code>embedding model</code> used for semantic file search). Most are pure overrides: leave a field at its default and eVi doesn’t send it at all, so it can’t change anything. Reach for one only for a specific need — a fixed <code>seed</code> for reproducible runs, <code>Max completion tokens</code> for reasoning models that reject <code>max_tokens</code>, or <code>logit bias</code> to push tokens up or down. Main gotcha: these are <b>backend-specific and silently ignored</b> where unsupported — <code>cache_prompt</code> is a llama.cpp / vLLM hint, <code>logit_bias</code> / <code>logprobs</code> need an OpenAI-schema server, and <b>CLI-agent backends</b> (claude / codex / gemini) honour almost none of them.`,
@@ -3371,14 +3445,19 @@ resetBtn.addEventListener('click', async () => {
     },
     server: async () => {
       const web = (cfg && cfg.web) || {}, fed = (cfg && cfg.federation) || {};
-      const hasToken = String(web.auth_token || '') !== '';
+      const access = (cfg && cfg.access) || {};
+      const hasToken = String(web.auth_token || '') !== '' || access.token === true || access.logins === true;
       const openSurface = fed.a2a === true || web.multi_user === true || fed.bind_lan === true;
+      // Without a token the server answers only this machine, so an "open"
+      // setting is unreachable from elsewhere rather than unprotected.
       if (!hasToken && openSurface)
-        return { tone:'bad', title:'Open surface, no token',
-          msg:'An externally reachable endpoint (A2A, multi-user, or LAN binding) is on with no access token — anyone who can reach it can drive eVi.' };
+        return { tone:'warn', title:'Network access, no token',
+          msg:'A2A, multi-user or LAN binding is on, but with no access token eVi refuses every other machine. Set a token to serve them (the desktop app makes its own for LAN access at its next launch).' };
+      if (hasToken && String(web.auth_token || '') === '' && access.launch_token)
+        return { tone:'good', title:'LAN token active', msg:'The desktop app generated this server’s access token (~/.evi/desktop-token); other machines must send it, this computer needs none.' };
       if (hasToken)
         return { tone:'good', title:'Access token set', msg:'The web UI and API require your token before responding.' };
-      return { tone:'off', title:'Localhost only', msg:'No token set, but nothing beyond localhost is reachable — fine on a single-user machine.' };
+      return { tone:'off', title:'Localhost only', msg:'No token set, so eVi answers only this computer — fine on a single-user machine.' };
     },
     permissions: async () => {
       const a = (cfg && cfg.auto) || {};
@@ -4492,7 +4571,7 @@ resetBtn.addEventListener('click', async () => {
         msg:'Other machines can’t delegate work here. Turn on “Answer requests” below to become a peer.' };
       if (!tok && (st === 'lan' || d.bind_lan)) return { tone:'bad',
         title:'Serving on your network without an access token',
-        msg:'eVi’s safety cutoff is blocking every incoming delegation until you set one — an open server on the LAN would let anyone run tasks here.',
+        msg:'eVi refuses every request from other machines until you set one — an open server on the LAN would let anyone run tasks here. (With LAN access on, the desktop app generates one at its next launch.)',
         cta:{ label:'Set access token', act:'set-serve-token' } };
       if (st === 'loopback') return { tone:'warn', title:'Reachable on this machine only',
         msg: d.bind_lan
@@ -4504,7 +4583,7 @@ resetBtn.addEventListener('click', async () => {
       if (st === 'down') return { tone:'bad', title:'Nothing is listening',
         msg:'Serving is on but no server is answering on port ' + port + '.' };
       return { tone:'good', title:'Reachable by peers', lanUrl:url,
-        msg:'Peers can delegate to this machine at ' + url + '. On the other machine, add this peer and paste this machine’s access token.' };
+        msg:'Peers can delegate to this machine at ' + url + '. On the other machine, add this peer and paste this machine’s access token (the desktop app’s generated one is in ~/.evi/desktop-token).' };
     };
     const serveBannerHtml = (d) => {
       const p = servePosture(d);

@@ -20,7 +20,14 @@ use std::path::{Path, PathBuf};
 /// the manifest's `min_shell_abi` <= this. Bump ONLY on a breaking change to how
 /// the shell launches/handshakes with the sidecar (flags, ports, `--check`), so
 /// an old shell refuses a sidecar it can't drive and keeps its bundled one.
-pub const SHELL_ABI: u32 = 1;
+///
+/// 1 — `--host/--port`, `--check`.
+/// 2 — with `[federation] bind_lan` the shell hands the sidecar an access token
+///     (`EVI_WEB_AUTH_TOKEN`) and injects it into the webview. A core that
+///     answers only loopback clients without a token would leave an ABI-1
+///     shell's LAN setup locked out, so such cores ship `min_shell_abi = 2`
+///     and ABI-1 shells get them only through a full app update.
+pub const SHELL_ABI: u32 = 2;
 
 const TAG_BASE: &str =
     "https://github.com/evi-assistant/evi-ai/releases/download/sidecar-latest";
@@ -93,6 +100,12 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
 
 fn is_newer(candidate: &str, current: &str) -> bool {
     parse_version(candidate) > parse_version(current)
+}
+
+/// Whether a shell speaking `shell_abi` can drive a core whose manifest asks
+/// for `min_shell_abi`. An older shell keeps its bundled core instead.
+fn shell_can_run(min_shell_abi: u32, shell_abi: u32) -> bool {
+    min_shell_abi <= shell_abi
 }
 
 /// The core version actually in effect, matching `staged_sidecar`'s guard: a
@@ -255,7 +268,7 @@ fn check_and_stage(evi_home: &Path, bundled_version: &str) -> Option<String> {
     }
     let manifest: Manifest = serde_json::from_str(&manifest_text).ok()?;
 
-    if manifest.min_shell_abi > SHELL_ABI {
+    if !shell_can_run(manifest.min_shell_abi, SHELL_ABI) {
         // Needs a newer shell than this one — a full app update will bring it.
         return None;
     }
@@ -368,6 +381,24 @@ mod tests {
         assert_eq!(m.version, "1.0.10");
         assert_eq!(m.min_shell_abi, 1);
         assert!(m.platforms.contains_key("linux-x86_64"));
+    }
+
+    #[test]
+    fn token_cores_are_offered_only_to_abi2_shells() {
+        // This shell speaks the token handshake (SHELL_ABI 2)...
+        assert!(SHELL_ABI >= 2);
+        let m: Manifest = serde_json::from_str(
+            r#"{"version":"1.0.54","min_shell_abi":2,
+                "platforms":{"linux-x86_64":{"url":"http://x/z.zip","sha256":"ab"}}}"#,
+        )
+        .unwrap();
+        assert!(shell_can_run(m.min_shell_abi, SHELL_ABI));
+        // ...while an ABI-1 shell is offered no core that requires the token: it
+        // keeps its bundled core until a full app update brings a new shell.
+        assert!(!shell_can_run(m.min_shell_abi, 1));
+        // Older cores (min_shell_abi 1) still run on either shell.
+        assert!(shell_can_run(1, 1));
+        assert!(shell_can_run(1, SHELL_ABI));
     }
 
     #[test]

@@ -18,10 +18,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import os
 import secrets
 import re
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
@@ -33,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from evi import hooks as hooks_mod
 from evi import safemode
 from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
 from evi.backends import get_backend
@@ -319,6 +322,278 @@ def _cross_site_refusal(request) -> str | None:
     return refusal
 
 
+# ---- request hardening: tokens, clients, owner-only routes ----------------
+
+# The access token a launcher hands the server for this run, beside `[web]
+# auth_token` in config.toml: the desktop shell's generated LAN token (main.rs,
+# when `[federation] bind_lan` is on) or a container's. Read once and removed
+# from the environment, so the agent's own subprocesses (shell, code runners,
+# MCP servers) never inherit it.
+_LAUNCH_TOKEN_ENV = "EVI_WEB_AUTH_TOKEN"
+_LAUNCH_TOKEN: str = os.environ.pop(_LAUNCH_TOKEN_ENV, "").strip()
+
+
+def _configured_token(cfg: Any) -> str:
+    return str(getattr(getattr(cfg, "web", None), "auth_token", "") or "").strip()
+
+
+def _web_tokens(cfg: Any) -> list[str]:
+    """Every token that authenticates as the owner: `[web] auth_token` and the
+    launch token. Empty (and no users.json logins) = no-token mode."""
+    tokens: list[str] = []
+    configured = _configured_token(cfg)
+    if configured:
+        tokens.append(configured)
+    if _LAUNCH_TOKEN and _LAUNCH_TOKEN not in tokens:
+        tokens.append(_LAUNCH_TOKEN)
+    return tokens
+
+
+def _lan_token_only(cfg: Any, users: list) -> bool:
+    """True when the launch token is the server's only credential (the desktop
+    app's LAN token, a container's): it gates other machines, and this machine
+    is served as in no-token mode — so an old VS Code extension or `evi` on
+    loopback keeps working. A `[web] auth_token` or users.json logins gate
+    loopback too."""
+    return bool(_LAUNCH_TOKEN) and not _configured_token(cfg) and not users
+
+
+def _provided_token(request) -> str:
+    """The bearer token a request carries: `Authorization: Bearer`, else
+    `?token=` (EventSource and <img> can't set headers)."""
+    header = request.headers.get("Authorization", "")
+    provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    return provided or request.query_params.get("token", "")
+
+
+def _token_matches(provided: str, tokens: list[str]) -> bool:
+    """Constant-time match against any of `tokens` (bytes, so a non-ASCII
+    guess is a mismatch rather than a TypeError)."""
+    if not provided:
+        return False
+    got = provided.encode("utf-8", "surrogatepass")
+    hit = False
+    for t in tokens:
+        hit |= secrets.compare_digest(got, t.encode("utf-8", "surrogatepass"))
+    return hit
+
+
+def _client_is_loopback(request) -> bool:
+    """True if the TCP peer is this machine. Unlike the Host header (any
+    non-browser client sets it freely), the peer address can't be forged
+    without owning the route back."""
+    client = getattr(request, "client", None)
+    return _is_loopback_host(client.host if client else "")
+
+
+# Headers a reverse proxy adds for the client it forwards.
+_FORWARDING_HEADERS = ("x-forwarded-for", "forwarded", "x-real-ip")
+
+
+def _client_is_local(request) -> bool:
+    """True if the request comes from this machine: a loopback TCP peer that
+    nothing forwarded. A forwarded request is another client's, whatever the
+    peer — a same-machine proxy relays the LAN into loopback — and uvicorn
+    rewrites the peer from X-Forwarded-For when it trusts the proxy
+    (FORWARDED_ALLOW_IPS), so a LAN client could claim 127.0.0.1 with it."""
+    if not _client_is_loopback(request):
+        return False
+    return not any((request.headers.get(h) or "").strip() for h in _FORWARDING_HEADERS)
+
+
+def lan_bind_refusal(host: str, cfg: Any = None) -> str | None:
+    """Why serving on `host` must be refused, else None.
+
+    Without an access token the server only answers loopback clients, so a
+    non-loopback bind (`--host 0.0.0.0`, a LAN address) with no token would
+    look up and refuse everyone it was bound for. For a user-run launcher
+    (`evi web`, a container entrypoint) to call before binding and stop with
+    the message. Not the desktop sidecar's entry: the shell decides its bind
+    and always passes a token when it binds the LAN."""
+    import ipaddress
+
+    h = str(host or "").strip().strip("[]").lower()
+    try:
+        loopback = h == "localhost" or ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        loopback = False  # a hostname binds whatever interface it names
+    if loopback:
+        return None
+    if cfg is None:
+        cfg = Config.load()
+    if _web_tokens(cfg):
+        return None
+    return (
+        f"refusing to serve on {host or '(all interfaces)'} without an access token: "
+        "other machines would be refused anyway. Set one with `evi web-config token "
+        f"rotate` (or the {_LAUNCH_TOKEN_ENV} environment variable), or bind 127.0.0.1."
+    )
+
+
+# A browser request is one with an Origin, or a Sec-Fetch-Site naming the page
+# that sent it. Every browser POST carries an Origin, and every current browser
+# labels its requests with Sec-Fetch-Site. Not Sec-Fetch-Mode alone: Node's
+# fetch (undici) — the VS Code extension host's, so old VSIX builds — sends
+# `Sec-Fetch-Mode: cors` and nothing else. `Sec-Fetch-Site: none` is a request
+# the user started (an address-bar load), never one a page made. curl, the CLI
+# and peers send none of these. A state-changing /api request from a browser
+# must also carry this header unless it authenticated with a token: eVi's own
+# pages add it (the fetch wrapper in index.html), and another page can't add a
+# custom header to a cross-origin request without a CORS preflight, which eVi
+# never answers.
+_CLIENT_HEADER = "x-evi-client"
+
+
+def _is_browser_request(request) -> bool:
+    headers = request.headers
+    if (headers.get("origin") or "").strip():
+        return True
+    return (headers.get("sec-fetch-site") or "").strip().lower() not in ("", "none")
+
+
+def _client_header_refusal(request) -> str | None:
+    """Why a browser's state-changing /api request without X-Evi-Client must
+    be refused, else None. Callers skip it for token-authenticated requests."""
+    path = request.url.path
+    if request.method in ("GET", "HEAD") and path in _SIDE_EFFECT_GETS:
+        # The wizard opens these as an EventSource, which can't send the header,
+        # so the browser's own label decides: another site or another local port
+        # never starts one — not even with EVI_ALLOW_CROSS_ORIGIN, which waives
+        # only the Origin check (_cross_site_refusal).
+        site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+        if site in ("cross-site", "same-site"):
+            return (
+                f"Refusing a {request.method} {path} that another site started "
+                f"(Sec-Fetch-Site: {site}): it has side effects, so only eVi's own "
+                "pages (or a client with the access token) may call it."
+            )
+        return None
+    if request.method not in _STATE_CHANGING_METHODS or not path.startswith("/api/"):
+        return None
+    # Routine webhooks: the path token is the credential (see _cross_site_refusal).
+    if path.startswith("/api/routine/"):
+        return None
+    if (request.headers.get(_CLIENT_HEADER) or "").strip():
+        return None
+    if not _is_browser_request(request):
+        return None
+    return (
+        "Refusing a browser request without the X-Evi-Client header. eVi's own "
+        "pages send it; a script calling the API from a browser must send "
+        "`X-Evi-Client: 1` (or authenticate with the access token)."
+    )
+
+
+# Multi-user mode: routes that reconfigure or act on the HOST rather than the
+# caller's own sessions. Only the owner (whoever holds `[web] auth_token` or the
+# launch token) may use them; a users.json login gets 403. (methods or None for
+# every method, path prefix.) A prefix matches itself and anything below it.
+_OWNER_ONLY_ROUTES: tuple[tuple[frozenset[str] | None, str], ...] = (
+    (None, "/api/config"),
+    (None, "/api/hooks"),
+    (None, "/api/plugins"),
+    (None, "/api/channels"),
+    (None, "/api/peers"),
+    (None, "/api/runtime"),
+    (None, "/api/mcp"),
+    (None, "/api/backends"),
+    (None, "/api/backend"),        # start / install / use / verify / pull
+    (frozenset({"POST"}), "/api/model-picker"),  # persists [llm]
+    (None, "/api/guardrails"),
+    (None, "/api/routes"),
+    # One global journal holds every user's file writes (checkpoints.py).
+    (None, "/api/checkpoints"),
+    (None, "/api/rewind"),
+    (frozenset({"POST"}), "/api/project/trust"),
+    # Headless runs on the host's own config and data dirs, outside the
+    # caller's per-user sessions (several auto-approve every tool).
+    (None, "/api/dispatch/workflow"),
+    (None, "/api/dispatch/ultracode"),
+    (None, "/api/recipes/run"),
+    (None, "/api/evals/run"),
+    # Delegated tasks from peers and A2A agents: headless agents on the host's
+    # config and default memory, like the runs above. Peers send the owner's token.
+    (None, "/api/federate"),
+    (None, "/a2a"),
+)
+# Reads every login needs (the chat UI polls it before each send).
+_OWNER_ONLY_EXEMPT = frozenset({("GET", "/api/backend/status"), ("HEAD", "/api/backend/status")})
+
+
+def _owner_only_route(method: str, path: str) -> bool:
+    if (method, path) in _OWNER_ONLY_EXEMPT:
+        return False
+    for methods, prefix in _OWNER_ONLY_ROUTES:
+        if (path == prefix or path.startswith(prefix + "/")) and (
+            methods is None or method in methods
+        ):
+            return True
+    return False
+
+
+def _require_owner(request) -> None:
+    """403 unless the caller is the owner (always true outside multi-user mode,
+    where the one token holder or the loopback user is the owner)."""
+    if not getattr(request.state, "evi_owner", True):
+        raise HTTPException(403, "only the owner can do this (multi-user mode)")
+
+
+# `/api/session/<id>/...`: the id is a path segment on every per-session route.
+_SESSION_PATH = re.compile(r"^/api/session/([^/]+)/")
+
+# Pending permission decisions resolve to deny at this deadline unless
+# `[web] decision_timeout_s` (or EVI_DECISION_TIMEOUT_S) says otherwise.
+_DECISION_TIMEOUT_DEFAULT_S = 300.0
+
+
+def _decision_timeout_s(cfg: Any = None) -> float:
+    """Seconds a permission prompt waits for an answer before it denies.
+    EVI_DECISION_TIMEOUT_S overrides `[web] decision_timeout_s`; anything that
+    isn't a positive number means the default — a prompt always has one."""
+    configured = getattr(getattr(cfg, "web", None), "decision_timeout_s", None)
+    for raw in (os.environ.get("EVI_DECISION_TIMEOUT_S"), configured):
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and math.isfinite(value):
+            return value
+    return _DECISION_TIMEOUT_DEFAULT_S
+
+
+def _deny_unattended(_tool_name: str, _args_json: str, _category: str) -> bool:
+    """The permission callback while no client is attached to a session (between
+    turns, channel runs): a tool that would ask is denied. Agent treats a None
+    callback as "no UI, allow", so a session is never left without one."""
+    return False
+
+
+# Uploads (and audio sent for transcription) stream to disk with this cap.
+_UPLOAD_MAX_BYTES = 32 * 1024 * 1024
+
+
+async def _save_upload(file: UploadFile, target: Path) -> int:
+    """Stream `file` to `target`, refusing (413, nothing left behind) past
+    _UPLOAD_MAX_BYTES. Returns the bytes written."""
+    written = 0
+    with target.open("wb") as out:
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > _UPLOAD_MAX_BYTES:
+                out.close()
+                target.unlink(missing_ok=True)
+                cap = _UPLOAD_MAX_BYTES
+                size = f"{cap // (1024 * 1024)} MB" if cap >= 1024 * 1024 else f"{cap} bytes"
+                raise HTTPException(413, f"upload exceeds {size}")
+            out.write(chunk)
+    return written
+
+
 def _within(path: Path, root: Path) -> bool:
     """True if `path` resolves strictly inside `root` (`..`, absolute or
     drive-relative components and symlinks all resolved first)."""
@@ -539,6 +814,30 @@ def _safe_user(name: str) -> str:
     return slug or "user"
 
 
+# Multi-user mode keys the owner's sessions as "owner" and keeps its transcripts
+# and memory in users/owner.
+_OWNER_LOGIN = "owner"
+
+
+def _reserved_login(name: str) -> bool:
+    """True for a users.json login that would land in the owner's workspace:
+    named owner in any case (Windows and macOS fold case in paths), or with a
+    name whose data-dir slug is owner ("owner.", "-owner-")."""
+    return (name.strip().casefold() == _OWNER_LOGIN
+            or _safe_user(name).casefold() == _OWNER_LOGIN)
+
+
+def _authenticate_login(provided: str, users: list) -> Any:
+    """The users.json login `provided` belongs to, else None. A login with a
+    reserved name never signs in — it would share the owner's sessions,
+    transcripts and memory (`evi doctor` flags it)."""
+    from evi.users import authenticate
+
+    if not provided or not provided.isascii():  # compare_digest wants ASCII str
+        return None
+    return authenticate(provided, [u for u in users if not _reserved_login(u.name)])
+
+
 def _config_snapshot(cfg: Config) -> dict[str, Any]:
     """asdict(cfg) with secrets masked for transport to the browser."""
     data = asdict(cfg)
@@ -644,6 +943,157 @@ class WebSession:
     channel_log: list[dict[str, str]] = field(default_factory=list)  # pushed-in alerts (Ph 83)
     busy: bool = False  # a turn is mid-flight — surfaced by the dispatch live-watch
     title: str = ""  # server-stored session name, for addressing in session messaging (Ph 95)
+    # Guards `busy`: one turn per session. Two workers on one Agent would
+    # interleave history and swap each other's permission callback.
+    turn_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def begin_turn(self) -> bool:
+        """Claim the session for a turn; False if one is already running."""
+        with self.turn_lock:
+            if self.busy:
+                return False
+            self.busy = True
+            return True
+
+    def end_turn(self) -> None:
+        with self.turn_lock:
+            self.busy = False
+
+    def steer(self, text: str) -> bool | None:
+        """Queue a follow-up on the running turn: None when no turn is running,
+        else whether the agent took it. Under turn_lock, like finish_turn, so a
+        follow-up is either handed back by the turn or refused here — never
+        queued on an agent whose turn has already ended."""
+        with self.turn_lock:
+            if not self.busy:
+                return None
+            return self.agent.steer(text)
+
+    def finish_turn(self) -> list[str]:
+        """Free the session and return the follow-ups the turn never applied
+        (it ended before another step), for the stream to hand back."""
+        with self.turn_lock:
+            self.busy = False
+            take = getattr(self.agent, "take_pending_steering", None)
+            return list(take()) if take else []
+
+
+def _busy_error(session_id: str) -> HTTPException:
+    """409 for a request that would start or rewrite a turn mid-flight."""
+    return HTTPException(
+        409,
+        f"session {session_id} is busy: a turn is already running. Send a "
+        f"follow-up with POST /api/session/{session_id}/steer (it applies at the "
+        "turn's next step), or wait for the turn to finish.",
+    )
+
+
+@contextmanager
+def _holding_turn(sess: WebSession, session_id: str):
+    """Hold the session for a quick history rewrite (/reset, truncate, edit…):
+    409 if a turn is running, and no turn can start until it's done."""
+    if not sess.begin_turn():
+        raise _busy_error(session_id)
+    try:
+        yield
+    finally:
+        sess.end_turn()
+
+
+def _stream_turn(sess: WebSession, run, enqueue) -> None:
+    """Run one claimed turn (`run()` yields its events) on a worker thread and
+    feed it to an SSE stream via `enqueue`; frees the session when it ends.
+
+    The frame that closes the turn (Done, or the Error that ended it) goes out
+    LAST. A turn can end before there's another step (no tool calls, an error,
+    max_turns), and a follow-up still queued then was never applied: it's
+    handed back first (Steering applied=false) so the UI resends it. After
+    Done it could arrive in a later network read, which the UI never makes.
+    """
+    closing: dict | None = None
+    try:
+        for event in run():
+            payload = {"kind": _event_kind(event)}
+            if is_dataclass(event):
+                payload.update(asdict(event))
+            if isinstance(event, (Done, Error)):
+                closing = payload
+                break
+            enqueue(payload)
+    except Exception as exc:  # noqa: BLE001
+        closing = {"kind": "Error", "message": f"{type(exc).__name__}: {exc}"}
+    finally:
+        # Detach this turn's client before freeing the session, so a later
+        # headless run (channel run:true) can't reach the dead stream's
+        # callback and wait on it.
+        sess.agent.permission_callback = _deny_unattended
+        # Guarded, and strictly before the sentinel: anything raising here
+        # would skip `enqueue(None)` and leave the SSE stream open forever.
+        # A hang is worse than a dropped follow-up.
+        try:
+            leftovers = sess.finish_turn()
+        except Exception:  # noqa: BLE001
+            leftovers = []
+        for text in leftovers:
+            enqueue({"kind": "Steering", "text": text, "applied": False})
+        if closing is not None:
+            enqueue(closing)
+        enqueue(None)  # sentinel — must always run or the stream never closes
+
+
+def _make_permission_callback(bucket: "dict[str, WebSession]", session_id: str,
+                              enqueue, timeout_s: float):
+    """Build a permission_callback that bridges worker thread → SSE client.
+
+    The callback (invoked on a worker thread inside Agent.chat) generates a
+    decision_id, pushes a PermissionRequest into the SSE queue via `enqueue`,
+    and waits for /api/decide — up to `timeout_s`, then it denies (and says so
+    with a PermissionExpired event). A dropped SSE stream does NOT deny: the
+    decision stays answerable until the deadline (another tab, a reattach).
+
+    `bucket` is captured here (in the request task) so the worker-thread
+    lookup resolves the right user's session without the ContextVar.
+    """
+    def callback(tool_name: str, args_json: str, category: str) -> bool:
+        decision_id = secrets.token_hex(8)
+        sess = bucket.get(session_id)
+        if sess is None:
+            return False
+        pending = PendingDecision(event=threading.Event())
+        sess.pending[decision_id] = pending
+        enqueue({
+            "kind": "PermissionRequest",
+            "decision_id": decision_id,
+            "tool_name": tool_name,
+            "args": args_json,
+            "category": category,
+            "timeout_s": timeout_s,
+        })
+        answered = pending.event.wait(timeout_s)
+        sess.pending.pop(decision_id, None)
+        if answered or pending.event.is_set():  # an answer racing the deadline wins
+            return pending.approved
+        enqueue({
+            "kind": "PermissionExpired",
+            "decision_id": decision_id,
+            "tool_name": tool_name,
+            "timeout_s": timeout_s,
+        })
+        return False
+    return callback
+
+
+# Slash commands that only read state, so they may answer while a turn runs.
+# Everything else rewrites history or the agent's settings (/reset, /compact,
+# /model <id>, /goal <text>, /auto on, /plan, user commands that start a turn).
+_READ_ONLY_SLASH = frozenset({"help", "?", "tools"})
+_READ_ONLY_WITHOUT_ARGS = frozenset({"model", "goal", "auto"})
+
+
+def _slash_is_read_only(raw: str) -> bool:
+    name, _, args = raw[1:].strip().partition(" ")
+    name = name.lower()
+    return name in _READ_ONLY_SLASH or (name in _READ_ONLY_WITHOUT_ARGS and not args.strip())
 
 
 # ---- federation activity (inbound peer requests) -------------------------
@@ -677,12 +1127,15 @@ def _is_loopback_host(host: str) -> bool:
     if h in ("127.0.0.1", "::1", "localhost", "") or h.startswith("127."):
         return True
     try:
-        return ipaddress.ip_address(h).is_loopback
+        addr = ipaddress.ip_address(h)
     except ValueError:
         # Not a real IP — e.g. the in-process TestClient's synthetic "testclient"
         # host. A request off a real socket always carries an IP, so only a
         # parseable non-loopback IP is a genuine remote peer; treat the rest local.
         return True
+    # A dual-stack socket reports an IPv4 client as ::ffff:a.b.c.d.
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return addr.is_loopback or bool(mapped is not None and mapped.is_loopback)
 
 
 def _federation_lan_guard(request: "Request", cfg: Any) -> None:
@@ -697,7 +1150,7 @@ def _federation_lan_guard(request: "Request", cfg: Any) -> None:
     client_host = request.client.host if request.client else ""
     if _is_loopback_host(client_host):
         return
-    if not str(getattr(cfg.web, "auth_token", "") or "").strip():
+    if not _web_tokens(cfg):
         raise HTTPException(
             403,
             "federation refused: this eVi is serving on the network without an "
@@ -717,6 +1170,19 @@ def _federation_lan_guard(request: "Request", cfg: Any) -> None:
 # tabs can only reach tabs (never another user's sessions).
 
 _MSG_LOG_CAP = 100  # keep the per-session inbox bounded
+
+
+def _with_user_hooks(agent: Agent) -> Agent:
+    """Give a server-built agent the user's hooks: the one registry this
+    process shares, which POST /api/hooks reloads in place, so an open session
+    picks up a Save without a restart. Empty in safe mode (load_hooks)."""
+    agent.hooks = hooks_mod.shared_registry()
+    return agent
+
+
+def _reload_user_hooks() -> int:
+    """Re-read hooks.toml and plugin hooks into the shared registry; the count."""
+    return len(hooks_mod.reload_shared().hooks)
 
 
 def _follow_runtime_window(sess: "WebSession") -> None:
@@ -1132,7 +1598,7 @@ def create_app() -> FastAPI:
     async def auth_middleware(request: Request, call_next):
         # Config is cheap to re-read (small TOML); doing it per-request
         # means `evi web token rotate` takes effect without a restart.
-        from evi.users import authenticate, load_users
+        from evi.users import load_users
 
         _CURRENT_USER.set(None)  # reset per request; set below when authenticated
         # Cross-site request guard — first, for every route (incl. /a2a and
@@ -1159,25 +1625,58 @@ def create_app() -> FastAPI:
         for want in request.query_params.getlist("session"):
             if want and not valid_session_id(want):
                 return JSONResponse({"detail": _BAD_SESSION_ID}, status_code=400)
+        # Same contract for the id in a per-session route's path, so no handler
+        # (or a future one) ever sees a path-like id.
+        m = _SESSION_PATH.match(request.url.path)
+        if m and not valid_session_id(m.group(1)):
+            return JSONResponse({"detail": _BAD_SESSION_ID}, status_code=400)
         cfg = Config.load()
-        token = cfg.web.auth_token.strip()
+        tokens = _web_tokens(cfg)
         users = load_users() if cfg.web.multi_user else []
+        request.state.evi_owner = True  # narrowed below for a users.json login
+        provided = _provided_token(request)
+        local = _client_is_local(request)
         # Open access only when no auth is configured at all — the common desktop
         # case, where the server is loopback-bound and the user is the only one
-        # on the machine.
+        # on the machine. So only this machine may talk to it: the TCP peer must
+        # be loopback, and not a proxy relaying someone else (_client_is_local).
+        # A Host check alone isn't enough off-box — curl or a script on the LAN
+        # sets `Host: localhost` freely (bind_lan, a manual --host 0.0.0.0, a
+        # container).
         #
-        # But "loopback-bound" does NOT by itself keep a browser out: any web page
+        # The same goes for this machine when the launch token is the only
+        # credential (_lan_token_only): it was minted to gate the LAN, and on
+        # loopback it would only lock out clients that predate it (an old VS
+        # Code extension) without keeping anyone out.
+        #
+        # And "loopback" does NOT by itself keep a browser out: any web page
         # can send requests to 127.0.0.1, and DNS rebinding lets a hostile site
         # point its own hostname at loopback and drive this API — which, with the
         # filesystem and shell tools behind it, is the whole machine. Browsers
         # can't forge the Host header, so requiring a loopback Host closes that
-        # vector at zero cost to real local use.
+        # vector at zero cost to real local use. A browser's state-changing
+        # request must also carry X-Evi-Client (_client_header_refusal).
         #
         # Deliberately scoped to the unauthenticated case: if a token or users
-        # are configured, that's the real control and this guard steps aside
+        # are configured, that's the real control and these guards step aside
         # (federation peers, LAN and container hostnames all authenticate).
-        # `EVI_ALLOW_ANY_HOST=1` overrides for exotic no-auth deployments.
-        if not token and not users:
+        # `EVI_ALLOW_ANY_HOST=1` overrides the Host check for exotic no-auth
+        # deployments; nothing overrides the peer check.
+        if (not tokens and not users) or (
+            local and _lan_token_only(cfg, users) and not _token_matches(provided, tokens)
+        ):
+            if not local and not request.url.path.startswith(
+                "/api/routine/"  # the path token is its credential
+            ):
+                return JSONResponse(
+                    {"detail": "Refusing a request from another machine (or relayed by a "
+                               "proxy) while no access token is set: without one, eVi only "
+                               "answers this computer. Set one with `evi web-config token rotate` (or "
+                               f"the {_LAUNCH_TOKEN_ENV} environment variable) to serve "
+                               "the network — the desktop app does this itself when LAN "
+                               "access is on."},
+                    status_code=403,
+                )
             if not _host_is_local(request):
                 return JSONResponse(
                     {"detail": "Refusing a request for a non-local hostname while no "
@@ -1185,6 +1684,9 @@ def create_app() -> FastAPI:
                                "(or set EVI_ALLOW_ANY_HOST=1 if this is intended)."},
                     status_code=403,
                 )
+            header_refusal = _client_header_refusal(request)
+            if header_refusal is not None:
+                return JSONResponse({"detail": header_refusal}, status_code=403)
             return await call_next(request)
         path = request.url.path
         if (
@@ -1202,26 +1704,31 @@ def create_app() -> FastAPI:
         ):
             return await call_next(request)
 
-        header = request.headers.get("Authorization", "")
-        provided = ""
-        if header.lower().startswith("bearer "):
-            provided = header[7:].strip()
-        if not provided:
-            provided = request.query_params.get("token", "")
-
-        # Multi-user: any user token (or the owner's auth_token) authenticates.
-        if users:
-            user = authenticate(provided, users)
-            if user is not None:
-                request.state.evi_user = user.name
-                _CURRENT_USER.set(user.name)
-                return await call_next(request)
-            if token and provided and secrets.compare_digest(provided, token):
-                request.state.evi_user = "owner"
-                _CURRENT_USER.set("owner")
-                return await call_next(request)
-        # Single-user: the one shared token.
-        elif provided and secrets.compare_digest(provided, token):
+        # A token-authenticated request needs no X-Evi-Client: a page on
+        # another site can't know the token.
+        if _token_matches(provided, tokens):
+            # The owner's token. In multi-user mode the owner gets its own
+            # workspace bucket, as before.
+            if users:
+                request.state.evi_user = _OWNER_LOGIN
+                _CURRENT_USER.set(_OWNER_LOGIN)
+            return await call_next(request)
+        # Multi-user: a users.json login is a user, never the owner, so
+        # host-level routes are refused to it — and one whose name would map
+        # onto the owner's workspace doesn't sign in at all (_reserved_login).
+        user = _authenticate_login(provided, users) if users else None
+        if user is not None:
+            request.state.evi_user = user.name
+            request.state.evi_owner = False
+            _CURRENT_USER.set(user.name)
+            if _owner_only_route(request.method, path):
+                return JSONResponse(
+                    {"detail": "Only the owner can do this: in multi-user mode, settings, "
+                               "hooks, plugins, channels, peers, the runtime, MCP, backends, "
+                               "file checkpoints and host-level runs belong to whoever "
+                               "holds the [web] auth_token."},
+                    status_code=403,
+                )
             return await call_next(request)
         return JSONResponse(
             {"error": "unauthorized"},
@@ -1242,56 +1749,25 @@ def create_app() -> FastAPI:
         `Authorization` header. If auth is disabled (`auth_token=""`),
         `required=false` and the overlay never shows.
         """
-        from evi.users import authenticate, load_users
+        from evi.users import load_users
 
         cfg = Config.load()
-        token = cfg.web.auth_token.strip()
+        tokens = _web_tokens(cfg)
         users = load_users() if cfg.web.multi_user else []
-        if not token and not users:
+        if not tokens and not users:
             return {"ok": True, "required": False}
-        header = request.headers.get("Authorization", "")
-        provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
-        if not provided:
-            provided = request.query_params.get("token", "")
-        ok = bool(provided) and secrets.compare_digest(provided, token)
-        user = authenticate(provided, users) if users else None
+        # The launch token alone gates only other machines (see auth_middleware).
+        if _lan_token_only(cfg, users) and _client_is_local(request):
+            return {"ok": True, "required": False}
+        provided = _provided_token(request)
+        ok = _token_matches(provided, tokens)
+        user = _authenticate_login(provided, users) if users and not ok else None
         if user is not None:
             ok = True
         result: dict[str, object] = {"ok": ok, "required": True}
         if user is not None:
             result["user"] = user.name
         return result
-
-    def _make_permission_callback(bucket: dict, session_id: str,
-                                  loop: asyncio.AbstractEventLoop, enqueue):
-        """Build a permission_callback that bridges worker thread → SSE client.
-
-        The callback (invoked on a worker thread inside Agent.chat) generates
-        a decision_id, pushes a PermissionRequest into the SSE queue via
-        `enqueue`, and blocks on a threading.Event until /api/decide flips it.
-
-        `bucket` is captured here (in the request task) so the worker-thread
-        lookup resolves the right user's session without the ContextVar.
-        """
-        def callback(tool_name: str, args_json: str, category: str) -> bool:
-            decision_id = secrets.token_hex(8)
-            sess = bucket.get(session_id)
-            if sess is None:
-                return False
-            pending = PendingDecision(event=threading.Event())
-            sess.pending[decision_id] = pending
-            enqueue({
-                "kind": "PermissionRequest",
-                "decision_id": decision_id,
-                "tool_name": tool_name,
-                "args": args_json,
-                "category": category,
-            })
-            # Block forever — the worker thread is dedicated to this turn.
-            pending.event.wait()
-            sess.pending.pop(decision_id, None)
-            return pending.approved
-        return callback
 
     def get_session(session_id: str) -> WebSession:
         # The id names the transcript file (TranscriptStore joins it onto a day
@@ -1312,9 +1788,11 @@ def create_app() -> FastAPI:
             # guardrails) to the SDK; the web dispatcher injects only its per-user
             # concerns: the per-user memory root + transcript store and the CLIENT's
             # session id (so the transcript file matches the tab, and a chat survives
-            # a server/app restart). project + hooks stay off here, matching the
-            # previous inline construction. permission_callback is attached per-request.
-            agent = build_agent(
+            # a server/app restart). Project context stays off here (the folder
+            # chip loads it). Hooks come from the shared registry rather than a
+            # per-session load, so a Settings → Hooks save reaches every open tab.
+            # permission_callback is attached per-request.
+            agent = _with_user_hooks(build_agent(
                 config=config,
                 memory_root=mem_root,
                 transcripts=TranscriptStore(root=tr_root) if toggles.get("transcripts") else None,
@@ -1322,7 +1800,7 @@ def create_app() -> FastAPI:
                 enable_project=False,
                 enable_hooks=False,
                 frontend="web",  # desktop app shares this surface — both have the Settings GUI
-            )
+            ))
             # Revive history from disk if this session was seen before (e.g. the
             # desktop app was closed + reopened). The composed system prompt at
             # index 0 stays; everything after is rebuilt from the transcript.
@@ -1337,6 +1815,9 @@ def create_app() -> FastAPI:
                         agent.history = [agent.history[0], *restored]
             except Exception:  # noqa: BLE001
                 pass
+            # No client attached yet: anything that would ask is denied until
+            # a turn attaches its own callback (_deny_unattended).
+            agent.permission_callback = _deny_unattended
             sess = WebSession(agent=agent)
             # Session messaging (Ph 95): give the agent tools to list + message
             # your OTHER live tabs. Injected directly (not via [tools] toggles),
@@ -1347,7 +1828,13 @@ def create_app() -> FastAPI:
                     agent.tools[_t.name] = _t
                 if isinstance(getattr(agent, "auto_approve_categories", None), set):
                     agent.auto_approve_categories.add("session")
-            bucket[session_id] = sess
+            # Built without a lock: it is slow, and the async routes call this on
+            # the event loop. So two first requests for a new id (the page's GET
+            # /api/session/cwd and its first /api/chat) can both get here. The
+            # first one stored wins and every caller gets that one; the other
+            # build is dropped. A turn must never run on a session nobody else
+            # can find (/steer would call it idle, /history would be empty).
+            sess = bucket.setdefault(session_id, sess)
         _follow_runtime_window(sess)  # every turn starts here
         return sess
 
@@ -2100,7 +2587,7 @@ def create_app() -> FastAPI:
         sess = get_session(session_id)
 
         if run_now:
-            if sess.busy:
+            if not sess.begin_turn():
                 # Can't drive a turn while one is mid-flight — fall back to a note.
                 sess.agent.history.append(
                     {"role": "system", "content": f"[channel:{source}] {text}"}
@@ -2109,12 +2596,15 @@ def create_app() -> FastAPI:
                 return {"ok": True, "source": source, "ran": False, "reason": "session busy"}
             from evi.headless import run_headless
 
-            sess.busy = True  # surfaced live by /api/dispatch/stream
+            # Nobody is watching this turn, so nothing can be asked: a tool that
+            # needs approval is denied (not left waiting on a callback a past
+            # /api/chat attached, whose stream is long gone).
+            sess.agent.permission_callback = _deny_unattended
             try:
                 res = run_headless(sess.agent, f"[channel:{source}] {text}")
                 reply = (res.text or res.error or "").strip()
             finally:
-                sess.busy = False
+                sess.end_turn()
             sess.channel_log.append({"source": source, "text": text, "ran": True, "reply": reply[:1000]})
             return {"ok": True, "source": source, "ran": True, "reply": reply}
 
@@ -2277,14 +2767,14 @@ def create_app() -> FastAPI:
         def run_step(prompt: str, step) -> str:
             from evi.sdk.builder import build_agent
 
-            # Single-user headless runner: project/hooks/guardrails stay off to
-            # match the previous inline construction (client/tools/memory/skills only).
-            agent = build_agent(
+            # Single-user headless runner: project/guardrails stay off to match
+            # the previous inline construction; the user's hooks apply (shared).
+            agent = _with_user_hooks(build_agent(
                 config=Config.load(),
                 enable_project=False,
                 enable_hooks=False,
                 enable_guardrails=False,
-            )
+            ))
             if step.mode:
                 agent.tools = {t.name: t for t in mode_tools(step.mode)}
             agent.enable_auto_all()
@@ -2317,14 +2807,14 @@ def create_app() -> FastAPI:
         from evi.headless import run_headless
         from evi.sdk.builder import build_agent
 
-        # Single-user headless runner; project/hooks/guardrails stay off to match
-        # the previous inline construction (client/tools/memory/skills only).
-        agent = build_agent(
+        # Single-user headless runner; project/guardrails stay off to match the
+        # previous inline construction; the user's hooks apply (shared registry).
+        agent = _with_user_hooks(build_agent(
             config=cfg,
             enable_project=False,
             enable_hooks=False,
             enable_guardrails=False,
-        )
+        ))
         mode = str(req.get("mode") or "")
         if mode:
             from evi.modes import mode_tools
@@ -2358,12 +2848,12 @@ def create_app() -> FastAPI:
         from evi.sdk.builder import build_agent
 
         def _run(text: str) -> tuple[str, str]:
-            agent = build_agent(
+            agent = _with_user_hooks(build_agent(
                 config=cfg,
                 enable_project=False,
                 enable_hooks=False,
                 enable_guardrails=False,
-            )
+            ))
             agent.permission_callback = lambda *a, **k: False
             agent.permission_batch_callback = None
             entry = _fed_begin("a2a", text)
@@ -2626,16 +3116,9 @@ def create_app() -> FastAPI:
 
         from evi import trust as _trust
 
-        if _CURRENT_USER.get() not in (None, ""):
-            # Multi-user: only the owner's own token (web.auth_token) — not
-            # whoever holds an account that happens to be *named* "owner".
-            owner_token = Config.load().web.auth_token.strip()
-            header = request.headers.get("Authorization", "")
-            provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
-            provided = provided or request.query_params.get("token", "")
-            if not (owner_token and provided
-                    and secrets.compare_digest(provided.encode(), owner_token.encode())):
-                raise HTTPException(403, "only the owner can change folder trust")
+        # Multi-user: only the owner's own token — not whoever holds an account
+        # that happens to be *named* "owner" (the middleware refuses it too).
+        _require_owner(request)
         sess = get_session(req.session_id)
         folder = Path(getattr(sess.agent, "cwd", "") or _os.getcwd())
         if req.trust:
@@ -2666,7 +3149,8 @@ def create_app() -> FastAPI:
     @app.get("/api/config")
     def config_get() -> dict[str, Any]:
         """Full config snapshot for the settings screen (secrets masked)."""
-        snap = _config_snapshot(Config.load())
+        cfg = Config.load()
+        snap = _config_snapshot(cfg)
         # Per-tool-category install availability (for the "needs setup" badge in
         # Settings → Tools). Only categories whose dependency/binary is missing
         # appear; it's a static probe, distinct from the risk ⚠ and config.
@@ -2675,6 +3159,16 @@ def create_app() -> FastAPI:
             snap["availability"] = tool_availability()
         except Exception:  # noqa: BLE001 — never let the probe break settings
             snap["availability"] = {}
+        # Whether a token gates this server — config's, the launch token the
+        # desktop shell passes when LAN access is on (never in config.toml), or
+        # multi-user logins.
+        from evi.users import load_users
+
+        snap["access"] = {
+            "token": bool(_web_tokens(cfg)),
+            "launch_token": bool(_LAUNCH_TOKEN),
+            "logins": bool(cfg.web.multi_user and load_users()),
+        }
         return snap
 
     @app.post("/api/config")
@@ -2761,8 +3255,6 @@ def create_app() -> FastAPI:
     def hooks_get() -> dict[str, Any]:
         """The hooks config: raw hooks.toml + a summary of every loaded hook
         (including plugin-supplied ones, which are read-only here)."""
-        from evi import hooks as hooks_mod
-
         registry = hooks_mod.load_hooks()
         return {
             "raw": hooks_mod.read_raw(),
@@ -2779,9 +3271,8 @@ def create_app() -> FastAPI:
     def hooks_set(req: dict[str, Any]) -> dict[str, Any]:
         """Validate + save hooks.toml from the editor. 400 on bad TOML, a
         typo'd event name, or a malformed entry (loudly — unlike the runtime
-        loader, which skips bad rows)."""
-        from evi import hooks as hooks_mod
-
+        loader, which skips bad rows). Open sessions and the runs this server
+        starts share one registry, reloaded here, so a save applies at once."""
         if not isinstance(req, dict) or "raw" not in req:
             raise HTTPException(400, "expected {raw: <toml>}")
         raw = str(req["raw"])
@@ -2789,8 +3280,7 @@ def create_app() -> FastAPI:
         if err:
             raise HTTPException(400, err)
         hooks_mod.write_raw(raw)
-        registry = hooks_mod.load_hooks()
-        return {"ok": True, "count": len(registry.hooks)}
+        return {"ok": True, "count": _reload_user_hooks()}
 
     @app.get("/api/plugins")
     def plugins_list() -> dict[str, Any]:
@@ -2843,6 +3333,7 @@ def create_app() -> FastAPI:
             installed = plugins.install(source)
         except plugins.PluginError as exc:
             raise HTTPException(400, str(exc))
+        _reload_user_hooks()  # a plugin can ship a hooks.toml
         return {"ok": True, "name": installed}
 
     @app.post("/api/plugins/remove")
@@ -2855,6 +3346,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "expected {name}")
         if not plugins.remove(name):
             raise HTTPException(404, f"no such plugin: {name}")
+        _reload_user_hooks()  # its hooks stop now, not at the next restart
         return {"ok": True}
 
     @app.get("/api/stats")
@@ -2914,6 +3406,8 @@ def create_app() -> FastAPI:
 
             # Single-user eval runner; project/hooks/guardrails stay off to match
             # the previous inline construction (client/tools/memory/skills only).
+            # No user hooks here, unlike the other runners: a hook that vetoes or
+            # rewrites a call would make eval scores depend on this machine.
             return build_agent(
                 config=Config.load(),
                 enable_project=False,
@@ -2997,14 +3491,14 @@ def create_app() -> FastAPI:
             raise HTTPException(404, str(exc))
         from evi.sdk.builder import build_agent
 
-        # Single-user headless runner; project/hooks/guardrails stay off to match
-        # the previous inline construction (client/tools/memory/skills only).
-        agent = build_agent(
+        # Single-user headless runner; project/guardrails stay off to match the
+        # previous inline construction; the user's hooks apply (shared registry).
+        agent = _with_user_hooks(build_agent(
             config=Config.load(),
             enable_project=False,
             enable_hooks=False,
             enable_guardrails=False,
-        )
+        ))
         agent.enable_auto_all()
         results = recipes.run_recipe_headless(agent, recipe)
         return {"ok": True, "name": recipe.name, "steps": results}
@@ -3026,18 +3520,18 @@ def create_app() -> FastAPI:
         def agent_factory(system_prompt: str | None, model: str | None = None):
             from evi.sdk.builder import build_agent
 
-            # Single-user ultracode runner; project/hooks/guardrails stay off to
-            # match the previous inline construction (client/tools/memory/skills only).
+            # Single-user ultracode runner; project/guardrails stay off to match
+            # the previous inline construction; the user's hooks apply (shared).
             # build_agent ignores system_prompt=None, preserving the eVi default.
             # `model` lets a stage run on a cheaper model (cheap fan-out).
-            return build_agent(
+            return _with_user_hooks(build_agent(
                 config=Config.load(),
                 system_prompt=system_prompt,
                 model=model,
                 enable_project=False,
                 enable_hooks=False,
                 enable_guardrails=False,
-            )
+            ))
 
         cfg_obj = Config.load()
         ucfg = uc.load_ultra_config(cfg_obj)  # resolves [ultracode] cheap_fanout
@@ -3090,7 +3584,8 @@ def create_app() -> FastAPI:
             ],
             "serving": serving,
             "bind_lan": cfg.federation.bind_lan,
-            "auth_token_set": bool((cfg.web.auth_token or "").strip()),
+            # The desktop's generated LAN token counts: it gates this server too.
+            "auth_token_set": bool(_web_tokens(cfg)),
             "self_status": self_status,
         }
 
@@ -3158,7 +3653,7 @@ def create_app() -> FastAPI:
         timeout = float(body.get("timeout") or 20.0)
         checks = federation.federation_preflight(
             serve=bool(getattr(cfg.federation, "serve", False)),
-            auth_token=getattr(cfg.web, "auth_token", "") or "",
+            auth_token=next(iter(_web_tokens(cfg)), ""),
             delegate_timeout=timeout,
             probe_delegation=not bool(body.get("fast")),
         )
@@ -3524,14 +4019,14 @@ def create_app() -> FastAPI:
 
         from evi.sdk.builder import build_agent
 
-        # Single-user headless runner; project/hooks/guardrails stay off to match
-        # the previous inline construction (client/tools/memory/skills only).
-        agent = build_agent(
+        # Single-user headless runner; project/guardrails stay off to match the
+        # previous inline construction; the user's hooks apply (shared registry).
+        agent = _with_user_hooks(build_agent(
             config=Config.load(),
             enable_project=False,
             enable_hooks=False,
             enable_guardrails=False,
-        )
+        ))
         if r.yes:
             agent.enable_auto_all()
         else:
@@ -3543,18 +4038,28 @@ def create_app() -> FastAPI:
 
     @app.post("/api/reset")
     def reset(req: ChatRequest) -> dict[str, str]:
-        sess = _my_sessions().get(req.session_id)
+        sess = _my_sessions().get(_require_session_id(req.session_id))
         if sess is not None:
-            sess.agent.reset()
+            with _holding_turn(sess, req.session_id):
+                sess.agent.reset()
         return {"status": "ok"}
 
     @app.post("/api/decide")
     def decide(req: DecisionRequest) -> dict[str, object]:
-        sess = _my_sessions().get(req.session_id)
-        if sess is None:
-            raise HTTPException(404, "no such session")
-        pending = sess.pending.get(req.decision_id)
+        bucket = _my_sessions()
+        sess = bucket.get(_require_session_id(req.session_id))
+        pending = sess.pending.get(req.decision_id) if sess is not None else None
         if pending is None:
+            # The prompt may belong to another of the caller's tabs (the tab was
+            # switched mid-turn). Decision ids are random, so look across the
+            # caller's own sessions — never another user's bucket.
+            for other in list(bucket.values()):
+                pending = other.pending.get(req.decision_id)
+                if pending is not None:
+                    break
+        if pending is None:
+            if sess is None:
+                raise HTTPException(404, "no such session")
             return {"ok": False, "reason": "no such decision"}
         pending.approved = req.approved
         pending.event.set()
@@ -3633,7 +4138,8 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
-        removed = sess.agent.truncate_history(req.after_index)
+        with _holding_turn(sess, session_id):
+            removed = sess.agent.truncate_history(req.after_index)
         return {"ok": True, "removed": removed, "length": len(sess.agent.history)}
 
     @app.post("/api/session/{session_id}/edit")
@@ -3641,7 +4147,8 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
-        ok = sess.agent.edit_message(req.at_index, req.content)
+        with _holding_turn(sess, session_id):
+            ok = sess.agent.edit_message(req.at_index, req.content)
         if not ok:
             raise HTTPException(400, "cannot edit that index")
         return {"ok": True, "length": len(sess.agent.history)}
@@ -3686,13 +4193,24 @@ def create_app() -> FastAPI:
         sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
-        sess.agent.rewind_to_last_user()
+        timeout_s = _decision_timeout_s(Config.load())
+        # A re-roll is a turn: claimed before the history is touched, so it
+        # can't rewind under (or run beside) one already in flight.
+        if not sess.begin_turn():
+            raise _busy_error(session_id)
+        try:
+            sess.agent.rewind_to_last_user()
+        except BaseException:
+            sess.end_turn()
+            raise
         # rewind_to_last_user() returns the count it popped, which is 0 when the
         # history ALREADY ends at a user message — e.g. right after editing a
         # user message truncated its stale reply. That's a valid re-roll target,
         # not a no-op; only bail when there is genuinely no user turn to answer.
         _hist = sess.agent.history
         if len(_hist) <= 1 or _hist[-1].get("role") != "user":
+            sess.end_turn()
+
             async def _noop() -> AsyncIterator[dict[str, str]]:
                 yield {"event": "message", "data": json.dumps(
                     {"kind": "Error", "message": "nothing to re-roll"}
@@ -3710,24 +4228,14 @@ def create_app() -> FastAPI:
             loop.call_soon_threadsafe(queue.put_nowait, payload)
 
         sess.agent.permission_callback = _make_permission_callback(
-            _my_sessions(), session_id, loop, enqueue,
+            _my_sessions(), session_id, enqueue, timeout_s,
         )
 
-        def worker() -> None:
-            try:
-                for event in sess.agent.continue_chat():
-                    payload = {"kind": _event_kind(event)}
-                    if is_dataclass(event):
-                        payload.update(asdict(event))
-                    enqueue(payload)
-                    if isinstance(event, (Done, Error)):
-                        break
-            except Exception as exc:  # noqa: BLE001
-                enqueue({"kind": "Error", "message": f"{type(exc).__name__}: {exc}"})
-            finally:
-                enqueue(None)
-
-        threading.Thread(target=worker, daemon=True).start()
+        # A follow-up can be steered onto a re-roll too (/api/chat answers 409
+        # and the UI queues it), so the re-roll hands leftovers back the same way.
+        threading.Thread(
+            target=_stream_turn, args=(sess, sess.agent.continue_chat, enqueue), daemon=True,
+        ).start()
 
         async def stream() -> AsyncIterator[dict[str, str]]:
             while True:
@@ -3751,20 +4259,32 @@ def create_app() -> FastAPI:
         if not text:
             raise HTTPException(400, "expected {text}")
         sess = get_session(session_id)
-        if not sess.busy:
+        queued = sess.steer(text)
+        if queued is None:
             return {"queued": False, "reason": "not busy"}
-        return {"queued": sess.agent.steer(text), "pending": sess.agent.pending_steering()}
+        return {"queued": queued, "pending": sess.agent.pending_steering()}
 
     @app.post("/api/chat")
-    async def chat(req: ChatRequest) -> EventSourceResponse:
+    async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
         message = req.message.strip()
         if not message:
             raise HTTPException(400, "empty message")
         sess = get_session(req.session_id)
 
-        # Server-side slash command dispatch — matches CLI semantics.
+        # Server-side slash command dispatch — matches CLI semantics. While a
+        # turn runs, only the read-only ones answer: /reset, /compact, /model
+        # <id>… would rewrite the history the running turn is appending to.
         if message.startswith("/"):
-            outcome = _handle_slash(sess.agent, message, cmd_store)
+            name, _, args = message[1:].strip().partition(" ")
+            if name.lower() == "model" and args.strip():
+                # `/model <id>` persists [llm] model to the host's config.toml,
+                # like POST /api/model-picker — owner-only in multi-user mode.
+                _require_owner(request)
+            if _slash_is_read_only(message):
+                outcome = _handle_slash(sess.agent, message, cmd_store)
+            else:
+                with _holding_turn(sess, req.session_id):
+                    outcome = _handle_slash(sess.agent, message, cmd_store)
             if outcome.handled:
                 async def _ack() -> AsyncIterator[dict[str, str]]:
                     yield {"event": "message", "data": json.dumps(
@@ -3777,20 +4297,6 @@ def create_app() -> FastAPI:
                 return EventSourceResponse(_ack())
             if outcome.expand_to is not None:
                 message = outcome.expand_to
-
-        # Real LLM turn — run Agent.chat() in a worker thread so the async
-        # SSE response stays responsive (and the permission_callback can
-        # block on a threading.Event without freezing the event loop).
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-
-        def enqueue(payload: dict) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, payload)
-
-        # Attach a session-scoped permission_callback for this turn.
-        sess.agent.permission_callback = _make_permission_callback(
-            _my_sessions(), req.session_id, loop, enqueue,
-        )
 
         response_format = None
         if req.output_schema:
@@ -3805,45 +4311,41 @@ def create_app() -> FastAPI:
                 response_format = as_response_format(raw)
             except SchemaError as exc:
                 raise HTTPException(400, f"bad schema: {exc}")
+        timeout_s = _decision_timeout_s(Config.load())
 
-        def worker() -> None:
-            sess.busy = True  # surfaced live by /api/dispatch/stream
-            try:
-                for event in sess.agent.chat(
-                    message,
-                    images=req.images,
-                    prediction=req.prediction,
-                    parallel_tool_calls=req.parallel_tool_calls,
-                    logit_bias=req.logit_bias,
-                    audio=req.audio,
-                    response_format=response_format,
-                ):
-                    payload = {"kind": _event_kind(event)}
-                    if is_dataclass(event):
-                        payload.update(asdict(event))
-                    enqueue(payload)
-                    if isinstance(event, (Done, Error)):
-                        break
-            except Exception as exc:  # noqa: BLE001
-                enqueue({"kind": "Error", "message": f"{type(exc).__name__}: {exc}"})
-            finally:
-                sess.busy = False
-                # A turn can end before there's another step (no tool calls, an
-                # error, max_turns). Anything still queued was never applied —
-                # report it so the UI resends it instead of losing it.
-                #
-                # Guarded, and strictly before the sentinel: anything raising
-                # here would skip `enqueue(None)` and leave the SSE stream open
-                # forever. A hang is worse than a dropped follow-up.
-                try:
-                    take = getattr(sess.agent, "take_pending_steering", None)
-                    for leftover in (take() if take else []):
-                        enqueue({"kind": "Steering", "text": leftover, "applied": False})
-                except Exception:  # noqa: BLE001
-                    pass
-                enqueue(None)  # sentinel — must always run or the stream never closes
+        # One turn per session. Claimed here, in the request, before the worker
+        # starts — a second /api/chat (a reload mid-turn, a second VS Code
+        # window, a slash command that expanded to a prompt) gets 409 and a
+        # pointer at steering instead of a concurrent turn on the same Agent.
+        if not sess.begin_turn():
+            raise _busy_error(req.session_id)
 
-        threading.Thread(target=worker, daemon=True).start()
+        # Real LLM turn — run Agent.chat() in a worker thread so the async
+        # SSE response stays responsive (and the permission_callback can
+        # block on a threading.Event without freezing the event loop).
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+
+        def enqueue(payload: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, payload)
+
+        # Attach a session-scoped permission_callback for this turn.
+        sess.agent.permission_callback = _make_permission_callback(
+            _my_sessions(), req.session_id, enqueue, timeout_s,
+        )
+
+        def run() -> Any:
+            return sess.agent.chat(
+                message,
+                images=req.images,
+                prediction=req.prediction,
+                parallel_tool_calls=req.parallel_tool_calls,
+                logit_bias=req.logit_bias,
+                audio=req.audio,
+                response_format=response_format,
+            )
+
+        threading.Thread(target=_stream_turn, args=(sess, run, enqueue), daemon=True).start()
 
         async def stream() -> AsyncIterator[dict[str, str]]:
             while True:
@@ -3874,12 +4376,8 @@ def create_app() -> FastAPI:
         if not _within(target, target_dir):
             raise HTTPException(400, "invalid filename")
         target_dir.mkdir(parents=True, exist_ok=True)
-        with target.open("wb") as out:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
+        # Same cap as /api/upload: an unbounded body would fill the disk.
+        await _save_upload(file, target)
         try:
             from evi.voice import transcribe_wav
 
@@ -3913,20 +4411,8 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "invalid filename")
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Stream to disk in chunks; cap at 32 MB to refuse mistakes.
-        max_bytes = 32 * 1024 * 1024
-        written = 0
-        with target.open("wb") as out:
-            while True:
-                chunk = await file.read(64 * 1024)
-                if not chunk:
-                    break
-                written += len(chunk)
-                if written > max_bytes:
-                    out.close()
-                    target.unlink(missing_ok=True)
-                    raise HTTPException(413, "upload exceeds 32 MB")
-                out.write(chunk)
+        # Stream to disk in chunks; capped to refuse mistakes.
+        written = await _save_upload(file, target)
 
         return {
             "ok": True,

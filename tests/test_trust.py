@@ -964,7 +964,9 @@ def test_web_a_user_named_owner_is_not_the_owner(
     client = _web(monkeypatch)
     r = client.post("/api/project/trust", json={"session_id": "s4"},
                     headers={"Authorization": "Bearer guest-tok"})
-    assert r.status_code == 403
+    # A login named owner can't sign in at all: it would share the owner's
+    # workspace (test_web_hardening.py).
+    assert r.status_code == 401
     assert not trust.status(env.repo).trusted
     r = client.post("/api/project/trust", json={"session_id": "s4"},
                     headers={"Authorization": "Bearer owner-tok"})

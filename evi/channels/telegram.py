@@ -57,7 +57,7 @@ def _reply_for(text: str, msg: dict[str, Any], cfg: Config) -> str:
         config=cfg,
         tool_categories=tools,      # explicit; ignores the local user's toggles
         enable_project=False,       # a remote sender gets no repo context
-        enable_hooks=False,         # ...and triggers no local side effects
+        enable_hooks=True,          # ...but the user's hooks guard its turns (off in safe mode)
         session_id=f"telegram-{msg.get('user_id')}",
     )
     # Never block waiting for a human: deny anything that would prompt.

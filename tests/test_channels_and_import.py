@@ -91,7 +91,8 @@ def test_approved_senders_get_a_narrow_toolset_not_the_users(monkeypatch):
 
     assert seen["tool_categories"] == ["memory", "skills"]      # ...the bot is not
     assert "shell" not in seen["tool_categories"]
-    assert seen["enable_project"] is False and seen["enable_hooks"] is False
+    assert seen["enable_project"] is False
+    assert seen["enable_hooks"] is True     # the user's hooks guard a remote turn too
 
 
 def test_channel_is_off_without_enable_and_token():

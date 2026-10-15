@@ -5384,9 +5384,90 @@ def dream(hours: int = 24) -> None:
     console.print(f"[dim]log: {report.log_path}[/dim]")
 
 
+# Launch tokens a launcher generates and keeps in the eVi home, then hands its
+# server as EVI_WEB_AUTH_TOKEN. No server reads these files; `evi web-config
+# token show` and the `evi web` banner only report them (docs/security.md).
+# (file name, what it is)
+_LAUNCH_TOKEN_FILES = (
+    ("container-token", "the token the eVi image's entrypoint generated and passes to "
+                        "its `evi web`"),
+    ("desktop-token", "the desktop app's LAN token, which it passes to its own server "
+                      "while [federation] bind_lan is on"),
+)
+
+
+def _launch_token_files() -> list[tuple[Path, str, str]]:
+    """The launch-token files present in the eVi home: (path, token, what).
+    Launchers write a 64-hex token and replace anything else, so only that
+    counts."""
+    import re as _re
+
+    from evi import config as _config
+
+    found: list[tuple[Path, str, str]] = []
+    for name, what in _LAUNCH_TOKEN_FILES:
+        path = _config.HOME / name
+        try:
+            token = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _re.fullmatch(r"[0-9A-Fa-f]{64}", token):
+            found.append((path, token, what))
+    return found
+
+
+def _web_logins(cfg: Config) -> list:
+    """users.json logins when multi-user mode is on (they gate the LAN too),
+    read as the server reads them: a missing or malformed file is none."""
+    if not cfg.web.multi_user:
+        return []
+    from evi import users as _users
+
+    return _users.load_users()
+
+
+def _web_auth_banner(cfg: Config, launch_token: bool, users: list) -> str:
+    """The `web auth:` line `evi web` prints: who the server will answer."""
+    if (cfg.web.auth_token or "").strip():
+        return (
+            "[cyan]web auth:[/cyan] [green]token required[/green] "
+            "[dim](\\[web] auth_token, from this machine too; the browser asks for it "
+            "once, and `evi web-config token show` prints it)[/dim]"
+        )
+    if users:
+        owner = (
+            "the owner signs in with EVI_WEB_AUTH_TOKEN" if launch_token
+            else "no owner token, so nobody can reach owner-only settings: see `evi doctor`"
+        )
+        return (
+            "[cyan]web auth:[/cyan] [green]users.json logins[/green] "
+            f"[dim](multi-user; {owner})[/dim]"
+        )
+    if launch_token:
+        return (
+            "[cyan]web auth:[/cyan] [green]token required from other machines[/green] "
+            "[dim](EVI_WEB_AUTH_TOKEN; this machine is served without it)[/dim]"
+        )
+    line = (
+        "[cyan]web auth:[/cyan] [yellow]no token — only this machine can connect[/yellow] "
+        "[dim](to serve the network, set one first: `evi web-config token rotate`)[/dim]"
+    )
+    from rich.markup import escape
+
+    for path, _token, what in _launch_token_files():
+        line += f"\n  [dim]{escape(f'{path} is {what}; this server does not use it')}[/dim]"
+    return line
+
+
 @app.command()
 def web(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Launch the local web UI (FastAPI + SSE)."""
+    """Launch the local web UI (FastAPI + SSE).
+
+    Without an access token it answers only this machine, so a non-loopback
+    `--host` (0.0.0.0, a LAN address) needs one first: `web.auth_token` in
+    config.toml (`evi web-config token rotate`), EVI_WEB_AUTH_TOKEN, or
+    multi-user logins.
+    """
     try:
         import uvicorn
     except ImportError:
@@ -5399,17 +5480,23 @@ def web(host: str = "127.0.0.1", port: int = 8000) -> None:
             "does NOT include the web server)[/dim]"
         )
         raise typer.Exit(1)
+    from rich.markup import escape
+
     cfg = Config.load()
-    if cfg.web.auth_token:
-        console.print(
-            "[cyan]web auth:[/cyan] [green]enabled[/green] "
-            "[dim](browser prompts for the token on first load)[/dim]"
-        )
-    else:
-        console.print(
-            "[cyan]web auth:[/cyan] [yellow]disabled[/yellow] "
-            "[dim](run `evi web token rotate` to require a token)[/dim]"
-        )
+    # The server module reads (and removes) the launch token, EVI_WEB_AUTH_TOKEN,
+    # when it is imported; uvicorn.run below reuses this import.
+    from evi.apps.web import server as web_server
+
+    users = _web_logins(cfg)
+    # Without a token the server answers only loopback clients, so a LAN bind
+    # would refuse everyone it was meant for: stop now and say how to fix it.
+    # (users.json logins gate the LAN like a token. The desktop sidecar never
+    # gets here — its shell decides the bind and passes the token.)
+    refusal = None if users else web_server.lan_bind_refusal(host, cfg)
+    if refusal is not None:
+        console.print(f"[red]{escape(refusal)}[/red]")
+        raise typer.Exit(1)
+    console.print(_web_auth_banner(cfg, bool(web_server._LAUNCH_TOKEN), users))
     console.print(f"[cyan]eVi web →[/cyan] http://{host}:{port}")
     # If a managed llama.cpp runtime was set up before, re-launch it in the
     # background so it persists across restarts (no-op unless [llm] is that
@@ -5486,23 +5573,53 @@ def web_users_remove(name: str) -> None:
 
 @token_app.command("show")
 def web_token_show() -> None:
-    """Print the current web auth token (or `(unset)` when auth is disabled)."""
+    """Print the access token a server here signs clients in with.
+
+    `web.auth_token` from config.toml first; else the launch token:
+    EVI_WEB_AUTH_TOKEN, or the one a launcher generated and keeps in the eVi
+    home (the eVi image's `container-token`, the desktop app's
+    `desktop-token`). Only the token goes to stdout, so
+    `$(evi web-config token show)` works; where it comes from, or `(unset …)`,
+    goes to stderr.
+    """
+    from rich.markup import escape
+
+    note = Console(stderr=True)
     cfg = Config.load()
-    if not cfg.web.auth_token:
-        console.print("[dim](unset — auth is disabled)[/dim]")
+    configured = (cfg.web.auth_token or "").strip()
+    launch = os.environ.get("EVI_WEB_AUTH_TOKEN", "").strip()
+    if configured:
+        token, source = configured, (
+            "[web] auth_token in config.toml: every client needs it, this machine's too")
+    elif launch:
+        token, source = launch, (
+            "EVI_WEB_AUTH_TOKEN, the launch token: a server started with it needs it "
+            "from other machines")
+    elif files := _launch_token_files():
+        path, token, what = files[0]
+        source = f"{path}: {what}. Other machines need it"
+        if path.name == "desktop-token" and not cfg.federation.bind_lan:
+            source += " (LAN access is off now, so the desktop app's server doesn't use it)"
+    else:
+        note.print(
+            "[dim](unset — no access token: a server answers only this machine. "
+            "`evi web-config token rotate` sets one)[/dim]"
+        )
         return
-    console.print(cfg.web.auth_token)
+    typer.echo(token)
+    note.print(f"[dim]{escape(source)}[/dim]")
 
 
 @token_app.command("rotate")
 def web_token_rotate(
     length: int = typer.Option(32, help="Token byte length (gives 2× hex chars).")
 ) -> None:
-    """Generate a new web auth token and persist it to config.toml.
+    """Generate a new access token and save it as `web.auth_token`.
 
-    Prints the token ONCE. Open the web UI, sign in with this value, and
-    your browser caches it in localStorage. Use `evi web token clear` to
-    disable auth again.
+    A running server re-reads config.toml on every request, so the new token
+    takes effect at once and the previous one stops working. Sign in to the
+    web UI with it; your browser keeps it. `evi web-config token show` prints
+    it again, and `evi web-config token clear` removes it.
     """
     import secrets as _secrets
 
@@ -5512,18 +5629,25 @@ def web_token_rotate(
     cfg.save()
     console.print(
         f"[green]rotated[/green]\n[bold]{token}[/bold]\n\n"
-        "[dim]Paste this into the browser sign-in form. Restart `evi web` if "
-        "it's currently running.[/dim]"
+        "[dim]In effect now, no restart needed: a running server re-reads config.toml "
+        "on every request, so the previous \\[web] auth_token stops working and "
+        "signed-in browsers ask for this one. A launch token (EVI_WEB_AUTH_TOKEN, or "
+        "the desktop app's or a container's generated one) stays valid until its "
+        "server restarts.[/dim]"
     )
 
 
 @token_app.command("clear")
 def web_token_clear() -> None:
-    """Unset the auth token — `evi web` becomes open access again."""
+    """Unset `web.auth_token`. With no other token, the server answers only
+    this machine."""
     cfg = Config.load()
     cfg.web.auth_token = ""
     cfg.save()
-    console.print("[yellow]cleared[/yellow] — web auth disabled")
+    console.print(
+        "[yellow]cleared[/yellow] — with no other token, the server answers only "
+        "this machine"
+    )
 
 
 models_app = typer.Typer(help="Inspect and switch the active LLM model.")

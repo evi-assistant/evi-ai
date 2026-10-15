@@ -8,7 +8,10 @@ are therefore invisible to the Playwright web suite:
   ``EVI_REMOTE_URL``), and
 * the two desktop-only JS surfaces exist and work: ``window.__TAURI__`` (the
   invoke bridge) and ``window.eviUI.handleMenu`` (the native-menu dispatch
-  target).
+  target), and
+* the access-token handshake (SHELL_ABI 2): with ``bind_lan`` the shell's own
+  server gets a generated token the UI signs in with, and a thin client injects
+  ``EVI_REMOTE_TOKEN`` for its server.
 
 Opt-in, Windows-only; see ``conftest.py``. Run: ``pytest tests/desktop_e2e -m desktop``.
 """
@@ -65,3 +68,75 @@ def test_native_menu_bridge_opens_settings(desktop_driver, wait_js):
         timeout=10,
     )
     assert shown, "handleMenu('settings') did not open a populated settings overlay"
+
+
+def _status(url: str, token: str | None = None) -> int:
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310 (localhost)
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def _lan_ip() -> str | None:
+    """This host's non-loopback IPv4 address, or None (no route out). A UDP
+    connect only picks the route; nothing is sent."""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        ip = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if ip.startswith("127.") or ip == "0.0.0.0" else ip
+
+
+_OVERLAY_SHOWN = (
+    "return !!(document.querySelector('#auth-overlay')"
+    " && document.querySelector('#auth-overlay').classList.contains('shown'))"
+)
+
+
+def test_bind_lan_starts_with_a_generated_token(lan_desktop, wait_js):
+    # `[federation] bind_lan = true`: the shell spawns its server on 0.0.0.0 and
+    # must hand it a token — generated at first need, persisted, injected into
+    # the webview — so the UI works with no login and other machines need it.
+    driver, home = lan_desktop
+    assert wait_js(driver, "return !!document.querySelector('#input')", timeout=120), \
+        "eVi chat UI never rendered (the shell's own server did not come up)"
+    token = (home / "desktop-token").read_text(encoding="utf-8").strip()
+    assert len(token) == 64, token
+    assert driver.execute_script("return window.__EVI_TOKEN__ || ''") == token
+    assert not wait_js(driver, _OVERLAY_SHOWN, timeout=3), "the UI asked for a token"
+    base = driver.execute_script("return location.origin")
+    # This machine needs no token (an older VS Code extension keeps working)...
+    assert _status(base + "/api/dispatch") == 200
+    # ...another machine does: reach the server through this host's LAN address.
+    lan_ip = _lan_ip()
+    if lan_ip:
+        lan = base.replace("127.0.0.1", lan_ip)
+        assert _status(lan + "/api/dispatch") == 401
+        assert _status(lan + "/api/dispatch", token) == 200
+
+
+def test_remote_thin_client_signs_in_with_its_token(desktop_token_driver,
+                                                    desktop_token_server, remote_token,
+                                                    wait_js):
+    # EVI_REMOTE_URL against a token-gated server: the shell injects
+    # EVI_REMOTE_TOKEN for that origin only, so the thin client still connects
+    # with no login prompt.
+    driver = desktop_token_driver
+    assert wait_js(driver, "return !!document.querySelector('#input')"), "UI never rendered"
+    assert driver.current_url.rstrip("/").startswith(desktop_token_server)
+    assert driver.execute_script("return window.__EVI_TOKEN__ || ''") == remote_token
+    assert not wait_js(driver, _OVERLAY_SHOWN, timeout=3), "the thin client asked for a token"
+    assert _status(desktop_token_server + "/api/dispatch") == 401

@@ -312,8 +312,8 @@ def _check_federation() -> list[Check]:
         bl = getattr(fed, "bind_lan", False)
         hint = (
             "running server is bound to 127.0.0.1 only — reinstall desktop "
-            "0.2.15+ or relaunch `evi web --host 0.0.0.0` so bind_lan takes "
-            "effect"
+            "0.2.15+ or relaunch `evi web --host 0.0.0.0` (with an access token "
+            "set) so bind_lan takes effect"
         ) if bl else (
             "set [federation] bind_lan = true and relaunch on 0.0.0.0 so peers "
             "can reach this node"
@@ -328,6 +328,102 @@ def _check_federation() -> list[Check]:
     return []
 
 
+def _owner_named(name: str) -> bool:
+    """A users.json login the web server refuses because it would share the
+    owner's workspace — the same rule as evi/apps/web/server.py
+    _reserved_login, restated so doctor runs without the web extra."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip()).strip("._-")
+    return "owner" in (name.strip().casefold(), slug.casefold())
+
+
+def _check_web_access() -> list[Check]:
+    """Who the web server answers, and the migration to token-gated LAN access:
+    without an access token it answers only this machine, so LAN setups need
+    one (the desktop app generates its own). Also flags a multi-user setup in
+    which nobody can reach the owner-only routes."""
+    name = "web access"
+    try:
+        from evi import config as _config
+
+        exists = _config.CONFIG_PATH.is_file()
+        cfg = _config.Config.load() if exists else _config.Config()
+    except Exception:  # noqa: BLE001
+        return [Check(name, "warn", "skipped (config did not load)")]
+    token_set = bool((cfg.web.auth_token or "").strip()) or bool(
+        os.environ.get("EVI_WEB_AUTH_TOKEN", "").strip()
+    )
+    rotate = "evi web-config token rotate"
+    out: list[Check] = []
+    fed = cfg.federation
+    desktop_token = _config.HOME / "desktop-token"
+    if fed.bind_lan and not token_set:
+        if desktop_token.is_file():
+            # bind_lan is the desktop app's setting, and only its shell reads
+            # desktop-token: a server started any other way has no token.
+            out.append(Check(
+                name, "ok",
+                f"the desktop app serves the LAN with its generated token ({desktop_token}); "
+                "peers and clients on other machines must send it. Only the desktop app "
+                "reads that file: `evi web --host 0.0.0.0` or a container still needs "
+                "[web] auth_token or EVI_WEB_AUTH_TOKEN, or it answers only this machine",
+            ))
+        else:
+            out.append(Check(
+                name, "warn",
+                "LAN access (bind_lan) is on, but no access token exists yet. A server "
+                "without a token now answers only this machine: an up-to-date desktop "
+                "app generates one at its next launch — update and restart it, or set "
+                "[web] auth_token yourself",
+                fix=(rotate,),
+            ))
+    elif (fed.serve or fed.a2a) and not token_set:
+        out.append(Check(
+            name, "warn",
+            "federation/A2A serving is on without an access token, so only this machine "
+            "can delegate here; set a token and share it with your peers",
+            fix=(rotate,),
+        ))
+    elif token_set:
+        out.append(Check(name, "ok", "access token set — the web UI and API require it"))
+    else:
+        out.append(Check(
+            name, "ok",
+            "no access token: the server answers only this machine (loopback). To serve "
+            f"the network (`evi web --host 0.0.0.0`, Docker), set one first ({rotate})",
+        ))
+    if cfg.web.multi_user:
+        try:
+            from evi.users import load_users
+
+            users = load_users()
+        except Exception:  # noqa: BLE001
+            users = []
+        reserved = [u.name for u in users if _owner_named(u.name)]
+        if reserved:
+            out.append(Check(
+                "multi-user owner", "warn",
+                f"users.json login {', '.join(repr(n) for n in reserved)} can't sign in: "
+                "the name is reserved for the owner's workspace. Re-add it under "
+                "another name",
+                fix=tuple(f'evi web-config users remove "{n}"' for n in reserved),
+            ))
+        if users and not token_set:
+            out.append(Check(
+                "multi-user owner", "warn",
+                "multi-user logins exist but no [web] auth_token: settings, hooks, plugins, "
+                "channels, peers, the runtime, MCP, backends and file checkpoints are "
+                "owner-only, and only that token is the owner",
+                fix=(rotate,),
+            ))
+        elif not users:
+            out.append(Check(
+                "multi-user owner", "warn",
+                "web.multi_user is on but ~/.evi/users.json has no users",
+                fix=("evi web-config users add <name>",),
+            ))
+    return out
+
+
 def run_checks() -> list[Check]:
     """Run every diagnostic and return the flat list of results."""
     checks: list[Check] = []
@@ -339,6 +435,7 @@ def run_checks() -> list[Check]:
     checks += _check_binaries()
     checks += _check_optional_deps()
     checks += _check_federation()
+    checks += _check_web_access()
     return checks
 
 

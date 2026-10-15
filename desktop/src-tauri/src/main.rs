@@ -61,21 +61,203 @@ fn evi_home() -> Option<PathBuf> {
     })
 }
 
-/// Host to bind the spawned server to. Loopback by default; `[federation]
-/// bind_lan = true` in config.toml exposes it on the LAN so this instance can
-/// act as a federation peer. The webview still connects via 127.0.0.1.
-fn server_bind_host() -> String {
-    let lan = evi_home()
-        .map(|h| h.join("config.toml"))
-        .and_then(|p| std::fs::read_to_string(p).ok())
+/// Env var the sidecar reads its launch token from (`evi/apps/web/server.py`
+/// `_LAUNCH_TOKEN_ENV`). Part of the shell↔sidecar handshake: see SHELL_ABI.
+const TOKEN_ENV: &str = "EVI_WEB_AUTH_TOKEN";
+
+/// The desktop's generated LAN access token, under the eVi home (user-only
+/// permissions on Unix; on Windows the profile directory's ACL already limits
+/// it to the user). The VS Code extension and `evi` read it from here too.
+const DESKTOP_TOKEN_FILE: &str = "desktop-token";
+
+/// `<evi_home>/config.toml`, parsed — None when absent or unparsable.
+fn read_config(home: &Path) -> Option<toml::Value> {
+    std::fs::read_to_string(home.join("config.toml"))
+        .ok()
         .and_then(|t| t.parse::<toml::Value>().ok())
-        .and_then(|v| {
-            v.get("federation")
-                .and_then(|f| f.get("bind_lan"))
-                .and_then(|b| b.as_bool())
-        })
-        .unwrap_or(false);
-    if lan { "0.0.0.0".to_string() } else { "127.0.0.1".to_string() }
+}
+
+/// A non-empty string at `[section] key`.
+fn config_str(cfg: Option<&toml::Value>, section: &str, key: &str) -> Option<String> {
+    cfg?.get(section)?
+        .get(key)?
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// `[federation] bind_lan` — serve on 0.0.0.0 so this machine can be a peer.
+fn config_bind_lan(cfg: Option<&toml::Value>) -> bool {
+    cfg.and_then(|v| v.get("federation"))
+        .and_then(|f| f.get("bind_lan"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
+/// 32 bytes from the OS CSPRNG, hex-encoded.
+fn generate_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no OS randomness: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Only a token this shell could have written is reused; anything else in the
+/// file is replaced.
+fn valid_token(t: &str) -> bool {
+    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Write `contents` readable by this user only (0600 on Unix, set at creation
+/// and again in case the file already existed with wider bits).
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(contents.as_bytes())?;
+    f.sync_all()
+}
+
+/// The desktop token: reuse `<home>/desktop-token`, or generate and persist one
+/// on first need, so peers and the VS Code extension keep working across
+/// launches.
+fn load_or_create_token(home: &Path) -> Result<String, String> {
+    let path = home.join(DESKTOP_TOKEN_FILE);
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if valid_token(existing) {
+            return Ok(existing.to_string());
+        }
+    }
+    let token = generate_token()?;
+    std::fs::create_dir_all(home).map_err(|e| e.to_string())?;
+    write_private(&path, &token).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(token)
+}
+
+/// How to launch the local server, decided from config.toml.
+#[derive(Debug, PartialEq, Eq)]
+struct LaunchPlan {
+    /// `--host` for the server.
+    host: String,
+    /// Passed to the server as TOKEN_ENV: the generated desktop token, when
+    /// the LAN bind needs one and config.toml sets none.
+    sidecar_token: Option<String>,
+    /// Injected into the webview so the UI signs itself in: `[web]
+    /// auth_token` when set, else the sidecar token.
+    webview_token: Option<String>,
+}
+
+/// Loopback by default. `[federation] bind_lan = true` exposes the server on
+/// the LAN so this machine can act as a federation peer — and a LAN-bound
+/// server always has a token: `[web] auth_token` if set, else the generated
+/// desktop token (the server only answers loopback without one). If no token
+/// can be had, it stays on loopback rather than open the LAN unauthenticated.
+/// The webview still connects via 127.0.0.1.
+fn plan_launch(home: Option<&Path>) -> LaunchPlan {
+    let cfg = home.and_then(read_config);
+    let configured = config_str(cfg.as_ref(), "web", "auth_token");
+    let loopback = |webview_token: Option<String>| LaunchPlan {
+        host: "127.0.0.1".to_string(),
+        sidecar_token: None,
+        webview_token,
+    };
+    if !config_bind_lan(cfg.as_ref()) {
+        return loopback(configured);
+    }
+    if configured.is_some() {
+        return LaunchPlan {
+            host: "0.0.0.0".to_string(),
+            sidecar_token: None,
+            webview_token: configured,
+        };
+    }
+    match home.map(load_or_create_token) {
+        Some(Ok(token)) => LaunchPlan {
+            host: "0.0.0.0".to_string(),
+            sidecar_token: Some(token.clone()),
+            webview_token: Some(token),
+        },
+        Some(Err(e)) => {
+            eprintln!("evi: LAN access needs a token and none could be created ({e}); serving on loopback only");
+            loopback(None)
+        }
+        None => {
+            eprintln!("evi: no eVi home for the LAN token; serving on loopback only");
+            loopback(None)
+        }
+    }
+}
+
+/// Hand the plan's token (and only it) to a server process. A token in the
+/// shell's own environment is dropped so the server's auth matches what the
+/// webview is given.
+fn apply_launch_env(cmd: &mut Command, plan: &LaunchPlan) {
+    match &plan.sidecar_token {
+        Some(t) => {
+            cmd.env(TOKEN_ENV, t);
+        }
+        None => {
+            cmd.env_remove(TOKEN_ENV);
+        }
+    }
+}
+
+/// The webview initialization script: `window.__EVI_PORT__` for the loading
+/// shim, and the access token — set only when the page's origin is one of
+/// `origins` (the server's own), so a page the webview navigates to elsewhere
+/// never sees it. Values are JSON-encoded, which is a valid JS literal.
+fn webview_init_script(port: Option<u16>, token: Option<&str>, origins: &[String]) -> String {
+    let mut js = String::new();
+    if let Some(p) = port {
+        js.push_str(&format!("window.__EVI_PORT__ = {p};"));
+    }
+    if let Some(t) = token.filter(|t| !t.is_empty()) {
+        let origins = serde_json::to_string(origins).unwrap_or_else(|_| "[]".into());
+        let token = serde_json::to_string(t).unwrap_or_else(|_| "\"\"".into());
+        js.push_str(&format!(
+            "(function(){{if({origins}.indexOf(window.location.origin)>=0)\
+             {{window.__EVI_TOKEN__={token};}}}})();"
+        ));
+    }
+    js
+}
+
+/// The origin (`scheme://host[:port]`) of `url`, for the token guard above.
+fn url_origin(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let origin = parsed.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
+/// Thin-client mode's token for the `EVI_REMOTE_URL` server: `EVI_REMOTE_TOKEN`
+/// (`env_token`), else the token `<home>/peers.json` keeps for a peer at the
+/// same origin — the credential this machine already holds for that server.
+/// Never this machine's own `[web] auth_token`: that gates a different server,
+/// and would be handed to another host.
+fn remote_token(env_token: Option<String>, home: Option<&Path>, remote: &str) -> Option<String> {
+    if let Some(t) = env_token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        return Some(t);
+    }
+    let origin = url_origin(remote)?;
+    let text = std::fs::read_to_string(home?.join("peers.json")).ok()?;
+    let peers: serde_json::Value = serde_json::from_str(&text).ok()?;
+    peers.as_array()?.iter().find_map(|p| {
+        let url = p.get("url")?.as_str()?.trim();
+        let token = p.get("token")?.as_str()?.trim();
+        (url_origin(url).as_deref() == Some(origin.as_str()) && !token.is_empty())
+            .then(|| token.to_string())
+    })
 }
 
 /// Directory for the spawned server's log, under the eVi home dir. Created
@@ -112,14 +294,14 @@ fn configure_child(cmd: &mut Command) {
 
 /// Spawn `python -m uvicorn evi.apps.web.server:app` from the repo root.
 /// On Windows we prefer the `py -3.13` launcher; elsewhere fall back to `python3`.
-fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
+fn spawn_server(repo_root: &Path, port: u16, plan: &LaunchPlan) -> std::io::Result<Child> {
     let (program, prefix_args): (&str, &[&str]) = if cfg!(windows) {
         ("py", &["-3.13", "-m"])
     } else {
         ("python3", &["-m"])
     };
 
-    let host = server_bind_host();
+    let host = plan.host.clone();
     let mut cmd = Command::new(program);
     cmd.args(prefix_args)
         .args([
@@ -147,6 +329,7 @@ fn spawn_server(repo_root: &Path, port: u16) -> std::io::Result<Child> {
         .current_dir(repo_root);
     }
 
+    apply_launch_env(&mut cmd, plan);
     configure_child(&mut cmd);
     cmd.spawn()
 }
@@ -188,10 +371,10 @@ fn sidecar_path(app: &tauri::App) -> Option<PathBuf> {
 /// Spawn the frozen sidecar binary with --host/--port. If a `tesseract`
 /// binary was bundled next to it (practical-tier OCR), point the server at
 /// it via env so `ocr.py` uses the bundled copy instead of a system one.
-fn spawn_sidecar(path: &Path, port: u16) -> std::io::Result<Child> {
-    let host = server_bind_host();
+fn spawn_sidecar(path: &Path, port: u16, plan: &LaunchPlan) -> std::io::Result<Child> {
     let mut cmd = Command::new(path);
-    cmd.args(["--host", &host, "--port", &port.to_string()]);
+    cmd.args(["--host", &plan.host, "--port", &port.to_string()]);
+    apply_launch_env(&mut cmd, plan);
 
     if let Some(dir) = path.parent() {
         let tess = dir.join(if cfg!(windows) { "tesseract.exe" } else { "tesseract" });
@@ -554,7 +737,8 @@ fn validate_external_url(raw: &str) -> Result<String, String> {
 /// as switch separators, and the shell plugin's opener isn't initialized in
 /// this app (no `.plugin(tauri_plugin_shell::init())`). The validator guarantees no
 /// whitespace or quotes, so std's argument quoting leaves the URL untouched.
-/// rundll32 is a GUI-subsystem binary, so no CREATE_NO_WINDOW is needed.
+/// rundll32 is a GUI-subsystem binary, so no CREATE_NO_WINDOW is needed. It is
+/// run by absolute path under %SystemRoot% (`windows_system_exe`).
 fn os_open_url(url: &str) -> std::io::Result<()> {
     url_open_command(Opener::host(), url).spawn().map(|_| ())
 }
@@ -581,12 +765,42 @@ impl Opener {
     }
 }
 
+/// The Windows directory (`%SystemRoot%`, else `%windir%`, else `C:\Windows`),
+/// without a trailing separator. Only an absolute drive path is taken, so the
+/// openers below never resolve through the search path.
+fn windows_root() -> String {
+    windows_root_from(
+        std::env::var("SystemRoot")
+            .ok()
+            .or_else(|| std::env::var("windir").ok()),
+    )
+}
+
+fn windows_root_from(value: Option<String>) -> String {
+    value
+        .map(|v| v.trim().trim_end_matches(['\\', '/']).to_string())
+        .filter(|v| {
+            let b = v.as_bytes();
+            b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/')
+        })
+        .unwrap_or_else(|| r"C:\Windows".to_string())
+}
+
+/// A system binary by absolute path (`<root>\System32\rundll32.exe`, …).
+/// A bare name would let Windows search the app's own folder first, so a DLL-
+/// or EXE-planted `rundll32.exe` next to evi-desktop.exe would run instead.
+/// Built as a string, not a PathBuf, so the Windows argv is identical (and
+/// tested) on every build host.
+fn windows_system_exe(rel: &str) -> String {
+    format!(r"{}\{}", windows_root(), rel)
+}
+
 /// The (unspawned) opener command for `os_open_url` — split out so tests can
 /// assert the program and argv without launching a browser.
 fn url_open_command(os: Opener, url: &str) -> Command {
     let mut cmd = match os {
         Opener::Windows => {
-            let mut c = Command::new("rundll32.exe");
+            let mut c = Command::new(windows_system_exe(r"System32\rundll32.exe"));
             c.arg("url.dll,FileProtocolHandler");
             c
         }
@@ -598,7 +812,7 @@ fn url_open_command(os: Opener, url: &str) -> Command {
 }
 
 /// Open a local directory in the OS file manager, passed as a single argument.
-/// Windows uses `explorer.exe <dir>` (browse only, no cmd.exe re-parsing; a
+/// Windows uses `%SystemRoot%\explorer.exe <dir>` (browse only, no cmd.exe re-parsing; a
 /// GUI-subsystem binary, so no CREATE_NO_WINDOW). Never used for URLs.
 fn os_open_dir(dir: &Path) -> std::io::Result<()> {
     dir_open_command(Opener::host(), dir).spawn().map(|_| ())
@@ -607,9 +821,9 @@ fn os_open_dir(dir: &Path) -> std::io::Result<()> {
 /// The (unspawned) opener command for `os_open_dir`, split out for tests.
 fn dir_open_command(os: Opener, dir: &Path) -> Command {
     let mut cmd = Command::new(match os {
-        Opener::Windows => "explorer.exe",
-        Opener::MacOs => "open",
-        Opener::Xdg => "xdg-open",
+        Opener::Windows => windows_system_exe("explorer.exe"),
+        Opener::MacOs => "open".to_string(),
+        Opener::Xdg => "xdg-open".to_string(),
     });
     cmd.arg(dir);
     cmd
@@ -840,6 +1054,10 @@ fn main() {
             // remote and local branches below set it before it's read.
             #[allow(unused_assignments)]
             let mut nav_base: Option<String> = None;
+            // The access token the webview signs in with, and the origins
+            // (the server's own) whose pages may see it.
+            let webview_token: Option<String>;
+            let token_origins: Vec<String>;
 
             // Remote mode: skip the Python spawn and just navigate to the URL.
             // Useful when this laptop is a thin client pointed at the AI server.
@@ -857,14 +1075,24 @@ fn main() {
                     );
                 }
                 nav_base = Some(trimmed.trim_end_matches('/').to_string());
+                // The remote server's token: EVI_REMOTE_TOKEN, else the one
+                // peers.json keeps for that server. Without one, the UI's
+                // login prompt still works.
+                webview_token = remote_token(
+                    std::env::var("EVI_REMOTE_TOKEN").ok(),
+                    evi_home().as_deref(),
+                    trimmed,
+                );
+                token_origins = url_origin(trimmed).into_iter().collect();
                 WebviewUrl::External(trimmed.parse().map_err(|e: url::ParseError| e.to_string())?)
             } else {
                 // Local mode. Prefer a bundled sidecar (standalone build);
                 // otherwise fall back to spawning a system Python from the
                 // repo root (developer / source-checkout install).
                 let port = pick_port()?;
+                let plan = plan_launch(evi_home().as_deref());
                 let child = if let Some(side) = sidecar_path(app) {
-                    spawn_sidecar(&side, port)?
+                    spawn_sidecar(&side, port, &plan)?
                 } else {
                     let exe = std::env::current_exe()?;
                     let start = exe.parent().unwrap_or(Path::new("."));
@@ -874,11 +1102,16 @@ fn main() {
                         .or_else(|| find_repo_root(start))
                         .ok_or("could not locate evi repo root (set EVI_REPO_ROOT) \
                                 and no bundled sidecar found")?;
-                    spawn_server(&repo_root, port)?
+                    spawn_server(&repo_root, port, &plan)?
                 };
                 app.state::<ServerHandle>().0.lock().unwrap().replace(child);
                 local_port = Some(port);
                 nav_base = Some(format!("http://127.0.0.1:{}", port));
+                webview_token = plan.webview_token;
+                token_origins = vec![
+                    format!("http://127.0.0.1:{port}"),
+                    format!("http://localhost:{port}"),
+                ];
 
                 // Show the loading shim immediately — do NOT block here waiting
                 // for health. The onefile sidecar's cold start (unpacking +
@@ -892,9 +1125,9 @@ fn main() {
                 .inner_size(1100.0, 800.0)
                 .min_inner_size(600.0, 400.0)
                 .resizable(true);
-            if let Some(port) = local_port {
-                builder = builder
-                    .initialization_script(format!("window.__EVI_PORT__ = {};", port));
+            let init = webview_init_script(local_port, webview_token.as_deref(), &token_origins);
+            if !init.is_empty() {
+                builder = builder.initialization_script(init);
             }
             let window = builder.build()?;
             window.show()?;
@@ -1030,13 +1263,187 @@ mod deep_link_tests {
 }
 
 #[cfg(test)]
+mod launch_token_tests {
+    // The LAN token handshake (SHELL_ABI 2): a LAN-bound sidecar always gets a
+    // token, the webview gets the same one, and it survives restarts.
+    use super::{
+        apply_launch_env, plan_launch, remote_token, url_origin, valid_token,
+        webview_init_script, DESKTOP_TOKEN_FILE, TOKEN_ENV,
+    };
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn home(tag: &str, config: Option<&str>) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("evi-tok-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        if let Some(c) = config {
+            std::fs::write(d.join("config.toml"), c).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn loopback_by_default_with_no_token() {
+        let h = home("default", None);
+        let plan = plan_launch(Some(&h));
+        assert_eq!(plan.host, "127.0.0.1");
+        assert_eq!(plan.sidecar_token, None);
+        assert_eq!(plan.webview_token, None);
+        assert!(!h.join(DESKTOP_TOKEN_FILE).exists(), "no token minted for loopback");
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn bind_lan_generates_persists_and_reuses_a_token() {
+        let h = home("lan", Some("[federation]\nbind_lan = true\n"));
+        let first = plan_launch(Some(&h));
+        assert_eq!(first.host, "0.0.0.0");
+        let tok = first.sidecar_token.clone().expect("LAN bind without a token");
+        assert!(valid_token(&tok), "{tok}");
+        assert_eq!(first.webview_token.as_deref(), Some(tok.as_str()));
+        // Persisted, user-only, and the same on the next launch.
+        let stored = std::fs::read_to_string(h.join(DESKTOP_TOKEN_FILE)).unwrap();
+        assert_eq!(stored.trim(), tok);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(h.join(DESKTOP_TOKEN_FILE)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert_eq!(plan_launch(Some(&h)), first);
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn tampered_token_file_is_replaced() {
+        let h = home("bad", Some("[federation]\nbind_lan = true\n"));
+        std::fs::write(h.join(DESKTOP_TOKEN_FILE), "short\n").unwrap();
+        let tok = plan_launch(Some(&h)).sidecar_token.unwrap();
+        assert!(valid_token(&tok) && tok != "short");
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn configured_token_wins_and_is_not_duplicated_in_env() {
+        let h = home(
+            "cfg",
+            Some("[web]\nauth_token = \"from-config\"\n[federation]\nbind_lan = true\n"),
+        );
+        let plan = plan_launch(Some(&h));
+        assert_eq!(plan.host, "0.0.0.0");
+        // The server reads config.toml itself, so a rotation there takes
+        // effect at once; the webview signs in with that token.
+        assert_eq!(plan.sidecar_token, None);
+        assert_eq!(plan.webview_token.as_deref(), Some("from-config"));
+        assert!(!h.join(DESKTOP_TOKEN_FILE).exists());
+        // Loopback with a configured token: the UI still signs itself in.
+        let h2 = home("cfg-lo", Some("[web]\nauth_token = \"tok\"\n"));
+        let lo = plan_launch(Some(&h2));
+        assert_eq!((lo.host.as_str(), lo.webview_token.as_deref()), ("127.0.0.1", Some("tok")));
+        let _ = std::fs::remove_dir_all(&h);
+        let _ = std::fs::remove_dir_all(&h2);
+    }
+
+    #[test]
+    fn no_token_means_no_lan() {
+        // The token can't be written (its path is a directory): fail closed to
+        // loopback instead of serving the LAN unauthenticated.
+        let h = home("closed", Some("[federation]\nbind_lan = true\n"));
+        std::fs::create_dir_all(h.join(DESKTOP_TOKEN_FILE)).unwrap();
+        let plan = plan_launch(Some(&h));
+        assert_eq!(plan.host, "127.0.0.1");
+        assert_eq!(plan.sidecar_token, None);
+        // No eVi home at all: same.
+        assert_eq!(plan_launch(None).host, "127.0.0.1");
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn sidecar_env_carries_exactly_the_planned_token() {
+        let h = home("env", Some("[federation]\nbind_lan = true\n"));
+        let plan = plan_launch(Some(&h));
+        let mut cmd = Command::new("x");
+        apply_launch_env(&mut cmd, &plan);
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].0, TOKEN_ENV);
+        assert_eq!(envs[0].1.and_then(|v| v.to_str()), plan.sidecar_token.as_deref());
+        // Loopback: an inherited token is removed, not passed through.
+        let mut cmd = Command::new("x");
+        apply_launch_env(&mut cmd, &plan_launch(None));
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert_eq!(envs.len(), 1);
+        assert_eq!((envs[0].0, envs[0].1), (std::ffi::OsStr::new(TOKEN_ENV), None));
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn init_script_guards_the_token_by_origin() {
+        let origins = vec!["http://127.0.0.1:8473".to_string(), "http://localhost:8473".to_string()];
+        let js = webview_init_script(Some(8473), Some("abc\"</script>"), &origins);
+        assert!(js.starts_with("window.__EVI_PORT__ = 8473;"), "{js}");
+        assert!(
+            js.contains(r#"["http://127.0.0.1:8473","http://localhost:8473"].indexOf(window.location.origin)>=0"#),
+            "{js}"
+        );
+        // JSON-encoded: the quote can't end the string literal.
+        assert!(js.contains(r#"window.__EVI_TOKEN__="abc\"</script>";"#), "{js}");
+        // No token: no __EVI_TOKEN__ at all; remote mode: no port.
+        assert_eq!(webview_init_script(Some(1), None, &origins), "window.__EVI_PORT__ = 1;");
+        assert_eq!(webview_init_script(Some(1), Some(""), &origins), "window.__EVI_PORT__ = 1;");
+        assert!(!webview_init_script(None, Some("t"), &origins).contains("__EVI_PORT__"));
+        assert_eq!(webview_init_script(None, None, &origins), "");
+    }
+
+    #[test]
+    fn remote_token_comes_from_env_or_the_matching_peer_never_local_config() {
+        let h = home(
+            "remote",
+            Some("[web]\nauth_token = \"this-machines-own\"\n"),
+        );
+        let remote = "http://gpu-box:8473/";
+        // Nothing for that server: no token at all — not this machine's own.
+        assert_eq!(remote_token(None, Some(&h), remote), None);
+        std::fs::write(
+            h.join("peers.json"),
+            r#"[{"name":"other","url":"http://other:8473","token":"other-tok"},
+                {"name":"gpu","url":"http://GPU-box:8473/","token":" gpu-tok "},
+                {"name":"bad","url":"not a url","token":"x"}]"#,
+        )
+        .unwrap();
+        // The peer at the same origin (host case and trailing slash don't matter).
+        assert_eq!(remote_token(None, Some(&h), remote).as_deref(), Some("gpu-tok"));
+        // EVI_REMOTE_TOKEN wins; a blank one is ignored.
+        assert_eq!(remote_token(Some(" env ".into()), Some(&h), remote).as_deref(), Some("env"));
+        assert_eq!(remote_token(Some("  ".into()), Some(&h), remote).as_deref(), Some("gpu-tok"));
+        // Another port is another server.
+        assert_eq!(remote_token(None, Some(&h), "http://gpu-box:9000"), None);
+        assert_eq!(remote_token(None, None, remote), None);
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn remote_origin_is_scheme_host_port() {
+        assert_eq!(url_origin("https://ai.lan:8443/x/y?z").as_deref(), Some("https://ai.lan:8443"));
+        assert_eq!(url_origin("http://10.0.0.5:8473").as_deref(), Some("http://10.0.0.5:8473"));
+        assert_eq!(url_origin("https://ai.example/").as_deref(), Some("https://ai.example"));
+        assert_eq!(url_origin("not a url"), None);
+        assert_eq!(url_origin("data:text/html,x"), None);
+    }
+}
+
+#[cfg(test)]
 mod external_url_tests {
     // `open_external_cmd` is invokable from the webview, which renders model
     // output, so `validate_external_url` is the gate between a crafted link and
     // the OS. The other half of the fix (no shell ever parses the URL) is
     // pinned by inspecting the unspawned `url_open_command` / `dir_open_command`
     // for every OS, so even Linux CI catches a Windows revert to cmd.exe.
-    use super::{dir_open_command, url_open_command, validate_external_url, Opener};
+    use super::{
+        dir_open_command, url_open_command, validate_external_url, windows_root_from,
+        windows_system_exe, Opener,
+    };
     use std::path::Path;
     use std::process::Command;
 
@@ -1200,9 +1607,10 @@ mod external_url_tests {
         let url = ok("https://example.com/?a=1&b=2|c^d");
         assert_eq!(url, "https://example.com/?a=1&b=2|c^d");
         let u = url.as_str();
+        let rundll32 = windows_system_exe(r"System32\rundll32.exe");
         assert_eq!(
             argv(&url_open_command(Opener::Windows, u)),
-            ["rundll32.exe", "url.dll,FileProtocolHandler", u]
+            [rundll32.as_str(), "url.dll,FileProtocolHandler", u]
         );
         assert_eq!(argv(&url_open_command(Opener::MacOs, u)), ["open", u]);
         assert_eq!(argv(&url_open_command(Opener::Xdg, u)), ["xdg-open", u]);
@@ -1212,13 +1620,44 @@ mod external_url_tests {
     fn dir_goes_to_a_non_shell_opener_as_one_argument() {
         // A profile path like `Tom & Jerry` must not be re-parsed by cmd.exe.
         let dir = "C:/Users/Tom & Jerry/.evi/logs";
+        let explorer = windows_system_exe("explorer.exe");
         for (os, opener) in [
-            (Opener::Windows, "explorer.exe"),
+            (Opener::Windows, explorer.as_str()),
             (Opener::MacOs, "open"),
             (Opener::Xdg, "xdg-open"),
         ] {
             assert_eq!(argv(&dir_open_command(os, Path::new(dir))), [opener, dir]);
         }
+    }
+
+    #[test]
+    fn windows_openers_run_by_absolute_system_path() {
+        // A bare `rundll32.exe` / `explorer.exe` is looked up in the app's own
+        // folder first, so a binary planted next to evi-desktop.exe would run.
+        let is_abs = |p: &str| {
+            let b = p.as_bytes();
+            b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+        };
+        let rundll32 = argv(&url_open_command(Opener::Windows, "https://example.com/"))[0].clone();
+        assert!(is_abs(&rundll32), "{rundll32}");
+        assert!(rundll32.to_ascii_lowercase().ends_with(r"\system32\rundll32.exe"), "{rundll32}");
+        let explorer = argv(&dir_open_command(Opener::Windows, Path::new("C:/x")))[0].clone();
+        assert!(is_abs(&explorer), "{explorer}");
+        assert!(explorer.to_ascii_lowercase().ends_with(r"\explorer.exe"), "{explorer}");
+        assert!(!explorer.to_ascii_lowercase().contains("system32"), "{explorer}");
+    }
+
+    #[test]
+    fn windows_root_takes_only_an_absolute_drive_path() {
+        assert_eq!(windows_root_from(Some(r"C:\WINDOWS".into())), r"C:\WINDOWS");
+        assert_eq!(windows_root_from(Some(r"D:\Win\".into())), r"D:\Win");
+        assert_eq!(windows_root_from(Some("E:/Windows/".into())), "E:/Windows");
+        // Relative, empty, UNC-less junk or unset: the stock location, never a
+        // name the search path would resolve.
+        for bad in ["", "Windows", r"\Windows", r"..\x", "C:", "C:Windows"] {
+            assert_eq!(windows_root_from(Some(bad.into())), r"C:\Windows", "{bad:?}");
+        }
+        assert_eq!(windows_root_from(None), r"C:\Windows");
     }
 
     #[test]

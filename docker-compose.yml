@@ -6,6 +6,12 @@
 #   docker compose exec ollama ollama pull qwen2.5:14b-instruct-q4_K_M
 # And point eVi at it:
 #   docker compose exec evi evi models use qwen2.5:14b-instruct-q4_K_M
+# Then sign in to http://localhost:8000 with eVi's access token:
+#   docker compose exec evi evi web-config token show
+# The published port reaches eVi from the Docker network, not from loopback, so
+# it needs a token even from this machine. Unless you set EVI_WEB_AUTH_TOKEN
+# below (or [web] auth_token in config.toml), the image generates one on first
+# start and keeps it in the evi-state volume (docs/security.md, "Containers").
 #
 # State lives in named volumes so it survives `docker compose down`.
 
@@ -43,6 +49,11 @@ services:
       # eVi configures via ~/.evi/config.toml — but env can override common bits.
       # See evi/config.py for the full list.
       EVI_HOME: /root/.evi
+      # Access token for the web UI and API from other machines (your browser
+      # through the port mapping counts as one). Leave it unset to use the one
+      # the image generates; to choose your own, uncomment and set a long
+      # random value (e.g. `openssl rand -hex 32`):
+      # EVI_WEB_AUTH_TOKEN: "<token>"
     volumes:
       - evi-state:/root/.evi
     # First-run hint: shell into the container and write a config that points

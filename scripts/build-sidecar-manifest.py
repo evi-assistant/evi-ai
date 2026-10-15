@@ -13,7 +13,7 @@ Usage:
     build-sidecar-manifest.py --version 1.0.10 \
         --repo evi-assistant/evi-ai --tag sidecar-latest \
         --sha windows-x86_64=<sha256> --sha darwin-aarch64=<sha256> \
-        --sha linux-x86_64=<sha256> [--min-shell-abi 1] [--out sidecar-latest.json]
+        --sha linux-x86_64=<sha256> [--min-shell-abi 2] [--out sidecar-latest.json]
 
 Platform keys match the Rust client's `platform_key()` (rust target_os/target_arch):
 `windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`.
@@ -29,7 +29,11 @@ import sys
 # The shell↔sidecar contract version. A sidecar in the manifest is only staged by
 # a shell whose SHELL_ABI >= the manifest's `min_shell_abi`. Bump when the shell's
 # launch contract with the sidecar changes incompatibly (flags, handshake, ports).
-DEFAULT_MIN_SHELL_ABI = 1
+# 2: the shell hands a LAN-bound core its access token (EVI_WEB_AUTH_TOKEN), and
+# a core without one answers only loopback, so an ABI-1 shell's LAN setup would
+# be locked out: such shells get these cores only through a full app update
+# (desktop/src-tauri/src/sidecar_update.rs SHELL_ABI; docs/security.md).
+DEFAULT_MIN_SHELL_ABI = 2
 
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+([-+].+)?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")

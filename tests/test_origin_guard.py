@@ -89,6 +89,12 @@ def _upload(c: TestClient, headers: dict[str, str], sid: str = "s1"):
                   files={"file": ("x.txt", b"hi", "text/plain")}, headers=headers)
 
 
+# What eVi's own pages add to every request (the index.html fetch wrapper). A
+# browser request this guard lets through still needs it in no-token mode —
+# that second rule has its own tests in test_web_hardening.py.
+UI = {"X-Evi-Client": "web"}
+
+
 def _chat(c: TestClient, headers: dict[str, str]):
     return c.post("/api/chat", json={"session_id": "s1", "message": "hi"}, headers=headers)
 
@@ -171,7 +177,7 @@ def test_peers_without_origin_reach_a2a_handler(local_client: TestClient) -> Non
     "HTTP://127.0.0.1:8473",
 ])
 def test_own_origin_allowed(local_client: TestClient, origin: str) -> None:
-    r = _upload(local_client, {"Origin": origin, "Sec-Fetch-Site": "same-origin"})
+    r = _upload(local_client, {"Origin": origin, "Sec-Fetch-Site": "same-origin", **UI})
     assert r.status_code == 200, (origin, r.text)
 
 
@@ -189,7 +195,7 @@ def test_loopback_alias_and_tauri_origins_allowed(
     """With the header pair a real browser sends: Chromium/WebView2 label a
     request from these pages to 127.0.0.1 `cross-site` (a different site), so
     the allowlist must win over that; None = a browser without Sec-Fetch-*."""
-    headers = {"Origin": origin, **({"Sec-Fetch-Site": site} if site else {})}
+    headers = {"Origin": origin, **({"Sec-Fetch-Site": site} if site else {}), **UI}
     r = _upload(local_client, headers)
     assert r.status_code == 200, (origin, site, r.text)
 
@@ -208,7 +214,7 @@ def test_near_miss_allowlist_origins_refused_cross_site(
 
 
 def test_same_origin_on_testserver_host(client: TestClient) -> None:
-    assert _upload(client, {"Origin": "http://testserver"}).status_code == 200
+    assert _upload(client, {"Origin": "http://testserver", **UI}).status_code == 200
     assert _upload(client, {"Origin": "http://localhost"}).status_code == 403
 
 
@@ -224,8 +230,8 @@ def test_get_with_foreign_origin_unaffected(local_client: TestClient) -> None:
 
 def test_env_override(local_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EVI_ALLOW_CROSS_ORIGIN", "1")
-    assert _upload(local_client, {"Origin": "https://evil.example"}).status_code == 200
-    assert _upload(local_client, {"Sec-Fetch-Site": "cross-site"}).status_code == 200
+    assert _upload(local_client, {"Origin": "https://evil.example", **UI}).status_code == 200
+    assert _upload(local_client, {"Sec-Fetch-Site": "cross-site", **UI}).status_code == 200
 
 
 # ---- with a token / behind a proxy ----------------------------------------
@@ -316,7 +322,7 @@ def test_forwarded_host_opt_in_needs_a_true_value(
 def test_forwarded_host_matches_origin(
     proxied_client: TestClient, origin: str, fwd: dict[str, str]
 ) -> None:
-    r = _upload(proxied_client, {"Origin": origin, **fwd})
+    r = _upload(proxied_client, {"Origin": origin, **fwd, **UI})
     assert r.status_code == 200, (origin, fwd, r.text)
 
 
@@ -412,11 +418,14 @@ def test_own_pull_still_streams(
 def test_cross_site_pull_env_override(
     local_client: TestClient, pulls: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """EVI_ALLOW_CROSS_ORIGIN waives only the Origin check. Without a token a
+    side-effecting GET another site started is still refused, as a
+    state-changing request without X-Evi-Client is (test_web_hardening.py)."""
     monkeypatch.setenv("EVI_ALLOW_CROSS_ORIGIN", "1")
     r = local_client.get("/api/backend/pull?model=test:1b",
                          headers={"Sec-Fetch-Site": "cross-site"})
-    assert r.status_code == 200
-    assert pulls == ["test:1b"]
+    assert r.status_code == 403
+    assert pulls == []
 
 
 def test_read_only_gets_unaffected_by_same_site(local_client: TestClient) -> None:

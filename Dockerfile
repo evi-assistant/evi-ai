@@ -13,6 +13,14 @@
 #     -e LLM_BACKEND=ollama \
 #     -v evi-state:/root/.evi \
 #     evi:latest
+#
+# Access token: a published port reaches eVi from the Docker bridge, not from
+# loopback, so the server needs a token before your browser can get in. Pass
+# your own with -e EVI_WEB_AUTH_TOKEN=..., or set [web] auth_token in
+# config.toml; otherwise the entrypoint (scripts/docker-entrypoint.sh)
+# generates one on first start and keeps it in the state volume. Print it with:
+#   docker exec <container> evi web-config token show
+# See docs/security.md ("Containers").
 
 ARG PYTHON_VERSION=3.13-slim
 FROM python:${PYTHON_VERSION} AS builder
@@ -51,10 +59,16 @@ COPY --from=builder /usr/local/bin/evi /usr/local/bin/evi
 ENV EVI_HOME=/root/.evi
 VOLUME ["/root/.evi"]
 
+# Gives `evi web` an access token when none is set (see the header).
+COPY scripts/docker-entrypoint.sh /usr/local/bin/evi-entrypoint
+
 EXPOSE 8000
+# Over loopback, so it needs no token: the generated one gates other machines
+# only, and /api/health is public whatever the token.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request, sys; \
 sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=3).status == 200 else 1)" \
     || exit 1
 
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/evi-entrypoint"]
 CMD ["evi", "web", "--host", "0.0.0.0", "--port", "8000"]

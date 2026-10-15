@@ -183,24 +183,30 @@ class MicrosoftSettings:
 
 @dataclass
 class WebSettings:
-    """Web frontend security + behaviour.
+    """Web frontend security + behaviour (docs/security.md).
 
-    `auth_token` empty disables auth entirely (current behaviour — open
-    access, fine for localhost-only). When set, every `/api/*` route
-    requires either an `Authorization: Bearer <token>` header OR a
-    `?token=<token>` query parameter (the latter is needed for `<img>`
-    src and streaming endpoints that can't carry custom headers).
+    `auth_token` empty, with no launch token (EVI_WEB_AUTH_TOKEN) and no
+    users, means no-token mode: the server answers only this machine
+    (loopback clients). When set, every `/api/*` route requires either an
+    `Authorization: Bearer <token>` header OR a `?token=<token>` query
+    parameter (the latter is needed for `<img>` src and streaming endpoints
+    that can't carry custom headers), from this machine too.
 
-    Generate a token with `evi web token rotate`.
+    Generate a token with `evi web-config token rotate`.
 
     `multi_user` (opt-in) lets a team each log in with their own revocable token
     from `~/.evi/users.json` instead of sharing `auth_token`. Each user gets an
     isolated workspace — their web sessions, transcripts, and memory live under
     `~/.evi/users/<name>/` and are not visible to other users.
+
+    `decision_timeout_s`: how long a permission prompt waits for an answer
+    before it denies. EVI_DECISION_TIMEOUT_S overrides it; anything that isn't
+    a positive number means the default.
     """
 
     auth_token: str = ""
     multi_user: bool = False
+    decision_timeout_s: float = 300.0
 
 
 @dataclass
