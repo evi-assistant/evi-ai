@@ -6,7 +6,7 @@ Hooks let you run your own code (or call a webhook) automatically at key moments
 
 Because eVi is local-first and single-user, hooks are your escape hatch for custom policy and integration without touching eVi's source: audit trails, "never write outside this folder" guards, secret-scanners on prompts, Slack/webhook notifications, and so on.
 
-Hooks live in one file, `~/.evi/hooks.toml` (Windows: `%USERPROFILE%\.evi\hooks.toml`), and are loaded fresh at startup. Installed plugins can also ship their own `hooks.toml`, which is merged in automatically.
+Hooks live in one file, `~/.evi/hooks.toml` (Windows: `%USERPROFILE%\.evi\hooks.toml`), and are loaded fresh each time the CLI starts. Installed plugins can also ship their own `hooks.toml`, which is merged in automatically. The web and desktop app load them once and reload them when you Save in Settings → Hooks or install or remove a plugin.
 
 ## How it works
 
@@ -18,9 +18,11 @@ A hook is an entry in `hooks.toml` keyed by the **event** it fires on. There are
 | `after_tool_call` | After a tool returns | No | Veto is ignored (notification only); a non-zero exit is just logged |
 | `user_prompt_submit` | Before each turn, before the model sees your prompt | Yes | Blocks the prompt |
 | `before_compact` | Before history compaction | Yes | Keeps history intact (skips compaction) |
-| `stop` | After a turn completes | No | Notification only; never blocks |
+| `stop` | Once per turn, when the reply is complete | No | Notification only; never blocks |
 
 `before_tool_call` and `after_tool_call` are **tool-scoped**: their `match` is a glob over the tool name. The three lifecycle events (`user_prompt_submit`, `before_compact`, `stop`) are **not tied to a tool**, so they use `match = "*"` (the default).
+
+`stop` fires exactly once per completed turn, just before the turn ends. A re-roll is a turn of its own and fires it once. A subagent the turn spawns (`delegate`, `parallel_research`, …) does not fire it, nor `user_prompt_submit`: subagents inherit only the tool hooks (see [Where hooks apply](#where-hooks-apply)). `stop` does not fire for a prompt that a `user_prompt_submit` hook or an input guardrail blocked, or for a turn that ended in an LLM error. eVi waits for it before reporting the turn done, so keep it quick (or give it a short `timeout`).
 
 Each hook does one of two things:
 
@@ -50,18 +52,33 @@ When eVi spawns a `command` hook it inherits your environment plus these:
 |----------|-------|
 | `EVI_HOOK_EVENT` | The event name (`before_tool_call`, `user_prompt_submit`, …) |
 | `EVI_HOOK_TOOL` | The tool name for tool events; the **event name** for lifecycle events |
-| `EVI_HOOK_ARGS_JSON` | Tool call arguments as JSON; for `user_prompt_submit`, the prompt text; for `before_compact`, the count of messages being compacted |
+| `EVI_HOOK_ARGS_JSON` | Tool call arguments as JSON; for `user_prompt_submit`, the prompt text; for `before_compact`, the count of messages being compacted; for `stop`, the finish reason (`stop`, `length`, `max_turns_reached`, …). Whole unless it is too big for one environment variable (see [Big payloads](#big-payloads)) |
+| `EVI_HOOK_ARGS_FILE` | Path of a temp file holding the **whole** payload above, exactly. Set when `EVI_HOOK_ARGS_JSON` was cut, and always for a hook with `args_via_file = true`; otherwise unset, so small payloads never touch the disk. Deleted when the hook exits |
+| `EVI_HOOK_ARGS_TRUNCATED` | `1` when `EVI_HOOK_ARGS_JSON` was cut; unset otherwise |
 | `EVI_HOOK_RESULT` | Only for `after_tool_call`: the tool's stringified output, **truncated to 4 KB** |
+| `EVI_CWD` | The session working folder the tools resolve relative paths against (set by `/cd`, `--cwd`, the web folder chip); the process folder when none is set |
+| `EVI_EFFORT` | The active reasoning effort (`low` / `medium` / `high` / `max`) |
+
+A `command` hook **runs in the session working folder** (`EVI_CWD`), so a "stay inside this folder" guard resolves a relative `path` the same way the tool will. Its **stdin is the null device**: a hook that reads stdin gets end-of-file straight away instead of waiting on the terminal (or the desktop app's server pipe) until its timeout. A NUL character in the payload, which no environment variable can hold, reaches `EVI_HOOK_ARGS_JSON` as the JSON escape `\u0000`.
+
+#### Big payloads
+
+One environment variable holds about 32,000 characters on Windows and 128 KiB on Linux. A payload that fits (nearly every tool call and prompt) reaches `EVI_HOOK_ARGS_JSON` whole. A bigger one (a pasted log, a large `write_file`) is handled like this:
+
+- **A guard** (`veto_on_nonzero = true` on `before_tool_call`, `user_prompt_submit` or `before_compact`) is **not run** on it, and the action is **blocked**: a guard must never judge input it can only partly see, since padding could push a write's `path` past any cut. The model sees why. To check input of any size, set `args_via_file = true` on the hook and read the payload from `EVI_HOOK_ARGS_FILE` (see [Example 2](#example-2--scan-prompts-for-secrets-with-a-python-script-cross-platform)).
+- **Any other hook** runs with a shortened `EVI_HOOK_ARGS_JSON`, `EVI_HOOK_ARGS_TRUNCATED=1`, and the whole payload in `EVI_HOOK_ARGS_FILE`. Tool arguments stay valid JSON with every key: only their longest string values are cut, all to the same length, each ending in `...[cut N chars; see EVI_HOOK_ARGS_FILE]`. When the arguments are too big even with every long string cut to that marker (thousands of string values, say), they keep their beginning instead, which is not valid JSON. A prompt keeps its beginning.
+
+The args file is private to your user and deleted when the hook exits; a background process the hook starts must copy it before then. One that can't be deleted at that moment (on Windows, while such a process still has it open) is removed on the next hook run or when eVi exits.
 
 ### What a `url` hook POSTs
 
 eVi sends `Content-Type: application/json`, `User-Agent: evi-hook`, and a JSON body:
 
 ```json
-{ "event": "after_tool_call", "tool": "generate_image", "args_json": "{…}", "result": "…" }
+{ "event": "after_tool_call", "tool": "generate_image", "args_json": "{…}", "result": "…", "effort": "medium", "cwd": "/home/me/project" }
 ```
 
-`result` is included only for `after_tool_call` (and is likewise capped at 4 KB).
+`result` is included only for `after_tool_call` (and is likewise capped at 4 KB). `args_json` is never cut, and `cwd` is the session working folder.
 
 ## Setup
 
@@ -77,6 +94,7 @@ Create `~/.evi/hooks.toml`. Each event is a TOML array-of-tables (`[[event_name]
 | `url` | string | `""` | If set, POST instead of spawning a command |
 | `timeout` | number (seconds) | `30.0` | Subprocess / HTTP timeout |
 | `veto_on_nonzero` | bool | `false` | Only meaningful for `before_*` / `user_prompt_submit` / `before_compact` |
+| `args_via_file` | bool | `false` | The hook reads its payload from `EVI_HOOK_ARGS_FILE`, which is then always written. Lets a guard check payloads too big for `EVI_HOOK_ARGS_JSON` instead of blocking them ([Big payloads](#big-payloads)) |
 
 A complete reference file:
 
@@ -107,8 +125,9 @@ url     = "https://example.com/evi-hook"    # POST instead of spawning a command
 
 [[user_prompt_submit]]                       # fires before each turn
 name            = "no-secrets"
-command         = ["python3", "/home/me/check_prompt.py"]   # prompt is in EVI_HOOK_ARGS_JSON
+command         = ["python3", "/home/me/check_prompt.py"]   # reads EVI_HOOK_ARGS_FILE
 veto_on_nonzero = true
+args_via_file   = true                      # check prompts of any length
 
 [[before_compact]]                           # before history compaction; veto keeps it intact
 name    = "log-compaction"
@@ -126,7 +145,7 @@ Hooks are merged from your `hooks.toml` plus any `hooks.toml` shipped by install
 Hooks aren't invoked by hand — they run automatically once configured. The workflow is:
 
 1. Edit `~/.evi/hooks.toml` (see Setup), or use **Settings → Hooks** / the CLI below.
-2. Start or restart eVi (`evi chat`, `evi web`, the desktop app, or any agent run). Hooks are loaded at process start, so restart after editing to pick up changes.
+2. Start or restart the CLI (`evi chat`, `evi run`, …). Hooks are loaded when it starts, so restart it after editing `hooks.toml`. The web and desktop app pick up a Save in Settings → Hooks at once, with no restart.
 3. Drive eVi normally — hooks fire as tools run and turns progress.
 
 ### CLI — `evi hooks`
@@ -148,9 +167,14 @@ TOML, a malformed entry, and crucially **typo'd event names** (e.g.
 `[[before_toolcall]]`), which the runtime loader would otherwise skip
 silently — and reports the error inline instead of writing a broken file.
 Plugin-supplied hooks appear in the chips but aren't editable here (they live
-in the plugin). Backed by `GET`/`POST /api/hooks`.
+in the plugin). Save applies at once to every open chat (one shared registry,
+reloaded in place). Backed by `GET`/`POST /api/hooks`.
 
-This applies across every front end (CLI REPL, FastAPI/SSE web UI, Tauri desktop) and to headless / workflow runs, since they all load the same `HookRegistry`.
+### Where hooks apply
+
+Hooks run wherever the CLI builds an agent (the `evi chat` REPL, `evi run` and the other agent commands) and for an agent built with the Python SDK's `build_agent` (on by default). They also guard web and desktop chat tabs; the workflow, recipe, routine and ultracode runs the web app starts; federation (`/api/federate`) and A2A tasks; and Telegram bridge turns. Eval runs (`/api/evals/run`) skip them so scores don't depend on the machine. In multi-user mode every user's sessions are guarded by the owner's `hooks.toml`. `session_start` and `session_end` still fire only in the CLI REPL, not in web sessions. Safe mode (`--safe-mode`) turns hooks off everywhere.
+
+A subagent spawned from a chat (`delegate`, `delegate_explore`, `parallel_research`) inherits the **tool hooks** (`before_tool_call`, `after_tool_call`) of the agent that spawned it and works in the same folder, so a veto guard binds it too. It does not inherit the lifecycle hooks: its task is not a prompt you typed, so `user_prompt_submit` doesn't screen it, and its end is not the end of your turn, so `stop` doesn't fire for it.
 
 Where to watch the effects:
 
@@ -190,7 +214,7 @@ BLOCKED BY HOOK 'no-system-writes': (no message)
 
 ### Example 2 — Scan prompts for secrets with a Python script (cross-platform)
 
-A `user_prompt_submit` hook reads the prompt from `EVI_HOOK_ARGS_JSON` and rejects it if it looks like an API key or password. This works on Windows too, since it spawns Python directly rather than relying on a shell.
+A `user_prompt_submit` hook reads the prompt and rejects it if it looks like an API key or password. This works on Windows too, since it spawns Python directly rather than relying on a shell. With `args_via_file = true` it reads the prompt from `EVI_HOOK_ARGS_FILE`, so it can check a pasted prompt of any length; a guard that reads `EVI_HOOK_ARGS_JSON` instead blocks a prompt too long for that variable ([Big payloads](#big-payloads)).
 
 ```toml
 # ~/.evi/hooks.toml
@@ -199,13 +223,15 @@ A `user_prompt_submit` hook reads the prompt from `EVI_HOOK_ARGS_JSON` and rejec
 name            = "no-secrets"
 command         = ["python3", "C:/Users/me/.evi/check_prompt.py"]
 veto_on_nonzero = true
+args_via_file   = true
 ```
 
 ```python
 # C:/Users/me/.evi/check_prompt.py
 import os, re, sys
 
-prompt = os.environ.get("EVI_HOOK_ARGS_JSON", "")
+with open(os.environ["EVI_HOOK_ARGS_FILE"], encoding="utf-8") as f:
+    prompt = f.read()
 if re.search(r"(?i)(api[_-]?key|secret|password)\s*[:=]\s*\S", prompt):
     print("Prompt looks like it contains a secret; blocked.", file=sys.stderr)
     sys.exit(1)   # non-zero + veto_on_nonzero -> the turn is blocked
@@ -230,13 +256,14 @@ The endpoint receives `POST` with body `{"event": "after_tool_call", "tool": "<n
 
 ## Notes / limits
 
-- **Fail-open by design.** A missing or malformed `hooks.toml` is treated as "no hooks", not an error. One bad entry is skipped with a warning while the rest load. Plugin-hook scanning failures never break your core hooks. Lifecycle hook execution is wrapped so that exceptions return "no veto" rather than crashing the turn.
+- **A missing config is no hooks; a broken guard blocks.** A missing or malformed `hooks.toml` is treated as "no hooks", not an error. One bad entry is skipped with a warning while the rest load. Plugin-hook scanning failures never break your core hooks. But once a guard (`veto_on_nonzero`) is configured, anything that stops it from judging an action blocks the action: it can't be started (exit `126`), it times out (`124`), its input is too big for `EVI_HOOK_ARGS_JSON` and it doesn't set `args_via_file`, or eVi's hook runner itself fails. A hook that only observes never blocks, and its failure never breaks the turn.
 - **Commands are not shell-evaluated.** `command` is argv. A bare-string `command` becomes a one-element argv list — it is **not** split on spaces or expanded. For pipes, globs, redirects, or `$VAR` expansion, call a shell explicitly (`["bash", "-c", "…"]`) — note this means `bash`-based examples need a shell available (use the Python form on Windows).
 - **Timeouts.** Default `timeout` is `30.0` seconds (subprocess or HTTP). A timed-out hook reports exit code `124`; a command that fails to exec reports `126`. For a vetoing before-hook, a timeout therefore counts as a non-zero exit and **blocks** the action — keep guard hooks fast and set a tight `timeout`.
 - **`after_tool_call` and `stop` never block.** Their veto is ignored; a non-zero `after_tool_call` exit is only logged.
 - **4 KB result cap.** `EVI_HOOK_RESULT` (and the `result` field in a URL POST) is truncated to 4 KB to avoid blowing OS env/arg limits. Don't rely on receiving the full tool output.
+- **Big arguments.** `EVI_HOOK_ARGS_JSON` holds a payload whole up to the OS limit for one environment variable (about 32,000 characters on Windows, 128 KiB on Linux). Past it, a guard without `args_via_file` blocks and other hooks get a shortened copy plus `EVI_HOOK_ARGS_FILE` ([Big payloads](#big-payloads)). A URL hook's `args_json` field is never cut.
 - **Permission first, then hooks.** Tool calls pass through eVi's permission / auto-approve gate before before-hooks run; a denied tool never reaches a hook.
 - **`EVI_HOOK_TOOL` for lifecycle events is the event name**, not a tool — there is no tool involved. For tool events it's the fully-qualified tool name (e.g. `write_file`, or `<server>.<tool>` for MCP tools).
 - **Security.** Hooks run arbitrary local commands with your user's privileges and full environment. Treat plugin-supplied `hooks.toml` files as code: review a plugin's hooks before installing it, since its hooks are merged into your registry and execute on every matching event.
-- **Reload requires a restart.** Hooks are loaded once at process start; edits to `hooks.toml` take effect on the next launch.
+- **The CLI reloads on restart.** The CLI loads hooks once when it starts, so edits to `hooks.toml` take effect on its next launch. The web and desktop app reload on Save in Settings → Hooks and on plugin install or remove.
 - See also the concise summaries in [docs/configuration.md](../configuration.md#hooks--evihookstoml) and [docs/features.md](../features.md#hooks). The authoritative behavior is in `evi/hooks.py`.

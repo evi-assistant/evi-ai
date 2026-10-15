@@ -7,8 +7,13 @@ make sessions collide). It's a ``ContextVar`` so each async request/turn gets
 its own value; when unset, everything falls back to the process cwd — so the
 single-session CLI and the test suite behave exactly as before.
 
-The Agent sets it from ``Agent.cwd`` at the start of a turn; the web server
-sets it per request from the session's working dir.
+The Agent sets it from ``Agent.cwd`` (which ``/cd``, ``--cwd`` and the web
+folder chip set) at the start of a turn and again around every tool call: tool
+bodies run on pool threads, which start with an empty context. A new Agent's
+``cwd`` starts as the folder set where it is built, so agents a session builds
+for its own runs (``/ultra`` stages, workflow steps) work in that folder. Code
+that fans work out to its own threads submits each job under
+``contextvars.copy_context()`` so the folder goes along.
 """
 
 from __future__ import annotations
@@ -31,6 +36,12 @@ def reset(token: contextvars.Token | None) -> None:
             _CWD.reset(token)
         except (ValueError, LookupError):
             pass
+
+
+def session_cwd() -> str:
+    """The session working dir exactly as set: ``""`` when unset (no process-cwd
+    fallback, unlike :func:`get_cwd`). For handing the folder on to a child agent."""
+    return _CWD.get()
 
 
 def get_cwd() -> Path:

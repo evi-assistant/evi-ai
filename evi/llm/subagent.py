@@ -5,19 +5,37 @@ a focused system prompt and a restricted tool list. Callers hand in a `task`
 string, we run the agent to completion, and return the concatenated final
 assistant text. Used by `evi.tools.subagent` to back `delegate_explore`,
 `delegate_plan`, …
+
+A subagent runs under the same session state as the agent that spawned it: its
+tool hooks (so a parent's veto guard also binds the subagent), its working
+folder and its active skill scope (a floor the subagent can only narrow). All
+three are read from the spawning tool call's context (`evi.hooks.active()`,
+`evi.workdir`, `evi.skillscope.inherited()`) unless the caller passes them.
+Lifecycle hooks (`user_prompt_submit`, `stop`, …) are not inherited: a
+delegated task is not a prompt the user typed, and a subagent finishing is not
+the end of the user's turn.
 """
 
 from __future__ import annotations
 
+import contextvars
 from pathlib import Path
 from typing import Iterable
 
 import tomllib
 
+from evi import hooks as hooks_mod
+from evi import skillscope
+from evi import workdir
 from evi.config import Config
+from evi.hooks import HookRegistry
 from evi.llm.agent import Agent, Done, Error, TextDelta, ToolResult
 from evi.llm.client import make_client
 from evi.tools.base import REGISTRY, Tool
+
+# Default for `hooks=` / `skill_scope=`: take the spawning agent's (None outside
+# a tool call).
+INHERIT = object()
 
 
 def _tools_in_categories(categories: Iterable[str]) -> list[Tool]:
@@ -31,13 +49,28 @@ def run_subagent(
     task: str,
     tool_categories: Iterable[str] = (),
     max_turns: int = 6,
+    hooks: HookRegistry | None | object = INHERIT,
+    cwd: str | None = None,
+    skill_scope: skillscope.Scope | None | object = INHERIT,
 ) -> str:
     """Run a one-shot scoped Agent and return its final assistant text.
 
     Pulls the same LLM client/config the parent uses; respects the parent's
     tool *category* filter but ignores per-tool toggles, so a subagent can
     use read-only filesystem tools even if `fs` is otherwise on.
+
+    `hooks` defaults to the tool hooks of the spawning agent
+    (`evi.hooks.active()`); pass a registry (used whole, lifecycle hooks
+    included), or None for no hooks. `cwd` defaults to the caller's session
+    working folder ("" when there is none: the process cwd). `skill_scope`
+    defaults to the spawning agent's active skill scope; the subagent's own
+    turns can narrow it but never clear it.
     """
+    if hooks is INHERIT:
+        parent = hooks_mod.active()
+        hooks = parent.tool_hooks() if parent is not None else None
+    if skill_scope is INHERIT:
+        skill_scope = skillscope.inherited()
     config = Config.load()
     client = make_client(config.llm)
     tools = _tools_in_categories(tool_categories)
@@ -46,7 +79,12 @@ def run_subagent(
         config=config,
         tools=tools,
         system_prompt=system_prompt,
+        hooks=hooks,  # type: ignore[arg-type]
     )
+    # Same folder as the parent: tools resolve against it, and so do the
+    # permission checks (protected paths, trusted dirs) that read agent.cwd.
+    agent.cwd = workdir.session_cwd() if cwd is None else cwd
+    agent.inherited_skill_scope = skill_scope  # type: ignore[assignment]
 
     text_parts: list[str] = []
     tool_trace: list[str] = []
@@ -84,6 +122,9 @@ def run_subagents_parallel(
     tool_categories: Iterable[str] = (),
     max_turns: int = 6,
     max_workers: int = 4,
+    hooks: HookRegistry | None | object = INHERIT,
+    cwd: str | None = None,
+    skill_scope: skillscope.Scope | None | object = INHERIT,
 ) -> list[tuple[str, str]]:
     """Run several subagents concurrently and return [(task, result), …] in the
     original order.
@@ -92,6 +133,9 @@ def run_subagents_parallel(
     from overlapping the orchestration + tool calls; note that a single local
     backend serialises the actual model inference (one model, one GPU), so the
     big speedups are on tool-heavy work or a remote / multi-GPU backend.
+    `hooks` / `cwd` / `skill_scope` are as for `run_subagent`; each worker
+    starts from a copy of the caller's context, so the defaults inherit from
+    the caller.
     """
     import concurrent.futures as _futures
 
@@ -100,13 +144,19 @@ def run_subagents_parallel(
     results: list[tuple[str, str]] = [(t, "") for t in tasks]
     workers = min(max_workers, len(tasks)) or 1
     with _futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        # A fresh context copy per task: one Context can't be entered by two
+        # threads at once, and pool threads otherwise start with an empty one.
         fut_to_i = {
             ex.submit(
+                contextvars.copy_context().run,
                 run_subagent,
                 system_prompt=system_prompt,
                 task=task,
                 tool_categories=tool_categories,
                 max_turns=max_turns,
+                hooks=hooks,
+                cwd=cwd,
+                skill_scope=skill_scope,
             ): i
             for i, task in enumerate(tasks)
         }

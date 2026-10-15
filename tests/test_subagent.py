@@ -85,7 +85,8 @@ def test_delegate_plan_has_no_tools(stub_llm, monkeypatch) -> None:
 # --- parallel multi-agent research (Phase 61) ---------------------------
 
 
-def _echo(*, system_prompt, task, tool_categories=(), max_turns=6):
+def _echo(*, system_prompt, task, tool_categories=(), max_turns=6, **_session):
+    # **_session: the hooks / cwd / skill scope the runner hands each subagent.
     return f"found:{task}"
 
 
@@ -96,7 +97,7 @@ def test_run_subagents_parallel_preserves_order(monkeypatch) -> None:
 
 
 def test_run_subagents_parallel_isolates_errors(monkeypatch) -> None:
-    def flaky(*, system_prompt, task, tool_categories=(), max_turns=6):
+    def flaky(*, system_prompt, task, tool_categories=(), max_turns=6, **_session):
         if task == "boom":
             raise RuntimeError("nope")
         return f"ok:{task}"

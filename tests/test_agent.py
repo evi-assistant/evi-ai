@@ -7,8 +7,6 @@ needs to exercise both the plain-text and tool-call paths.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
-from typing import Iterator
 
 import pytest
 
@@ -23,6 +21,20 @@ from evi.llm.agent import (
     _sanitized_messages,
 )
 from evi.tools.base import Tool
+
+# The scripted client lives in tests/conftest.py (the shared `fake_llm`
+# fixture). Its pieces are re-exported here for the tests that import them
+# from this module.
+from tests.conftest import (  # noqa: F401
+    _Choice,
+    _Chunk,
+    _Delta,
+    _FakeClient,
+    _FakeCompletions,
+    _FnDelta,
+    _text_chunk,
+    _ToolCallDelta,
+)
 
 
 def test_sanitized_messages_coerces_null_content() -> None:
@@ -53,60 +65,7 @@ def test_sanitized_messages_coerces_null_content() -> None:
     assert history[1]["content"] is None
 
 
-# ---- fake OpenAI stream primitives --------------------------------------
-
-
-@dataclass
-class _FnDelta:
-    name: str | None = None
-    arguments: str | None = None
-
-
-@dataclass
-class _ToolCallDelta:
-    index: int
-    id: str | None = None
-    function: _FnDelta | None = None
-
-
-@dataclass
-class _Delta:
-    content: str | None = None
-    tool_calls: list[_ToolCallDelta] | None = None
-
-
-@dataclass
-class _Choice:
-    delta: _Delta
-    finish_reason: str | None = None
-
-
-@dataclass
-class _Chunk:
-    choices: list[_Choice]
-
-
-class _FakeCompletions:
-    def __init__(self, scripts: list[list[_Chunk]]) -> None:
-        self._scripts = scripts
-        self.calls = 0
-
-    def create(self, **_: object) -> Iterator[_Chunk]:
-        script = self._scripts[self.calls]
-        self.calls += 1
-        return iter(script)
-
-
-class _FakeClient:
-    def __init__(self, scripts: list[list[_Chunk]]) -> None:
-        self.chat = type("C", (), {"completions": _FakeCompletions(scripts)})()
-
-
 # ---- tests --------------------------------------------------------------
-
-
-def _text_chunk(t: str, finish: str | None = None) -> _Chunk:
-    return _Chunk([_Choice(_Delta(content=t), finish)])
 
 
 def test_plain_text_response() -> None:

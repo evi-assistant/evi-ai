@@ -10,6 +10,7 @@ Events yielded by `Agent.chat`:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import secrets
 import threading
@@ -26,12 +27,14 @@ from evi.hooks import HookRegistry
 
 if TYPE_CHECKING:
     from evi.guardrails import Guardrails
+from evi import hooks as hooks_mod
 from evi import otel
 from evi import skillscope
+from evi import workdir
 from evi.memory import MemoryStore
 from evi.project import ProjectContext
 from evi.skills import SkillStore
-from evi.tools.base import Tool
+from evi.tools.base import REGISTRY, Tool
 from evi.transcripts import TranscriptStore
 from evi.audio_input import (
     build_audio_content,
@@ -483,7 +486,17 @@ class Agent:
         self.project = project
         # Session working folder ("" = process cwd). File tools resolve relative
         # paths against this via evi.workdir; set by /cd, --cwd, or the web UI.
-        self.cwd: str = ""
+        # It starts as the folder active where the agent is built, so an agent
+        # built for a session's run (an /ultra stage, a workflow step inside
+        # fan_out) works in that session's folder, not the process cwd.
+        self.cwd: str = workdir.session_cwd()
+        # The active skill's tool scope for this turn (evi.skillscope). Agent
+        # state, never a ContextVar: invoke_skill runs on a tool thread, so it
+        # returns the scope and the loop applies it here. Cleared each turn.
+        self.active_skill_scope: skillscope.Scope | None = None
+        # The scope of the agent that spawned this one (a subagent started
+        # while a skill was active). A floor: never cleared, only narrowed.
+        self.inherited_skill_scope: skillscope.Scope | None = None
         self.hooks = hooks
         self.permission_callback = permission_callback
         self.permission_batch_callback = permission_batch_callback
@@ -1222,13 +1235,12 @@ class Agent:
         once any tool runs, the prediction is stale and we let the model
         write freely.
         """
-        # Scope file tools to this session's working folder for the turn.
+        # Scope file tools to this session's working folder for the turn. Tool
+        # bodies run on pool threads, so _dispatch_run sets it there too.
         if getattr(self, "cwd", ""):
-            from evi import workdir
-
             workdir.set_cwd(self.cwd)
         # Reset active-skill tool scope each turn; invoke_skill re-arms it.
-        skillscope.clear()
+        self.active_skill_scope = None
         # Input guardrails run on the raw user text, before any composition.
         if self.guardrails is not None:
             _jf = self._guardrail_judge_fn() if self.guardrails.judge_rules else None
@@ -1340,8 +1352,8 @@ class Agent:
             parallel_tool_calls=parallel_tool_calls,
             logit_bias=logit_bias,
         )
-        # Lifecycle hook: the turn finished (notification; veto ignored).
-        self._fire_lifecycle("stop")
+        # No `stop` hook here: every consumer breaks on Done, which closes this
+        # generator before it gets back to this line. The loop fires it.
 
     def _guardrail_judge_fn(self):
         """A one-shot LLM classifier for semantic ([[judge]]) guardrails.
@@ -1409,20 +1421,30 @@ class Agent:
 
     def _fire_lifecycle(self, event: str, payload: str = "") -> bool:
         """Run lifecycle hooks for `event`. Returns True if a hook vetoed.
-        No-op (returns False) when no hooks are configured or scanning fails."""
+        No-op (returns False) when no hooks are configured. If the hooks can't
+        be run at all, a vetoing guard for the event still blocks it (fail
+        closed); anything else is let through."""
         if self.hooks is None:
             return False
         try:
-            _results, veto = self.hooks.run_lifecycle(event, payload=payload)  # type: ignore[arg-type]
+            _results, veto = self.hooks.run_lifecycle(  # type: ignore[arg-type]
+                event, payload=payload, cwd=getattr(self, "cwd", "")
+            )
             return veto is not None
         except Exception:
-            return False
+            try:
+                return self.hooks.can_veto(event)  # type: ignore[arg-type]
+            except Exception:
+                return event in hooks_mod.VETO_EVENTS
 
     def continue_chat(self, max_turns: int = 6) -> Iterator[Event]:
         """Resume inference against the current `history` without appending a
         new user message. Caller is responsible for setting history up — the
         typical use is re-roll: pop the last assistant message (and any
         intervening tool messages), then invoke this to regenerate."""
+        # A re-roll answers the last user message afresh: the turn that set
+        # the old skill scope was rewound away with it.
+        self.active_skill_scope = None
         # Re-use the model the original turn picked, so re-rolls stay on
         # the same expert.
         yield from self._run_inference_loop(
@@ -1572,12 +1594,13 @@ class Agent:
                 yield Steering(_steer, applied=True)
 
             # Recompute each round so tools surfaced mid-turn by `search_tools`
-            # (deferred tool-search-at-scale) become available immediately, and
-            # so an active skill's tool scope (set by invoke_skill) takes effect
-            # on the following rounds.
+            # (deferred tool-search-at-scale) become available immediately. An
+            # active skill's tool scope does NOT trim this list: a tool list
+            # that changes mid-turn makes local backends re-process the whole
+            # prompt. The scope is enforced at dispatch below instead.
             tool_schemas = (
                 None if plan_only
-                else ([t.openai_schema() for t in skillscope.filter_tools(self.tools.values())] or None)
+                else ([t.openai_schema() for t in self.tools.values()] or None)
             )
             dlog(
                 "llm.request",
@@ -1917,7 +1940,7 @@ class Agent:
 
             if not tool_buf:
                 self._maybe_autocompact()
-                yield Done(finish_reason or "stop")
+                yield from self._finish_turn(finish_reason or "stop")
                 return
 
             # Execute the requested tools. Permission is gated in ONE pass
@@ -1937,19 +1960,38 @@ class Agent:
                     "args": fargs,
                 })
 
-            # 1) Permission for all calls at once (batched when possible).
-            self._gate_permissions(calls_meta)
-            # 2) Per-call: unknown-tool error → permission denial → hook veto.
+            # 1) Unknown tools, and the skill scope (allowed/disallowed-tools),
+            #    enforced here at dispatch; the tool list stays as is. A skill
+            #    invoked in this same batch runs alongside the other calls, so
+            #    its scope is read from its arguments up front (skillscope.peek)
+            #    and applied to the rest of the batch.
+            turn_scope = self._skill_scope()
+            batch_scope = turn_scope
             for m in calls_meta:
+                m["sets_scope"] = False
+                if m["tool"] is not None and skillscope.allows(m["name"], turn_scope):
+                    peeked = self._fit_scope(skillscope.peek(m["tool"], m["args"]))
+                    if peeked is not None:
+                        m["sets_scope"] = True
+                        batch_scope = skillscope.narrow(batch_scope, peeked)
+            for m in calls_meta:
+                scope = turn_scope if m["sets_scope"] else batch_scope
                 if m["tool"] is None:
                     m["blocked"] = f"ERROR: unknown tool '{m['name']}'"
-                elif not skillscope.allows(m["name"]):
-                    # Defense-in-depth: the active skill's scope withholds this
-                    # tool from the schema, but refuse it if called anyway.
+                elif not skillscope.allows(m["name"], scope):
                     m["blocked"] = (
                         f"ERROR: tool '{m['name']}' is not allowed by the active skill's scope"
                     )
-                elif not m["perm"]:
+                else:
+                    m["blocked"] = None
+            # 2) Permission for the calls still standing, at once (batched when
+            #    possible): a call refused above never prompts.
+            self._gate_permissions([m for m in calls_meta if m["blocked"] is None])
+            # 3) Per-call: permission denial → hook veto.
+            for m in calls_meta:
+                if m["blocked"] is not None:
+                    continue
+                if not m["perm"]:
                     m["blocked"] = self._denial_message(m.get("tool"), m["name"], m["args"])
                 else:
                     m["blocked"] = self._run_before_hooks(m["name"], m["args"])
@@ -1973,9 +2015,15 @@ class Agent:
                 # thrashing a local LLM box that's also running the model.
                 max_workers = min(4, len(runnable)) or 1
                 with _futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    # Each call runs on its own copy of this thread's context
+                    # (one Context can't be entered by two threads at once), so
+                    # ContextVars set for the turn reach the tool body. Nothing
+                    # a tool sets there comes back: results do (skill scope).
                     future_to_idx = {
                         ex.submit(
-                            self._dispatch_run, m["tool"], m["name"], m["args"]
+                            contextvars.copy_context().run,
+                            self._dispatch_run, m["tool"], m["name"], m["args"],
+                            batch_scope,
                         ): i
                         for i, m in runnable
                     }
@@ -2010,6 +2058,13 @@ class Agent:
                             names = [calls_meta[future_to_idx[f]]["name"] for f in pending]
                             yield ToolProgress(names, round(time.monotonic() - start, 1))
 
+            # A skill invoked this round scopes the rounds after it. Applied
+            # here, on the loop's thread, in call order (skillscope.narrow).
+            for output in outputs:
+                scope = self._fit_scope(skillscope.scope_of(output))
+                if scope is not None:
+                    self.active_skill_scope = skillscope.narrow(self.active_skill_scope, scope)
+
             # Emit results + append history in the ORIGINAL order so
             # tool_call_id pairing stays consistent.
             for m, output in zip(calls_meta, outputs):
@@ -2029,7 +2084,26 @@ class Agent:
                 )
                 self._log_to_transcript("tool", out_obj.text, tool_name=fname)
 
-        yield Done("max_turns_reached")
+        yield from self._finish_turn("max_turns_reached")
+
+    def _finish_turn(self, reason: str) -> Iterator[Event]:
+        """End the turn: fire the `stop` lifecycle hook, then yield Done.
+
+        The hook fires BEFORE the Done event because every consumer (REPL,
+        headless, web worker, subagent) breaks on Done and so closes the
+        generator: anything after that yield never runs. Once per completed
+        inference loop, so a re-roll (continue_chat) fires it once too."""
+        self._fire_lifecycle("stop", reason)
+        yield Done(reason)
+
+    def _skill_scope(self) -> skillscope.Scope | None:
+        """The skill scope this turn's calls run under: the one inherited from
+        a spawning agent, narrowed by any skill invoked in this turn."""
+        return skillscope.narrow(self.inherited_skill_scope, self.active_skill_scope)
+
+    def _fit_scope(self, scope: skillscope.Scope | None) -> skillscope.Scope | None:
+        """A skill's declared scope as eVi understands it (skillscope.fit)."""
+        return skillscope.fit(scope, set(REGISTRY) | set(self.tools))
 
     # --- tool dispatch with permission + hooks --------------------------
 
@@ -2062,7 +2136,20 @@ class Agent:
         else None. Split out from permission so the batch path can gate
         permission once and still run hooks per call."""
         if self.hooks is not None:
-            _results, veto = self.hooks.run_before(name, args_json)
+            try:
+                _results, veto = self.hooks.run_before(
+                    name, args_json, cwd=getattr(self, "cwd", "")
+                )
+            except Exception as exc:
+                # The hooks could not run: a vetoing guard for this call still
+                # blocks it (fail closed); an observer is skipped.
+                try:
+                    guarded = self.hooks.can_veto("before_tool_call", name, args_json)
+                except Exception:
+                    guarded = True
+                if guarded:
+                    return f"BLOCKED BY HOOK: the guard hooks failed to run ({type(exc).__name__})"
+                return None
             if veto is not None:
                 msg = veto.stderr.strip() or veto.stdout.strip() or "(no message)"
                 return f"BLOCKED BY HOOK {veto.hook_name!r}: {msg}"
@@ -2129,22 +2216,44 @@ class Agent:
             for m in need_prompt:
                 m["perm"] = self._ask_permission(m["tool"], m["args"])
 
-    def _dispatch_run(self, tool: Tool, name: str, args_json: str) -> ToolOutput:
+    def _dispatch_run(
+        self,
+        tool: Tool,
+        name: str,
+        args_json: str,
+        skill_scope: skillscope.Scope | None = None,
+    ) -> ToolOutput:
         """Execute the tool body + run after-hooks. Safe to call in parallel
         across multiple tools — each tool gets its own thread of execution
         and its own subprocess for any hook commands.
+
+        `skill_scope` is the scope the call's batch runs under (None: this
+        agent's own), handed to any subagent the tool spawns.
 
         Returns a `ToolOutput` carrying both visible text and any citations
         the tool produced.
         """
         dlog("tool.call", {"name": name, "args": args_json})
         _t0 = time.monotonic()
-        with otel.span("evi.tool", **{"tool.name": name}):
-            try:
-                output = tool.call_rich(args_json)
-            except Exception as exc:
-                # Belt-and-braces: Tool.call_rich already catches most exceptions.
-                output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
+        # The tool body sees this session's folder ("" = the process cwd, not
+        # whatever folder the calling thread last had), hooks and skill scope.
+        # In the chat loop this runs on a pool thread under a copied context,
+        # so these sets stay with this one call; the tokens put things back
+        # when called in-thread. (A batch scope of None means the agent's is.)
+        cwd_token = workdir.set_cwd(getattr(self, "cwd", "") or None)
+        hooks_token = hooks_mod.bind(self.hooks)
+        scope_token = skillscope.bind(skill_scope or self._skill_scope())
+        try:
+            with otel.span("evi.tool", **{"tool.name": name}):
+                try:
+                    output = tool.call_rich(args_json)
+                except Exception as exc:
+                    # Belt-and-braces: Tool.call_rich already catches most exceptions.
+                    output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
+        finally:
+            skillscope.unbind(scope_token)
+            hooks_mod.unbind(hooks_token)
+            workdir.reset(cwd_token)
         otel.record_tool(
             name,
             ok=not output.text.startswith("ERROR:"),
@@ -2152,7 +2261,12 @@ class Agent:
         )
         dlog("tool.result", {"name": name, "output": output.text})
         if self.hooks is not None:
-            self.hooks.run_after(name, args_json, output.text)
+            try:
+                self.hooks.run_after(
+                    name, args_json, output.text, cwd=getattr(self, "cwd", "")
+                )
+            except Exception:  # noqa: BLE001 — an observer must not replace the result
+                pass
         return output
 
     def _invoke_tool(self, tool: Tool | None, name: str, args_json: str) -> str:

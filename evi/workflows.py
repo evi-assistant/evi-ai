@@ -41,6 +41,7 @@ literal braces in a prompt.
 
 from __future__ import annotations
 
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,14 +164,19 @@ def fan_out(fn: Callable[[Any], Any], items: list, max_workers: int = 8) -> list
 
     The shared concurrency primitive behind ``run_workflow``'s parallel blocks
     and ``evi/ultracode.py``'s solver/critic fleets — one home for the
-    ThreadPoolExecutor pattern so neither re-implements it.
+    ThreadPoolExecutor pattern so neither re-implements it. Each call runs on
+    a fresh copy of the caller's context, so session ContextVars (the working
+    folder, the active hooks) reach ``fn``; nothing ``fn`` sets comes back.
     """
     items = list(items)
     if not items:
         return []
     results: list = [None] * len(items)
     with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as ex:
-        fut_to_i = {ex.submit(fn, item): i for i, item in enumerate(items)}
+        fut_to_i = {
+            ex.submit(contextvars.copy_context().run, fn, item): i
+            for i, item in enumerate(items)
+        }
         for fut in as_completed(fut_to_i):
             results[fut_to_i[fut]] = fut.result()
     return results

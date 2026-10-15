@@ -162,7 +162,9 @@ def drain_team(store, run_one, *, max_workers: int = 3, poll: float = 0.02) -> l
     -> str`` until the list can make no more progress. Returns the final tasks.
 
     ``run_one`` must never need to raise — but if it does, the task is marked
-    failed (its dependents become unrunnable and are reported, never hung)."""
+    failed (its dependents become unrunnable and are reported, never hung).
+    Teammates run via ``fan_out``, each on a copy of the caller's context, so
+    ``run_one`` sees the caller's session folder and hooks."""
     from evi.workflows import fan_out
 
     def worker(idx: int) -> None:
