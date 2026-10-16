@@ -314,7 +314,10 @@ def test_tool_call_dispatch() -> None:
         func=_add,
     )
 
-    agent = Agent(client=_FakeClient(script), config=Config(), tools=[add_tool])
+    # No permission UI and an unlisted category: opt into the unattended
+    # "allow" policy so this exercises dispatch, not the permission gate.
+    agent = Agent(client=_FakeClient(script), config=Config(), tools=[add_tool],
+                  unattended_policy="allow")
     events = list(agent.chat("what is 2 + 3?"))
 
     tcalls = [e for e in events if isinstance(e, ToolCall)]
@@ -928,7 +931,8 @@ def test_tool_progress_heartbeat(monkeypatch) -> None:
         long=True,
     )
 
-    agent = Agent(client=_FakeClient(script), config=Config(), tools=[slow_tool])
+    agent = Agent(client=_FakeClient(script), config=Config(), tools=[slow_tool],
+                  unattended_policy="allow")  # no permission UI: let the tool run
     events = list(agent.chat("go"))
 
     progs = [e for e in events if isinstance(e, ToolProgress)]

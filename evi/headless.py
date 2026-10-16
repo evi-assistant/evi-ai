@@ -3,7 +3,8 @@
 Backs `evi run "<prompt>"` — drain one agent turn-loop to completion and return
 a structured result, for scripts / CI / cron. The CLI builds the agent (and
 sets a non-interactive permission policy); this module just drains + formats, so
-it's testable with a fake agent.
+it's testable with a fake agent. The result names the policy the run had
+(`evi.llm.agent.policy_label`: "deny", "allow", "allow-all" or "interactive").
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from evi.llm.agent import Done, Error, TextDelta, ToolResult, UsageStats
+from evi.llm.agent import Done, Error, TextDelta, ToolResult, UsageStats, policy_label
 
 
 @dataclass
@@ -20,6 +21,8 @@ class HeadlessResult:
     tools: list[dict] = field(default_factory=list)
     usage: dict | None = None
     error: str | None = None
+    # How a tool call that would ask was settled in this run (policy_label).
+    policy: str | None = None
 
 
 def run_headless(
@@ -31,7 +34,7 @@ def run_headless(
     for Structured Outputs when the agent supports it.
     """
     parts: list[str] = []
-    res = HeadlessResult()
+    res = HeadlessResult(policy=policy_label(agent))
     chat_kwargs = {"max_turns": max_turns}
     if response_format is not None:
         chat_kwargs["response_format"] = response_format
@@ -55,6 +58,7 @@ def run_headless(
 
 
 def to_json(res: HeadlessResult) -> str:
-    return json.dumps(
-        {"text": res.text, "tools": res.tools, "usage": res.usage, "error": res.error}
-    )
+    out = {"text": res.text, "tools": res.tools, "usage": res.usage, "error": res.error}
+    if res.policy is not None:
+        out["policy"] = res.policy
+    return json.dumps(out)

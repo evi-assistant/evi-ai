@@ -44,7 +44,7 @@ from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
 from evi.backends import get_backend
 from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
-from evi.llm.agent import Agent, Done, Error, Event
+from evi.llm.agent import Agent, Done, Error, Event, make_unattended, remote_unattended
 from evi.llm.client import make_client
 from evi.mcp import MCPManager, filter_allowed, load_servers
 
@@ -706,9 +706,35 @@ def _decision_timeout_s(cfg: Any = None) -> float:
 
 def _deny_unattended(_tool_name: str, _args_json: str, _category: str) -> bool:
     """The permission callback while no client is attached to a session (between
-    turns, channel runs): a tool that would ask is denied. Agent treats a None
-    callback as "no UI, allow", so a session is never left without one."""
+    turns, channel runs): a tool that would ask is denied. With no callback at
+    all the Agent follows [auto] unattended_policy, which the user may set to
+    "allow" for their own scheduled jobs; a session reachable from outside
+    (channel push, a stale stream) is never left without this one."""
     return False
+
+
+@contextmanager
+def _unattended_run(entry: str, settings: Any):
+    """Mark a server-side run nobody watches (`evi.llm.cli_agent.unattended`):
+    a delegate CLI-agent backend the user hasn't allowed for unattended runs
+    ([llm] allow_cli_agent_unattended) is a 409 naming the setting, before any
+    agent work."""
+    from evi.llm.cli_agent import CliAgentUnattended, unattended
+
+    try:
+        with unattended(entry, settings):
+            yield
+    except CliAgentUnattended as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+def _unattended_policy(cfg: Config) -> str:
+    """The policy a local unattended run on `cfg` follows, as its response
+    reports it (`evi.llm.agent.policy_label`): [auto] unattended_policy
+    ("deny" | "allow"), naming an [auto] mode that lets calls run unasked."""
+    from evi.llm.agent import config_policy_label
+
+    return config_policy_label(cfg)
 
 
 # Uploads (and audio sent for transcription) stream to disk with this cap.
@@ -1714,17 +1740,22 @@ def create_app() -> FastAPI:
                     )
                     mcp_manager = None
 
-        try:
-            from evi.scheduler import Scheduler
+        # Safe mode: no scheduled jobs either. They run the user's saved prompts
+        # unattended, exactly what a clean boot rules out.
+        if safemode.enabled():
+            logger.info("scheduler not started: safe mode is on")
+        else:
+            try:
+                from evi.scheduler import Scheduler
 
-            scheduler_obj = Scheduler()
-            scheduler_obj.start()
-        except RuntimeError as exc:
-            logger.info("scheduler not started: %s", exc)
-            scheduler_obj = None
-        except Exception as exc:
-            logger.warning("scheduler failed to start: %s", exc)
-            scheduler_obj = None
+                scheduler_obj = Scheduler()
+                scheduler_obj.start()
+            except RuntimeError as exc:
+                logger.info("scheduler not started: %s", exc)
+                scheduler_obj = None
+            except Exception as exc:
+                logger.warning("scheduler failed to start: %s", exc)
+                scheduler_obj = None
 
         # Inbound chat channels (Telegram). Off unless enabled AND given a token,
         # so the default install starts no poller and opens no inbound path.
@@ -2818,6 +2849,16 @@ def create_app() -> FastAPI:
         sess = get_session(session_id)
 
         if run_now:
+            # A delegate CLI agent's own tools would run with nobody to approve
+            # them: refused (409) unless [llm] allow_cli_agent_unattended.
+            settings = getattr(sess.agent, "config", None)
+            if settings is not None:
+                from evi.llm.cli_agent import CliAgentUnattended, check_unattended
+
+                try:
+                    check_unattended(settings, "channel")
+                except CliAgentUnattended as exc:
+                    raise HTTPException(409, str(exc)) from None
             if not sess.begin_turn():
                 # Can't drive a turn while one is mid-flight — fall back to a note.
                 sess.agent.history.append(
@@ -2829,10 +2870,16 @@ def create_app() -> FastAPI:
 
             # Nobody is watching this turn, so nothing can be asked: a tool that
             # needs approval is denied (not left waiting on a callback a past
-            # /api/chat attached, whose stream is long gone).
+            # /api/chat attached, whose stream is long gone). The text comes from
+            # outside, so what the desk user turned on for this session (/auto
+            # on, [auto] mode yolo / accept_edits, its own auto-approvals) does
+            # not apply either; all of it is put back afterwards. The deny
+            # callback stays attached throughout.
             sess.agent.permission_callback = _deny_unattended
             try:
-                res = run_headless(sess.agent, f"[channel:{source}] {text}")
+                remote = remote_unattended(sess.agent, _deny_unattended)
+                with _unattended_run("channel", settings), remote:
+                    res = run_headless(sess.agent, f"[channel:{source}] {text}")
                 reply = (res.text or res.error or "").strip()
             finally:
                 sess.end_turn()
@@ -2980,8 +3027,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/dispatch/workflow/{name}")
     def dispatch_run_workflow(name: str, req: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Run a workflow headless, server-side (each step its own auto-approved
-        agent; parallel blocks concurrent). Returns {step_id: output}."""
+        """Run a workflow headless, server-side (each step its own agent;
+        parallel blocks concurrent). Nobody can approve a step's tool call, so
+        each runs unattended: auto-approved categories run, anything else
+        follows [auto] unattended_policy (deny by default). Returns
+        {ok, outputs: {step_id: output}, policy}."""
         from evi import workflows as _wf
         from evi.headless import run_headless
         from evi.modes import mode_tools
@@ -3008,15 +3058,17 @@ def create_app() -> FastAPI:
             ))
             if step.mode:
                 agent.tools = {t.name: t for t in mode_tools(step.mode)}
-            agent.enable_auto_all()
+            make_unattended(agent)  # nobody to ask: [auto] unattended_policy
             res = run_headless(agent, prompt)
             return res.text or (f"ERROR: {res.error}" if res.error else "")
 
+        cfg = Config.load()
         try:
-            outputs = _wf.run_workflow(wf, run_step=run_step, variables=variables)
+            with _unattended_run("workflow", cfg):
+                outputs = _wf.run_workflow(wf, run_step=run_step, variables=variables)
         except _wf.WorkflowError as exc:
             raise HTTPException(400, str(exc))
-        return {"ok": True, "outputs": outputs}
+        return {"ok": True, "outputs": outputs, "policy": _unattended_policy(cfg)}
 
     @app.post("/api/federate")
     def federate(req: dict[str, Any], request: Request) -> dict[str, Any]:
@@ -3051,13 +3103,14 @@ def create_app() -> FastAPI:
             from evi.modes import mode_tools
 
             agent.tools = {t.name: t for t in mode_tools(mode)}
-        # Non-interactive: deny tools not already in the auto-approve list.
-        agent.permission_callback = lambda *a, **k: False
-        agent.permission_batch_callback = None
         # Record inbound peer activity so the receiver UI can show an indicator.
         entry = _fed_begin(str(req.get("source") or "peer"), task)
         try:
-            res = run_headless(agent, task)
+            # Non-interactive, and a remote peer's task: deny tools not already
+            # in the auto-approve list, whatever [auto] unattended_policy or
+            # [auto] mode (yolo, accept_edits) says.
+            with _unattended_run("federation", cfg), remote_unattended(agent):
+                res = run_headless(agent, task)
         except Exception:
             _fed_end(entry, "error")
             raise
@@ -3076,6 +3129,7 @@ def create_app() -> FastAPI:
         _federation_lan_guard(request, cfg)
         from evi import a2a as a2a_mod
         from evi.headless import run_headless
+        from evi.llm.cli_agent import unattended
         from evi.sdk.builder import build_agent
 
         def _run(text: str) -> tuple[str, str]:
@@ -3085,11 +3139,13 @@ def create_app() -> FastAPI:
                 enable_hooks=False,
                 enable_guardrails=False,
             ))
-            agent.permission_callback = lambda *a, **k: False
-            agent.permission_batch_callback = None
             entry = _fed_begin("a2a", text)
             try:
-                res = run_headless(agent, text)
+                # A remote agent's task: deny anything not auto-approved, whatever
+                # [auto] unattended_policy or mode says. A refused CLI-agent
+                # backend becomes a failed A2A task.
+                with unattended("A2A", cfg), remote_unattended(agent):
+                    res = run_headless(agent, text)
             except Exception:
                 _fed_end(entry, "error")
                 raise
@@ -3708,7 +3764,9 @@ def create_app() -> FastAPI:
     @app.post("/api/recipes/run")
     def recipes_run(req: dict[str, Any]) -> dict[str, Any]:
         """Run a recipe's steps through one shared agent (calls the model per
-        step). Returns [{label, prompt, text, error}, …]."""
+        step). Nobody can approve a tool call mid-run: auto-approved categories
+        run, anything else follows [auto] unattended_policy (deny by default).
+        Returns {ok, name, steps: [{label, prompt, text, error}, …], policy}."""
         from evi import recipes
 
         if not isinstance(req, dict):
@@ -3724,15 +3782,17 @@ def create_app() -> FastAPI:
 
         # Single-user headless runner; project/guardrails stay off to match the
         # previous inline construction; the user's hooks apply (shared registry).
-        agent = _with_user_hooks(build_agent(
-            config=Config.load(),
-            enable_project=False,
-            enable_hooks=False,
-            enable_guardrails=False,
-        ))
-        agent.enable_auto_all()
-        results = recipes.run_recipe_headless(agent, recipe)
-        return {"ok": True, "name": recipe.name, "steps": results}
+        cfg = Config.load()
+        with _unattended_run("recipe", cfg):
+            agent = _with_user_hooks(build_agent(
+                config=cfg,
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
+            ))
+            policy = make_unattended(agent)  # [auto] unattended_policy
+            results = recipes.run_recipe_headless(agent, recipe)
+        return {"ok": True, "name": recipe.name, "steps": results, "policy": policy}
 
     @app.post("/api/dispatch/ultracode")
     def dispatch_ultracode(req: dict[str, Any]) -> dict[str, Any]:
@@ -3779,9 +3839,13 @@ def create_app() -> FastAPI:
             ucfg.stage_models["solve"] = str(req["solver_model"])
         if cfg_obj.ultracode.auto_tune:
             ucfg = uc.default_tuning(cfg_obj.llm.model, cfg_obj.llm.context_size, ucfg)
-        res = uc.run_ultracode(
-            task, run_one=uc.make_runner(agent_factory, stage_models=ucfg.stage_models), cfg=ucfg
-        )
+        # Stages run unattended (make_runner): refuse a delegate CLI agent up
+        # front rather than as an ERROR in every stage.
+        with _unattended_run("ultracode", cfg_obj):
+            res = uc.run_ultracode(
+                task, run_one=uc.make_runner(agent_factory, stage_models=ucfg.stage_models),
+                cfg=ucfg,
+            )
         return {
             "ok": True, "answer": res.answer,
             "stages": [asdict(s) for s in res.stages],
@@ -4252,19 +4316,22 @@ def create_app() -> FastAPI:
 
         # Single-user headless runner; project/guardrails stay off to match the
         # previous inline construction; the user's hooks apply (shared registry).
-        agent = _with_user_hooks(build_agent(
-            config=Config.load(),
-            enable_project=False,
-            enable_hooks=False,
-            enable_guardrails=False,
-        ))
-        if r.yes:
-            agent.enable_auto_all()
-        else:
-            # Non-interactive: deny non-auto-approved tools rather than block.
-            agent.permission_callback = lambda *a, **k: False
-            agent.permission_batch_callback = None
-        results = recipes.run_recipe_headless(agent, recipe)
+        cfg = Config.load()
+        with _unattended_run("routine", cfg):
+            agent = _with_user_hooks(build_agent(
+                config=cfg,
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
+            ))
+            if r.yes:
+                agent.enable_auto_all()  # this routine's own, explicit opt-in
+                results = recipes.run_recipe_headless(agent, recipe)
+            else:
+                # Triggered from outside: deny non-auto-approved tools, whatever
+                # [auto] unattended_policy or mode says.
+                with remote_unattended(agent):
+                    results = recipes.run_recipe_headless(agent, recipe)
         return {"ok": True, "routine": r.name, "results": results}
 
     @app.post("/api/reset")

@@ -56,6 +56,25 @@ def _resolve_tools(items: Iterable[Any]) -> "list[Tool]":
     return out
 
 
+# The customization-backed tool categories safe mode switches off (tool_toggles).
+SAFE_MODE_OFF_CATEGORIES: tuple[str, ...] = ("memory", "skills", "mcp")
+
+
+def tool_toggles(config: "Config") -> dict[str, Any]:
+    """The ``[tools]`` toggles an agent built now gets: the config's, with the
+    customization-backed categories (memory, skills, MCP) off in safe mode.
+    Their tools hold module-level stores (evi/tools/memory.py,
+    evi/tools/skills.py), so clearing the prompt-side flags is not enough to
+    keep a broken skill or memory file out of the turn."""
+    from evi import safemode
+
+    toggles = asdict(config.tools)
+    if safemode.enabled():
+        for _cat in SAFE_MODE_OFF_CATEGORIES:
+            toggles[_cat] = False
+    return toggles
+
+
 def build_agent(
     *,
     config: "Config | None" = None,
@@ -77,6 +96,7 @@ def build_agent(
     transcripts: "TranscriptStore | None" = None,
     session_id: str | None = None,
     frontend: str = "cli",
+    unattended_policy: str | None = None,
 ):
     """Assemble an :class:`~evi.llm.agent.Agent` from config with batteries.
 
@@ -102,9 +122,13 @@ def build_agent(
         ``user_root/memory``. ``None`` takes the user of the tool call building
         this agent (a subagent works for its parent's user), else single-user.
       permission_callback / permission_batch_callback: tool-permission prompts;
-        ``None`` means non-interactive (the caller decides via auto-approve).
+        ``None`` means non-interactive: auto-approved categories run, and any
+        other call that would ask follows the unattended policy.
       transcripts: a :class:`~evi.transcripts.TranscriptStore` to log turns to.
       session_id: reuse a specific session id (default: a fresh one).
+      unattended_policy: ``"deny"`` | ``"allow"`` — what a call that would ask
+        does when there is no permission callback. ``None`` follows
+        ``[auto] unattended_policy`` (default ``"deny"``: fail closed).
 
     Returns the constructed Agent. Does **not** register the agent anywhere or
     spawn MCP servers — those are runtime concerns for the caller.
@@ -135,7 +159,8 @@ def build_agent(
     if model:
         config = _replace(config, llm=_replace(config.llm, model=model))
     client = client or make_client(config.llm)
-    toggles = asdict(config.tools)
+    # Safe mode drops the customization-backed tool categories (tool_toggles).
+    toggles = tool_toggles(config)
 
     # Safe mode (`evi --safe-mode` / EVI_SAFE_MODE=1) forces every customization
     # off regardless of what the caller asked for. Enforced HERE — the single
@@ -151,12 +176,6 @@ def build_agent(
         enable_hooks = False
         enable_guardrails = False
         transcripts = None
-        # Also drop the customization-backed tool categories. Their tools hold
-        # module-level stores (evi/tools/memory.py, evi/tools/skills.py), so
-        # clearing the prompt-side flags above is not enough to keep a broken
-        # skill or memory file out of the turn.
-        for _cat in ("memory", "skills", "mcp"):
-            toggles[_cat] = False
 
     if tools is None:
         register_builtin_tools()  # ensure REGISTRY is populated before selection
@@ -227,6 +246,7 @@ def build_agent(
         guardrails=guardrails,
         frontend=frontend,
         user_root=user_root,
+        unattended_policy=unattended_policy,
         **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
     # Tool-search-at-scale (opt-in): with many tools, defer the long tail behind

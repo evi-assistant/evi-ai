@@ -459,11 +459,10 @@ def drain(q: queue.Queue):
 # an agent drained on a worker thread, is still caught). The opt-in is a user
 # config edit, ``[llm] allow_cli_agent_unattended = true``.
 #
-# Not wired yet: no shipped entry point enters ``unattended(...)`` and
-# LLMSettings has no ``allow_cli_agent_unattended`` field (read here as False,
-# so the gate fails closed once it is wired). Both come with the unattended
-# default-deny work, which wraps the telegram, scheduler, routine, workflow,
-# federate / a2a, recipe and ultracode runs in this block.
+# Wrapped in this block: scheduled tasks (evi/scheduler.py), subagents with no
+# parent permission UI and so dream and `evi team` (evi/llm/subagent.py),
+# ultracode stages (evi/ultracode.py), `evi run` / `evi batch`, and the web's
+# workflow, recipe, routine, ultracode, channel push, federation and A2A runs.
 
 _UNATTENDED: contextvars.ContextVar[tuple[str, bool] | None] = contextvars.ContextVar(
     "evi_cli_agent_unattended", default=None

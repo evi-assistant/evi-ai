@@ -273,9 +273,21 @@ def multi_review(
     context: str = "",
 ) -> str:
     """Run one reviewer per lens in parallel and combine into one report.
-    `context` is optional repo-scoped review guidance (BUGBOT.md + rules)."""
-    from evi.llm.subagent import run_subagents_parallel
+    `context` is optional repo-scoped review guidance (BUGBOT.md + rules).
 
+    The diff under review is untrusted text and nobody can approve a call
+    mid-review, so each reviewer gets only the READ-ONLY tools of
+    `tool_categories` (`Tool.read_only`: no write_file from `fs`), whatever
+    the ``[tools]`` toggles say (git and index are off by default), and those
+    run without asking. Protected secrets (.env, keys) are still never read."""
+    from evi.llm.subagent import run_subagents_parallel
+    from evi.tools import register_builtin_tools
+
+    cats = set(tool_categories)
+    readonly = tuple(
+        t.name for t in register_builtin_tools().values()
+        if t.category in cats and t.read_only
+    )
     chosen = lenses or list(REVIEW_LENSES)
     body, truncated = truncate_diff(diff)
     note = "" if not truncated else f"\n(NOTE: diff truncated at {_MAX_DIFF_BYTES // 1024} KB)"
@@ -289,6 +301,9 @@ def multi_review(
         tasks,
         system_prompt=MULTI_REVIEW_SYSTEM_PROMPT,
         tool_categories=tool_categories,
+        tools=readonly,
+        # Safe to let run: the reviewers hold read-only tools and nothing else.
+        unattended_policy="allow",
     )
     blocks = [
         f"## {lens.title()}\n\n{findings}"

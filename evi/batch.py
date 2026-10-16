@@ -13,6 +13,7 @@ The engine takes a ``run_one`` callable so it's testable without a model.
 
 from __future__ import annotations
 
+import contextvars
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -82,14 +83,19 @@ def run_batch(
     parallel: int = 1,
 ) -> list[dict[str, Any]]:
     """Run each item through ``run_one`` (order preserved). ``parallel`` > 1
-    runs that many concurrently. Per-item errors are captured, not raised."""
+    runs that many concurrently, each on a copy of the caller's context so the
+    run's ContextVars (the unattended marker, the working folder) reach it.
+    Per-item errors are captured, not raised."""
     if not items:
         return []
     if parallel <= 1:
         return [_safe(run_one, it) for it in items]
     results: list[dict | None] = [None] * len(items)
     with ThreadPoolExecutor(max_workers=min(parallel, len(items))) as ex:
-        fut_to_i = {ex.submit(_safe, run_one, it): i for i, it in enumerate(items)}
+        fut_to_i = {
+            ex.submit(contextvars.copy_context().run, _safe, run_one, it): i
+            for i, it in enumerate(items)
+        }
         for fut, i in fut_to_i.items():
             results[i] = fut.result()
     return [r for r in results if r is not None]

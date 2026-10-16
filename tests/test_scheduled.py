@@ -96,11 +96,14 @@ class _FakeAgent:
 
 @pytest.fixture
 def stubbed_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Redirect scheduled log dir + stub the LLM client + Agent."""
+    """Redirect scheduled log dir + config under tmp_path, and stub the Agent
+    (every scheduled run is built through evi.sdk.builder.build_agent)."""
+    import evi.config as config_mod
+
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.toml")
     monkeypatch.setattr(scheduler_mod, "SCHEDULED_LOG_DIR", tmp_path)
-    monkeypatch.setattr(scheduler_mod, "make_client", lambda *_: None)
-    monkeypatch.setattr(scheduler_mod, "Agent", _FakeAgent)
-    monkeypatch.setattr(scheduler_mod, "get_enabled_tools", lambda _: [])
+    monkeypatch.setattr("evi.sdk.builder.build_agent", _FakeAgent)
     monkeypatch.setattr(scheduler_mod, "ensure_dirs", lambda: None)
     return tmp_path
 
@@ -119,6 +122,7 @@ def test_execute_writes_log_and_records_status(
     assert "hello summa" in body  # text deltas concatenated
     assert "trace" in body
     assert "read_file" in body
+    assert "# policy: deny" in body  # unattended, fail-closed by default
 
     refetched = store.get(task.id)
     assert refetched.last_status == "ok"

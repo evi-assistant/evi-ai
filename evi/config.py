@@ -147,6 +147,11 @@ class LLMSettings:
     # built-ins (concise/explanatory/teacher) or a ~/.evi/styles/<name>.md file.
     # Empty = eVi's default voice. See evi/styles.py.
     output_style: str = ""
+    # A delegate CLI-agent backend (codex, gemini, amp, qwen, copilot) runs its
+    # own tools outside eVi's permission checks, so unattended runs (scheduled
+    # tasks, routines, channels, federation, workflows, subagents, `evi run`)
+    # refuse it unless this is true (evi/llm/cli_agent.py `unattended`).
+    allow_cli_agent_unattended: bool = False
 
 
 @dataclass
@@ -455,6 +460,13 @@ class AutoSettings:
     # Builtin rule ids to silence without disabling the whole guard, e.g.
     # ["git-commit-amend", "system-power"]. See evi/shell_guard.RULE_IDS.
     destructive_disable_rules: list[str] = field(default_factory=list)
+    # What a tool call that would ask does when nobody can be asked: a
+    # scheduled task, a subagent or dream run, a workflow step, an SDK embed
+    # with no permission callback. "deny" (the default, and what any other
+    # value means) refuses it; "allow" runs it, the explicit escape hatch.
+    # Auto-approved categories run either way; protected paths and the
+    # destructive guard deny either way.
+    unattended_policy: str = "deny"
 
 
 @dataclass
@@ -538,16 +550,31 @@ class ChannelSettings:
     Off by default and deliberately narrow: a channel drives a tool-capable
     agent, so an unknown sender is gated by a pairing code (approved locally with
     `evi channel approve`) and an approved one runs with `telegram_tools`, NOT
-    with whatever the desktop user has enabled. Keep `shell`/`fs`/`computer` out
-    of that list unless you fully trust everyone you pair with.
+    with whatever the desktop user has enabled, under the channel's own policy
+    (evi/channels/policy.py), never `[auto]`. Keep `shell`/`fs`/`code`/`computer`
+    out of these lists unless you fully trust everyone you pair with.
     """
 
     telegram_enabled: bool = False
     telegram_token: str = ""
     # Tool CATEGORIES an approved sender may use. Chosen explicitly rather than
-    # inherited, so enabling shell locally never widens the bot.
+    # inherited, so enabling shell locally never widens the bot. [] = no tools.
     telegram_tools: list[str] = field(default_factory=lambda: ["memory", "skills"])
+    # Categories (of telegram_tools) that run without asking. Nobody is at the
+    # desk to answer a prompt, so every other call is denied. [auto] never
+    # applies to the bot: not its auto_approve, mode (yolo / accept_edits),
+    # allow rules or trusted dirs. Listing `code`, `fs`, `shell` or `computer`
+    # lets every paired sender run code or change files on this machine.
+    telegram_auto_approve: list[str] = field(default_factory=list)
     telegram_max_turns: int = 6
+    # Answer paired senders in group chats too. Off: only direct (private)
+    # chats are answered, and a pairing code is only ever sent in one.
+    allow_groups: bool = False
+    # What a channel may do with your long-term memory: "recall" (default:
+    # read and search it), "staged" (also remember, but each note waits in
+    # ~/.evi/inbox/channel/ as untrusted until you apply it) or "full" (read,
+    # write and forget it directly). Any other value means "recall".
+    memory_mode: str = "recall"
 
 
 @dataclass

@@ -2534,7 +2534,12 @@ def _apply_review_fixes(diff: str, review_text: str) -> None:
         ),
         register=False,
     )
-    agent.enable_auto_all()  # --fix is an explicit opt-in to write edits
+    # --fix is an explicit opt-in to file edits and to nothing else: the review
+    # it applies was written by a model reading an untrusted diff. So only the
+    # fs tools, pre-approved; protected paths still ask (and are denied with no
+    # terminal to answer), and no shell, code, web or computer control.
+    agent.tools = {n: t for n, t in agent.tools.items() if getattr(t, "category", "") == "fs"}
+    agent.auto_approve_categories.add("fs")
     prompt = (
         f"Apply the safe, concrete fixes from this review to the working tree.\n\n"
         f"REVIEW:\n{review_text}\n\nDIFF THAT WAS REVIEWED:\n{diff[:20000]}"
@@ -4452,31 +4457,24 @@ def run(
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
-    text → the final answer on stdout. json → {text, tools, usage, error}.
-    Without --yes, tools that aren't in your auto-approve list are denied (so a
-    scripted run never blocks on a prompt). Reads the prompt from stdin if
-    omitted: `echo "summarise README.md" | evi run -m code -y`."""
+    text → the final answer on stdout. json → {text, tools, usage, error,
+    policy}. Nothing prompts (so a scripted run never blocks): without --yes,
+    tools outside your auto-approve list follow [auto] unattended_policy —
+    denied by default. Protected paths (writes, and reads of secrets such as
+    .env that no allow rule covers) and the destructive-command guard deny
+    even with --yes. A delegate CLI-agent backend is refused unless [llm]
+    allow_cli_agent_unattended. Reads the prompt from stdin if omitted:
+    `echo "summarise README.md" | evi run -m code -y`."""
     import sys as _sys
 
     from evi import headless as _hl
+    from evi.llm.agent import make_unattended
+    from evi.llm.cli_agent import CliAgentUnattended, unattended
 
     text = (prompt if prompt is not None else _sys.stdin.read()).strip()
     if not text:
         console.print("[red]no prompt given[/red]")
         raise typer.Exit(2)
-
-    agent = _build_agent()
-    if mode:
-        from evi.modes import mode_tools
-
-        agent.tools = {t.name: t for t in mode_tools(mode)}
-    if yes:
-        agent.enable_auto_all()
-    else:
-        # Non-interactive: deny tools not already auto-approved rather than
-        # block on a permission prompt that no one can answer.
-        agent.permission_callback = lambda *a, **k: False
-        agent.permission_batch_callback = None
 
     response_format = None
     if schema:
@@ -4488,7 +4486,23 @@ def run(
             print(f"error: {exc}", file=_sys.stderr)
             raise typer.Exit(2)
 
-    res = _hl.run_headless(agent, text, response_format=response_format)
+    try:
+        with unattended("evi run", Config.load()):
+            agent = _build_agent()
+            if mode:
+                from evi.modes import mode_tools
+
+                agent.tools = {t.name: t for t in mode_tools(mode)}
+            if yes:
+                agent.enable_auto_all()
+            # Non-interactive: drop the terminal prompts, so a call that would
+            # ask follows the unattended policy instead of blocking on a prompt
+            # no one can answer.
+            make_unattended(agent)
+            res = _hl.run_headless(agent, text, response_format=response_format)
+    except CliAgentUnattended as exc:
+        print(f"error: {exc}", file=_sys.stderr)
+        raise typer.Exit(1)
     if format == "json":
         print(_hl.to_json(res))
         return
@@ -4510,11 +4524,15 @@ def batch(
 
     Each item gets its own agent (per-item `mode`/`schema` override the flags).
     Local analog of a Batch API — good for evals, bulk extraction, translations.
+    Nothing prompts: as for `evi run`, tools outside your auto-approve list
+    follow [auto] unattended_policy (denied by default) unless --yes.
     """
     import sys as _sys
 
     from evi import batch as _batch
     from evi.headless import run_headless
+    from evi.llm.agent import make_unattended
+    from evi.llm.cli_agent import CliAgentUnattended, unattended
     from evi.modes import mode_tools
     from evi.structured import as_response_format, load_schema
 
@@ -4534,9 +4552,7 @@ def batch(
             agent.tools = {t.name: t for t in mode_tools(m)}
         if yes:
             agent.enable_auto_all()
-        else:
-            agent.permission_callback = lambda *a, **k: False
-            agent.permission_batch_callback = None
+        make_unattended(agent)  # no prompts: [auto] unattended_policy decides
         rf = None
         if item.get("schema"):
             rf = as_response_format(load_schema(str(item["schema"])))
@@ -4547,9 +4563,15 @@ def batch(
             "text": res.text,
             "error": res.error,
             "usage": res.usage,
+            "policy": res.policy,
         }
 
-    results = _batch.run_batch(items, run_one, parallel=max(1, parallel))
+    try:
+        with unattended("evi batch", Config.load()):
+            results = _batch.run_batch(items, run_one, parallel=max(1, parallel))
+    except CliAgentUnattended as exc:
+        print(f"error: {exc}", file=_sys.stderr)
+        raise typer.Exit(1)
     payload = _batch.to_jsonl(results)
     if out:
         from pathlib import Path as _Path
@@ -6234,14 +6256,28 @@ def team_run(
         help="Distribute tasks across reachable federation peers + local (cross-machine parallelism).",
     ),
 ) -> None:
-    """Spawn teammates to drain the shared list in dependency order."""
+    """Spawn teammates to drain the shared list in dependency order.
+
+    Teammates run unattended: fs and code calls run if auto-approved, anything
+    else follows [auto] unattended_policy (denied by default)."""
     from evi import teams
+    from evi.llm.agent import config_policy_label
+    from evi.llm.cli_agent import CliAgentUnattended, check_unattended
     from evi.llm.subagent import run_subagent
 
     store = teams.TeamStore()
     if not teams.ready_tasks(store.load()) and not store.any_active():
         console.print("[yellow]nothing to run[/yellow] — add tasks with `evi team new`/`evi team add`")
         raise typer.Exit(1)
+    cfg = Config.load()
+    try:
+        check_unattended(cfg, "evi team")  # before any teammate starts
+    except CliAgentUnattended as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[dim]teammates run unattended · policy={config_policy_label(cfg)}[/dim]"
+    )
 
     def run_one(task) -> str:
         return run_subagent(
@@ -7434,7 +7470,8 @@ def schedule_run_now(task_id: str) -> None:
 
     sched = Scheduler()
     log_path = sched.run_now(task_id)
-    console.print(f"[cyan]ran[/cyan] {task_id} → {log_path}")
+    status = sched.store.get(task_id).last_status or ""
+    console.print(f"[cyan]ran[/cyan] {task_id} → {log_path} [dim]({status})[/dim]")
 
 
 @app.command()
@@ -7443,7 +7480,11 @@ def scheduler(reload_interval: int = 60) -> None:
 
     Re-syncs jobs with disk every `--reload-interval` seconds so changes via
     `evi schedule add/remove/...` are picked up without restarting.
+
+    Jobs run unattended: auto-approved tool categories run, anything else
+    follows [auto] unattended_policy (denied by default).
     """
+    from evi.llm.agent import config_policy_label
     from evi.scheduler import Scheduler
 
     sched = Scheduler()
@@ -7452,7 +7493,11 @@ def scheduler(reload_interval: int = 60) -> None:
     except RuntimeError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
-    console.print("[cyan]eVi scheduler running.[/cyan] Ctrl-C to stop.")
+    policy = config_policy_label(Config.load())
+    console.print(
+        "[cyan]eVi scheduler running.[/cyan] Ctrl-C to stop. "
+        f"[dim]policy={policy}[/dim]"
+    )
     try:
         import time
 

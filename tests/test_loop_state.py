@@ -90,11 +90,27 @@ def _lines(p: Path) -> list[str]:
 
 
 def _agent(client, tools: list[str], *, hooks=None, cwd: str = "") -> Agent:
+    # No permission UI here: the unattended "allow" policy lets shell and
+    # subagent calls run, so these tests exercise session state, not the gate
+    # (tests/test_unattended_policy.py covers that).
     agent = Agent(
-        client=client, config=Config(), tools=[REGISTRY[n] for n in tools], hooks=hooks
+        client=client, config=Config(), tools=[REGISTRY[n] for n in tools], hooks=hooks,
+        unattended_policy="allow",
     )
     agent.cwd = cwd
     return agent
+
+
+def _writer_profile(home: Path, monkeypatch) -> None:
+    """A user subagent profile `writer` with the fs category (write_file
+    included): the built-in explore profile is read-only."""
+    import evi.llm.subagent as subagent_mod
+
+    f = home / "agents.toml"
+    f.write_text(
+        '[[agent]]\nname = "writer"\nsystem_prompt = "sub"\ntools = ["fs"]\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(subagent_mod, "_user_profiles_path", lambda: f)
 
 
 def _results(events) -> list[ToolResult]:
@@ -263,11 +279,25 @@ def test_agents_built_for_a_run_after_cd_work_in_the_session_folder(
         return Agent(client=client, config=Config(), tools=[REGISTRY["write_file"]],
                      system_prompt=sp)
 
+    # Ultracode stages only read (a solver keeps just read-only fs tools), so
+    # they show their folder by reading a file that is only in the session's.
+    (proj / "stage.txt").write_text("in the session folder\n", encoding="utf-8")
+    readers: list = []
+
+    def reader(sp, model=None, backend=None):
+        client = fake_llm([
+            fake_llm.call(("read_file", {"path": "stage.txt"})),
+            fake_llm.text("ok"),
+        ])
+        readers.append(client)
+        return Agent(client=client, config=Config(), tools=[REGISTRY["read_file"]],
+                     system_prompt=sp)
+
     token = workdir.set_cwd(str(proj))
     try:
         assert factory("sp").cwd == str(proj)
         uc.run_ultracode(
-            "edit it", run_one=uc.make_runner(factory),
+            "edit it", run_one=uc.make_runner(reader),
             cfg=uc.UltraConfig(breadth=1, rounds=0, mode=""),
         )
         fan_out(lambda n: list(factory("step", name=n).chat("go")), ["a.txt", "b.txt"])
@@ -276,7 +306,9 @@ def test_agents_built_for_a_run_after_cd_work_in_the_session_folder(
         list(early.chat("go"))
     finally:
         workdir.reset(token)
-    assert (proj / "stage.txt").exists() and not (Path.cwd() / "stage.txt").exists()
+    assert any("in the session folder" in json.dumps(c.requests[-1]["messages"])
+               for c in readers)
+    assert not (Path.cwd() / "stage.txt").exists()
     assert (proj / "a.txt").exists() and (proj / "b.txt").exists()
     assert (Path.cwd() / "early.txt").exists() and not (proj / "early.txt").exists()
 
@@ -439,12 +471,13 @@ def test_delegate_runs_under_the_skill_scope(home, tmp_path, skills, fake_llm, m
     ])
     monkeypatch.setattr(subagent_mod, "make_client", lambda *_: sub_client)
     monkeypatch.setattr(subagent_mod, "Config", SimpleNamespace(load=Config))
+    _writer_profile(home, monkeypatch)
     parent = fake_llm([
         fake_llm.call(("invoke_skill", {"name": "careful"})),
-        fake_llm.call(("delegate_explore", {"task": "write x.txt"})),
+        fake_llm.call(("delegate", {"profile": "writer", "task": "write x.txt"})),
         fake_llm.text("delegated"),
     ])
-    agent = _agent(parent, ["invoke_skill", "write_file", "delegate_explore"], cwd=str(proj))
+    agent = _agent(parent, ["invoke_skill", "write_file", "delegate"], cwd=str(proj))
 
     out = _results(agent.chat("go"))
 
@@ -697,8 +730,9 @@ def test_subagent_inherits_parent_hooks_and_folder(home, tmp_path, fake_llm, mon
     ])
     monkeypatch.setattr(subagent_mod, "make_client", lambda *_: sub_client)
     monkeypatch.setattr(subagent_mod, "Config", SimpleNamespace(load=Config))
+    _writer_profile(home, monkeypatch)
     parent = fake_llm([
-        fake_llm.call(("delegate_explore", {"task": "write two files"})),
+        fake_llm.call(("delegate", {"profile": "writer", "task": "write two files"})),
         fake_llm.text("delegated"),
     ])
     reg = HookRegistry([
@@ -706,7 +740,7 @@ def test_subagent_inherits_parent_hooks_and_folder(home, tmp_path, fake_llm, mon
         _marker_hook("stop", marker),
         _marker_hook("user_prompt_submit", marker),
     ])
-    agent = _agent(parent, ["delegate_explore"], hooks=reg, cwd=str(proj))
+    agent = _agent(parent, ["delegate"], hooks=reg, cwd=str(proj))
 
     out = _results(agent.chat("go"))
 

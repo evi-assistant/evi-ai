@@ -1,8 +1,16 @@
 """Scheduler — fire `ScheduledTask`s on a cron schedule.
 
 Wraps APScheduler's `BackgroundScheduler`. On each fire we build a one-shot
-`Agent` (no shared history between runs), drain its event stream into a log
-file under `~/.evi/logs/scheduled/`, and record the run on the task.
+`Agent` (no shared history between runs) through `evi.sdk.build_agent` (so safe
+mode, hooks and guardrails apply), drain its event stream into a log file under
+`~/.evi/logs/scheduled/`, and record the run on the task.
+
+Nobody is there to approve a tool call, so a scheduled run is unattended: the
+auto-approved categories run, and anything that would ask follows
+``[auto] unattended_policy`` — denied by default. The log header names the
+policy, and a run where a call was denied records a non-ok status
+("denied: …") so `evi schedule list` shows it. A delegate CLI-agent backend is
+refused unless ``[llm] allow_cli_agent_unattended`` is set.
 
 The scheduler is independent of the chat UI — running `evi scheduler` (CLI
 daemon mode) is enough to fire jobs. When the FastAPI app is up it also
@@ -17,17 +25,21 @@ get a clear error there instead of an ImportError at top of the module.
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
 from evi.config import SCHEDULED_LOG_DIR, Config, ensure_dirs
-from evi.llm.agent import Agent, Done, Error, TextDelta, ToolCall, ToolResult
-from evi.llm.client import make_client
-from evi.memory import MemoryStore
+from evi.llm.agent import (
+    Done,
+    Error,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+    is_permission_denial,
+    make_unattended,
+)
+from evi.llm.cli_agent import unattended
 from evi.scheduled import ScheduledTask, TaskStore
-from evi.skills import SkillStore
-from evi.tools.base import get_enabled_tools
 
 
 logger = logging.getLogger(__name__)
@@ -135,10 +147,13 @@ def _execute(task: ScheduledTask, store: TaskStore) -> str:
     config = Config.load()
     log_path = SCHEDULED_LOG_DIR / _log_name(task)
     try:
-        if task.kind == "eval":
-            text, status = _run_eval_once(task, config)
-        else:
-            text, status = _run_agent_once(task, config), "ok"
+        # Unattended: a delegate CLI agent is refused up front, and any client
+        # built inside refuses on whatever thread later calls it.
+        with unattended("scheduled task", config):
+            if task.kind == "eval":
+                text, status = _run_eval_once(task, config)
+            else:
+                text, status = _run_agent_once(task, config)
         log_path.write_text(text, encoding="utf-8")
         store.record_run(task.id, status=status)
         return str(log_path)
@@ -152,30 +167,28 @@ def _execute(task: ScheduledTask, store: TaskStore) -> str:
         return str(log_path)
 
 
-def _run_agent_once(task: ScheduledTask, config: Config) -> str:
-    """Build a fresh Agent, send the prompt, return assistant text + trace."""
-    client = make_client(config.llm)
-    toggles = asdict(config.tools)
-    tools = get_enabled_tools(toggles)
-    memory = MemoryStore() if toggles.get("memory") else None
-    skills = SkillStore() if toggles.get("skills") else None
+def _run_agent_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
+    """Build a fresh Agent, send the prompt, return (log text, status).
+
+    The status is "ok", "denied: <tools>" when the unattended policy (or the
+    guard) refused a call, or "error: <message>" when the turn failed."""
+    from evi.sdk.builder import build_agent
 
     base_prompt = (
         "You are eVi, a personal AI assistant running locally. "
         "You have access to tools — call them when they would help, but "
         "answer directly when you don't need them. " + _SCHEDULED_SYSTEM_SUFFIX
     )
-    agent = Agent(
-        client=client,
-        config=config,
-        tools=tools,
-        system_prompt=base_prompt,
-        memory=memory,
-        skills=skills,
-    )
+    # build_agent: safe mode, hooks and guardrails apply. No project context:
+    # a scheduled run has no project folder.
+    agent = build_agent(config=config, system_prompt=base_prompt, enable_project=False)
+    # Nobody to ask: anything that would ask follows [auto] unattended_policy.
+    policy = make_unattended(agent)
 
     text_parts: list[str] = []
     trace: list[str] = []
+    denied: list[str] = []
+    error: str | None = None
     for event in agent.chat(task.prompt, max_turns=8):
         if isinstance(event, TextDelta):
             text_parts.append(event.text)
@@ -184,8 +197,11 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> str:
         elif isinstance(event, ToolResult):
             preview = event.output[:200].replace("\n", " ")
             trace.append(f"<- {event.name}: {preview}")
+            if is_permission_denial(event.output) and event.name not in denied:
+                denied.append(event.name)
         elif isinstance(event, Error):
             trace.append(f"!! {event.message}")
+            error = event.message
             break
         elif isinstance(event, Done):
             break
@@ -195,6 +211,7 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> str:
         f"# id: {task.id}\n"
         f"# cron: {task.cron}\n"
         f"# fired_at: {datetime.now().isoformat(timespec='seconds')}\n"
+        f"# policy: {policy}\n"
         f"# prompt: {task.prompt!r}\n"
         f"\n## response\n\n"
     )
@@ -202,27 +219,42 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> str:
     tail = ""
     if trace:
         tail = "\n\n## trace\n\n" + "\n".join(trace)
-    return header + body + tail + "\n"
+    if error is not None:
+        status = f"error: {error}"
+    elif denied:
+        status = f"denied: {', '.join(denied)} (policy {policy})"
+    else:
+        status = "ok"
+    return header + body + tail + "\n", status[:200]
 
 
 def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
     """Run an eval suite (task.prompt = suite name). Returns (log_text, status)
     where status is "ok (P/T)" when all pass, else "fail (P/T)" — so drift shows
-    up in `evi schedule list`."""
+    up in `evi schedule list`.
+
+    Cases run with every tool approved, as `evi eval run` does
+    (evals.make_runners): the suite is the user's own and measures what the
+    agent can do. The log header says so."""
     from evi import evals
     from evi.headless import run_headless
+    from evi.sdk.builder import build_agent
 
     suite = evals.load_suite(task.prompt)
 
+    # As the web eval runner: no hooks or guardrails, so a hook that vetoes or
+    # rewrites a call can't make the scores depend on this machine.
+    bare = {"enable_memory": False, "enable_skills": False, "enable_project": False,
+            "enable_hooks": False, "enable_guardrails": False}
+
     def run_one(case) -> str:
-        agent = Agent(client=make_client(config.llm), config=config,
-                      tools=get_enabled_tools(asdict(config.tools)))
+        agent = build_agent(config=config, **bare)
         agent.enable_auto_all()
         res = run_headless(agent, case.prompt)
         return res.text or (f"ERROR: {res.error}" if res.error else "")
 
     def judge_fn(case, output) -> tuple[bool, str]:
-        agent = Agent(client=make_client(config.llm), config=config, tools=[])
+        agent = build_agent(config=config, tools=[], **bare)
         prompt = (
             "Grade the ANSWER against the RUBRIC. Reply PASS or FAIL on the first "
             f"line, then a one-line reason.\n\nRUBRIC: {case.judge}\n\nANSWER:\n{output}"
@@ -238,6 +270,7 @@ def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
         f"# scheduled eval: {task.name}",
         f"# suite: {suite.name}  ({p}/{t} passed)",
         f"# fired_at: {datetime.now().isoformat(timespec='seconds')}",
+        "# policy: allow-all (eval suite cases, as `evi eval run`)",
         "",
     ]
     for c in report["cases"]:

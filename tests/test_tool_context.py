@@ -90,6 +90,15 @@ def _results(events) -> list[ToolResult]:
     return [e for e in events if isinstance(e, ToolResult)]
 
 
+def _open_config() -> Config:
+    """A stock Config under which an agent with no permission UI runs every
+    tool call ([auto] unattended_policy = "allow"). These tests are about the
+    ToolContext; tests/test_unattended_policy.py covers what a missing UI denies."""
+    cfg = Config()
+    cfg.auto.unattended_policy = "allow"
+    return cfg
+
+
 def _schema(**props: str) -> dict:
     return {
         "type": "object",
@@ -149,7 +158,7 @@ def test_ctx_tool_gets_session_cwd_id_and_turn(home, tmp_path, fake_llm):
         fake_llm.call(("probe", {"x": "second"}), ("probe", {"x": "third"})),
         fake_llm.text("done"),
     ])
-    agent = Agent(client=client, config=Config(), tools=[_probe(seen)], session_id="sess-1")
+    agent = Agent(client=client, config=_open_config(), tools=[_probe(seen)], session_id="sess-1")
     agent.cwd = str(tmp_path)
     list(agent.chat("one"))
     list(agent.chat("two"))
@@ -196,7 +205,7 @@ def test_legacy_tools_are_called_exactly_as_before(home, fake_llm):
                       ("srv.tool", {"ctx": "the server's own argument"})),
         fake_llm.text("done"),
     ])
-    agent = Agent(client=client, config=Config(), tools=tools)
+    agent = Agent(client=client, config=_open_config(), tools=tools)
     events = list(agent.chat("go"))
 
     assert sorted(got, key=repr) == sorted([
@@ -215,7 +224,7 @@ def test_the_model_cannot_forge_the_context(home, fake_llm):
         fake_llm.call(("probe", {"x": "a", "ctx": {"user_root": "/somewhere/else"}})),
         fake_llm.text("done"),
     ])
-    agent = Agent(client=client, config=Config(), tools=[_probe(seen)])
+    agent = Agent(client=client, config=_open_config(), tools=[_probe(seen)])
     list(agent.chat("go"))
     [(_, ctx)] = seen
     assert isinstance(ctx, ToolContext) and ctx.agent is agent and ctx.user_root is None
@@ -272,11 +281,11 @@ def test_two_agents_never_see_each_others_bound_state(home, fake_llm):
             fake_llm.call(("note", {"text": "a1"})), fake_llm.text("ok"),
             fake_llm.call(("note", {"text": "a2"})), fake_llm.text("ok"),
         ]),
-        config=Config(), tools=[shared], session_id="A",
+        config=_open_config(), tools=[shared], session_id="A",
     )
     b = Agent(
         client=fake_llm([fake_llm.call(("note", {"text": "b1"})), fake_llm.text("ok")]),
-        config=Config(), tools=[shared], session_id="B",
+        config=_open_config(), tools=[shared], session_id="B",
     )
     first_a = _results(a.chat("1"))
     only_b = _results(b.chat("1"))
@@ -298,11 +307,11 @@ def test_an_agent_built_from_another_agents_tools_binds_its_own(home, fake_llm):
     shared = _note_tool()
     a = Agent(client=fake_llm([fake_llm.call(("note", {"text": "secret-a"})),
                                fake_llm.text("ok")]),
-              config=Config(), tools=[shared], session_id="A")
+              config=_open_config(), tools=[shared], session_id="A")
     list(a.chat("1"))
     a_copies = list(a.tools_for_session().values())
     b = Agent(client=fake_llm([fake_llm.call(("note", {"text": "b1"})), fake_llm.text("ok")]),
-              config=Config(), tools=a_copies, session_id="B")
+              config=_open_config(), tools=a_copies, session_id="B")
     [got] = _results(b.chat("1"))
     assert json.loads(got.output) == {"session": "B", "notes": ["b1"]}
     assert b.tools_for_session(a_copies)["note"] is b.tools_for_session()["note"]
@@ -327,7 +336,7 @@ def test_a_failing_binder_breaks_only_its_own_calls(home, fake_llm):
     seen: list = []
     client = fake_llm([fake_llm.call(("bad", {}), ("probe", {"x": "fine"})),
                        fake_llm.text("ok")])
-    agent = Agent(client=client, config=Config(), tools=[bad, _probe(seen)])  # no raise
+    agent = Agent(client=client, config=_open_config(), tools=[bad, _probe(seen)])  # no raise
     results = {r.name: r.output for r in _results(agent.chat("go"))}
     assert results["bad"] == "ERROR: RuntimeError: binder exploded"
     assert results["probe"] == "ok" and [x for x, _ in seen] == ["fine"]
@@ -347,7 +356,7 @@ def test_a_binder_may_look_up_another_session_tool(home, fake_llm):
 
     outer = _binder_tool("outer", binder)
     agent = Agent(client=fake_llm([fake_llm.call(("outer", {})), fake_llm.text("ok")]),
-                  config=Config(), tools=[outer, helper], session_id="S")
+                  config=_open_config(), tools=[outer, helper], session_id="S")
     out: list = []
     t = threading.Thread(target=lambda: out.extend(_results(agent.chat("go"))), daemon=True)
     t.start()
@@ -372,7 +381,7 @@ def test_reset_starts_session_tools_afresh_and_turns_keep_counting(home, fake_ll
             fake_llm.call(("note", {"text": "after"}), ("probe", {"x": "t"})),
             fake_llm.text("ok"),
         ]),
-        config=Config(), tools=[_note_tool(), _probe(seen)], session_id="S",
+        config=_open_config(), tools=[_note_tool(), _probe(seen)], session_id="S",
     )
     list(agent.chat("1"))
     agent.reset()
@@ -389,7 +398,7 @@ def test_the_session_bound_is_the_one_a_call_runs_in(home, fake_llm):
             fake_llm.call(("note", {"text": "r1"})), fake_llm.text("ok"),
             fake_llm.call(("note", {"text": "o1"})), fake_llm.text("ok"),
         ]),
-        config=Config(), tools=[_note_tool()],
+        config=_open_config(), tools=[_note_tool()],
     )
     agent.session_id = "resumed-session"
     [first] = _results(agent.chat("1"))
@@ -406,7 +415,7 @@ def test_two_agents_running_at_once_keep_their_own_state(home, fake_llm):
         calls = [("note", {"text": f"{sid}{i}"}) for i in range(3)]
         agents[sid] = Agent(
             client=fake_llm([fake_llm.call(*calls), fake_llm.text("ok")]),
-            config=Config(), tools=[shared], session_id=sid,
+            config=_open_config(), tools=[shared], session_id=sid,
         )
     start = threading.Barrier(2)
 
@@ -434,7 +443,7 @@ def test_a_tool_added_after_build_is_bound_once(home, fake_llm):
             fake_llm.call(("note", {"text": "x"})), fake_llm.text("ok"),
             fake_llm.call(("note", {"text": "y"})), fake_llm.text("ok"),
         ]),
-        config=Config(), tools=[], session_id="S",
+        config=_open_config(), tools=[], session_id="S",
     )
     agent.tools = {"note": shared}
     list(agent.chat("1"))
@@ -468,7 +477,7 @@ def test_tool_schema_bytes_identical_with_and_without_binding(home, fake_llm):
         fake_llm.call(("note", {"text": "x"})), fake_llm.text("ok"),
         fake_llm.text("again"),
     ])
-    agent = Agent(client=client, config=Config(), tools=raw)
+    agent = Agent(client=client, config=_open_config(), tools=raw)
 
     assert list(agent.tools) == [t.name for t in raw]  # same names, same order
     assert _digest(_schema_bytes(agent.tools.values())) == want
@@ -557,9 +566,9 @@ def test_agents_built_inside_a_tool_call_work_for_the_same_user(home, fake_llm):
 
     def spawn() -> str:
         inner["context"] = active_context()
-        inner["agent"] = Agent(client=fake_llm([]), config=Config(), tools=[])
+        inner["agent"] = Agent(client=fake_llm([]), config=_open_config(), tools=[])
         inner["built"] = build_agent(
-            config=Config(), client=fake_llm([]), tools=[], enable_memory=True,
+            config=_open_config(), client=fake_llm([]), tools=[], enable_memory=True,
             enable_skills=False, enable_project=False, enable_hooks=False,
             enable_guardrails=False,
         )
@@ -567,7 +576,7 @@ def test_agents_built_inside_a_tool_call_work_for_the_same_user(home, fake_llm):
 
     parent = Agent(
         client=fake_llm([fake_llm.call(("spawn", {})), fake_llm.text("ok")]),
-        config=Config(), tools=[Tool(name="spawn", description="d",
+        config=_open_config(), tools=[Tool(name="spawn", description="d",
                                      parameters=_schema(), func=spawn)],
         user_root=alice_root,
     )
@@ -578,7 +587,7 @@ def test_agents_built_inside_a_tool_call_work_for_the_same_user(home, fake_llm):
     assert inner["built"].memory.root == alice_root / "memory"
     # Outside a tool call nothing is inherited.
     assert active_context() is None
-    assert Agent(client=fake_llm([]), config=Config(), tools=[]).user_root is None
+    assert Agent(client=fake_llm([]), config=_open_config(), tools=[]).user_root is None
 
 
 def _sse_events(body: str) -> list[dict]:
@@ -672,7 +681,7 @@ def test_checkpoints_record_session_turn_and_user(home, tmp_path, fake_llm):
         fake_llm.call(("write_file", {"path": str(target), "content": "v1"})),
         fake_llm.text("ok"),
     ])
-    agent = Agent(client=client, config=Config(), tools=[REGISTRY["write_file"]],
+    agent = Agent(client=client, config=_open_config(), tools=[REGISTRY["write_file"]],
                   session_id="sess-w", user_root=home / "users" / "alice")
     agent.auto_all = True
     list(agent.chat("write it"))
@@ -706,7 +715,7 @@ def test_a_revived_session_counts_turns_on_from_its_history(home, tmp_path, fake
     work.mkdir()
 
     def agent_for(script) -> Agent:
-        ag = Agent(client=fake_llm(script), config=Config(), tools=[REGISTRY["write_file"]],
+        ag = Agent(client=fake_llm(script), config=_open_config(), tools=[REGISTRY["write_file"]],
                    transcripts=TranscriptStore(root=tr_root), session_id="S1")
         ag.auto_all = True
         return ag
@@ -753,7 +762,7 @@ def test_a_nested_agents_writes_carry_the_top_level_session_and_turn(
         child = Agent(
             client=fake_llm([fake_llm.call(_write_call(work / "child.txt", "c")),
                              fake_llm.text("ok")]),
-            config=Config(), tools=[REGISTRY["write_file"]],
+            config=_open_config(), tools=[REGISTRY["write_file"]],
         )
         child.auto_all = True
         built["child"] = child
@@ -765,7 +774,7 @@ def test_a_nested_agents_writes_carry_the_top_level_session_and_turn(
             fake_llm.text("hello"),
             fake_llm.call(("spawn", {})), fake_llm.text("ok"),
         ]),
-        config=Config(), session_id="P", user_root=home / "users" / "alice",
+        config=_open_config(), session_id="P", user_root=home / "users" / "alice",
         tools=[Tool(name="spawn", description="d", parameters=_schema(), func=spawn)],
     )
     list(parent.chat("hi"))

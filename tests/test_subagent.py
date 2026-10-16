@@ -1,8 +1,9 @@
 """Tests for the subagent runner and the delegate_* tools.
 
-We don't hit the real LLM — instead we monkeypatch `Agent` inside
-`evi.llm.subagent` with a fake that yields a scripted event stream so we can
-verify event drain, tool tracing, and error propagation.
+We don't hit the real LLM — instead we monkeypatch `build_agent` (which
+`evi.llm.subagent` builds every subagent through) with a fake that yields a
+scripted event stream so we can verify event drain, tool tracing, and error
+propagation.
 """
 
 from __future__ import annotations
@@ -40,13 +41,24 @@ class _ErroringAgent:
 
 
 @pytest.fixture
-def stub_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    # We don't need a real OpenAI client or config — short-circuit both.
+def stub_llm(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    # We don't need a real OpenAI client — short-circuit it — and the config
+    # is a stock one under tmp_path, never ~/.evi.
+    import evi.config as config_mod
+
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.toml")
+    monkeypatch.delenv("EVI_SAFE_MODE", raising=False)
     monkeypatch.setattr(subagent_mod, "make_client", lambda *_: None)
 
 
+def _build_with(monkeypatch, fake) -> None:
+    """Every subagent is built through evi.sdk.builder.build_agent."""
+    monkeypatch.setattr("evi.sdk.builder.build_agent", fake)
+
+
 def test_run_subagent_concatenates_text(stub_llm, monkeypatch) -> None:
-    monkeypatch.setattr(subagent_mod, "Agent", _FakeAgent)
+    _build_with(monkeypatch, _FakeAgent)
     out = subagent_mod.run_subagent(
         system_prompt="you are a test",
         task="do the thing",
@@ -59,24 +71,25 @@ def test_run_subagent_concatenates_text(stub_llm, monkeypatch) -> None:
 
 
 def test_run_subagent_surfaces_error(stub_llm, monkeypatch) -> None:
-    monkeypatch.setattr(subagent_mod, "Agent", _ErroringAgent)
+    _build_with(monkeypatch, _ErroringAgent)
     out = subagent_mod.run_subagent(system_prompt="t", task="x")
     assert out.startswith("ERROR: subagent failed:")
     assert "model unreachable" in out
 
 
 def test_delegate_explore_uses_fs_only(stub_llm, monkeypatch) -> None:
-    monkeypatch.setattr(subagent_mod, "Agent", _FakeAgent)
+    _build_with(monkeypatch, _FakeAgent)
     REGISTRY["delegate_explore"].call(json.dumps({"task": "find foo"}))
     kwargs = _FakeAgent.last_init_kwargs
     cats = {t.category for t in kwargs["tools"]}
     # Even if other tools are registered (memory, code, etc.) the explore
-    # subagent must only see fs tools.
+    # subagent must only see fs tools — and only the read-only ones.
     assert cats.issubset({"fs"})
+    assert {t.name for t in kwargs["tools"]} == set(subagent_mod.EXPLORE_TOOLS)
 
 
 def test_delegate_plan_has_no_tools(stub_llm, monkeypatch) -> None:
-    monkeypatch.setattr(subagent_mod, "Agent", _FakeAgent)
+    _build_with(monkeypatch, _FakeAgent)
     REGISTRY["delegate_plan"].call(json.dumps({"task": "design X"}))
     kwargs = _FakeAgent.last_init_kwargs
     assert kwargs["tools"] == []
@@ -182,3 +195,35 @@ def test_all_profiles_merges_user(monkeypatch, tmp_path) -> None:
     assert subagent_mod.get_profile("mine") == {
         "system_prompt": "custom", "tool_categories": ("fs",)
     }
+
+
+class _RecordingAgent(_FakeAgent):
+    built: list = []
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        _RecordingAgent.built.append(self)
+
+
+def test_subagent_memory_tools_use_the_parents_store(stub_llm, monkeypatch, tmp_path) -> None:
+    """A subagent's memory tools work on the spawning agent's store, never the
+    import-time default ~/.evi/memory (that fallback once let a probe write a
+    memory into the real home)."""
+    from types import SimpleNamespace
+
+    from evi.memory import MemoryStore
+
+    parent_store = MemoryStore(root=tmp_path / "parent-mem")
+    parent = SimpleNamespace(memory=parent_store, permission_callback=None,
+                             permission_batch_callback=None)
+    monkeypatch.setattr(subagent_mod, "active_context",
+                        lambda: SimpleNamespace(agent=parent))
+    _RecordingAgent.built = []
+    _build_with(monkeypatch, _RecordingAgent)
+    subagent_mod.run_subagent(system_prompt="t", task="x", tools=["remember"])
+    assert _RecordingAgent.built[-1].memory is parent_store
+
+    # An explicit store still wins over the parent's.
+    own = MemoryStore(root=tmp_path / "own-mem")
+    subagent_mod.run_subagent(system_prompt="t", task="x", tools=["remember"], memory=own)
+    assert _RecordingAgent.built[-1].memory is own

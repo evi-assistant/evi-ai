@@ -14,13 +14,26 @@ three are read from the spawning tool call's context (`evi.hooks.active()`,
 Lifecycle hooks (`user_prompt_submit`, `stop`, …) are not inherited: a
 delegated task is not a prompt the user typed, and a subagent finishing is not
 the end of the user's turn.
+
+Permissions follow the spawning agent too: a subagent asks through its parent's
+permission callbacks (in the web UI, the session's pending-decision prompt with
+its deadline), one prompt at a time however many subagents run at once, and
+inherits `/auto on`, the parent's unattended policy and a remote trigger's
+restrictions. With no parent UI (dream, `evi team`, a scheduled task) it runs
+unattended: a call that would ask follows ``[auto] unattended_policy``, deny
+by default. A profile's tool categories are intersected with the ``[tools]``
+toggles (and safe mode): a profile can never hand a subagent a tool the user
+switched off.
 """
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
+import threading
+import weakref
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 import tomllib
 
@@ -29,18 +42,115 @@ from evi import skillscope
 from evi import workdir
 from evi.config import Config
 from evi.hooks import HookRegistry
-from evi.llm.agent import Agent, Done, Error, TextDelta, ToolResult
+from evi.llm.agent import Done, Error, TextDelta, ToolResult
 from evi.llm.client import make_client
-from evi.tools.base import REGISTRY, Tool
+from evi.memory import MemoryStore
+from evi.tools.base import REGISTRY, Tool, active_context
 
 # Default for `hooks=` / `skill_scope=`: take the spawning agent's (None outside
 # a tool call).
 INHERIT = object()
 
+# Pinned tool-NAME lists for agents that must not change anything on disk.
+# Names, not categories: the `fs` category also holds write_file, edit_file
+# and apply_patch. tests/test_unattended_policy.py pins these lists and the
+# sets of fs and memory tools, so a new one fails it until it is sorted in or
+# out. (Phase 3 replaces these with tool side-effect annotations.)
+READ_ONLY_FS_TOOLS: tuple[str, ...] = ("read_file", "list_dir", "find_files", "search_files")
+# The memory tools (evi/tools/memory.py) that only read ~/.evi/memory, and the
+# ones that change it. Not the bug-ledger tools that share the category.
+MEMORY_READ_TOOLS: tuple[str, ...] = ("recall", "list_memories", "recall_by_tag")
+MEMORY_WRITE_TOOLS: tuple[str, ...] = ("remember", "forget")
+MEMORY_TOOLS: tuple[str, ...] = MEMORY_READ_TOOLS + MEMORY_WRITE_TOOLS
+# The Explore profile: look around, change nothing.
+EXPLORE_TOOLS: tuple[str, ...] = READ_ONLY_FS_TOOLS
+# The dream agent (evi/dream.py): read the files and memories the transcripts
+# mention, change nothing. The transcripts hold tool output anyone could have
+# written, so it proposes memory changes for the user instead of making them:
+# no remember / forget, fs writes, shell, code, web or computer control.
+DREAM_TOOLS: tuple[str, ...] = READ_ONLY_FS_TOOLS + MEMORY_READ_TOOLS
 
-def _tools_in_categories(categories: Iterable[str]) -> list[Tool]:
+
+def _tools_in_categories(categories: Iterable[str], pool: Iterable[Tool]) -> list[Tool]:
+    """Tools of `pool` whose category — or, for a pinned list such as
+    `EXPLORE_TOOLS`, whose name — is in `categories`."""
     allowed = set(categories)
-    return [t for t in REGISTRY.values() if t.category in allowed]
+    return [t for t in pool if t.category in allowed or t.name in allowed]
+
+
+def _toggled_on(tool: Tool, toggles: dict[str, Any]) -> bool:
+    """Whether the ``[tools]`` toggles enable `tool`: its category's toggle,
+    or on for a category that has none (an SDK ``@tool``'s, a plugin's)."""
+    value = toggles.get(tool.category)
+    return value if isinstance(value, bool) else True
+
+
+def select_tools(
+    config: Config,
+    *,
+    tool_categories: Iterable[str] = (),
+    tools: Iterable[str] | None = None,
+) -> list[Tool]:
+    """A subagent's tools.
+
+    `tools` (a pinned name list the calling code chose: dream, multi-review,
+    an SDK caller's own tools) gives exactly those registered tools, whatever
+    the ``[tools]`` toggles say; only safe mode still drops memory, skills and
+    MCP tools. Otherwise the tools whose category or name is in
+    `tool_categories` (a profile's list), and only those the toggles enable,
+    safe mode applied (`evi.sdk.builder.tool_toggles`). A category with no
+    toggle (a custom ``@tool``'s) counts as enabled."""
+    from evi import safemode
+    from evi.sdk.builder import SAFE_MODE_OFF_CATEGORIES, tool_toggles
+    from evi.tools import register_builtin_tools
+
+    register_builtin_tools()
+    if tools is not None:
+        wanted = set(tools)
+        off = set(SAFE_MODE_OFF_CATEGORIES) if safemode.enabled() else set()
+        return [t for t in REGISTRY.values() if t.name in wanted and t.category not in off]
+    toggles = tool_toggles(config)
+    pool = [t for t in REGISTRY.values() if _toggled_on(t, toggles)]
+    return _tools_in_categories(tool_categories, pool)
+
+
+# One permission prompt at a time per parent agent: parallel subagents
+# (delegate calls in one turn, parallel_research) ask from tool threads, and a
+# terminal prompt can't take two answers at once.
+_PROMPT_LOCKS: "weakref.WeakKeyDictionary[Any, threading.RLock]" = weakref.WeakKeyDictionary()
+_PROMPT_LOCKS_GUARD = threading.Lock()
+_FALLBACK_PROMPT_LOCK = threading.RLock()
+
+
+def _prompt_lock(parent: Any) -> threading.RLock:
+    with _PROMPT_LOCKS_GUARD:
+        try:
+            lock = _PROMPT_LOCKS.get(parent)
+            if lock is None:
+                lock = _PROMPT_LOCKS[parent] = threading.RLock()
+            return lock
+        except TypeError:  # not weak-referenceable: share one lock
+            return _FALLBACK_PROMPT_LOCK
+
+
+def _one_at_a_time(
+    ask: Callable[..., Any] | None, parent: Any, child: list[Any]
+) -> Callable[..., Any] | None:
+    """`ask` (a parent's permission callback) serialized per parent. An answer
+    that turned the parent's `/auto on` on ("allow all this session") covers
+    the subagent (`child[0]`) from then on too."""
+    if ask is None:
+        return None
+    lock = _prompt_lock(parent)
+
+    def serialized(*args: Any) -> Any:
+        with lock:
+            answer = ask(*args)
+        if getattr(parent, "auto_all", False) and child and not getattr(child[0], "auto_all", True):
+            child[0].enable_auto_all()
+        return answer
+
+    return serialized
 
 
 def run_subagent(
@@ -52,56 +162,109 @@ def run_subagent(
     hooks: HookRegistry | None | object = INHERIT,
     cwd: str | None = None,
     skill_scope: skillscope.Scope | None | object = INHERIT,
+    tools: Iterable[str] | None = None,
+    unattended_policy: str | None = None,
+    memory: MemoryStore | None = None,
 ) -> str:
     """Run a one-shot scoped Agent and return its final assistant text.
 
-    Pulls the same LLM client/config the parent uses; respects the parent's
-    tool *category* filter but ignores per-tool toggles, so a subagent can
-    use read-only filesystem tools even if `fs` is otherwise on.
+    Pulls the same LLM client/config the parent uses. Its tools are those
+    whose category (or name) is in `tool_categories`, cut to what the
+    ``[tools]`` toggles enable, or exactly the registered tools named in
+    `tools` when given (`select_tools`).
 
     `hooks` defaults to the tool hooks of the spawning agent
     (`evi.hooks.active()`); pass a registry (used whole, lifecycle hooks
     included), or None for no hooks. `cwd` defaults to the caller's session
     working folder ("" when there is none: the process cwd). `skill_scope`
     defaults to the spawning agent's active skill scope; the subagent's own
-    turns can narrow it but never clear it.
+    turns can narrow it but never clear it. `memory` is the store its memory
+    tools work on (default: the spawning session's, else ~/.evi/memory).
+
+    Permission prompts go through the spawning agent's callbacks, one at a
+    time. With no parent UI the run is unattended: a call that would ask
+    follows `unattended_policy` ("deny" | "allow"; None: the parent's, else
+    ``[auto] unattended_policy``, deny by default), and a delegate CLI-agent
+    backend is refused unless ``[llm] allow_cli_agent_unattended`` is set.
+    Only pass "allow" with a pinned read-only `tools` list.
     """
+    from evi.llm.cli_agent import CliAgentUnattended, unattended
+    from evi.sdk.builder import build_agent
+
     if hooks is INHERIT:
-        parent = hooks_mod.active()
-        hooks = parent.tool_hooks() if parent is not None else None
+        parent_hooks = hooks_mod.active()
+        hooks = parent_hooks.tool_hooks() if parent_hooks is not None else None
     if skill_scope is INHERIT:
         skill_scope = skillscope.inherited()
-    config = Config.load()
-    client = make_client(config.llm)
-    tools = _tools_in_categories(tool_categories)
-    agent = Agent(
-        client=client,
-        config=config,
-        tools=tools,
-        system_prompt=system_prompt,
-        hooks=hooks,  # type: ignore[arg-type]
+    # The agent whose tool call spawned this one, if any: its permission UI
+    # (or its unattended policy) is the subagent's.
+    ctx = active_context()
+    parent = ctx.agent if ctx is not None else None
+    child: list[Any] = []  # the subagent, once built (_one_at_a_time)
+    permission_callback = _one_at_a_time(
+        getattr(parent, "permission_callback", None), parent, child
     )
-    # Same folder as the parent: tools resolve against it, and so do the
-    # permission checks (protected paths, trusted dirs) that read agent.cwd.
-    agent.cwd = workdir.session_cwd() if cwd is None else cwd
-    agent.inherited_skill_scope = skill_scope  # type: ignore[assignment]
+    permission_batch_callback = _one_at_a_time(
+        getattr(parent, "permission_batch_callback", None), parent, child
+    )
+    attended = permission_callback is not None or permission_batch_callback is not None
 
+    config = Config.load()
     text_parts: list[str] = []
     tool_trace: list[str] = []
     error: str | None = None
+    try:
+        # Nobody can approve anything a delegate CLI agent's own tools do.
+        gate = contextlib.nullcontext() if attended else unattended("subagent", config)
+        with gate:
+            agent = build_agent(
+                config=config,
+                client=make_client(config.llm),
+                tools=select_tools(config, tool_categories=tool_categories, tools=tools),
+                system_prompt=system_prompt,
+                enable_memory=False,
+                enable_skills=False,
+                enable_project=False,
+                enable_hooks=False,
+                enable_guardrails=False,
+                permission_callback=permission_callback,
+                permission_batch_callback=permission_batch_callback,
+                unattended_policy=(
+                    unattended_policy if unattended_policy is not None
+                    else getattr(parent, "unattended_policy", None)
+                ),
+            )
+            child.append(agent)
+            agent.hooks = hooks  # type: ignore[assignment]
+            # The store its memory tools use (_store_for): the one given, else the
+            # spawning agent's. Never fall through to the import-time default
+            # store while a parent has its own (that wrote into ~/.evi/memory).
+            store = memory if memory is not None else getattr(parent, "memory", None)
+            if isinstance(store, MemoryStore):
+                agent.memory = store
+            if getattr(parent, "auto_all", False):
+                agent.enable_auto_all()  # the user's `/auto on` covers the session
+            # A remote trigger's run stays one: no desk-user yolo / accept_edits.
+            agent.remote_trigger = bool(getattr(parent, "remote_trigger", False))
+            # Same folder as the parent: tools resolve against it, and so do the
+            # permission checks (protected paths, trusted dirs) that read agent.cwd.
+            agent.cwd = workdir.session_cwd() if cwd is None else cwd
+            agent.inherited_skill_scope = skill_scope  # type: ignore[assignment]
 
-    for event in agent.chat(task, max_turns=max_turns):
-        if isinstance(event, TextDelta):
-            text_parts.append(event.text)
-        elif isinstance(event, ToolResult):
-            # Keep a short trace so the caller can see what the sub-agent did.
-            preview = event.output[:200].replace("\n", " ")
-            tool_trace.append(f"{event.name}: {preview}")
-        elif isinstance(event, Error):
-            error = event.message
-            break
-        elif isinstance(event, Done):
-            break
+            for event in agent.chat(task, max_turns=max_turns):
+                if isinstance(event, TextDelta):
+                    text_parts.append(event.text)
+                elif isinstance(event, ToolResult):
+                    # Keep a short trace so the caller can see what the sub-agent did.
+                    preview = event.output[:200].replace("\n", " ")
+                    tool_trace.append(f"{event.name}: {preview}")
+                elif isinstance(event, Error):
+                    error = event.message
+                    break
+                elif isinstance(event, Done):
+                    break
+    except CliAgentUnattended as exc:
+        error = str(exc)
 
     if error:
         return f"ERROR: subagent failed: {error}"
@@ -125,6 +288,8 @@ def run_subagents_parallel(
     hooks: HookRegistry | None | object = INHERIT,
     cwd: str | None = None,
     skill_scope: skillscope.Scope | None | object = INHERIT,
+    tools: Iterable[str] | None = None,
+    unattended_policy: str | None = None,
 ) -> list[tuple[str, str]]:
     """Run several subagents concurrently and return [(task, result), …] in the
     original order.
@@ -133,9 +298,9 @@ def run_subagents_parallel(
     from overlapping the orchestration + tool calls; note that a single local
     backend serialises the actual model inference (one model, one GPU), so the
     big speedups are on tool-heavy work or a remote / multi-GPU backend.
-    `hooks` / `cwd` / `skill_scope` are as for `run_subagent`; each worker
-    starts from a copy of the caller's context, so the defaults inherit from
-    the caller.
+    `hooks` / `cwd` / `skill_scope` / `tools` / `unattended_policy` are as for
+    `run_subagent`; each worker starts from a copy of the caller's context, so
+    the defaults (and the permission UI) inherit from the caller.
     """
     import concurrent.futures as _futures
 
@@ -157,6 +322,12 @@ def run_subagents_parallel(
                 hooks=hooks,
                 cwd=cwd,
                 skill_scope=skill_scope,
+                # Only when set, so a stand-in runner without them still works.
+                **({"tools": tools} if tools is not None else {}),
+                **(
+                    {"unattended_policy": unattended_policy}
+                    if unattended_policy is not None else {}
+                ),
             ): i
             for i, task in enumerate(tasks)
         }
@@ -179,7 +350,8 @@ SUBAGENT_PROFILES: dict[str, dict[str, object]] = {
             "use read-only filesystem tools. Do not modify anything. End "
             "with a short bulleted summary of what you found."
         ),
-        "tool_categories": ("fs",),
+        # Tool names, not the fs category (which can write): read-only for real.
+        "tool_categories": EXPLORE_TOOLS,
     },
     "plan": {
         "system_prompt": (
@@ -200,7 +372,10 @@ def load_plugin_profiles(root: Path | None = None) -> dict[str, dict[str, object
         [[agent]]
         name = "security"
         system_prompt = "You are a security reviewer…"
-        tools = ["fs"]          # tool *categories* the subagent may use
+        tools = ["fs"]          # tool categories (or tool names) the subagent may use
+
+    Whatever a profile lists, the subagent only gets tools the ``[tools]``
+    toggles enable (`select_tools`).
     """
     out: dict[str, dict[str, object]] = {}
     try:

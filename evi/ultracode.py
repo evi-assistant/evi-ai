@@ -30,8 +30,16 @@ from evi.workflows import fan_out
 
 # A stage run with this mode gets NO tools — pure reasoning over the text it's
 # handed. Used for decompose / critique / synthesize so only the *solver* stage
-# can touch the filesystem or shell. Keeps an adversarial critic from writing.
+# can use tools at all. Keeps an adversarial critic from even reading.
 NO_TOOLS = "none"
+
+# The solver stage runs `breadth` agents at once on ONE working tree, nobody can
+# approve anything mid-run, and the pipeline's output is the synthesized TEXT:
+# solvers that wrote files would clobber each other and leave the tree as
+# whichever wrote last. So a solver only gets the pinned read-only fs tools
+# (evi.llm.subagent.READ_ONLY_FS_TOOLS) that its mode includes, never
+# write / shell / code tools, and runs under the unattended policy (no
+# enable_auto_all).
 
 
 # --- diversity angles (baked into the solver task text, like review lenses) --
@@ -81,7 +89,7 @@ SYNTH_SYSTEM_PROMPT = (
 class UltraConfig:
     breadth: int = 3          # parallel solver angles (1 disables fan-out)
     rounds: int = 1           # verify passes (0 skips critique entirely)
-    mode: str = "code"        # tool preset for the SOLVER stage (chat|cowork|code)
+    mode: str = "code"        # SOLVER tool preset (chat|cowork|code): its read-only fs tools only
     angles: list[str] = field(default_factory=list)  # [] => first `breadth`
     max_workers: int = 4
     # Optional per-stage model override {stage -> model id}, stages:
@@ -244,7 +252,12 @@ def make_runner(
     WITH that system prompt (threaded through construction — never mutated after)
     and that model id (when given). Each stage gets its own agent, so per-stage
     context stays small regardless of pipeline length. ``mode == NO_TOOLS`` strips
-    tools (decompose/critic/synth); a real mode name scopes the solver's toolset.
+    tools (decompose/critic/synth); a real mode name scopes the solver's toolset
+    to the read-only fs tools that mode includes, and no mode to the read-only
+    fs tools among the factory's. No stage auto-approves
+    anything: each runs unattended (``[auto] unattended_policy``), and a
+    delegate CLI-agent backend is refused unless
+    ``[llm] allow_cli_agent_unattended`` is set.
 
     ``stage_models`` maps a stage name (decompose | solve | verify | synthesize)
     to a model id; a stage not in the map runs on the factory's default model.
@@ -260,6 +273,9 @@ def make_runner(
     import itertools
 
     from evi.headless import run_headless
+    from evi.llm.agent import make_unattended
+    from evi.llm.cli_agent import unattended
+    from evi.llm.subagent import READ_ONLY_FS_TOOLS
     from evi.modes import mode_tools
 
     sm = stage_models or {}
@@ -284,10 +300,16 @@ def make_runner(
                 agent = agent_factory(system_prompt, model)
             if mode == NO_TOOLS:
                 agent.tools = {}
-            elif mode:
-                agent.tools = {t.name: t for t in mode_tools(mode)}
-            agent.enable_auto_all()
-            res = run_headless(agent, task)
+            else:
+                # Fail closed: with no mode (`[ultracode] mode = ""`, an SDK
+                # UltraConfig(mode=None)) the factory's tools are cut the same way.
+                have = mode_tools(mode) if mode else list(getattr(agent, "tools", {}).values())
+                agent.tools = {t.name: t for t in have if t.name in READ_ONLY_FS_TOOLS}
+            # Nobody approves anything mid-pipeline: a call that would ask
+            # follows [auto] unattended_policy (deny by default).
+            make_unattended(agent)
+            with unattended("ultracode", getattr(agent, "config", None)):
+                res = run_headless(agent, task)
             return res.text or (f"ERROR: {res.error}" if res.error else "")
         except Exception as exc:  # noqa: BLE001 — a stage failure can't crash the run
             return f"ERROR: {type(exc).__name__}: {exc}"

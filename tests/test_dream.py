@@ -90,12 +90,15 @@ def test_run_dream_writes_log_and_diffs_memory(
         timestamp=time.time(),
     )
 
-    # Stub run_subagent to mutate memory the way a real dream would, then
+    # Stub run_subagent to change memory (the dream agent itself only reads
+    # it now, but the audit must show any change made during a dream), then
     # return a summary string.
     def fake_run_subagent(**kwargs):
-        # Verify we got the dream prompt + memory + fs categories.
+        # Verify we got the dream prompt + the pinned read-only tool list.
         assert "dream agent" in kwargs["system_prompt"]
-        assert kwargs["tool_categories"] == ("memory", "fs")
+        assert kwargs["tools"] == dream_mod.DREAM_TOOLS
+        assert "tool_categories" not in kwargs
+        assert kwargs["memory"] is memory  # its memory tools read the audited store
         memory.write("old_fact", "user prefers dark mode")  # change existing
         memory.write("new_fact", "user's project lives at C:/evi")  # add
         return "Updated preference; recorded new project path."
@@ -104,8 +107,10 @@ def test_run_dream_writes_log_and_diffs_memory(
     monkeypatch.setattr(dream_mod, "DREAM_LOG_DIR", log_dir)
     monkeypatch.setattr(dream_mod, "ensure_dirs", lambda: None)
 
+    from evi.config import Config
+
     report = dream_mod.run_dream(
-        hours=24, memory=memory, transcripts=transcripts
+        hours=24, config=Config(), memory=memory, transcripts=transcripts
     )
 
     assert report.added == ["new_fact"]
@@ -116,3 +121,4 @@ def test_run_dream_writes_log_and_diffs_memory(
     assert "Dream report" in body
     assert "+1" in str(len(report.added)) or "new_fact" in body
     assert "Updated preference" in body
+    assert "policy: deny" in body  # the dream ran unattended, fail-closed

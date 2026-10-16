@@ -10,6 +10,7 @@ Events yielded by `Agent.chat`:
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import secrets
@@ -60,6 +61,124 @@ PermissionCallback = Callable[[str, str, str], bool]
 # calls that need a human decision, return a parallel list of bools. Lets a
 # frontend prompt once for a whole multi-tool turn instead of N times.
 BatchPermissionCallback = Callable[[list[tuple[str, str, str]]], list[bool]]
+
+# What a tool call that would ask does when nobody can be asked (no permission
+# callback: a scheduled task, a subagent, a workflow step, an SDK embed):
+# "deny" refuses it, "allow" runs it ([auto] unattended_policy, the explicit
+# escape hatch). Any other value fails closed to "deny".
+UNATTENDED_POLICIES = ("deny", "allow")
+
+# How a tool result written for a call the permission checks refused starts
+# (`Agent._denial_message`); a hook veto ("BLOCKED BY HOOK") is not one.
+_DENIAL_PREFIXES = ("PERMISSION DENIED", "BLOCKED by the destructive-command guard")
+
+
+def unattended_policy_name(value: object) -> str:
+    """`value` as an unattended policy: "allow" only when it says exactly
+    that (any case), "deny" for anything else."""
+    return "allow" if str(value or "").strip().lower() == "allow" else "deny"
+
+
+def is_permission_denial(text: str) -> bool:
+    """Whether a tool result is the text of a call the permission checks
+    refused (the policy, an unanswered or refused prompt, the guard)."""
+    return str(text or "").startswith(_DENIAL_PREFIXES)
+
+
+def policy_label(agent: Any) -> str:
+    """How `agent` settles a tool call that would ask, for a run's header or
+    log: "allow-all" (`/auto on`, `-y`), "interactive" (a permission callback
+    decides), else its unattended policy ("deny" | "allow"). An [auto] mode
+    that lets calls through without asking is named too, since it applies
+    before the policy: "allow-all (mode=yolo)", "deny (mode=accept_edits: file
+    edits run)". A remote trigger (`remote_unattended`) ignores the mode."""
+    if getattr(agent, "auto_all", False):
+        return "allow-all"
+    if (
+        getattr(agent, "permission_callback", None) is not None
+        or getattr(agent, "permission_batch_callback", None) is not None
+    ):
+        return "interactive"
+    effective = getattr(agent, "effective_unattended_policy", None)
+    if callable(effective):
+        policy = effective()
+    else:
+        policy = unattended_policy_name(getattr(agent, "unattended_policy", None))
+    if getattr(agent, "remote_trigger", False):
+        return policy
+    mode = getattr(getattr(getattr(agent, "config", None), "auto", None), "mode", "ask")
+    if mode == "yolo":
+        return "allow-all (mode=yolo)"
+    if mode == "accept_edits" and policy == "deny":
+        return "deny (mode=accept_edits: file edits run)"
+    return policy
+
+
+def config_policy_label(config: Any) -> str:
+    """The `policy_label` of an unattended agent built on `config` that has no
+    policy of its own: [auto] unattended_policy, and an [auto] mode that lets
+    calls run unasked (a run's header before its agents exist)."""
+    from types import SimpleNamespace
+
+    auto = getattr(config, "auto", None)
+    return policy_label(SimpleNamespace(
+        config=config, unattended_policy=getattr(auto, "unattended_policy", "deny"),
+    ))
+
+
+def make_unattended(agent: Any, policy: str | None = None) -> str:
+    """Run `agent` with nobody to ask: drop its permission callbacks, so a
+    call that would ask follows the unattended policy — `policy` ("deny" |
+    "allow") when given, else the agent's own ([auto] unattended_policy).
+    Pre-approved categories still run; protected paths and the destructive
+    guard still deny. Works on any agent-like object. Returns the run's
+    `policy_label`."""
+    agent.permission_callback = None
+    agent.permission_batch_callback = None
+    if policy is not None:
+        agent.unattended_policy = unattended_policy_name(policy)
+    return policy_label(agent)
+
+
+# What `remote_unattended` changes on an agent, and puts back afterwards.
+_REMOTE_STATE = (
+    "permission_callback", "permission_batch_callback", "unattended_policy",
+    "auto_all", "auto_approve_categories", "remote_trigger",
+)
+
+
+@contextlib.contextmanager
+def remote_unattended(
+    agent: Any, deny_callback: PermissionCallback | None = None
+) -> Iterator[str]:
+    """Drive `agent` for a remote trigger (a federation peer, an A2A client, a
+    routine webhook, a channel push), then put it back as it was.
+
+    Nobody can be asked, and nothing the desk user turned on for themselves
+    applies: the permission callbacks are dropped, the unattended policy is
+    "deny" whatever [auto] unattended_policy says, `/auto on` is off, the
+    auto-approve set is [auto] auto_approve again (no session additions), and
+    [auto] mode yolo / accept_edits is ignored (`Agent.remote_trigger`, which
+    a subagent inherits). `deny_callback`, a callback that refuses every call
+    (the web's `_deny_unattended`), stays attached during the run instead of
+    none, for a session that must never be left without one. Yields the run's
+    policy, "deny". Works on any agent-like object."""
+    saved = {name: getattr(agent, name) for name in _REMOTE_STATE if hasattr(agent, name)}
+    try:
+        make_unattended(agent, "deny")
+        agent.permission_callback = deny_callback
+        agent.auto_all = False
+        auto = getattr(getattr(agent, "config", None), "auto", None)
+        agent.auto_approve_categories = set(getattr(auto, "auto_approve", []) or [])
+        agent.remote_trigger = True
+        yield "deny"
+    finally:
+        for name in _REMOTE_STATE:
+            if name in saved:
+                setattr(agent, name, saved[name])
+            else:
+                with contextlib.suppress(AttributeError):
+                    delattr(agent, name)
 
 
 def _generate_session_id() -> str:
@@ -486,6 +605,7 @@ class Agent:
         guardrails: "Guardrails | None" = None,
         frontend: str = "cli",
         user_root: Path | str | None = None,
+        unattended_policy: str | None = None,
     ) -> None:
         self.client = client
         self.config = config
@@ -509,6 +629,15 @@ class Agent:
         self.hooks = hooks
         self.permission_callback = permission_callback
         self.permission_batch_callback = permission_batch_callback
+        # With neither callback set nobody can be asked, and a call that would
+        # ask follows this policy ("deny" | "allow"). None: [auto]
+        # unattended_policy, read live (effective_unattended_policy).
+        self.unattended_policy: str | None = (
+            None if unattended_policy is None else unattended_policy_name(unattended_policy)
+        )
+        # A remote trigger drives this run (`remote_unattended`): [auto] mode
+        # yolo / accept_edits is the desk user's and does not apply.
+        self.remote_trigger: bool = False
         self.transcripts = transcripts
         self.guardrails = guardrails
         # Which surface the user is on ("cli" | "web"; the desktop app is "web").
@@ -959,6 +1088,15 @@ class Agent:
             or getattr(self, "permission_batch_callback", None) is not None
         )
 
+    def effective_unattended_policy(self) -> str:
+        """What a call that would ask does when there is no permission UI:
+        "deny" or "allow". The agent's own `unattended_policy` when an entry
+        point set one, else [auto] unattended_policy (default "deny")."""
+        own = getattr(self, "unattended_policy", None)
+        if own is None:
+            own = getattr(getattr(self.config, "auto", None), "unattended_policy", "deny")
+        return unattended_policy_name(own)
+
     def _protected_patterns(self) -> list[str]:
         """`[auto] protected_paths` plus the built-in defaults, minus
         `protected_paths_remove` (`permissions.effective_protected_paths`)."""
@@ -1052,6 +1190,13 @@ class Agent:
                     "([auto] protected_paths), which needs the user's approval, and was "
                     "not approved — not run."
                 )
+        if not self._has_permission_ui():
+            return (
+                f"PERMISSION DENIED: {name}({args_json}) was not run. This run is "
+                "unattended (nobody can approve a tool call), so only auto-approved "
+                "tool categories run ([auto] auto_approve; [auto] unattended_policy = "
+                f'"{self.effective_unattended_policy()}").'
+            )
         return f"PERMISSION DENIED: user did not approve {name}({args_json})"
 
     def _permission_decision(self, tool: Tool, args_json: str) -> str:
@@ -1061,11 +1206,42 @@ class Agent:
         still apply. A deny from the policy (hard_deny, plan mode, a deny rule)
         always wins, even over a guard prompt."""
         guard = self._destructive_decision(tool, args_json)
+        decision = self._decide(tool, args_json, self._auto_mode())
+        if decision == "deny":
+            return "deny"
+        if guard is not None:
+            return guard[0]  # destructive guard overrides auto-approve / yolo / /auto
+        if not self._has_permission_ui():
+            # Unattended, a protected write is never let through, and neither is
+            # a secret read (.env, a key) that no explicit allow rule covers:
+            # not by [auto] unattended_policy, yolo or `/auto on` (`-y`).
+            if decision == "ask" and self._protected_hit(tool, args_json) is not None:
+                return "deny"
+            if self._secret_read_hit(tool, args_json) is not None and (
+                decision == "ask" or self._decide(tool, args_json, "ask") != "allow"
+            ):
+                return "deny"
+        return decision
+
+    def _auto_mode(self) -> str:
+        """The permission mode this agent's calls are decided under: "yolo"
+        for `/auto on`, else [auto] mode, except that a remote trigger
+        (`remote_trigger`) never gets the desk user's yolo or accept_edits."""
+        if self.auto_all:
+            return "yolo"
+        mode = getattr(getattr(self.config, "auto", None), "mode", "ask")
+        if getattr(self, "remote_trigger", False) and mode in ("yolo", "accept_edits"):
+            return "ask"
+        return mode
+
+    def _decide(self, tool: Tool, args_json: str, mode: str) -> str:
+        """`permissions.decide` for this call under `mode`, with this agent's
+        auto-approve set and the [auto] rules, trusted scopes and paths."""
         from evi.permissions import decide
 
         auto = getattr(self.config, "auto", None)
-        decision = decide(
-            "yolo" if self.auto_all else getattr(auto, "mode", "ask"),
+        return decide(
+            mode,
             self.auto_approve_categories,
             getattr(auto, "rules", []) or [],
             tool.name,
@@ -1079,17 +1255,6 @@ class Agent:
             path_args=self._tool_path_args(tool, args_json),
             read_only=getattr(tool, "read_only", None),
         )
-        if decision == "deny":
-            return "deny"
-        if guard is not None:
-            return guard[0]  # destructive guard overrides auto-approve / yolo / /auto
-        if (
-            decision == "ask"
-            and not self._has_permission_ui()
-            and self._protected_hit(tool, args_json) is not None
-        ):
-            return "deny"  # a protected write is never let through unattended
-        return decision
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
         """Return True iff the tool call is allowed to proceed."""
@@ -1107,12 +1272,11 @@ class Agent:
             return self._prompt_one(tool, args_json)
         if self._is_pre_approved(tool):
             return True
-        if self.permission_callback is None:
-            return True  # no UI to ask; default-allow (web/scheduler mode)
-        try:
-            return bool(self.permission_callback(tool.name, args_json, tool.category))
-        except Exception:
-            return False
+        if not self._has_permission_ui():
+            # Nobody to ask (scheduler, subagent, SDK embed): the unattended
+            # policy decides, and it fails closed.
+            return self.effective_unattended_policy() == "allow"
+        return self._prompt_one(tool, args_json)
 
     def reset(self, system_prompt: str | None = None) -> None:
         if system_prompt is not None:
@@ -2303,8 +2467,10 @@ class Agent:
                 m["perm"] = True
             elif decision == "deny":
                 m["perm"] = False  # policy/mode/rule blocked it — no prompt
-            elif self.permission_callback is None and self.permission_batch_callback is None:
-                m["perm"] = True  # 'ask' but no UI to ask (web/scheduler) → default allow
+            elif not self._has_permission_ui():
+                # 'ask' with nobody to ask (scheduler, subagent, SDK embed): the
+                # unattended policy decides, "deny" unless the user opted in.
+                m["perm"] = self.effective_unattended_policy() == "allow"
             else:
                 m["perm"] = None  # undecided — needs a prompt
                 need_prompt.append(m)
