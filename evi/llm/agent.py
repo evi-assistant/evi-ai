@@ -1393,15 +1393,25 @@ class Agent:
     def reset(self, system_prompt: str | None = None) -> None:
         if system_prompt is not None:
             self._base_system_prompt = system_prompt
+        before = len(self.history)
         self.history = [
             {"role": "system", "content": self._compose_system_prompt()}
         ]
+        # The session id stays, so the transcript records the cut: a revived
+        # session must not bring the cleared conversation back.
+        self._log_cut(before)
         # A new conversation: session-bound tools start afresh. turn_index
         # keeps counting, as the session id (and so its journal tags) stays.
         with self._bound_lock:
             self._bound.clear()
 
     # --- history manipulation (edit / re-roll / branch) ------------------
+    #
+    # Each change is written to the transcript as a meta record (truncate,
+    # edit, fork_of: evi.transcripts) that a resume replays, so a revived
+    # session is the conversation the user last saw. A cut inside a tool round
+    # leaves the calls it orphaned without results, here and in the replay;
+    # what is sent pairs them (_sanitized_messages).
 
     def truncate_history(self, after_index: int) -> int:
         """Drop every message past `after_index` (inclusive of system at 0).
@@ -1414,8 +1424,10 @@ class Agent:
         cutoff = max(1, after_index + 1)
         if cutoff >= len(self.history):
             return 0
-        removed = len(self.history) - cutoff
+        before = len(self.history)
+        removed = before - cutoff
         self.history = self.history[:cutoff]
+        self._log_cut(before)
         return removed
 
     def edit_message(self, at_index: int, new_content: str) -> bool:
@@ -1425,10 +1437,20 @@ class Agent:
         """
         if at_index <= 0 or at_index >= len(self.history):
             return False
+        before = len(self.history)
         msg = dict(self.history[at_index])
         msg["content"] = new_content
         # Re-shape: keep [0..at_index], replace at_index, drop everything else.
         self.history = self.history[:at_index] + [msg]
+        if self.transcripts is not None:
+            try:
+                # Replay positions leave the system prompt out.
+                self.transcripts.write_edit(
+                    self.session_id, index=at_index - 1, role=str(msg.get("role") or ""),
+                    text=new_content, length=before - 1,
+                )
+            except OSError:
+                pass  # never let disk errors break an edit
         return True
 
     def rewind_to_last_user(self) -> int:
@@ -1437,11 +1459,40 @@ class Agent:
         Used by re-roll: regenerate the assistant's response without
         appending a new user turn. Returns the number of messages popped.
         """
+        before = len(self.history)
         popped = 0
         while len(self.history) > 1 and self.history[-1].get("role") != "user":
             self.history.pop()
             popped += 1
+        self._log_cut(before)
         return popped
+
+    def log_fork(self, source: str) -> None:
+        """Record that this session starts as a copy of session `source`'s
+        history: everything in `history` after the system prompt (a web branch,
+        `evi sessions fork`). The copy goes into the transcript's fork_of
+        record, so a resume of this session restores it; its messages are not
+        logged again as this session's own."""
+        if self.transcripts is None:
+            return
+        try:
+            self.transcripts.write_fork(
+                self.session_id, source=source, messages=self.history[1:]
+            )
+        except OSError:
+            pass
+
+    def _log_cut(self, before: int) -> None:
+        """Record that the history, `before` messages long with the system
+        prompt, was cut back to what it holds now (a truncate record)."""
+        if self.transcripts is None or len(self.history) >= before:
+            return
+        try:
+            self.transcripts.write_truncate(
+                self.session_id, keep=len(self.history) - 1, length=before - 1
+            )
+        except OSError:
+            pass
 
     def _pick_model_for_turn(self, user_msg: str) -> tuple[str, str]:
         """Resolve the (model_id, route_name) to use for this turn.

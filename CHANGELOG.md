@@ -791,6 +791,37 @@ All notable user-visible changes to eVi. Format loosely follows
   `reasoning_effort: "max"`, a level OpenAI, Ollama and the gpt-oss templates
   don't accept; `/effort max` and `/effort ultracode` now ask for `high`, the
   highest level they share.
+- **A chat you edited, re-rolled, cut back or branched comes back as you left
+  it.** Edit, Delete from here, Branch and `/reset` changed the chat only in
+  memory, and a re-roll logged just the new reply, so after a restart (the
+  desktop app reopened) an edited chat came back as the original prompt
+  followed by the old and the new reply, a branch came back empty and a reset
+  chat came back whole. Each change is now written to the transcript as a
+  record (`edit`, `truncate`, `fork_of`) that a revive or resume replays.
+  `evi sessions resume`, `continue` and `fork` now rebuild a session the same
+  way as the web revive, compactions included, instead of reading back every
+  message ever logged. `evi stats`, search, dreaming, fine-tune export and
+  `evi sessions show` skip the records. After a quick re-roll the web chat no
+  longer draws the new reply twice. See "Transcripts" in
+  docs/features/sessions.md.
+- **`evi sessions fork` keeps what it copied.** The fork's copy of the
+  history was never written to its own transcript, so resuming the fork later
+  lost everything before the fork. It now starts with a `fork_of` record.
+- **A session that runs past midnight resumes whole.** Its messages are filed
+  under the day each was written, and resume, the web revive, export and
+  handoff read only one day's file. They now read every day's, in the order
+  the lines were written. Retention (`tools.cleanup_period_days`,
+  `evi sessions purge`) keeps a session that ran on into a day it keeps whole,
+  instead of deleting its first days.
+- **Handing a session off to another device works.** `evi sessions handoff`
+  said to `evi sync`, but sync leaves transcripts behind, so the other device
+  had nothing to resume. Handoff now copies the session to
+  `~/.evi/handoff/<id>.jsonl`, which `evi sync` carries (even from a sync repo
+  set up before), and `evi sessions resume <id>`, `evi sessions fork <id>` or
+  `/?session=<id>` on the other device takes the copy in, adding to a copy it
+  already has but never overwriting one that went on differently. The copy
+  reaches your sync remote unencrypted. See "Handing a session off to another
+  device" in docs/features/sessions.md.
 
 ## [1.0.53] — 2026-10-09
 

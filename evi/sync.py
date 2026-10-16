@@ -1,11 +1,12 @@
 """Cross-machine sync of the portable ``~/.evi`` state via a git remote.
 
 Syncs the knowledge that should follow you between machines — memory, skills,
-profiles, saved commands, routes, the MCP server list, and hooks — while
-deliberately leaving behind anything per-machine, secret, large, or
-rebuildable:
+profiles, saved commands, routes, the MCP server list, hooks, and the sessions
+you hand off — while deliberately leaving behind anything per-machine, secret,
+large, or rebuildable:
 
   synced:   memory/ skills/ profiles/ commands/ routes.json mcp.json hooks.toml
+            handoff/ (a copy of each session `evi sessions handoff` was run on)
   ignored:  config.toml (per-machine backend + secrets), tokens/ (OAuth
             secrets), models/ + indices/ (large / rebuildable), logs/ images/
             screenshots/ uploads/ transcripts/ scheduled/ (machine-local).
@@ -35,6 +36,7 @@ SYNCED_PATHS = (
     "routes.json",
     "mcp.json",
     "hooks.toml",
+    "handoff",
 )
 
 # Ignore everything, then re-include only the portable state. Keeps per-machine
@@ -52,6 +54,7 @@ GITIGNORE = """\
 !/routes.json
 !/mcp.json
 !/hooks.toml
+!/handoff/
 # Belt-and-suspenders: never sync key material even if nested under a
 # re-included directory.
 **/*.key
@@ -149,6 +152,10 @@ def push(message: str | None = None, root: Path | None = None) -> str:
         raise SyncError("not initialised — run `evi sync init <git-url>` first")
     r = _root(root)
     _git(r, "add", "-A", check=True)
+    if (r / "handoff").is_dir():
+        # A .gitignore written before handoff/ was synced still ignores it, and
+        # the sessions handed off since are exactly what this push is for.
+        _git(r, "add", "-A", "-f", "--", "handoff/*.jsonl")
     committed = False
     if _has_staged_changes(r):
         msg = message or f"sync from {socket.gethostname()} at {datetime.now().isoformat(timespec='seconds')}"

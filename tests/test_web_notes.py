@@ -10,7 +10,8 @@ message mid-history. These tests cover what the web layer does with one:
   session (the desktop app reopened, a server restart) gets it back where it
   was, through the same path as every other message;
 - one held through a running turn is written when the turn ends, after the
-  turn's own messages, and one a re-roll holds again is not written twice;
+  turn's own messages, and one a re-roll holds again comes back once, after
+  the new reply, in the replay too (the re-roll's cut is recorded);
 - /history marks notes and the compaction summary/acknowledgement pair so the
   browser draws them as notes, lists the notes still held, and can return
   just the messages since an index (the browser catching up on new notes);
@@ -188,7 +189,13 @@ def test_a_note_held_through_a_turn_is_logged_after_the_turn(tmp_path, fake_llm)
     assert sess.held_notes == [] and sess.unlogged_notes == set()
 
 
-def test_a_note_a_reroll_holds_again_is_logged_once(monkeypatch, tmp_path, fake_llm) -> None:
+def test_a_note_a_reroll_holds_again_comes_back_once_after_the_new_reply(
+    monkeypatch, tmp_path, fake_llm
+) -> None:
+    """The re-roll's cut is recorded (a truncate record) and takes the note's
+    first line out of the replay with the old reply, so the note is logged
+    again where it rejoins the history: a revived session has it once, after
+    the new reply, as the live one does."""
     root = tmp_path / "transcripts"
     agent = _agent(fake_llm([fake_llm.text("first reply"), fake_llm.text("rerolled reply")]),
                    root, "r1")
@@ -198,10 +205,12 @@ def test_a_note_a_reroll_holds_again_is_logged_once(monkeypatch, tmp_path, fake_
     client.post("/api/session/r1/message", json={"text": "build is green", "from": "ops"})
     assert '"Done"' in client.post("/api/session/r1/reroll").text
 
-    assert [(m["role"], m["content"]) for m in agent.history[1:]] == [
-        ("user", "hello"), ("assistant", "rerolled reply"), ("user", NOTE_OPS),
-    ]
-    assert [e["content"] for e in _lines(root, "r1")].count(NOTE_OPS) == 1
+    live = [(m["role"], m["content"]) for m in agent.history[1:]]
+    assert live == [("user", "hello"), ("assistant", "rerolled reply"), ("user", NOTE_OPS)]
+    lines = _lines(root, "r1")
+    assert [(e.get("type"), e.get("keep")) for e in lines if e.get("type")] == [("truncate", 1)]
+    revived = history_from_transcript(find_session("r1", root=root), replay=True)
+    assert [(m["role"], m["content"]) for m in revived] == live
 
 
 def test_a_note_without_a_transcript_is_still_delivered() -> None:

@@ -6766,13 +6766,36 @@ def sessions_export(
 
 
 def _hydrate_agent(agent: Agent, path) -> int:
-    """Load a transcript into `agent.history`, keeping its composed system
-    prompt at index 0. Returns the number of restored messages."""
+    """Load a session's history into `agent.history`, keeping its composed
+    system prompt at index 0: its meta records replayed (compactions, edits
+    and cuts made in the web UI, the fork it started from) and every day's
+    file of it read, so it is the conversation as it was last left. Returns
+    the number of restored messages."""
     from evi.sessions import history_from_transcript
 
-    history = history_from_transcript(path)
+    history = history_from_transcript(path, replay=True)
     agent.history = [agent.history[0], *history]
     return len(history)
+
+
+def _adopt_handoff(session_id: str) -> None:
+    """Take in a copy of the session another device handed off, if one came
+    with `evi sync pull` (evi.sessions.adopt_handoff). A copy that can't be
+    taken in leaves this device's transcript as it is, to load as usual."""
+    from evi.sessions import adopt_handoff
+
+    try:
+        state = adopt_handoff(session_id)
+    except OSError as exc:
+        console.print(f"[yellow]could not take in the handed-off copy of {session_id}:[/yellow] {exc}")
+        return
+    if state == "adopted":
+        console.print(f"[dim]took in the handed-off copy of {session_id}[/dim]")
+    elif state == "diverged":
+        console.print(
+            "[yellow]the handed-off copy of this session went on differently from this "
+            "device's; resuming this device's[/yellow]"
+        )
 
 
 @sessions_app.command("resume")
@@ -6780,6 +6803,7 @@ def sessions_resume(session_id: str) -> None:
     """Resume a past session — load its history and continue in the same file."""
     from evi.sessions import find_session
 
+    _adopt_handoff(session_id)
     path = find_session(session_id)
     if path is None:
         console.print(f"[red]no session[/red] {session_id}")
@@ -6816,13 +6840,16 @@ def sessions_handoff(
         None, help="Session to hand off (default: the most recent)."
     ),
 ) -> None:
-    """Print how to pick a session up on another device (Phase 87).
+    """Hand a session off to another device (Phase 87).
 
     Transcripts persist per-turn, so a session is resumable once it has any
-    turns. Sync first (`evi sync`), then on the other device run the resume
-    command or open the URL.
+    turns. `evi sync` leaves transcripts on the device, so this copies the
+    session to ~/.evi/handoff/, which sync carries; then sync, and on the
+    other device run the resume command or open the URL (either takes the
+    copy in).
     """
-    from evi.sessions import handoff_info, most_recent_session_id
+    from evi import sync
+    from evi.sessions import handoff_info, most_recent_session_id, stage_handoff
 
     sid = session_id or most_recent_session_id()
     if sid is None:
@@ -6832,7 +6859,19 @@ def sessions_handoff(
     if info is None:
         console.print(f"[red]no session[/red] {sid}")
         raise typer.Exit(1)
+    try:
+        staged = stage_handoff(sid)
+    except (OSError, ValueError) as exc:  # ValueError: a transcript that isn't UTF-8
+        console.print(f"[red]could not copy the session for sync:[/red] {exc}")
+        raise typer.Exit(1)
+    if staged is None:
+        console.print(f"[red]no session[/red] {sid}")
+        raise typer.Exit(1)
     console.print(f"[cyan]handoff {sid}[/cyan] [dim]({info['messages']} messages)[/dim]")
+    console.print(f"  [dim]copied to {staged} for sync to carry[/dim]")
+    if not sync.is_initialized():
+        console.print("  [yellow]sync isn't set up here:[/yellow] "
+                      "[bold]evi sync init <git-url>[/bold] first")
     console.print("  1. sync this device:   [bold]evi sync push[/bold]")
     console.print("  2. on the other device: [bold]evi sync pull[/bold], then either")
     console.print(f"       [green]{info['resume_cmd']}[/green]")
@@ -6844,6 +6883,7 @@ def sessions_fork(session_id: str) -> None:
     """Fork a past session into a NEW session — the original is left intact."""
     from evi.sessions import find_session
 
+    _adopt_handoff(session_id)  # as resume: a copy handed off from another device
     path = find_session(session_id)
     if path is None:
         console.print(f"[red]no session[/red] {session_id}")
@@ -6851,6 +6891,11 @@ def sessions_fork(session_id: str) -> None:
     _project_trust_prompt()  # as `evi chat`: before the config is loaded
     agent = _build_agent()  # fresh agent → new auto-generated session_id
     n = _hydrate_agent(agent, path)
+    # The copy goes into the new session's transcript (a fork_of record), so
+    # resuming the fork later restores it.
+    log_fork = getattr(agent, "log_fork", None)
+    if callable(log_fork):
+        log_fork(session_id)
     console.print(
         f"[cyan]forked {session_id}[/cyan] → new session "
         f"[bold]{agent.session_id}[/bold] [dim]({n} messages copied)[/dim]"

@@ -1195,9 +1195,10 @@ class WebSession:
     # result, which strict backends reject (_post_note). A re-roll holds the
     # ones after the reply it regenerates (_hold_notes_past_last_prompt).
     held_notes: list[dict[str, Any]] = field(default_factory=list, repr=False, compare=False)
-    # id() of the held notes not yet in the transcript: a note is logged when
-    # it enters the history (_log_note), so one a re-roll holds again (already
-    # logged) isn't logged twice. Each id belongs to a note in held_notes.
+    # id() of the held notes to log when they join the history (_log_note):
+    # the ones delivered mid-turn, and the ones a re-roll holds again, whose
+    # earlier line its recorded cut dropped from the replay. Each id belongs
+    # to a note in held_notes.
     unlogged_notes: set[int] = field(default_factory=set, repr=False, compare=False)
 
     def begin_turn(self) -> bool:
@@ -1214,9 +1215,9 @@ class WebSession:
             self._release_notes()
 
     def _release_notes(self) -> None:
-        """Append the notes held during the turn, logging the ones the
-        transcript doesn't have yet, after the turn's own messages, so a
-        revived session has them in the same place. Caller holds turn_lock."""
+        """Append the notes held during the turn, logging the ones in
+        unlogged_notes, after the turn's own messages, so a revived session
+        has them in the same place. Caller holds turn_lock."""
         if self.held_notes:
             self.agent.history.extend(self.held_notes)
             for note in self.held_notes:
@@ -1537,7 +1538,14 @@ def _hold_notes_past_last_prompt(sess: "WebSession") -> None:
     prompt the user typed into held_notes, ahead of any held already. A note is
     a user message too, so the rewind would otherwise stop at it and answer it,
     keeping the reply being re-rolled. Held, they come back after the new reply
-    when the turn ends. Caller has claimed the turn."""
+    when the turn ends. Caller has claimed the turn.
+
+    With notes to hold, the history is cut back to that prompt here, notes
+    and reply together, with Agent.truncate_history, so the transcript records
+    the cut (the rewind then has nothing left to drop). The cut takes the notes
+    out of the transcript's replay too, so each is logged again when it
+    rejoins the history, after the new reply: a revived session has them
+    there."""
     with sess.turn_lock:
         hist = sess.agent.history
         last = next(
@@ -1549,8 +1557,9 @@ def _hold_notes_past_last_prompt(sess: "WebSession") -> None:
             return  # nothing but notes to answer: leave it to the rewind
         notes = [m for m in hist[last + 1:] if is_note(m)]
         if notes:
-            hist[last + 1:] = [m for m in hist[last + 1:] if not is_note(m)]
+            sess.agent.truncate_history(last)
             sess.held_notes[:0] = notes
+            sess.unlogged_notes.update(id(n) for n in notes)
 
 
 # The user half of the compaction pair (evi.history.compaction_messages).
@@ -2188,13 +2197,26 @@ def create_app() -> FastAPI:
             # desktop app was closed + reopened). The composed system prompt at
             # index 0 stays; everything after is rebuilt from the transcript.
             # Scoped to the user's own transcript dir so revival can't cross users.
+            if tr_root is None:
+                # A session handed off from another device (`evi sessions
+                # handoff`, then `evi sync`) is taken in first. Single-user
+                # only: the handoff folder isn't per user. A copy that can't
+                # be taken in leaves this device's transcript to revive.
+                try:
+                    from evi.sessions import adopt_handoff
+
+                    adopt_handoff(session_id)
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 from evi.sessions import find_session, history_from_transcript
 
                 path = find_session(session_id, root=tr_root)
                 if path is not None:
-                    # Compactions replayed: the history the model last saw.
-                    restored = history_from_transcript(path, apply_compaction=True)
+                    # Meta records replayed (compactions, edits, cuts, the
+                    # fork it started from), every day's file of it: the
+                    # conversation as the user and the model last had it.
+                    restored = history_from_transcript(path, replay=True)
                     if restored:
                         agent.history = [agent.history[0], *restored]
             except Exception:  # noqa: BLE001
@@ -4619,6 +4641,11 @@ def create_app() -> FastAPI:
         # The factory inserts a system message at index 0; replace history
         # outright with our snapshot (the snapshot's index 0 is also system).
         new_session.agent.history = snapshot
+        # The copy goes into the branch's transcript (a fork_of record), so
+        # the branch survives a restart. Guarded for lightweight test doubles.
+        log_fork = getattr(new_session.agent, "log_fork", None)
+        if callable(log_fork):
+            log_fork(session_id)
         # Inherit the parent's model/backend/effort + working folder so the
         # branch continues under the same setup instead of falling back to app
         # defaults (a branch off a coder model shouldn't silently become the
@@ -4657,6 +4684,10 @@ def create_app() -> FastAPI:
         # user message truncated its stale reply. That's a valid re-roll target,
         # not a no-op; only bail when there is genuinely no user turn to answer.
         _hist = sess.agent.history
+        # Where the rewind left the history, for the browser to redraw up to
+        # (X-Evi-History-Length): the new reply can be in it before the
+        # browser asks, and the stream draws that.
+        rewound = len(_hist)
         if len(_hist) <= 1 or _hist[-1].get("role") != "user":
             sess.end_turn()
 
@@ -4693,7 +4724,7 @@ def create_app() -> FastAPI:
                     return
                 yield {"event": "message", "data": json.dumps(payload)}
 
-        return EventSourceResponse(stream())
+        return EventSourceResponse(stream(), headers={"X-Evi-History-Length": str(rewound)})
 
     @app.post("/api/session/{session_id}/steer")
     def session_steer(session_id: str, req: dict[str, Any]) -> dict[str, Any]:

@@ -75,10 +75,12 @@ def test_prune_removes_old_day_dirs(tmp_path: Path) -> None:
     store = TranscriptStore(root=tmp_path)
     old_day = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
     new_day = datetime.now().strftime("%Y-%m-%d")
+    # Two sessions: one with the same id in a kept day would be one session
+    # that ran on, and keeps its old day (test_transcript_fidelity).
     (tmp_path / old_day).mkdir()
-    (tmp_path / old_day / "s.jsonl").write_text("{}\n")
+    (tmp_path / old_day / "old.jsonl").write_text("{}\n")
     (tmp_path / new_day).mkdir()
-    (tmp_path / new_day / "s.jsonl").write_text("{}\n")
+    (tmp_path / new_day / "new.jsonl").write_text("{}\n")
 
     removed = store.prune(keep_days=30)
     assert removed == 1

@@ -4,9 +4,9 @@
 
 eVi keeps a durable record of your conversations and the file changes it makes, so you can pick up where you left off and undo mistakes.
 
-- **Sessions / transcripts** — every chat is written to disk as a JSONL file, one file per session per day. You can list, view, export, and reopen them.
+- **Sessions / transcripts** — every chat is written to disk as a JSONL file, one file per session per day. You can list, view, export, and reopen them. Edits, re-rolls, deletes and branches made in the web UI are recorded too, so a reopened chat is the one you left.
 - **Resume / continue / fork** — reopen a past session and keep talking in the same file, jump back into the most recent session, or branch a copy into a brand-new session while leaving the original untouched.
-- **Handoff** — print the exact command + URL to pick a session up on another device after syncing.
+- **Handoff** — copy a session where `evi sync` carries it, and print the command + URL that pick it up on another device.
 - **Import** — bring the conversations you already had in Claude Code and Codex into eVi's store, where they become searchable, resumable and exportable.
 - **Checkpoints / rewind** — every file eVi writes via its `write_file` tool is journalled with the file's prior contents, so a bad edit can be rolled back.
 
@@ -24,25 +24,31 @@ When the `transcripts` tool toggle is on (the default), each turn is appended to
 
 Each line is a JSON object for one message (`role` = `user` / `assistant` / `tool` / `system`, plus `content`, a `ts` timestamp, and — for tool results — `tool_name` and the `tool_call_id` of the call it answers, or `tool_calls` on assistant turns). A placeholder result for a call that never ran (its reply was cut off) is logged without `tool_name`. Notes from outside the chat are logged as `user` lines when they join the history (see [Notes in a chat](#notes-in-a-chat)). Because writes happen per turn, the on-disk copy is always current as of the last completed turn.
 
-A line with a `type` other than `message` is a **meta record**: a resume applies it rather than showing it. It has role `system` and empty `content`, so readers that predate meta records skip it like any system line; a line without `type` is a message. The one type so far is `compaction`, written when history is compacted ([Context management](memory-context.md#context-management-compaction)):
+A line with a `type` other than `message` is a **meta record**: a resume applies it rather than showing it. It records a change to the history that isn't a new message, since the file is only ever appended to. It has role `system` and empty `content`, so readers that predate meta records skip it like any system line; a line without `type` is a message. The types:
 
-| Field | Meaning |
-|---|---|
-| `summary` | the summary text |
-| `cut` | where in the live history the kept part started (the system prompt is 0) |
-| `kept` | how many messages the kept part held, notes included |
-| `collapsed` | how many messages the summary stands for |
+| `type` | Written when | Fields |
+|---|---|---|
+| `compaction` | history is compacted ([Context management](memory-context.md#context-management-compaction)) | `summary` (the summary text), `cut` (where in the live history the kept part started; the system prompt is 0), `kept` (how many messages the kept part held, notes included), `collapsed` (how many messages the summary stands for) |
+| `edit` | a message is edited in the web UI (everything after it is dropped) | `index` (its position), `message_role`, `text` (the new content), `length` |
+| `truncate` | the history is cut back: **Delete from here**, a re-roll dropping the reply it regenerates, `/reset` | `keep` (how many messages are left), `length` |
+| `fork_of` | a session starts as a copy of another one's history: a web **Branch**, `evi sessions fork` | `source` (that session's id), `cut` (how many of its messages were copied), `messages` (the copies) |
 
-Message counts (`evi sessions list`, `evi stats`) count only messages, never meta records.
+In `edit` and `truncate`, positions count messages from 0 with the system prompt left out, and `length` is how many messages the history held just before the change. A replay uses `length` to line its rebuild up with the history the change was made to: a resumed session can hold a placeholder result its log doesn't (below). A `fork_of` record carries its copies itself rather than as message lines, because they were logged once already, in the source session: there is nothing to look up in the source, which may be gone, and nothing is counted twice. Copies hold text only; an image or audio attachment is a count, as in the message lines (`[+1 image attachment(s)]`). A record applied twice changes nothing more.
 
-Listing scans the day directories newest-first and summarizes each file: message count, first user message (the injected `[ongoing goal: …]` prefix is stripped from the summary), and start/end timestamps derived from the `ts` fields.
+Message counts (`evi sessions list`, `evi stats`), search, dreaming and fine-tune export see only messages, never meta records.
 
-**Resume is a best-effort reconstruction.** eVi rebuilds an in-memory history from the JSONL in order and re-emits user/assistant/tool messages. Each tool result is paired with the call it answers: by its logged `tool_call_id`, or by position in a transcript written before ids were logged. A call with no logged result gets a placeholder result starting `(interrupted)`, a result with no call is dropped, and a missing or repeated call id gets a fresh one, so strict OpenAI-compatible backends accept the resumed history. A web or desktop chat revived from disk also replays its compactions, so it comes back as the model last saw it. `evi sessions resume`, `continue` and `fork` restore the whole log instead (just as valid, only longer), and `evi sessions show` and fine-tune export always read the whole log. A resume does **not** restore the backend's KV cache (the next message is a fresh prompt to the model) nor transient flags like an active goal or one-shot plan mode — re-set those if you need them.
+Each line goes under the day it was written, so a session that runs past midnight has a file in each day's directory. Resume, the web revive, export and handoff read all of them, in the order their lines were written (by timestamp: a device whose time zone moved west across midnight files later lines under the day before); the listing, `evi sessions show` and fine-tune export go file by file. Retention (`tools.cleanup_period_days`, `evi sessions purge`) goes by session: the earlier days' files of a session that ran on into a day inside the window are kept too, since a replay counts positions from the session's start.
 
-- **resume** and **continue** reuse the same `session_id`, so new messages append to the **same** transcript file.
-- **fork** loads the history into a **fresh** agent with a new auto-generated `session_id`, so the original file is left intact and new turns go to a new file.
+Listing scans the day directories newest-first and summarizes each file: message count, first user message (the injected `[ongoing goal: …]` prefix is stripped from the summary; a fork shows the first one it copied), and start/end timestamps derived from the `ts` fields. A file that holds only meta records (a web **Branch** or `evi sessions fork` nobody has written in yet) isn't listed: it isn't counted by `evi stats` or fine-tune export, and `evi sessions continue` doesn't pick it. It still resumes by id.
 
-In the web UI, a session id arriving via `/?session=<id>` is revived from disk on first use: if a transcript for that id exists, its history is loaded into a fresh `Agent` before the next message, compactions replayed and notes in place.
+**Resume is a best-effort reconstruction.** eVi rebuilds an in-memory history from the JSONL in order and re-emits user/assistant/tool messages, applying the meta records as it goes: a compaction replaces what it summarised with the summary, an edit rewrites its message and drops what followed, a truncate cuts back, and a `fork_of` record starts the history with the messages it copied. So a resumed chat is the conversation as you and the model last had it: after an edit and a re-roll it is the edited prompt and the new reply, not the original prompt followed by both replies. Each tool result is paired with the call it answers: by its logged `tool_call_id`, or by position in a transcript written before ids were logged. A call with no logged result gets a placeholder result starting `(interrupted)`, a result with no call is dropped, and a missing or repeated call id gets a fresh one, so strict OpenAI-compatible backends accept the resumed history. A web or desktop chat revived from disk and `evi sessions resume`, `continue` and `fork` all rebuild it this way; `evi sessions show` and fine-tune export read the log as written (every message, no record applied). A resume does **not** restore the backend's KV cache (the next message is a fresh prompt to the model) nor transient flags like an active goal or one-shot plan mode — re-set those if you need them.
+
+- **resume** and **continue** reuse the same `session_id`, so new messages append to the **same** session (today's file of it).
+- **fork** loads the history into a **fresh** agent with a new auto-generated `session_id` and writes it to the new session's transcript as a `fork_of` record, so the original file is left intact, new turns go to a new file, and resuming the fork later brings back what it copied.
+
+In the web UI, a session id arriving via `/?session=<id>` is revived from disk on first use: if a transcript for that id exists, its history is loaded into a fresh `Agent` before the next message, rebuilt as above, notes in place. A web **Branch** is a fork: the new tab's transcript starts with a `fork_of` record.
+
+**Delete from here** on a tool result, or **Branch** at a tool call or at one of its results but the last, leaves a call without its result. The chat shows it as you left it, but what goes to the model gives that call a placeholder result starting `(interrupted)` ([History a strict backend accepts](#history-a-strict-backend-accepts)), and so does a revive or resume: after a restart the chat shows that placeholder after the call.
 
 ### Notes in a chat
 
@@ -67,7 +73,7 @@ A note from anyone but you reaches the model **sealed**: every line of its body 
 
 So what you type next stays yours, and the note's text can't fake its own end or pass as you, however it breaks its lines. Sealing happens only on the way to the model; the history, the transcript and `GET /api/session/<id>/history` keep the plain form.
 
-A note that arrives while the chat is in the middle of a turn waits until the turn ends, then joins the history after the turn's own messages, so it never lands between a tool call and its result. A re-roll after a note regenerates the reply before it, and the note comes back after the new reply. A note is written to the transcript as a `user` line when it joins the history, so a revived chat has it where it was. Whatever the model does about a note, each tool call still goes through that chat's own permission prompt. How the web UI shows notes: [web-desktop.md](web-desktop.md#notes-and-compaction-in-the-chat).
+A note that arrives while the chat is in the middle of a turn waits until the turn ends, then joins the history after the turn's own messages, so it never lands between a tool call and its result. A re-roll after a note regenerates the reply before it, and the note comes back after the new reply. A note is written to the transcript as a `user` line when it joins the history, so a revived chat has it where it was; a note a re-roll brought back is written again in its new place, after the re-roll's `truncate` record took its first line out of the replay. Whatever the model does about a note, each tool call still goes through that chat's own permission prompt. How the web UI shows notes: [web-desktop.md](web-desktop.md#notes-and-compaction-in-the-chat).
 
 ### History a strict backend accepts
 
@@ -123,6 +129,7 @@ Relevant paths:
 | Data | Path |
 |------|------|
 | Session transcripts | `~/.evi/transcripts/<YYYY-MM-DD>/<session_id>.jsonl` |
+| Handed-off sessions (synced) | `~/.evi/handoff/<session_id>.jsonl` |
 | Checkpoint journal | `~/.evi/checkpoints/journal.jsonl` |
 | Checkpoint blobs | `~/.evi/checkpoints/blobs/<sha256>` |
 
@@ -137,7 +144,7 @@ evi sessions export <session_id> [-f md|html|json] [-o PATH]
 evi sessions resume <session_id>             # reopen and continue in the SAME file
 evi sessions continue                        # resume the most recently active session
 evi sessions fork <session_id>               # branch into a NEW session, original intact
-evi sessions handoff [session_id]            # print resume cmd + URL for another device
+evi sessions handoff [session_id]            # copy it for `evi sync`, print resume cmd + URL
 evi sessions title <session_id>              # LLM-generated short title for a session
 evi sessions search <query> [--days N]       # full-text search across transcripts
 evi sessions purge [--older-than N] [-y]     # delete transcripts older than N days
@@ -146,6 +153,17 @@ evi sessions import [--source claude-code|codex] [--write]   # see "Importing" b
 
 - `list` defaults to the last **7** days and **20** entries; `export` defaults to `md` and prints to stdout unless you pass `--out/-o`.
 - `handoff` defaults to the most recent session when no id is given.
+
+### Handing a session off to another device
+
+`evi sync` leaves transcripts on the device they were written on, so `evi sessions handoff <id>` copies that one session, every day's file of it, to `~/.evi/handoff/<id>.jsonl`, which sync carries. Then `evi sync push` here and `evi sync pull` on the other device. There, `evi sessions resume <id>`, `evi sessions fork <id>` or opening `/?session=<id>` in the web UI takes the copy in before loading the session:
+
+- the session isn't on that device yet: the copy becomes its transcript;
+- that device has the start of it (it was handed off from there and went on here): the new lines are added;
+- that device already has every line: nothing changes;
+- both devices went on since: that device's own transcript is kept, and `evi sessions resume` says so.
+
+Hand off again after more turns: the copy is replaced. `evi sessions continue` picks among the sessions the device already has, so resume a handed-off one by its id. A copy that can't be read is ignored, and so is a line in it that isn't a transcript entry; whatever goes wrong taking a copy in, the device's own transcript still loads. A sync repo set up before handoff was synced still ignores `handoff/` in its managed `.gitignore`; `evi sync push` adds the handed-off sessions anyway. In multi-user web mode the web revive doesn't take copies in (the handoff folder isn't per user).
 
 ### Importing from Claude Code and Codex — `evi sessions import`
 
@@ -188,6 +206,7 @@ Inside an interactive chat (`evi chat`), `/recent [n]` lists recent sessions (re
 ### Web UI
 
 - Open a specific session directly with `/?session=<session_id>` (the desktop app also handles the `evi://session/<id>` deep link). Its history is revived from the on-disk transcript.
+- **Edit**, **Re-roll**, **Delete from here** and **Branch** on a message last: each is recorded in the transcript (above), so after a restart the chat, and a branch's tab, come back as you left them.
 - The web chat surfaces a **rewind** dialog to undo file writes (the browser equivalent of `evi rewind`).
 
 ## Examples
@@ -211,13 +230,14 @@ To continue it later on another machine:
 ```console
 $ evi sessions handoff a1b2c3d4
 handoff a1b2c3d4 (17 messages)
+  copied to /home/you/.evi/handoff/a1b2c3d4.jsonl for sync to carry
   1. sync this device:   evi sync push
   2. on the other device: evi sync pull, then either
        evi sessions resume a1b2c3d4
-       or open http:///?session=a1b2c3d4 in the web UI
+       or open /?session=a1b2c3d4 in the web UI
 ```
 
-Run `evi sync push` here, `evi sync pull` on the other device, then either resume command works because the transcript file travels with the sync.
+Run `evi sync push` here, `evi sync pull` on the other device, then either resume command works: the handed-off copy travels with the sync, and resuming takes it in.
 
 ### Example 2 — fork a session, export it, then undo a bad file write
 
@@ -257,13 +277,14 @@ transcripts = true
 
 ## Notes / limits
 
-- **Resume is not perfect.** The KV cache is not restored (the next prompt is fresh), and transient flags like an active goal or one-shot plan mode are dropped — re-set them if needed. In a transcript written before tool-call ids were logged, results are paired with their calls by position. A CLI resume doesn't replay compactions (a web revive does), so it restores more than the model last saw.
+- **Resume is not perfect.** The KV cache is not restored (the next prompt is fresh), and transient flags like an active goal or one-shot plan mode are dropped — re-set them if needed. In a transcript written before tool-call ids were logged, results are paired with their calls by position. Transcripts written before meta records existed have no record of web edits, deletes or branches, so those still come back as they were logged. An image or audio attachment comes back as its count, not the file.
+- **One session, several files.** A session that ran past midnight is one session to resume, export and hand off, but `evi sessions list`, `evi stats` and fine-tune export still go file by file, so it shows once per day it was active.
 - **Transcripts must be on.** With `transcripts = false` there is nothing to list, show, resume, fork, continue, or hand off. The CLI hints at this when the list is empty.
 - **resume/continue write back to the original file; fork does not.** Use `fork` when you want to explore a branch without altering the source session.
-- **Handoff relies on sync.** The on-disk copy is only as current as the last completed turn, and the other device only sees it after `evi sync pull`. Always `evi sync push` from the source first.
+- **Handoff relies on sync.** The handed-off copy is as current as the last completed turn when you ran `evi sessions handoff`, and the other device only sees it after `evi sync pull`. Always `evi sync push` from the source first, and hand off again after more turns.
 - **Imports keep the original dates.** An imported conversation is filed under the day(s) it happened, so `evi sessions list` (last 7 days by default) may not show an old one; use `--days` or `search`.
 - **Checkpoints are best-effort and fail-open.** A checkpoint failure never blocks the actual write — so in rare cases a write may not be undoable.
 - **5 MiB snapshot cap.** Writes over 5 MiB are journalled as `skip` and **cannot** be rewound (the listing shows them, but rewind reports "could not restore (not snapshotted)").
 - **Rewind is destructive and not itself undoable.** It overwrites current file contents with the saved prior bytes (or deletes newly created files) and trims the journal, so undone entries are gone; there is no "redo."
 - **Scope of checkpoints.** Only files eVi writes through its own `write_file` tool are journalled — edits you make by hand, or changes from shell commands, are not captured here. Use git for general version control.
-- **Privacy.** Transcripts and checkpoint blobs are plain files under your eVi home (`~/.evi`, or `$EVI_HOME`). They contain your full conversation text (notes other sessions and channel pushes sent in included) and prior file contents in the clear; treat that directory as sensitive, and remember that `export` (md/html/json) produces an unencrypted copy wherever you write it.
+- **Privacy.** Transcripts and checkpoint blobs are plain files under your eVi home (`~/.evi`, or `$EVI_HOME`). They contain your full conversation text (notes other sessions and channel pushes sent in included) and prior file contents in the clear; treat that directory as sensitive, and remember that `export` (md/html/json) produces an unencrypted copy wherever you write it. A session you hand off is pushed, unencrypted, to your sync remote; delete `~/.evi/handoff/<id>.jsonl` (and push) to stop syncing it.

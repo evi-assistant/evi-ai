@@ -522,7 +522,9 @@ function updateRerollButtons() {
   });
 }
 
-async function rebuildHistory() {
+// `until`: draw only the messages before that history index (a re-roll's
+// redraw stops where the server rewound, as the stream draws the new reply).
+async function rebuildHistory({ until = Infinity } = {}) {
   try {
     const r = await fetch(`/api/session/${sessionId}/history`);
     if (!r.ok) return;
@@ -531,6 +533,7 @@ async function rebuildHistory() {
     historyView += 1;  // a note sync started before this redraw must not draw
     nextHistoryIndex = 1;
     for (const m of messages) {
+      if (m.index >= until) break;
       if (m.role === 'system' || m.kind === 'compaction_ack') {
         // The system slot, or the acknowledgement that pairs with the
         // compaction summary (the summary's note stands for both).
@@ -643,8 +646,11 @@ async function streamReroll() {
     const r = await fetch(`/api/session/${turnSid}/reroll`, { method: 'POST' });
     if (r.status === 409) throw new Error('a turn is still running in this session');
     if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
-    // Refresh history so any popped assistant/tool bubbles vanish.
-    await rebuildHistory();
+    // Refresh history so any popped assistant/tool bubbles vanish, up to
+    // where the server rewound: with a quick model the new reply is already
+    // in the history, and the stream below draws it.
+    const rewound = parseInt(r.headers.get('X-Evi-History-Length') || '', 10);
+    await rebuildHistory(Number.isFinite(rewound) ? { until: rewound } : {});
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
