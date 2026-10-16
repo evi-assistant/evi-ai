@@ -35,6 +35,16 @@ Defining a custom tool::
 
     agent = build_agent(tools=[add])
 
+A tool that needs the session calling it declares ``ctx``: the agent passes
+the call's ToolContext (session id, turn, working folder, the user's data
+dir), and ``ctx`` never appears in the schema the model sees::
+
+    from evi.sdk import tool, ToolContext
+
+    @tool(category="custom", description="Where this session works")
+    def where(ctx: ToolContext | None = None) -> str:
+        return ctx.cwd if ctx and ctx.cwd else "."
+
 See ``docs/sdk.md`` and ``examples/python/`` for the full guide.
 """
 
@@ -72,6 +82,9 @@ from evi.tools import (
     register_builtin_tools,
     tool,
 )
+# What a tool that declares a `ctx` parameter receives: the calling agent's
+# session, turn, user data dir and workdir (evi.tools.base).
+from evi.tools.base import ToolContext
 
 # --- subagents -----------------------------------------------------------
 from evi.llm.subagent import (
@@ -153,6 +166,7 @@ __all__ = [
     # tools
     "tool",
     "Tool",
+    "ToolContext",
     "ToolOutput",
     "REGISTRY",
     "get_enabled_tools",

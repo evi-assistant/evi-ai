@@ -16,7 +16,8 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 from openai import OpenAI
 
@@ -34,7 +35,14 @@ from evi import workdir
 from evi.memory import MemoryStore
 from evi.project import ProjectContext
 from evi.skills import SkillStore
-from evi.tools.base import REGISTRY, Tool
+from evi.tools.base import (
+    REGISTRY,
+    Tool,
+    ToolContext,
+    active_context,
+    bind_context,
+    unbind_context,
+)
 from evi.transcripts import TranscriptStore
 from evi.audio_input import (
     build_audio_content,
@@ -477,6 +485,7 @@ class Agent:
         session_id: str | None = None,
         guardrails: "Guardrails | None" = None,
         frontend: str = "cli",
+        user_root: Path | str | None = None,
     ) -> None:
         self.client = client
         self.config = config
@@ -507,6 +516,27 @@ class Agent:
         # user edits config, not a Settings GUI.
         self.frontend = (frontend or "cli").strip().lower()
         self.session_id = session_id or _generate_session_id()
+        # The tool call this agent is built inside (a subagent, a workflow
+        # step), None for a top-level agent: ToolContext.parent of its calls.
+        self.parent_context: ToolContext | None = active_context()
+        # The multi-user web login's data dir (HOME/users/<name>), None in
+        # single-user mode; tools reach it as ToolContext.user_root. An agent
+        # built inside a tool call works for the same user as the agent whose
+        # tool built it.
+        if user_root is None and self.parent_context is not None:
+            user_root = self.parent_context.user_root
+        self.user_root: Path | None = Path(user_root) if user_root is not None else None
+        # User turns so far (ToolContext.turn_index): chat() counts each one,
+        # continuing a revived session's count (_sync_turn_index).
+        self.turn_index: int = 0
+        self._turns_of: str | None = None  # the session_id turn_index counts for
+        # ToolContext.cancel_token. Nothing sets it yet (Agent cancel will).
+        self.cancel_token = threading.Event()
+        # This agent's bindings of tools that have a `binder`, made at each
+        # tool's first call (`_session_tool`): unbound tool's id → (that tool,
+        # kept alive so the id stays unique; its binding; the session bound for).
+        self._bound_lock = threading.Lock()
+        self._bound: dict[int, tuple[Tool, Tool, str]] = {}
         # Categories that never prompt. Populated from config.auto.auto_approve.
         self.auto_approve_categories: set[str] = set(
             getattr(getattr(config, "auto", None), "auto_approve", []) or []
@@ -1090,6 +1120,10 @@ class Agent:
         self.history = [
             {"role": "system", "content": self._compose_system_prompt()}
         ]
+        # A new conversation: session-bound tools start afresh. turn_index
+        # keeps counting, as the session id (and so its journal tags) stays.
+        with self._bound_lock:
+            self._bound.clear()
 
     # --- history manipulation (edit / re-roll / branch) ------------------
 
@@ -1336,6 +1370,8 @@ class Agent:
             user_content = composed
             transcript_summary = composed
 
+        self._sync_turn_index()
+        self.turn_index += 1  # ToolContext.turn_index for this turn's calls
         self.history.append({"role": "user", "content": user_content})
         self._log_to_transcript("user", transcript_summary)
         model_for_turn, route_name = self._pick_model_for_turn(composed)
@@ -1445,6 +1481,7 @@ class Agent:
         # A re-roll answers the last user message afresh: the turn that set
         # the old skill scope was rewound away with it.
         self.active_skill_scope = None
+        self._sync_turn_index()  # a revived session re-rolls its last turn
         # Re-use the model the original turn picked, so re-rolls stay on
         # the same expert.
         yield from self._run_inference_loop(
@@ -2105,6 +2142,79 @@ class Agent:
         """A skill's declared scope as eVi understands it (skillscope.fit)."""
         return skillscope.fit(scope, set(REGISTRY) | set(self.tools))
 
+    # --- session-bound tools ----------------------------------------------
+
+    def tool_context(self) -> ToolContext:
+        """The ToolContext a tool call made now runs with."""
+        return ToolContext(
+            agent=self,
+            session_id=self.session_id,
+            cwd=getattr(self, "cwd", "") or "",
+            cancel_token=self.cancel_token,
+            turn_index=self.turn_index,
+            user_root=self.user_root,
+            parent=getattr(self, "parent_context", None),
+        )
+
+    def _sync_turn_index(self) -> None:
+        """Count turns for the session this agent now holds. A revived or
+        resumed one (history restored, or `session_id` set after the agent was
+        built) counts on from the user messages already in its history, so a new
+        turn never reuses an earlier one's (session, turn) checkpoint tag."""
+        if self._turns_of != self.session_id:
+            self._turns_of = self.session_id
+            self.turn_index = sum(
+                1 for m in self.history[1:] if isinstance(m, dict) and m.get("role") == "user"
+            )
+
+    def tools_for_session(self, tools: Iterable[Tool] | None = None) -> dict[str, Tool]:
+        """This session's own tool map: `tools` (default: this agent's) with
+        every tool that has a `binder` bound to this agent now (`Tool.bind`),
+        the rest shared as they are. Names, order and schema objects don't
+        change, so the tool list the model sees is byte-identical. The agent
+        itself binds lazily, at each tool's first call; a tool whose binder
+        fails here stays unbound, and its call reports the error."""
+        src = list(self.tools.values()) if tools is None else list(tools)
+        out: dict[str, Tool] = {}
+        for t in src:
+            try:
+                out[t.name] = self._session_tool(t)
+            except Exception:  # noqa: BLE001 — the call surfaces it as ERROR
+                out[t.name] = t
+        return out
+
+    def _session_tool(self, tool: Tool) -> Tool:
+        """`tool` as this agent runs it: a tool with a `binder` is bound for
+        this agent's session at its first call, and that binding reused until
+        the session id changes or `reset`. A copy bound for another agent (one
+        built from that agent's tools) is bound afresh from its source, so the
+        two never share state. Other tools are returned as they are."""
+        src = getattr(tool, "bound_from", None) or tool
+        if getattr(src, "binder", None) is None:
+            return tool
+        with self._bound_lock:
+            bound = self._cached_binding(src)
+        if bound is not None:
+            return bound
+        # The binder runs outside the lock (it may look up another of this
+        # session's tools) and on a fully built agent. If two first calls race,
+        # the binding stored first is the one both use.
+        ctx = self.tool_context()
+        fresh = src.bind(ctx)
+        with self._bound_lock:
+            bound = self._cached_binding(src)
+            if bound is None:
+                self._bound[id(src)] = (src, fresh, ctx.session_id)
+                bound = fresh
+        return bound
+
+    def _cached_binding(self, src: Tool) -> Tool | None:
+        """This session's binding of `src`, if any. Caller holds _bound_lock."""
+        hit = self._bound.get(id(src))
+        if hit is not None and hit[0] is src and hit[2] == self.session_id:
+            return hit[1]
+        return None
+
     # --- tool dispatch with permission + hooks --------------------------
 
     # --- transcript writes ----------------------------------------------
@@ -2230,27 +2340,40 @@ class Agent:
         `skill_scope` is the scope the call's batch runs under (None: this
         agent's own), handed to any subagent the tool spawns.
 
+        A tool that declares ``ctx`` gets this session's ToolContext, and one
+        with a `binder` runs as this agent's own binding of it (made here at
+        its first call; a binder that fails makes the call's ERROR).
+
         Returns a `ToolOutput` carrying both visible text and any citations
         the tool produced.
         """
         dlog("tool.call", {"name": name, "args": args_json})
         _t0 = time.monotonic()
+        ctx = self.tool_context()
         # The tool body sees this session's folder ("" = the process cwd, not
-        # whatever folder the calling thread last had), hooks and skill scope.
-        # In the chat loop this runs on a pool thread under a copied context,
-        # so these sets stay with this one call; the tokens put things back
-        # when called in-thread. (A batch scope of None means the agent's is.)
+        # whatever folder the calling thread last had), hooks, skill scope and
+        # tool context. In the chat loop this runs on a pool thread under a
+        # copied context, so these sets stay with this one call; the tokens put
+        # things back when called in-thread. (A batch scope of None means the
+        # agent's is.)
         cwd_token = workdir.set_cwd(getattr(self, "cwd", "") or None)
         hooks_token = hooks_mod.bind(self.hooks)
         scope_token = skillscope.bind(skill_scope or self._skill_scope())
+        ctx_token = bind_context(ctx)
         try:
             with otel.span("evi.tool", **{"tool.name": name}):
                 try:
-                    output = tool.call_rich(args_json)
+                    run = self._session_tool(tool)
+                    # A duck-typed tool (not a Tool) keeps its one-argument call.
+                    output = (
+                        run.call_rich(args_json, ctx) if isinstance(run, Tool)
+                        else run.call_rich(args_json)
+                    )
                 except Exception as exc:
                     # Belt-and-braces: Tool.call_rich already catches most exceptions.
                     output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
         finally:
+            unbind_context(ctx_token)
             skillscope.unbind(scope_token)
             hooks_mod.unbind(hooks_token)
             workdir.reset(cwd_token)

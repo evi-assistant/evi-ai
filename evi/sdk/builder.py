@@ -71,6 +71,7 @@ def build_agent(
     enable_hooks: bool = True,
     enable_guardrails: bool = True,
     memory_root: "Path | None" = None,
+    user_root: "Path | None" = None,
     permission_callback: "PermissionCallback | None" = None,
     permission_batch_callback: "BatchPermissionCallback | None" = None,
     transcripts: "TranscriptStore | None" = None,
@@ -96,6 +97,10 @@ def build_agent(
       memory_root: directory for the :class:`~evi.memory.MemoryStore` when memory
         is enabled (e.g. a per-user data dir in multi-user web mode). ``None``
         uses the shared default location — identical to ``MemoryStore()``.
+      user_root: the multi-user web login's data dir (``HOME/users/<name>``).
+        Memory tools keep that user's notes under it, and memory defaults to
+        ``user_root/memory``. ``None`` takes the user of the tool call building
+        this agent (a subagent works for its parent's user), else single-user.
       permission_callback / permission_batch_callback: tool-permission prompts;
         ``None`` means non-interactive (the caller decides via auto-approve).
       transcripts: a :class:`~evi.transcripts.TranscriptStore` to log turns to.
@@ -165,6 +170,19 @@ def build_agent(
     want_memory = toggles.get("memory", False) if enable_memory is None else enable_memory
     want_skills = toggles.get("skills", False) if enable_skills is None else enable_skills
 
+    # Per-user data: an agent built inside a tool call works for the same user
+    # as the agent whose tool built it, so its memory index and tools are that
+    # user's, never the shared store.
+    if user_root is None:
+        from evi.tools.base import active_context
+
+        parent = active_context()
+        user_root = parent.user_root if parent is not None else None
+    if memory_root is None and user_root is not None:
+        from pathlib import Path as _Path
+
+        memory_root = _Path(user_root) / "memory"
+
     memory = None
     if want_memory:
         from evi.memory import MemoryStore
@@ -208,6 +226,7 @@ def build_agent(
         session_id=session_id,
         guardrails=guardrails,
         frontend=frontend,
+        user_root=user_root,
         **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
     # Tool-search-at-scale (opt-in): with many tools, defer the long tail behind

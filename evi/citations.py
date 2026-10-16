@@ -16,6 +16,7 @@ import from here without dragging extras along.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -50,10 +51,14 @@ class ToolOutput:
     Tools can return either a plain `str` (no citations) or a
     `ToolOutput`. The base Tool wrapper unwraps both shapes so the
     agent always receives a `ToolOutput`.
+
+    `extra` carries structured data for eVi itself, never shown to the
+    model (e.g. a skill's tool scope, a todo list, a background job id).
     """
 
     text: str
     citations: list[Citation] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def trim_excerpt(text: str, *, max_chars: int = 240) -> str:

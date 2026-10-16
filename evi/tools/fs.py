@@ -7,7 +7,7 @@ from pathlib import Path
 
 from evi import workdir
 from evi.citations import Citation, ToolOutput, trim_excerpt
-from evi.tools.base import tool
+from evi.tools.base import ToolContext, tool
 
 
 _MAX_READ_BYTES = 256 * 1024  # 256 KB cap so we don't dump huge files into context
@@ -176,14 +176,14 @@ def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
     description="Write UTF-8 text to a file, creating parent dirs if needed. Overwrites.",
     category="fs",
 )
-def write_file(path: str, content: str) -> str:
+def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
     p = workdir.resolve(path)
     # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
     # Best-effort — a checkpoint failure must never block the write itself.
     try:
         from evi.checkpoints import record_before_write
 
-        record_before_write(p)
+        record_before_write(p, ctx=ctx)  # tagged with the session + turn
     except Exception:  # noqa: BLE001
         pass
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -205,7 +205,11 @@ def write_file(path: str, content: str) -> str:
     category="fs",
 )
 def edit_file(
-    path: str, old_string: str, new_string: str, replace_all: bool = False
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+    ctx: ToolContext | None = None,
 ) -> str:
     p = workdir.resolve(path)
     if not p.is_file():
@@ -233,7 +237,7 @@ def edit_file(
     try:
         from evi.checkpoints import record_before_write
 
-        record_before_write(p)
+        record_before_write(p, ctx=ctx)  # tagged with the session + turn
     except Exception:  # noqa: BLE001
         pass
     p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
@@ -263,7 +267,7 @@ def _parse_patch(patch: str) -> list[tuple[str, str]]:
     ),
     category="fs",
 )
-def apply_patch(path: str, patch: str) -> str:
+def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
     p = workdir.resolve(path)
     if not p.is_file():
         return f"ERROR: not a file: {p}"
@@ -295,7 +299,7 @@ def apply_patch(path: str, patch: str) -> str:
     try:
         from evi.checkpoints import record_before_write
 
-        record_before_write(p)
+        record_before_write(p, ctx=ctx)  # tagged with the session + turn
     except Exception:  # noqa: BLE001
         pass
     p.write_text(new_text, encoding="utf-8", newline="")
