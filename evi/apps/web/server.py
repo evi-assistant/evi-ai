@@ -44,6 +44,7 @@ from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
 from evi.backends import get_backend
 from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
+from evi.history import COMPACTION_ACK, is_note, note_message
 from evi.llm.agent import Agent, Done, Error, Event, make_unattended, remote_unattended
 from evi.llm.client import make_client
 from evi.mcp import MCPManager, filter_allowed, load_servers
@@ -1073,13 +1074,22 @@ def _refused_login(provided: str, users: list) -> str | None:
 
 
 def _config_snapshot(cfg: Config) -> dict[str, Any]:
-    """asdict(cfg) with secrets masked for transport to the browser."""
+    """asdict(cfg) with secrets masked for transport to the browser, plus
+    `auto_approve_migration`: `[auto] auto_approve` with "code" replaced by
+    "code_read" when the list still holds the old default's "code" (which now
+    auto-approves running code), else None. Settings → Permissions offers it
+    as a one-click switch (evi.permissions.auto_approve_migration, the fix
+    `evi lint` and `evi doctor` suggest). It is no config section, so a POST
+    of it back changes nothing (_apply_config_patch skips it)."""
+    from evi.permissions import auto_approve_migration
+
     data = asdict(cfg)
     for section, secrets_ in _SECRET_FIELDS.items():
         body = data.get(section, {})
         for key in secrets_:
             if body.get(key):
                 body[key] = _SECRET_SENTINEL
+    data["auto_approve_migration"] = auto_approve_migration(cfg.auto.auto_approve)
     return data
 
 
@@ -1180,6 +1190,15 @@ class WebSession:
     # Guards `busy`: one turn per session. Two workers on one Agent would
     # interleave history and swap each other's permission callback.
     turn_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    # Notes (session messages, channel pushes) that arrived mid-turn, held until
+    # the turn ends: appended then, one could land between a tool call and its
+    # result, which strict backends reject (_post_note). A re-roll holds the
+    # ones after the reply it regenerates (_hold_notes_past_last_prompt).
+    held_notes: list[dict[str, Any]] = field(default_factory=list, repr=False, compare=False)
+    # id() of the held notes not yet in the transcript: a note is logged when
+    # it enters the history (_log_note), so one a re-roll holds again (already
+    # logged) isn't logged twice. Each id belongs to a note in held_notes.
+    unlogged_notes: set[int] = field(default_factory=set, repr=False, compare=False)
 
     def begin_turn(self) -> bool:
         """Claim the session for a turn; False if one is already running."""
@@ -1192,6 +1211,19 @@ class WebSession:
     def end_turn(self) -> None:
         with self.turn_lock:
             self.busy = False
+            self._release_notes()
+
+    def _release_notes(self) -> None:
+        """Append the notes held during the turn, logging the ones the
+        transcript doesn't have yet, after the turn's own messages, so a
+        revived session has them in the same place. Caller holds turn_lock."""
+        if self.held_notes:
+            self.agent.history.extend(self.held_notes)
+            for note in self.held_notes:
+                if id(note) in self.unlogged_notes:
+                    _log_note(self.agent, note)
+            self.held_notes.clear()
+        self.unlogged_notes.clear()
 
     def steer(self, text: str) -> bool | None:
         """Queue a follow-up on the running turn: None when no turn is running,
@@ -1208,6 +1240,7 @@ class WebSession:
         (it ended before another step), for the stream to hand back."""
         with self.turn_lock:
             self.busy = False
+            self._release_notes()
             take = getattr(self.agent, "take_pending_steering", None)
             return list(take()) if take else []
 
@@ -1433,25 +1466,117 @@ def _follow_runtime_window(sess: "WebSession") -> None:
 
 
 def _deliver_note(sess: "WebSession", source: str, text: str) -> bool:
-    """Append a pushed-in message to a session's history + channel_log. Dedupes
-    an identical (source, text) repeat of the most recent entry (loop guard) and
-    caps the log. Returns True if delivered, False if deduped."""
+    """Append a pushed-in message to a session's history (and transcript, so a
+    revived session keeps it: _post_note) + channel_log. Dedupes an identical
+    (source, text) repeat of the most recent entry (loop guard) and caps the
+    log. Returns True if delivered, False if deduped."""
     source = (str(source or "channel").strip() or "channel")[:64]
     text = str(text or "")
     last = sess.channel_log[-1] if sess.channel_log else None
     if last is not None and last.get("source") == source and last.get("text") == text:
         return False  # identical repeat — drop (loop / double-send guard)
     # Framed clearly as a peer message so the receiving model treats it as
-    # information from another session, NOT an instruction from the user. (Any
-    # tool it then runs still goes through this session's own permission prompt.)
-    who = source[len("session:"):] if source.startswith("session:") else source
-    sess.agent.history.append(
-        {"role": "system", "content": f'📨 Message from session "{who}": {text}'}
-    )
+    # information from another session (or whoever named themself in POST
+    # /message's `from`), NOT an instruction from the user. (Any tool it then
+    # runs still goes through this session's own permission prompt.) "you" is
+    # the default for that `from`: the Dispatch panel's own compose, so the
+    # user's words, which are theirs to give.
+    if source == "you":
+        note = note_message(text, None)
+    elif source.startswith("session:"):
+        note = note_message(text, source[len("session:"):], "session")
+    else:
+        note = note_message(text, source)
+    _post_note(sess, note)
     sess.channel_log.append({"source": source, "text": text, "ran": False})
     if len(sess.channel_log) > _MSG_LOG_CAP:
         del sess.channel_log[: len(sess.channel_log) - _MSG_LOG_CAP]
     return True
+
+
+def _post_note(sess: "WebSession", note: dict[str, str]) -> None:
+    """Add a note to the session's history now, or, while a turn is running,
+    when it ends (WebSession.held_notes): appended mid-turn it could land
+    between a tool call and its result. It goes to the transcript when it
+    joins the history (_log_note), so the transcript keeps the history's
+    order."""
+    lock = getattr(sess, "turn_lock", None)
+    if lock is None:  # a lightweight test double: no turns to wait for
+        sess.agent.history.append(note)
+        _log_note(sess.agent, note)
+        return
+    with lock:
+        if sess.busy:
+            sess.held_notes.append(note)
+            sess.unlogged_notes.add(id(note))
+        else:
+            sess.agent.history.append(note)
+            _log_note(sess.agent, note)
+
+
+def _log_note(agent: Any, note: dict[str, Any]) -> None:
+    """Write a note the session's history just took to its transcript, as the
+    user line it is (note_message: never system, so a revived session gets it
+    back where it was, through the same path as every other message, and
+    evi.history.is_note still tells it from a prompt). Without a transcript
+    (transcripts off, a test double) there is nothing to write; a disk error
+    never fails the delivery."""
+    store = getattr(agent, "transcripts", None)
+    write = getattr(store, "write_message", None)
+    if not callable(write):
+        return
+    try:
+        write(session=getattr(agent, "session_id", ""), role="user",
+              content=str(note.get("content") or ""))
+    except OSError:
+        pass
+
+
+def _hold_notes_past_last_prompt(sess: "WebSession") -> None:
+    """Before a re-roll rewinds: move the notes that arrived after the last
+    prompt the user typed into held_notes, ahead of any held already. A note is
+    a user message too, so the rewind would otherwise stop at it and answer it,
+    keeping the reply being re-rolled. Held, they come back after the new reply
+    when the turn ends. Caller has claimed the turn."""
+    with sess.turn_lock:
+        hist = sess.agent.history
+        last = next(
+            (i for i in range(len(hist) - 1, 0, -1)
+             if hist[i].get("role") == "user" and not is_note(hist[i])),
+            None,
+        )
+        if last is None:
+            return  # nothing but notes to answer: leave it to the rewind
+        notes = [m for m in hist[last + 1:] if is_note(m)]
+        if notes:
+            hist[last + 1:] = [m for m in hist[last + 1:] if not is_note(m)]
+            sess.held_notes[:0] = notes
+
+
+# The user half of the compaction pair (evi.history.compaction_messages).
+_COMPACTION_SUMMARY = re.compile(r"\[compacted: \d+ earlier messages summarised\]\n")
+
+
+def _history_kind(history: list[dict[str, Any]], i: int) -> str | None:
+    """What the browser should draw history[i] as when it isn't a plain
+    message: "note" for a note from outside the chat (evi.history.is_note),
+    "compaction" for the summary compaction put first after the system prompt,
+    and "compaction_ack" for the assistant acknowledgement right after it
+    (evi.history.compaction_messages). None for everything else."""
+    m = history[i]
+    if is_note(m):
+        return "note"
+    content = m.get("content")
+    if not isinstance(content, str) or i not in (1, 2):
+        return None
+    if i == 1 and m.get("role") == "user" and _COMPACTION_SUMMARY.match(content):
+        return "compaction"
+    if (
+        i == 2 and m.get("role") == "assistant" and content == COMPACTION_ACK
+        and not m.get("tool_calls") and _history_kind(history, 1) == "compaction"
+    ):
+        return "compaction_ack"
+    return None
 
 
 def _resolve_target(bucket: "dict[str, WebSession]", self_id: str, target: str):
@@ -2068,7 +2193,8 @@ def create_app() -> FastAPI:
 
                 path = find_session(session_id, root=tr_root)
                 if path is not None:
-                    restored = history_from_transcript(path)
+                    # Compactions replayed: the history the model last saw.
+                    restored = history_from_transcript(path, apply_compaction=True)
                     if restored:
                         agent.history = [agent.history[0], *restored]
             except Exception:  # noqa: BLE001
@@ -2833,11 +2959,13 @@ def create_app() -> FastAPI:
     @app.post("/api/session/{session_id}/channel")
     def push_channel(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
         """Push an external alert/notification into a (live or revived) session
-        (Phase 83). By default the text is added as a system note so the
-        assistant sees it on its NEXT turn. With ``run: true`` it pushes into the
-        LIVE session — the agent acts on it immediately (headless turn) and the
-        reply lands in the session history. An external sender (webhook, script)
-        authenticates with the normal web token.
+        (Phase 83). By default the text is added as a note (a user message
+        headed as information, not instructions; held until a running turn
+        ends; logged to the transcript, so a revived session keeps it) so the
+        assistant sees it on its NEXT turn. With ``run: true`` it
+        pushes into the LIVE session — the agent acts on it immediately
+        (headless turn) and the reply lands in the session history. An external
+        sender (webhook, script) authenticates with the normal web token.
         """
         if not isinstance(req, dict):
             raise HTTPException(400, "expected an object body")
@@ -2861,9 +2989,7 @@ def create_app() -> FastAPI:
                     raise HTTPException(409, str(exc)) from None
             if not sess.begin_turn():
                 # Can't drive a turn while one is mid-flight — fall back to a note.
-                sess.agent.history.append(
-                    {"role": "system", "content": f"[channel:{source}] {text}"}
-                )
+                _post_note(sess, note_message(text, source, "channel"))
                 sess.channel_log.append({"source": source, "text": text, "ran": False})
                 return {"ok": True, "source": source, "ran": False, "reason": "session busy"}
             from evi.headless import run_headless
@@ -2886,9 +3012,7 @@ def create_app() -> FastAPI:
             sess.channel_log.append({"source": source, "text": text, "ran": True, "reply": reply[:1000]})
             return {"ok": True, "source": source, "ran": True, "reply": reply}
 
-        sess.agent.history.append(
-            {"role": "system", "content": f"[channel:{source}] {text}"}
-        )
+        _post_note(sess, note_message(text, source, "channel"))
         sess.channel_log.append({"source": source, "text": text, "ran": False})
         return {"ok": True, "source": source, "pending": len(sess.channel_log)}
 
@@ -3060,7 +3184,7 @@ def create_app() -> FastAPI:
                 agent.tools = {t.name: t for t in mode_tools(step.mode)}
             make_unattended(agent)  # nobody to ask: [auto] unattended_policy
             res = run_headless(agent, prompt)
-            return res.text or (f"ERROR: {res.error}" if res.error else "")
+            return _wf.step_output(res)  # an Error mid-reply is a failed step
 
         cfg = Config.load()
         try:
@@ -4366,11 +4490,19 @@ def create_app() -> FastAPI:
     # --- session history manipulation (edit / re-roll / branch) --------
 
     @app.get("/api/session/{session_id}/history")
-    def session_history(session_id: str) -> dict[str, object]:
+    def session_history(session_id: str, since: int = 0) -> dict[str, object]:
         """Return the session's history so the browser can rebuild state after a
         reload. Uses get_session so a session that's only on disk (e.g. the
         desktop app was reopened) is revived from its transcript rather than
-        404'ing into a blank chat."""
+        404'ing into a blank chat.
+
+        `since` returns only the messages from that index on (the browser
+        catching up on notes that arrived after what it drew), and `length` is
+        the whole history's. A message drawn as something other than a plain
+        bubble carries a `kind` (_history_kind: a note, the compaction summary
+        and its acknowledgement). `held` lists the notes waiting for the
+        running turn to end (WebSession.held_notes): they have no index yet,
+        and join the history, after the turn's messages, when it ends."""
         sess = get_session(session_id)
         # Strip the bulky image_url data URLs from any multipart user content
         # so the response stays small. The agent still has them in memory.
@@ -4398,8 +4530,15 @@ def create_app() -> FastAPI:
             else []
         )
 
+        # One snapshot of both, under the lock the turn's end releases held
+        # notes under, so a note is in exactly one of them. (The turn's worker
+        # may still append to the history meanwhile.)
+        with sess.turn_lock:
+            history = list(sess.agent.history)
+            held = [dict(n) for n in sess.held_notes]
         cleaned: list[dict] = []
-        for i, msg in enumerate(sess.agent.history):
+        for i in range(max(0, since), len(history)):
+            msg = history[i]
             content = msg.get("content")
             if isinstance(content, list):
                 content = "".join(
@@ -4413,14 +4552,24 @@ def create_app() -> FastAPI:
                 "tool_calls": msg.get("tool_calls"),
                 "name": msg.get("name"),
             }
-            if msg.get("role") == "user" and upload_imgs and isinstance(content, str):
+            kind = _history_kind(history, i)
+            if kind is not None:
+                entry["kind"] = kind
+            elif msg.get("role") == "user" and upload_imgs and isinstance(content, str):
                 imgs = [
                     f"/uploads/{session_id}/{quote(n)}" for n in upload_imgs if n in content
                 ]
                 if imgs:
                     entry["images"] = imgs
             cleaned.append(entry)
-        return {"messages": cleaned}
+        return {
+            "messages": cleaned,
+            "length": len(history),
+            "held": [
+                {"role": n.get("role"), "content": n.get("content"), "kind": "note"}
+                for n in held
+            ],
+        }
 
     @app.post("/api/session/{session_id}/title")
     def session_title(session_id: str) -> dict[str, object]:
@@ -4487,7 +4636,8 @@ def create_app() -> FastAPI:
     @app.post("/api/session/{session_id}/reroll")
     async def session_reroll(session_id: str) -> EventSourceResponse:
         """Drop the last assistant turn (and any tool messages after the
-        last user) and regenerate. SSE shape matches /api/chat."""
+        last user) and regenerate. Notes that arrived after it come back
+        after the new reply. SSE shape matches /api/chat."""
         sess = _my_sessions().get(session_id)
         if sess is None:
             raise HTTPException(404, "no such session")
@@ -4497,6 +4647,7 @@ def create_app() -> FastAPI:
         if not sess.begin_turn():
             raise _busy_error(session_id)
         try:
+            _hold_notes_past_last_prompt(sess)
             sess.agent.rewind_to_last_user()
         except BaseException:
             sess.end_turn()

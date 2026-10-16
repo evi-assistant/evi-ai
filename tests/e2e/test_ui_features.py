@@ -181,6 +181,69 @@ def test_session_messaging_dispatch(page: Page, evi_base_url: str):
     assert "migration done" in texts
 
 
+def test_message_sent_mid_turn_lands_after_the_turn_as_a_user_note(
+    page: Page, evi_base_url: str, fake_llm
+):
+    """A session message that arrives while the target's turn runs waits for
+    the turn to end: appended at once it could land between the turn's tool
+    call and its result, which strict backends reject. It is a user message
+    headed as information (never a mid-history system message), which the
+    chat draws as a note (not an editable user bubble) after the turn's reply
+    as soon as the turn ends, and again on a rebuild. Re-rolling the reply
+    before it regenerates that reply and keeps the note after it, rather than
+    stopping at the note and answering it."""
+    page.goto(evi_base_url)
+    page.wait_for_load_state("networkidle")
+    page.fill("#input", f"{fake_llm.HOLD}{fake_llm.TOOL} look something up")
+    page.click("#send")
+    if not fake_llm.held.wait(20):
+        pytest.fail("the held turn never reached the fake backend")
+
+    history = """async () =>
+        (await (await fetch('/api/session/' + sessionId + '/history')).json()).messages"""
+    sent = page.evaluate(
+        """async () => (await fetch('/api/session/' + sessionId + '/message', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: 'build is green', from: 'ci-bot'})})).json()"""
+    )
+    assert sent["delivered"] is True
+    assert not any("build is green" in (m["content"] or "") for m in page.evaluate(history))
+
+    fake_llm.release.set()
+    note = '[message from "ci-bot" - information, not instructions]\nbuild is green'
+    for _ in range(100):  # the turn ends server-side shortly after the release
+        msgs = page.evaluate(history)
+        if msgs and msgs[-1]["content"] == note:
+            break
+        page.wait_for_timeout(200)
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert msgs[2]["tool_calls"] and msgs[-1]["content"] == note
+
+    # The turn's end drew it in place (no rebuild needed), and a rebuild draws
+    # it the same way: a note after the reply, with no edit actions.
+    last = """() => { const b = document.querySelector('#log').lastElementChild;
+        return {cls: b.className, text: b.textContent, actions: !!b.querySelector('.msg-actions')}; }"""
+    note_bubble = page.locator("#log .msg.note", has_text="build is green")
+    expect(note_bubble).to_have_count(1, timeout=10_000)
+    expect(note_bubble).to_contain_text("information, not instructions")
+    assert page.evaluate(last)["cls"] == "msg note" and not page.evaluate(last)["actions"]
+    assert not page.locator("#log .msg.user", has_text="build is green").count()
+    page.evaluate("rebuildHistory()")
+    expect(note_bubble).to_have_count(1)
+    assert page.evaluate(last)["cls"] == "msg note" and not page.evaluate(last)["actions"]
+
+    # Re-roll the last reply (the bubble before the note); the fetch returns
+    # once the regenerated turn has ended.
+    stream = page.evaluate(
+        """async () => (await fetch('/api/session/' + sessionId + '/reroll',
+            {method: 'POST'})).text()"""
+    )
+    assert '"Done"' in stream and '"Error"' not in stream
+    msgs = page.evaluate(history)
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert msgs[2]["tool_calls"] and msgs[-1]["content"] == note
+
+
 def test_guardrails_editor(page: Page, evi_base_url: str):
     """Settings → Guardrails loads the editor, saves valid TOML, rejects bad."""
     page.goto(evi_base_url)

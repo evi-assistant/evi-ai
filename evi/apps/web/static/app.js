@@ -332,9 +332,118 @@ function addBubble(cls, { history = true } = {}) {
     attachMessageActions(div, cls);
   }
   clearEmptyState();  // a real message replaces the starter prompts
-  log.appendChild(div);
+  // Held notes (renderHeldNotes) stay last: they join the history only when
+  // the running turn ends, after everything it adds.
+  const held = document.getElementById('held-notes');
+  if (held && held.parentNode === log) log.insertBefore(div, held);
+  else log.appendChild(div);
   log.scrollTop = log.scrollHeight;
   return div;
+}
+
+// ---- notes ------------------------------------------------------------
+// A note from outside this chat (a message from another session, a channel
+// push, your own message from the Dispatch panel) and the compaction summary
+// are part of what the model reads, but neither typed here nor said by it, so
+// they render as notes: no Edit / Re-roll / Branch / Delete, and the summary's
+// assistant acknowledgement isn't drawn at all. The server says which is which
+// (`kind` in /history: evi/history.py note_message / compaction_messages).
+const COMPACTED_RE = /^\[compacted: (\d+) earlier messages summarised\]\n?/;
+
+function renderNoteInto(bubble, m) {
+  const text = String(m.content || '');
+  const nl = text.indexOf('\n');
+  const first = nl < 0 ? text : text.slice(0, nl);
+  const body = document.createElement('div');
+  body.className = 'note-body';
+  if (m.kind === 'compaction') {
+    const hit = COMPACTED_RE.exec(text);
+    const n = hit ? Number(hit[1]) : 0;
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = `Summary of ${n} earlier message${n === 1 ? '' : 's'} (compacted)`;
+    body.textContent = hit ? text.slice(hit[0].length).trim() : text;
+    d.appendChild(s); d.appendChild(body);
+    bubble.appendChild(d);
+    return;
+  }
+  const head = document.createElement('div');
+  head.className = 'note-head';
+  // "[message from session "Beta" - information, not instructions]"
+  head.textContent = '📨 ' + first.replace(/^\[/, '').replace(/\]$/, '');
+  body.textContent = nl < 0 ? '' : text.slice(nl + 1);
+  bubble.appendChild(head); bubble.appendChild(body);
+}
+
+// Draw history message `m` (a note or the compaction summary) in its place.
+// It claims no bubble index, but the next bubble's index follows it.
+function drawNote(m) {
+  nextHistoryIndex = m.index + 1;
+  const b = addBubble('note');
+  if (m.kind === 'compaction') b.classList.add('compaction');
+  renderNoteInto(b, m);
+  return b;
+}
+
+// Notes waiting for the running turn to end (the server holds them so none
+// lands between a tool call and its result, and joins them to the history
+// after the turn). Drawn below everything, in a box new bubbles go above, so
+// a note you could see doesn't vanish while a re-roll regenerates the reply
+// before it.
+function renderHeldNotes(held) {
+  let box = document.getElementById('held-notes');
+  if (!held || !held.length) { if (box) box.remove(); return; }
+  if (!box) { box = document.createElement('div'); box.id = 'held-notes'; }
+  box.innerHTML = '';
+  for (const n of held) {
+    const b = document.createElement('div');
+    b.className = 'msg note held';
+    renderNoteInto(b, n);
+    const wait = document.createElement('div');
+    wait.className = 'note-wait';
+    wait.textContent = 'arrives when the current turn ends';
+    b.appendChild(wait);
+    box.appendChild(b);
+  }
+  clearEmptyState();
+  log.appendChild(box);  // (re)placed last
+  log.scrollTop = log.scrollHeight;
+}
+
+// Catch up on notes that joined this session's history after the chat was
+// drawn: one delivered while it sat idle, or held through the turn that just
+// ended. Drawn in place, so the next bubble's history index stays aligned
+// with the server's (edit / branch / delete use it). Only a run of notes at the
+// end is drawn here; anything else waits for the next full rebuild. One sync
+// at a time, so a send right after a turn can't draw a note twice.
+let _noteSync = null;
+let historyView = 0;  // bumped by every full redraw (rebuildHistory)
+function syncNotes(sid) {
+  if (!_noteSync) _noteSync = _syncNotes(sid).finally(() => { _noteSync = null; });
+  return _noteSync;
+}
+async function _syncNotes(sid) {
+  if (sid !== sessionId || nextHistoryIndex <= 1) return;
+  const since = nextHistoryIndex, view = historyView;
+  let data;
+  try {
+    const r = await fetch(`/api/session/${sid}/history?since=${since}`);
+    if (!r.ok) return;
+    data = await r.json();
+  } catch { return; }
+  // Moved on meanwhile: another tab, a new bubble, or a full redraw.
+  if (sid !== sessionId || nextHistoryIndex !== since || historyView !== view) return;
+  const msgs = data.messages || [];
+  const hadHeld = !!document.getElementById('held-notes');
+  if (msgs.length && msgs[0].index === since && msgs.every(m => m.kind === 'note')) {
+    for (const m of msgs) drawNote(m);
+  } else if (hadHeld && msgs.some(m => m.kind === 'note')) {
+    // A held note was released after messages this view didn't count:
+    // redraw the whole chat rather than lose it.
+    await rebuildHistory();
+    return;
+  }
+  renderHeldNotes(data.held || []);
 }
 
 // ---- empty-chat starter prompts --------------------------------------
@@ -417,12 +526,19 @@ async function rebuildHistory() {
   try {
     const r = await fetch(`/api/session/${sessionId}/history`);
     if (!r.ok) return;
-    const { messages } = await r.json();
+    const { messages, held } = await r.json();
     log.innerHTML = ''; renderEmptyState();
+    historyView += 1;  // a note sync started before this redraw must not draw
     nextHistoryIndex = 1;
     for (const m of messages) {
-      if (m.role === 'system') {
-        nextHistoryIndex = m.index + 1; // skip the system slot
+      if (m.role === 'system' || m.kind === 'compaction_ack') {
+        // The system slot, or the acknowledgement that pairs with the
+        // compaction summary (the summary's note stands for both).
+        nextHistoryIndex = m.index + 1;
+        continue;
+      }
+      if (m.kind === 'note' || m.kind === 'compaction') {
+        drawNote(m);
         continue;
       }
       const cls = m.role === 'user' ? 'user'
@@ -466,6 +582,7 @@ async function rebuildHistory() {
         }
       }
     }
+    renderHeldNotes(held);
     updateRerollButtons();  // only the last assistant turn may re-roll
     refreshUsage();  // the newly-shown session's context usage (was stale)
   } catch (err) { console.error('history rebuild failed', err); }
@@ -556,6 +673,9 @@ async function streamReroll() {
   } finally {
     send.disabled = false;
     refreshUsage();
+    // The notes the re-roll held (drawn below the new reply meanwhile) are
+    // back in the history, after it: draw them in their place.
+    await syncNotes(turnSid);
   }
 }
 
@@ -1810,6 +1930,9 @@ async function sendMessage(text, images) {
   }
   // If the user is talking, stop the TTS — they want our attention.
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  // A note that arrived while this chat sat idle goes before the new prompt,
+  // so the prompt's bubble gets the history index the server gives it.
+  if (!turnInFlight) await syncNotes(sessionId);
   const userBubble = addBubble('user');
   userBubble.textContent = text;
   attachMessageActions(userBubble, 'user');  // textContent above wiped the toolbar
@@ -1897,6 +2020,8 @@ async function sendMessage(text, images) {
       send.title = '';
       workStatus.stop();
       send.disabled = false;
+      // Notes held while the turn ran joined the history as it ended.
+      syncNotes(turnSid);
     }
     input.focus();
     refreshUsage();
@@ -2841,6 +2966,20 @@ resetBtn.addEventListener('click', async () => {
   const TOOL_KEYS = ['fs','code','shell','gmail','outlook','image','memory','subagent',
     'mcp','skills','web','voice','computer','transcripts','pdf','sqlite','index','git','ocr','calendar',
     'federation','ask','vision'];
+  // What [auto] auto_approve can name: the tool categories, plus "code_read",
+  // a category of the CALL rather than a toggle (evi.permissions.classify_call):
+  // the code tools' calls that only read code. Placed before "code" so the two
+  // read as the pair they are.
+  const AUTO_APPROVE_KEYS = TOOL_KEYS.flatMap(k => k === 'code' ? ['code_read', 'code'] : [k]);
+  // One line each where the category's name alone misleads: what auto-approving
+  // it lets run with no prompt.
+  const AUTO_APPROVE_WHY = {
+    code_read: 'Reading and analysing code, not running it: python_symbols, monitor watching a file, '
+      + 'check_file on Python (ruff / pyflakes run no project code), and run_python only while the OS sandbox is active.',
+    code: 'Running code: run_python outside a sandbox and check_file linters that execute project code '
+      + '(eslint, cargo clippy, go vet). Includes code_read. Never unasked in a run a remote trigger drives.',
+    shell: 'Shell commands: run_command and monitor running a command (kind=command).',
+  };
   const RISKY = new Set(['shell','computer','web','federation']);
   // Why each risky tool carries the ⚠ — shown as a hover tooltip + legend so
   // the icon reads as "acts outside eVi's sandbox, enable with care" and is NOT
@@ -2930,7 +3069,7 @@ resetBtn.addEventListener('click', async () => {
       applies:'new-chat', fields:[
         { type:'select', section:'auto', key:'mode', label:'Permission mode',
           options:['ask','accept_edits','plan','yolo'],
-          help:'ask: prompt for non-approved tools · accept_edits: auto-allow file edits · plan: no tools · yolo: allow everything' },
+          help:'ask: prompt for non-approved tools · accept_edits: auto-allow file edits and code reading (never running code) · plan: no tools · yolo: allow everything' },
         { type:'auto-approve', section:'auto', key:'auto_approve' },
         { type:'lines', section:'auto', key:'rules', label:'Rules (one per line)',
           help:'allow|deny <tool-name-glob> [arg-glob], first match wins — e.g. "deny run_command rm*", "allow web_*", "deny *_file *.env". A shell line is matched per command: an allow covers it only if every command is allowed, the line parses and redirects stay in the working folder; a deny matches any one command.' },
@@ -3219,7 +3358,7 @@ resetBtn.addEventListener('click', async () => {
       if (yolo && guardOff) return { tone:'bad', title:'Everything allowed, no guard', msg:'Yolo runs every tool without asking and the destructive-command guard is disabled — nothing is gated.' };
       if (yolo) return { tone:'bad', title:'Yolo mode active', msg:'Every tool call runs without prompting; only hard-deny rules and the destructive guard still block.' };
       if (guardOff) return { tone:'warn', title:'Destructive guard off', msg:'Curated destructive shell commands (rm -rf ~, git reset --hard, force-push) no longer force a confirmation.' };
-      if (a.mode === 'accept_edits') return { tone:'info', title:'Edits auto-approved', msg:'File edits apply without prompting; other tool categories still follow your rules.' };
+      if (a.mode === 'accept_edits') return { tone:'info', title:'Edits auto-approved', msg:'File edits and code reading apply without prompting; running code and other tool categories still follow your rules.' };
       if (a.mode === 'plan') return { tone:'info', title:'Plan mode: tools off', msg:'All tool calls are denied — the model can reason but not act.' };
       return { tone:'good', title:'Standard permissions', msg:'Non-approved tools prompt before running and the destructive-command guard is on.' };
     },
@@ -3356,6 +3495,8 @@ resetBtn.addEventListener('click', async () => {
       } else if (act === 'reload') {
         const m = t.closest('.sec-health-mount');
         if (m) refreshSectionHealth(m.id.replace('health-', ''), m);
+      } else if (act === 'migrate-auto-approve') {
+        migrateAutoApprove(t);
       }
     });
   }
@@ -3757,15 +3898,40 @@ resetBtn.addEventListener('click', async () => {
     if (f.type === 'auto-approve') {
       const t = document.createElement('div'); t.className = 'set-group-title';
       t.textContent = 'Auto-approve categories'; wrap.appendChild(t);
+      // A list saved before code_read existed holds the old default's "code",
+      // which now approves RUNNING code unasked. The server works out the fix
+      // (evi.permissions.auto_approve_migration: "code" → "code_read", every
+      // other entry kept; the one `evi lint` / `evi doctor` suggest) from the
+      // SAVED config, and the button saves it right away.
+      const migrated = cfg && Array.isArray(cfg.auto_approve_migration) ? cfg.auto_approve_migration : null;
+      if (migrated) {
+        const banner = document.createElement('div');
+        banner.id = 'auto-approve-migration';
+        banner.innerHTML = healthBannerHtml({
+          tone: 'warn', title: 'Running code is approved without asking',
+          msg: 'Your auto-approve list has "code" (the old default), which now means running code — '
+            + 'run_python and linters that execute project code run with no prompt. Reading and '
+            + 'analysing code is its own category, "code_read". Switch to: ' + migrated.join(', ')
+            + ' (your other categories stay as they are).',
+          cta: { label: 'Switch to code_read', action: 'migrate-auto-approve' },
+        });
+        wrap.appendChild(banner);
+      }
       const current = new Set(getVal('auto', 'auto_approve') || []);
-      TOOL_KEYS.forEach(k => {
+      AUTO_APPROVE_KEYS.forEach(k => {
         const row = document.createElement('label'); row.className = 'set-check';
+        row.dataset.category = k;
         const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = current.has(k);
         cb.onchange = () => {
           cb.checked ? current.add(k) : current.delete(k);
           setVal('auto', 'auto_approve', Array.from(current));
         };
         row.appendChild(cb); row.appendChild(document.createTextNode(' ' + k));
+        if (AUTO_APPROVE_WHY[k]) {
+          const why = document.createElement('span'); why.className = 'set-check-why';
+          why.textContent = AUTO_APPROVE_WHY[k];
+          row.appendChild(why);
+        }
         wrap.appendChild(row);
       });
       return wrap;
@@ -5032,6 +5198,43 @@ resetBtn.addEventListener('click', async () => {
       renderSection();
     } catch (e) {
       statusEl.textContent = 'Save failed: ' + e.message; statusEl.style.color = '#e05252'; saveBtn.disabled = false;
+    }
+  }
+
+  // Settings → Permissions' one-click fix for an auto-approve list from before
+  // code_read: saves the list the server worked out (cfg.auto_approve_migration)
+  // through the config API at once. It replaces an unsaved edit of that same
+  // list (the checkboxes then show what was saved); other unsaved edits stay.
+  async function migrateAutoApprove(btn) {
+    const list = cfg && Array.isArray(cfg.auto_approve_migration) ? cfg.auto_approve_migration : null;
+    if (!list) return;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto: { auto_approve: list } }),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      // The POST's snapshot has no availability / access probe: keep the GET's.
+      cfg = Object.assign({}, data.config, { availability: cfg.availability, access: cfg.access });
+      if (pending.auto) {
+        delete pending.auto.auto_approve;
+        if (!Object.keys(pending.auto).length) delete pending.auto;
+      }
+      markDirty();
+      if (!Object.keys(pending).length) {
+        statusEl.textContent = Array.isArray(cfg.auto_approve_migration)
+          // Config.save writes only your config.toml: an active profile or this
+          // folder's .evi.toml can still list "code".
+          ? 'Saved, but "code" is still listed by an active profile or this folder’s .evi.toml.'
+          : 'Saved — running code now asks first (applies to new chats).';
+        statusEl.style.color = Array.isArray(cfg.auto_approve_migration) ? '#e0a52e' : '#4caf50';
+      }
+      renderSection();
+    } catch (e) {
+      statusEl.textContent = 'Switch failed: ' + e.message; statusEl.style.color = '#e05252';
+      if (btn) btn.disabled = false;
     }
   }
 
