@@ -837,15 +837,52 @@ def test_amp_hints_name_ampcode_cli(monkeypatch):
     assert cli_agent.CLI_AGENTS["amp"] == ("amp", "npm i -g @ampcode/cli")
 
 
+REPO = Path(__file__).resolve().parents[1]
+# The old amp package, and gemini sold as a free Google login (ended 2026-06-18).
+STALE_INSTALL_HINTS = ("npm i -g @sourcegraph/amp", "Google free login",
+                       "Gemini via the free login", "pick a Google login")
+
+
+def _ui_code(root: Path) -> list[Path]:
+    # The web UI's own code: index.html and every first-party script or page next
+    # to it (its JS moved to app.js in B4). vendor/ is pinned third-party code.
+    static = root / "evi" / "apps" / "web" / "static"
+    return sorted(p for p in static.glob("*") if p.is_file() and p.suffix in (".js", ".html"))
+
+
+def _stale_install_hints(root: Path) -> list[str]:
+    files = [*(root / "evi").rglob("*.py"), *(root / "docs").rglob("*.md"), *_ui_code(root)]
+    return [f"{p}: {s}" for p in files for s in STALE_INSTALL_HINTS
+            if s in p.read_text(encoding="utf-8")]
+
+
 def test_no_old_amp_install_command_left_in_the_package():
-    root = Path(__file__).resolve().parents[1]
-    files = [*(root / "evi").rglob("*.py"), *(root / "docs").rglob("*.md"),
-             root / "evi" / "apps" / "web" / "static" / "index.html"]
-    # The old amp package, and gemini sold as a free Google login (ended 2026-06-18).
-    stale = ("npm i -g @sourcegraph/amp", "Google free login", "Gemini via the free login",
-             "pick a Google login")
-    hits = [f"{p}: {s}" for p in files for s in stale if s in p.read_text(encoding="utf-8")]
-    assert hits == []
+    assert _stale_install_hints(REPO) == []
+
+
+def test_stale_hint_scan_covers_the_ui_code():
+    # The UI's install hints live in app.js now; a scan that only read index.html
+    # passed with a stale hint sitting in app.js.
+    ui = _ui_code(REPO)
+    names = {p.name for p in ui}
+    assert {"index.html", "app.js"} <= names
+    assert any("npm i -g @ampcode/cli" in p.read_text(encoding="utf-8") for p in ui)
+
+
+def test_stale_hint_in_any_ui_script_is_caught(tmp_path):
+    static = tmp_path / "evi" / "apps" / "web" / "static"
+    (static / "vendor" / "lib").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    (static / "index.html").write_text("<script src=app.js></script>", encoding="utf-8")
+    (static / "app.js").write_text("// hint: npm i -g @sourcegraph/amp\n", encoding="utf-8")
+    (static / "panels.js").write_text("const t = 'pick a Google login';\n", encoding="utf-8")
+    # Pinned third-party bundles are not ours to fix.
+    (static / "vendor" / "lib" / "lib.min.js").write_text(
+        "/* Google free login */", encoding="utf-8")
+    hits = _stale_install_hints(tmp_path)
+    assert len(hits) == 2
+    assert any("app.js: npm i -g @sourcegraph/amp" in h for h in hits)
+    assert any("panels.js: pick a Google login" in h for h in hits)
 
 
 def test_docs_name_the_current_install_commands():

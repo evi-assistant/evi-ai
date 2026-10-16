@@ -8,14 +8,17 @@ FastAPI app:
   and a forwarded request (X-Forwarded-For & co.) never counts as loopback. The
   launch token alone gates only other machines.
 * A browser's state-changing request needs `X-Evi-Client` (or a token); the
-  old VSIX (Node fetch: `Sec-Fetch-Mode` only) / CLI / peers keep working.
+  old VSIX (Node fetch: `Sec-Fetch-Mode` only) / CLI / peers keep working. The
+  side-effecting GET /api/backend/pull needs it from every caller: an <img>,
+  <link>, <iframe> or link on eVi's own page can't start a model download.
 * One turn per session: a second /api/chat (or a history-rewriting slash
   command, reset, truncate, edit, re-roll) gets 409 while one runs.
 * A permission prompt denies at its deadline; a dropped SSE stream does not
   deny, and the answer may come from another of the caller's tabs. A channel
   `run: true` on a used session no longer waits on a dead stream's callback.
 * Multi-user: a users.json login gets 403 on host-level (owner-only) routes,
-  checkpoints and rewind included.
+  checkpoints and rewind included; logins whose names map to one data folder
+  ('bob smith' / 'bob_smith', 'Alice' / 'alice') don't sign in at all.
 
 Concurrency is exercised against a real uvicorn server in a thread, because
 TestClient runs one streamed response to completion before the next request
@@ -446,11 +449,66 @@ def test_side_effect_get_from_another_site_is_refused_even_cross_origin_allowed(
     monkeypatch.setenv("EVI_ALLOW_CROSS_ORIGIN", "1")
     r = local.get("/api/backend/pull?model=huge-70b", headers={"Sec-Fetch-Site": site})
     assert r.status_code == 403, r.text
+    # ...nor with the header (a cross-site fetch can't send it without a
+    # preflight eVi never answers; refused here all the same).
+    r = local.get("/api/backend/pull?model=huge-70b", headers={"Sec-Fetch-Site": site, **UI})
+    assert r.status_code == 403, r.text
     assert pulls == []
-    # The wizard's own same-origin EventSource still works.
-    r = local.get("/api/backend/pull?model=tiny", headers={"Sec-Fetch-Site": "same-origin"})
+    # The UI's own fetch (same-origin, with the header) still streams.
+    r = local.get("/api/backend/pull?model=tiny",
+                  headers={"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", **UI})
     assert r.status_code == 200 and '"done"' in r.text
     assert pulls == ["tiny"]
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("headers", [
+    # <img>/<link>/<iframe> on eVi's own page (markup past the sanitizer, a
+    # diagram's resource): no Origin, Sec-Fetch-Site same-origin.
+    {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"},
+    {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"},
+    # An EventSource on eVi's own page (CORS mode, Origin, no custom header).
+    {"Origin": LOCAL, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
+    # A link opened in the system browser (the desktop sends links there).
+    {"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"},
+    # An older browser that sends no Sec-Fetch-* at all — and curl.
+    {},
+])
+def test_model_pull_needs_the_client_header_from_everyone(
+    local: TestClient, monkeypatch: pytest.MonkeyPatch, headers: dict, method: str
+) -> None:
+    """GET /api/backend/pull starts a download, and a GET is what any
+    subresource or link sends: no same-origin <img>, <link>, <iframe> or
+    EventSource — nor any caller without the header — may start one."""
+    from evi.backends.ollama import OllamaBackend
+
+    pulls: list[str] = []
+    monkeypatch.setattr(OllamaBackend, "pull_model", lambda self, m: pulls.append(m) or iter(()))
+    r = local.request(method, "/api/backend/pull?model=huge-70b", headers=headers)
+    assert r.status_code == 403, r.text
+    assert pulls == []
+    if method == "GET":
+        assert "X-Evi-Client" in r.json()["detail"]
+        r = local.get("/api/backend/pull?model=tiny", headers={**headers, **UI})
+        assert r.status_code == 200 and '"done"' in r.text
+        assert pulls == ["tiny"]
+
+
+def test_model_pull_with_the_token_needs_no_header(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A page can't know the token, so a token-authenticated pull (header or
+    ?token=) passes as before; without either it's a 401."""
+    from evi.backends.ollama import OllamaBackend
+
+    pulls: list[str] = []
+    monkeypatch.setattr(OllamaBackend, "pull_model", lambda self, m: pulls.append(m) or iter(()))
+    c = TestClient(_make_app(monkeypatch, tmp_path, token="s3cret"), base_url=LOCAL)
+    img = {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "no-cors"}
+    assert c.get("/api/backend/pull?model=a", headers=img).status_code == 401
+    r = c.get("/api/backend/pull?model=b", headers={**img, "Authorization": "Bearer s3cret"})
+    assert r.status_code == 200 and '"done"' in r.text
+    assert pulls == ["b"]
 
 
 def test_reads_need_no_header(local: TestClient) -> None:
@@ -827,6 +885,79 @@ def test_reserved_login_names() -> None:
         assert server_mod._reserved_login(name) and _owner_named(name), name
     for name in ("alice", "owners", "co-owner", "owner2", "the owner"):
         assert not server_mod._reserved_login(name) and not _owner_named(name), name
+
+
+@pytest.mark.parametrize("first,second", [
+    ("bob smith", "bob_smith"),         # both users/bob_smith
+    ("bob_smith", "bob/smith"),
+    ("Alice", "alice"),                 # one folder on Windows and macOS
+    (".", "user"),                      # an empty name falls back to users/user
+])
+def test_logins_sharing_a_data_folder_cannot_sign_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    first: str, second: str,
+) -> None:
+    """Two logins whose names map to one users/<dir> would read each other's
+    chats and memory: neither signs in, each is told why (without naming the
+    other), the owner's log names both, and other logins are unaffected."""
+    monkeypatch.setattr(server_mod, "_logged_collisions", set())  # logged once per process
+    app = _make_app(monkeypatch, tmp_path, token="owner-tok", multi_user=True,
+                    users=[{"name": "carol", "token": "carol-tok"},
+                           {"name": first, "token": "first-tok"},
+                           {"name": second, "token": "second-tok"}])
+    c = TestClient(app, base_url=LOCAL)
+    with caplog.at_level("WARNING", logger=server_mod.logger.name):
+        for tok, name, other in (("first-tok", first, second), ("second-tok", second, first)):
+            auth = {"Authorization": f"Bearer {tok}"}
+            r = c.get("/api/dispatch", headers=auth)
+            assert r.status_code == 403, (name, r.text)
+            detail = r.json()["detail"]
+            assert f"The login {name!r} can't sign in" in detail
+            assert f"users/{server_mod._safe_user(name)})" in detail and "rename" in detail
+            assert repr(other) not in detail
+            assert _chat(c, "s1", "no-tool", auth).status_code == 403
+            check = c.get("/api/auth/check", headers=auth).json()
+            assert check == {"ok": False, "required": True, "error": detail}
+    warnings = [rec.getMessage() for rec in caplog.records if "users.json" in rec.getMessage()]
+    assert len(warnings) == 1, warnings  # once, however many requests
+    assert repr(first) in warnings[0] and repr(second) in warnings[0]
+    # A distinct login, the owner and an unknown token are as before.
+    carol = {"Authorization": "Bearer carol-tok"}
+    assert c.get("/api/auth/check", headers=carol).json() == {"ok": True, "required": True,
+                                                              "user": "carol"}
+    assert _chat(c, "c1", "no-tool", carol).status_code == 200
+    assert c.get("/api/dispatch", headers=OWNER).status_code == 200
+    stranger = {"Authorization": "Bearer nope"}
+    assert c.get("/api/dispatch", headers=stranger).status_code == 401
+    assert c.get("/api/auth/check", headers=stranger).json() == {"ok": False, "required": True}
+
+
+def test_distinct_logins_keep_their_own_folders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Names that only look alike but map to different folders, and one login
+    listed twice with two tokens, all still sign in."""
+    users = [{"name": "bob-smith", "token": "t1"}, {"name": "bob_smith", "token": "t2"},
+             {"name": "dana", "token": "t3"}, {"name": "dana", "token": "t4"}]
+    assert server_mod._colliding_logins(
+        [SimpleNamespace(name=u["name"]) for u in users]) == {}
+    c = TestClient(_make_app(monkeypatch, tmp_path, token="owner-tok", multi_user=True,
+                             users=users), base_url=LOCAL)
+    for tok, name in (("t1", "bob-smith"), ("t2", "bob_smith"), ("t3", "dana"), ("t4", "dana")):
+        r = c.get("/api/whoami", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200 and r.json() == {"user": name}, tok
+
+
+def test_colliding_logins_groups_every_login_on_one_folder() -> None:
+    names = ["Bob Smith", "bob_smith", "bob/smith", "BOB-SMITH", "eve", "Eve.", "zed"]
+    got = server_mod._colliding_logins([SimpleNamespace(name=n) for n in names])
+    assert got == {
+        "Bob Smith": ["bob_smith", "bob/smith"],
+        "bob_smith": ["Bob Smith", "bob/smith"],
+        "bob/smith": ["Bob Smith", "bob_smith"],
+        "eve": ["Eve."],
+        "Eve.": ["eve"],
+    }
 
 
 def test_non_ascii_login_token_is_a_401_not_a_500(multi: TestClient) -> None:

@@ -60,7 +60,7 @@ def test_sections_are_grouped(page: Page, evi_base_url: str):
 
 
 def test_ungrouped_section_lands_under_more(page: Page, evi_base_url: str):
-    """Serve the page with one extra section that no group names: it must
+    """Serve the app with one extra section that no group names: it must
     show up under "More" rather than silently disappear."""
     anchor = "{ id:'about', title:'About'"
     extra = "{ id:'e2e-extra', title:'E2E Extra', blurb:'In no group.', fields:[] },\n    "
@@ -71,7 +71,9 @@ def test_ungrouped_section_lands_under_more(page: Page, evi_base_url: str):
         assert body.count(anchor) == 1, "SCHEMA anchor moved — update this test"
         route.fulfill(response=resp, body=body.replace(anchor, extra + anchor))
 
-    page.route(evi_base_url + "/", patch)
+    # The settings SCHEMA is in the app script, static/app.js (the page's CSP
+    # runs no inline script), so that is the file to patch.
+    page.route(evi_base_url + "/static/app.js", patch)
     page.goto(evi_base_url)
     _open(page, "general")
     nav = _nav(page)

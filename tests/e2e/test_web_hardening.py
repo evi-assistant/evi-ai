@@ -10,6 +10,8 @@
   `window.__EVI_TOKEN__` (the shell's init script) signs itself in with no
   login prompt; a stale injected token never replaces a working stored one,
   and a failing stored token gives way to a working injected one.
+* Multi-user: a users.json login whose data folder another login maps to as
+  well doesn't sign in, and the login overlay says why.
 
 The eVi homes are pytest tmp dirs (see conftest.evi_base_url).
 """
@@ -136,13 +138,17 @@ def _free_port() -> int:
     return port
 
 
-def _start_server(tmp_path: Path, config: str, env: dict[str, str] | None = None):
-    """A real `evi web` app on 127.0.0.1 with its own eVi home; yields its base URL."""
+def _start_server(tmp_path: Path, config: str, env: dict[str, str] | None = None,
+                  files: dict[str, str] | None = None):
+    """A real `evi web` app on 127.0.0.1 with its own eVi home (config.toml,
+    plus `files` by name, e.g. users.json); yields its base URL."""
     import httpx
 
     home = tmp_path / "evi-home"
     home.mkdir()
     (home / "config.toml").write_text(config, encoding="utf-8")
+    for name, text in (files or {}).items():
+        (home / name).write_text(text, encoding="utf-8")
     port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "evi.apps.web.server:app",
@@ -185,6 +191,17 @@ def launch_token_server(tmp_path: Path):
 def token_server(tmp_path: Path):
     """`[web] auth_token` set: this machine needs the token too."""
     yield from _start_server(tmp_path, '[web]\nauth_token = "current-token"\n')
+
+
+@pytest.fixture
+def colliding_logins_server(tmp_path: Path):
+    """Multi-user mode where two users.json logins map to one data folder
+    (users/bob_smith) and a third doesn't."""
+    users = [{"name": "bob smith", "token": "bob-space-token"},
+             {"name": "bob_smith", "token": "bob-underscore-token"},
+             {"name": "carol", "token": "carol-token"}]
+    yield from _start_server(tmp_path, '[web]\nauth_token = "owner-token"\nmulti_user = true\n',
+                             files={"users.json": json.dumps(users)})
 
 
 def _inject(page: Page, base: str, token: str) -> None:
@@ -304,3 +321,35 @@ def test_a_failing_stored_token_falls_back_to_the_injected_one(
     assert page.evaluate("localStorage.getItem('evi.authToken')") == "current-token"
     assert _reset_status(page) == 200
     assert len(loads) == 2  # settled: no reload loop
+
+
+def test_a_login_sharing_a_data_folder_is_told_why(
+    page: Page, colliding_logins_server: str
+) -> None:
+    """'bob smith' and 'bob_smith' would read each other's chats and memory
+    (one users/bob_smith folder), so neither signs in. The login overlay says
+    why, both when the token is typed and when it was already stored; a
+    distinct login signs in as before."""
+    base = colliding_logins_server
+    page.goto(base)
+    expect(page.locator("#auth-overlay")).to_have_class(SHOWN, timeout=10000)
+    page.fill("#auth-token", "bob-underscore-token")
+    page.click("#auth-submit")
+    err = page.locator("#auth-err")
+    expect(err).to_contain_text("The login 'bob_smith' can't sign in", timeout=10000)
+    expect(err).to_contain_text("users/bob_smith")
+    assert "bob smith" not in err.text_content()  # the other login isn't named
+    assert page.evaluate("localStorage.getItem('evi.authToken')") is None
+
+    # A token stored before the collision existed: the page says why on load.
+    page.evaluate("localStorage.setItem('evi.authToken', 'bob-space-token')")
+    page.reload()
+    expect(page.locator("#auth-overlay")).to_have_class(SHOWN, timeout=10000)
+    expect(err).to_contain_text("The login 'bob smith' can't sign in", timeout=10000)
+
+    page.fill("#auth-token", "carol-token")
+    with page.expect_navigation():
+        page.click("#auth-submit")
+    _settled(page)
+    assert _signed_in(page)
+    assert page.evaluate("async () => (await fetch('/api/whoami')).json()") == {"user": "carol"}

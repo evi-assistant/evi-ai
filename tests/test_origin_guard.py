@@ -7,7 +7,8 @@ loopback alias of the same port, or the desktop shell's), and are refused when
 the browser says Sec-Fetch-Site: cross-site. No Origin = a non-browser client
 (CLI, VS Code extension host, federation/A2A peers) and passes. The one GET
 with side effects (/api/backend/pull) is guarded the same way, plus a no-Origin
-`same-site` refusal for <img>-style requests from another local port.
+`same-site` refusal for <img>-style requests from another local port; and it
+needs X-Evi-Client or the token from every caller (test_web_hardening.py).
 X-Forwarded-Host counts only with EVI_TRUSTED_PROXY=1.
 """
 
@@ -402,14 +403,21 @@ def test_cross_site_pull_is_refused(
 
 
 @pytest.mark.parametrize("headers", [
-    {"Sec-Fetch-Site": "same-origin"},   # the wizard's own EventSource
-    {"Sec-Fetch-Site": "none"},          # URL typed into the address bar
+    {"Sec-Fetch-Site": "same-origin"},   # the UI's own fetch (or an <img> on its page)
+    {"Sec-Fetch-Site": "none"},          # URL typed into the address bar, a link
     {},                                  # curl / CLI
 ])
 def test_own_pull_still_streams(
     local_client: TestClient, pulls: list[str], headers: dict[str, str]
 ) -> None:
+    # Every caller now needs X-Evi-Client (or the token): a GET is what an
+    # <img> or a link sends, and it must not start a download.
+    # test_web_hardening.py covers the refusals.
     r = local_client.get("/api/backend/pull?model=test:1b", headers=headers)
+    assert r.status_code == 403, (headers, r.text)
+    assert pulls == []
+    r = local_client.get("/api/backend/pull?model=test:1b",
+                         headers={**headers, "X-Evi-Client": "web"})
     assert r.status_code == 200, (headers, r.text)
     assert "done" in r.text
     assert pulls == ["test:1b"]

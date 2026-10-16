@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+"""Vendor the web UI's JavaScript libraries from exact, integrity-checked npm
+releases, and keep the UI's SRI pins and Content-Security-Policy in step.
+
+The web UI (evi/apps/web/static/index.html, its code in static/app.js)
+renders model output with marked (markdown), DOMPurify (the sanitizer),
+highlight.js (code) and mermaid (diagrams). They used to be imported from
+cdn.jsdelivr.net on floating major versions with no integrity check, so a bad
+upstream release ran on the eVi origin and an unreachable CDN broke rendering.
+They now ship inside the package under static/vendor/, pinned twice in this
+file:
+
+- PACKAGES: each npm release by name, exact version and the registry's
+  `dist.integrity` (the sha512 of the tarball). A download whose hash differs
+  is refused before anything is read out of it.
+- FILES: the sha384 of every file written under static/vendor/ — the value
+  index.html's `integrity` attributes carry (or, for a script the app loads on
+  demand, the `integrity:` next to its `src:` in static/app.js), so the browser
+  refuses a vendored file that changed after review.
+
+Nothing downloaded is executed or extracted to disk by tarfile: only the
+listed members are read, by exact name, and must be regular files. The one
+derived file, highlight/highlight.min.js, is highlight.js's prebuilt common
+bundle followed by every other prebuilt language file (byte concatenation),
+so code blocks keep the full language set the CDN import had.
+
+index.html also carries the page's Content-Security-Policy in a <meta> tag —
+the policy's one source: the server reads that tag and sends it as a header
+with frame-ancestors 'none' added (evi/apps/web/server.py page_csp). Its
+`script-src` is 'self' alone: the page runs script files eVi serves and no
+inline script, inline handler or hash, so editing the UI never touches the
+policy. `--check` fails on an inline <script> or on* attribute in index.html.
+
+    python scripts/vendor_ui_libs.py              # fetch, verify, write static/vendor/
+    python scripts/vendor_ui_libs.py --check      # offline: files, SRI pins and the CSP
+    python scripts/vendor_ui_libs.py --sync-html  # rewrite the SRI pins (index.html, app.js)
+
+To move a library to a new release: set its `version` and `integrity` (the
+registry's `dist.integrity`, from https://registry.npmjs.org/<name>/<version>),
+run with `--repin`, paste the printed FILES block over the one below, then run
+`--sync-html` and the UI tests. Exit codes: 0 ok, 1 a check failed or a pin
+does not match, 2 usage or network error.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import io
+import re
+import sys
+import tarfile
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+STATIC = Path("evi") / "apps" / "web" / "static"
+INDEX_HTML = STATIC / "index.html"
+VENDOR_DIR = STATIC / "vendor"
+# The URL path the server mounts STATIC at (evi/apps/web/server.py).
+STATIC_URL = "/static/"
+VENDOR_URL = STATIC_URL + "vendor/"
+# The app script index.html must load (the UI's code; no inline script).
+APP_JS_URL = STATIC_URL + "app.js"
+REGISTRY = "https://registry.npmjs.org"
+# Files under VENDOR_DIR that are not vendored code (kept by a fetch).
+KEEP = frozenset({".gitattributes"})
+
+
+@dataclass(frozen=True)
+class Package:
+    name: str
+    version: str
+    # npm `dist.integrity`: "sha512-<base64>" of the .tgz.
+    integrity: str
+    # tarball member (relative to its `package/` root) -> path under VENDOR_DIR
+    files: tuple[tuple[str, str], ...]
+
+    @property
+    def tarball_url(self) -> str:
+        base = self.name.rsplit("/", 1)[-1]
+        return f"{REGISTRY}/{self.name}/-/{base}-{self.version}.tgz"
+
+
+PACKAGES: tuple[Package, ...] = (
+    Package(
+        "dompurify", "3.4.16",
+        "sha512-sqo+pNp3qRhCIpbgRi1y8Tgk27Bo2Ry7w0dC1NBeNTdZChWjz9Xb/KOoZbRP/R6pQZ80Qw8YhXw13hWWBbMRnQ==",
+        (("dist/purify.min.js", "dompurify/purify.min.js"),
+         ("LICENSE", "dompurify/LICENSE")),
+    ),
+    Package(
+        "marked", "14.1.4",
+        "sha512-vkVZ8ONmUdPnjCKc5uTRvmkRbx4EAi2OkTOXmfTDhZz3OFqMNBM1oTTWwTr4HY4uAEojhzPf+Fy8F1DWa3Sndg==",
+        (("marked.min.js", "marked/marked.min.js"),
+         ("LICENSE.md", "marked/LICENSE.md")),
+    ),
+    Package(
+        "@highlightjs/cdn-assets", "11.12.0",
+        "sha512-KvOKXODaiFmId9xaq3xc5xCL66wVLUuOngDbO9B/kewbFTqdGbn2nJxNhN3H5R1cgDTVj6R8vH0zgiNDEGjpDw==",
+        (("styles/github-dark.min.css", "highlight/github-dark.min.css"),
+         ("LICENSE", "highlight/LICENSE")),
+    ),
+    Package(
+        "mermaid", "11.17.2",
+        "sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==",
+        (("dist/mermaid.min.js", "mermaid/mermaid.min.js"),
+         ("LICENSE", "mermaid/LICENSE")),
+    ),
+)
+
+HLJS_PACKAGE = "@highlightjs/cdn-assets"
+HLJS_BUNDLE = "highlight/highlight.min.js"
+
+# sha384 (SRI) of every file under VENDOR_DIR. Generated by --repin.
+FILES: dict[str, str] = {
+    "dompurify/LICENSE": "sha384-II9e1ieUDl5AxyiVq3/FflTua1Sr0kMJ25e6imG7rXg7SiAsA2VemsvEqVsLqM7/",
+    "dompurify/purify.min.js": "sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL",
+    "highlight/LICENSE": "sha384-PdMCsAZNy5AH7gGEL6XVxHEXIrtvn5oA704FTocp7whxdzCQ+AuammKPDLS1ubFV",
+    "highlight/github-dark.min.css": "sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH",
+    "highlight/highlight.min.js": "sha384-GhPy46+Pnw0ee7gKLnNRENaTZ3wfmX/V/B9giRKLcoVZ/rjgMzM5KPK/VpFVbkyN",
+    "marked/LICENSE.md": "sha384-61EZB/aHzoKVT71zYfgKtxFiu+RWPSi9UH34kVJPMyzaTcFdbvH0liFiUwpiBNqY",
+    "marked/marked.min.js": "sha384-lqPzN0kmFw9t2syAMwVPM4VbAyqsz/lPyYWbb2Xt6nSPM0WPNrpSWCUBgdcAdgnC",
+    "mermaid/LICENSE": "sha384-FCnkWxNcDqSeMyGV7DzhA4eWHiIbf8mNLMrlPTH+aJ/u2mGjKQSvwo10hu5IH0DC",
+    "mermaid/mermaid.min.js": "sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2",
+}
+
+
+# ---- hashing ---------------------------------------------------------------
+
+def _b64(digest: bytes) -> str:
+    return base64.b64encode(digest).decode("ascii")
+
+
+def sri(data: bytes) -> str:
+    """The Subresource Integrity value index.html carries for `data`."""
+    return "sha384-" + _b64(hashlib.sha384(data).digest())
+
+
+def _integrity_ok(blob: bytes, integrity: str) -> bool:
+    algo, _, want = integrity.partition("-")
+    if algo not in {"sha512", "sha384", "sha256"} or not want:
+        return False
+    return _b64(hashlib.new(algo, blob).digest()) == want
+
+
+# ---- fetch -----------------------------------------------------------------
+
+def _download(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=300) as resp:  # noqa: S310 (fixed https registry URL)
+        return resp.read()
+
+
+def _member_reader(tf: tarfile.TarFile):
+    """Read one regular-file member by its exact name under `package/`."""
+    counts: dict[str, int] = {}
+    for m in tf.getmembers():
+        counts[m.name] = counts.get(m.name, 0) + 1
+
+    def read(rel: str) -> bytes:
+        name = "package/" + rel
+        if counts.get(name, 0) != 1:
+            raise ValueError(f"{name}: expected exactly one tarball member, found {counts.get(name, 0)}")
+        member = tf.getmember(name)
+        if not member.isfile():
+            raise ValueError(f"{name}: not a regular file")
+        fh = tf.extractfile(member)
+        if fh is None:
+            raise ValueError(f"{name}: unreadable")
+        return fh.read()
+
+    return read, sorted(counts)
+
+
+def _hljs_languages(common: bytes) -> set[str]:
+    """Languages already registered by highlight.js's common bundle — its
+    grammars are keyed `grmr_<name>`, registered as name with the first `_`
+    turned into `-` (e.g. grmr_php_template -> php-template)."""
+    keys = set(re.findall(rb"\bgrmr_([A-Za-z0-9_]+)\b", common))
+    return {k.decode().replace("_", "-", 1) for k in keys}
+
+
+def build_hljs_bundle(read, names: list[str]) -> bytes:
+    """highlight.min.js (core + common languages) followed by every other
+    prebuilt `languages/<name>.min.js`, in name order."""
+    common = read("highlight.min.js")
+    have = _hljs_languages(common)
+    if len(have) < 30:  # the common bundle has ~37; fewer means the parse broke
+        raise ValueError(f"highlight.js common bundle: only {len(have)} languages recognised")
+    parts = [common.rstrip(b"\n")]
+    for name in names:
+        m = re.fullmatch(r"package/languages/([a-z0-9-]+)\.min\.js", name)
+        if m and m.group(1) not in have:
+            parts.append(read(f"languages/{m.group(1)}.min.js").rstrip(b"\n"))
+    return b"\n".join(parts) + b"\n"
+
+
+def fetch_all() -> dict[str, bytes]:
+    """Download every package, verify its tarball, and return the vendored
+    files (path under VENDOR_DIR -> bytes)."""
+    out: dict[str, bytes] = {}
+    for pkg in PACKAGES:
+        blob = _download(pkg.tarball_url)
+        if not _integrity_ok(blob, pkg.integrity):
+            raise ValueError(
+                f"{pkg.name}@{pkg.version}: tarball does not match its pinned integrity "
+                f"({pkg.tarball_url}) — refusing to read it"
+            )
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tf:
+            read, names = _member_reader(tf)
+            for member, dest in pkg.files:
+                out[dest] = read(member)
+            if pkg.name == HLJS_PACKAGE:
+                out[HLJS_BUNDLE] = build_hljs_bundle(read, names)
+    return out
+
+
+def write_vendor(files: dict[str, bytes], root: Path = ROOT) -> None:
+    vendor = root / VENDOR_DIR
+    for rel, data in files.items():
+        dest = vendor / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.is_file() or dest.read_bytes() != data:
+            dest.write_bytes(data)
+    for path in sorted(vendor.rglob("*"), reverse=True):
+        rel = path.relative_to(vendor).as_posix()
+        if path.is_file() and rel not in files and rel not in KEEP:
+            path.unlink()
+        elif path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+
+def files_block(files: dict[str, bytes]) -> str:
+    lines = ["FILES: dict[str, str] = {"]
+    lines += [f'    "{rel}": "{sri(files[rel])}",' for rel in sorted(files)]
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# ---- index.html and app.js: SRI pins and the CSP meta ----------------------
+
+# One left-to-right pass over the page, the way the HTML parser splits it: a
+# comment is skipped whole (so a `<script>` mentioned in one is not a script),
+# a script runs to its first `</script`, a style to its first `</style`, and
+# any other start tag is just its tag (a `>` inside a quoted attribute value,
+# as in the data: icon's inline SVG, doesn't end it).
+_TAG_ATTRS = r"""(?:[^>"']|"[^"]*"|'[^']*')*"""
+_TOKEN = re.compile(
+    r"<!--.*?-->"
+    r"|<(?P<script>script)\b(?P<sattrs>" + _TAG_ATTRS + r")>(?P<body>.*?)</script\s*>"
+    r"|<style\b[^>]*>.*?</style\s*>"
+    r"|<(?P<tag>[A-Za-z][A-Za-z0-9-]*)\b(?P<attrs>" + _TAG_ATTRS + r")>",
+    re.IGNORECASE | re.DOTALL,
+)
+_ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+# The server reads the policy with this same pattern (server.py _CSP_META), so
+# --check failing to find it means the server can't either.
+_CSP_META = re.compile(
+    r"""<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]*)"\s*/?>""",
+    re.IGNORECASE,
+)
+_HASH_SOURCE = re.compile(r"'sha(?:256|384|512)-[A-Za-z0-9+/=]+'")
+# A vendored script the app loads on demand names its path and pin together:
+# `src: '/static/vendor/<file>', integrity: 'sha384-…'`.
+_JS_REF = re.compile(
+    r"""\bsrc:\s*(['"])(?P<url>""" + re.escape(VENDOR_URL) + r"""[^'"]+)\1,\s*"""
+    r"""integrity:\s*(['"])(?P<sri>[^'"]*)\3"""
+)
+# Inline <script> types the browser does not execute.
+_INERT_TYPES = {"application/json", "application/ld+json", "text/plain", "text/template"}
+
+
+def _attrs(raw: str) -> dict[str, str]:
+    return {m.group(1).lower(): (m.group(2) if m.group(2) is not None else m.group(3))
+            for m in _ATTR.finditer(raw)}
+
+
+def _elements(html: str):
+    """(tag, attrs, inline body or None, match) for each <script> and each
+    other start tag, tag names in lower case (<style> bodies are skipped)."""
+    for m in _TOKEN.finditer(html):
+        if m.group("script"):
+            yield "script", _attrs(m.group("sattrs")), m.group("body"), m
+        elif m.group("tag"):
+            yield m.group("tag").lower(), _attrs(m.group("attrs")), None, m
+
+
+def inline_scripts(html: str) -> list[str]:
+    """The text of every inline script the browser would execute. The page's
+    CSP refuses each one, so there must be none."""
+    out = []
+    for tag, attrs, body, _m in _elements(html):
+        if tag != "script" or "src" in attrs:
+            continue
+        if attrs.get("type", "").strip().lower() in _INERT_TYPES:
+            continue
+        out.append(body)
+    return out
+
+
+def inline_handlers(html: str) -> list[str]:
+    """`<tag on…=>` for every inline event-handler attribute (refused by the
+    CSP too: the handler would silently never run)."""
+    return [f"<{tag} {name}=>" for tag, attrs, _b, _m in _elements(html)
+            for name in attrs if name.startswith("on")]
+
+
+def page_scripts(html: str) -> list[str]:
+    """Paths under STATIC of the page's own (not vendored) script files, in
+    page order."""
+    out = []
+    for tag, attrs, _body, _m in _elements(html):
+        src = attrs.get("src") if tag == "script" else None
+        if src and src.startswith(STATIC_URL) and not src.startswith(VENDOR_URL):
+            out.append(src[len(STATIC_URL):])
+    return out
+
+
+def read_page_scripts(html: str, root: Path = ROOT) -> dict[str, str]:
+    """{path under STATIC: text} for page_scripts(html); '' for a missing file."""
+    out = {}
+    for rel in page_scripts(html):
+        path = root / STATIC / rel
+        out[rel] = path.read_text(encoding="utf-8") if path.is_file() else ""
+    return out
+
+
+def _tag_refs(html: str):
+    """(path under VENDOR_URL, integrity or None, (start, end) of the tag's
+    attribute text) for each <script src>/<link href> naming a vendored file."""
+    for tag, attrs, _body, m in _elements(html):
+        if tag not in ("script", "link"):
+            continue
+        url = attrs.get("src") if tag == "script" else attrs.get("href")
+        if url and url.startswith(VENDOR_URL):
+            group = "sattrs" if tag == "script" else "attrs"
+            yield url[len(VENDOR_URL):], attrs.get("integrity"), (m.start(group), m.end(group))
+
+
+def _js_refs(js: str):
+    """(path under VENDOR_URL, integrity, (start, end) of the integrity
+    string) for each on-demand load in a script file (_JS_REF)."""
+    for r in _JS_REF.finditer(js):
+        yield r.group("url")[len(VENDOR_URL):], r.group("sri"), (r.start("sri"), r.end("sri"))
+
+
+def csp_policy(html: str) -> str | None:
+    m = _CSP_META.search(html)
+    return m.group(1) if m else None
+
+
+def csp_directives(policy: str) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for part in policy.split(";"):
+        tokens = part.split()
+        if tokens:
+            out.setdefault(tokens[0].lower(), tokens[1:])
+    return out
+
+
+def _external(url: str) -> bool:
+    return bool(re.match(r"^\s*(?:[a-z][a-z0-9+.-]*:)?//", url, re.IGNORECASE))
+
+
+def html_problems(html: str, files: dict[str, str] | None = None,
+                  scripts: dict[str, str] | None = None) -> list[str]:
+    """Problems with the UI's library pins and CSP (empty when sound).
+    `scripts` holds the text of the page's own script files ({path under
+    STATIC: text}, as read_page_scripts returns it); None reads them from
+    the checkout."""
+    files = FILES if files is None else files
+    scripts = read_page_scripts(html) if scripts is None else scripts
+    problems: list[str] = []
+    first_code = len(html)
+    for tag, attrs, _body, m in _elements(html):
+        if tag not in ("script", "link"):
+            continue
+        first_code = min(first_code, m.start())
+        url = attrs.get("src") if tag == "script" else attrs.get("href")
+        if url is None:
+            continue
+        rel = attrs.get("rel", "").lower()
+        loads_code = tag == "script" or "stylesheet" in rel or "modulepreload" in rel
+        if loads_code and _external(url):
+            problems.append(f"index.html loads {url} from another origin (vendor it instead)")
+
+    refs = [(path, sri, "index.html") for path, sri, _span in _tag_refs(html)]
+    for rel, text in sorted(scripts.items()):
+        if not text:
+            problems.append(f"index.html loads {STATIC_URL}{rel}, which is missing or empty")
+        refs += [(path, sri, rel) for path, sri, _span in _js_refs(text)]
+    referenced: dict[str, int] = {}
+    for path, integrity, where in refs:
+        url = VENDOR_URL + path
+        referenced[path] = referenced.get(path, 0) + 1
+        want = files.get(path)
+        if want is None:
+            problems.append(f"{where} references {url}, which scripts/vendor_ui_libs.py does not vendor")
+        elif integrity != want:
+            problems.append(
+                f"{url} (in {where}): integrity is {integrity!r}, the pinned file is {want!r} "
+                "(run: python scripts/vendor_ui_libs.py --sync-html)"
+            )
+    for path in files:
+        if path.endswith((".js", ".css")) and referenced.get(path, 0) != 1:
+            problems.append(f"the UI must load {VENDOR_URL}{path} exactly once "
+                            f"(found {referenced.get(path, 0)})")
+    if page_scripts(html).count(APP_JS_URL[len(STATIC_URL):]) != 1:
+        problems.append(f"index.html must load {APP_JS_URL} exactly once")
+    for body in inline_scripts(html):
+        snippet = " ".join(body.split())[:60]
+        problems.append(f"index.html has an inline <script> ({snippet!r}): the page's CSP "
+                        "runs no inline script, so put the code in static/app.js")
+    for handler in inline_handlers(html):
+        problems.append(f"index.html has an inline event handler {handler}: the page's CSP "
+                        "refuses it, so attach the listener in static/app.js")
+
+    meta = _CSP_META.search(html)
+    if meta is None:
+        problems.append('index.html has no <meta http-equiv="Content-Security-Policy" '
+                        'content="..."> in that form (the server reads it)')
+        return problems
+    if meta.start() > first_code:
+        problems.append("the CSP <meta> must come before the first <script>/<link>")
+    directives = csp_directives(meta.group(1))
+    if directives.get("script-src") != ["'self'"]:
+        have = " ".join(directives.get("script-src", [])) or "(missing)"
+        problems.append(f"the CSP's script-src must be 'self' alone, not {have}: no inline "
+                        "script, hash or other origin runs in the page "
+                        "(--sync-html drops a leftover hash)")
+    if "frame-ancestors" in directives:
+        problems.append("frame-ancestors is ignored in a <meta> policy: the server adds it "
+                        "to the header (server.py page_csp), so leave it out here")
+    return problems
+
+
+def vendor_problems(root: Path = ROOT, files: dict[str, str] | None = None) -> list[str]:
+    files = FILES if files is None else files
+    vendor = root / VENDOR_DIR
+    problems: list[str] = []
+    if not files:
+        return ["FILES is empty: run scripts/vendor_ui_libs.py --repin"]
+    for rel, want in sorted(files.items()):
+        path = vendor / rel
+        if not path.is_file():
+            problems.append(f"{VENDOR_DIR.as_posix()}/{rel} is missing (run scripts/vendor_ui_libs.py)")
+        elif sri(path.read_bytes()) != want:
+            problems.append(f"{VENDOR_DIR.as_posix()}/{rel} does not match its pinned sha384")
+    if vendor.is_dir():
+        for path in sorted(vendor.rglob("*")):
+            rel = path.relative_to(vendor).as_posix()
+            if path.is_file() and rel not in files and rel not in KEEP:
+                problems.append(f"{VENDOR_DIR.as_posix()}/{rel} is not a pinned vendored file")
+    return problems
+
+
+def check(root: Path = ROOT) -> list[str]:
+    html = (root / INDEX_HTML).read_text(encoding="utf-8")
+    return vendor_problems(root) + html_problems(html, scripts=read_page_scripts(html, root))
+
+
+def _with_integrity(raw: str, want: str) -> str:
+    """A tag's attribute text with `integrity` set to `want`."""
+    if re.search(r"\bintegrity\s*=", raw):
+        return re.sub(r"""\bintegrity\s*=\s*(?:"[^"]*"|'[^']*')""", f'integrity="{want}"', raw)
+    body = raw.rstrip()
+    if body.endswith("/"):
+        return body[:-1].rstrip() + f' integrity="{want}" /'
+    return body + f' integrity="{want}"'
+
+
+def _splice(text: str, edits: list[tuple[int, int, str]]) -> str:
+    """`text` with each (start, end) span, in order, replaced."""
+    out, pos = [], 0
+    for start, end, new in edits:
+        out += [text[pos:start], new]
+        pos = end
+    return "".join(out) + text[pos:]
+
+
+def sync_html(html: str, files: dict[str, str] | None = None) -> str:
+    """index.html with every vendored tag's integrity set from FILES, and any
+    hash source dropped from the CSP's script-src (the page has no inline
+    script for one to allow)."""
+    files = FILES if files is None else files
+    html = _splice(html, [(start, end, _with_integrity(html[start:end], files[path]))
+                          for path, integrity, (start, end) in _tag_refs(html)
+                          if path in files and integrity != files[path]])
+
+    def fix_meta(m: re.Match) -> str:
+        parts = []
+        for part in m.group(1).split(";"):
+            tokens = part.split()
+            if tokens and tokens[0].lower() == "script-src":
+                part = " ".join(t for t in tokens if not _HASH_SOURCE.fullmatch(t))
+            parts.append(part.strip())
+        policy = "; ".join(p for p in parts if p)
+        return m.group(0).replace(m.group(1), policy)
+
+    return _CSP_META.sub(fix_meta, html, count=1)
+
+
+def sync_script(js: str, files: dict[str, str] | None = None) -> str:
+    """A page script with each on-demand load's integrity set from FILES."""
+    files = FILES if files is None else files
+    return _splice(js, [(start, end, files[path])
+                        for path, integrity, (start, end) in _js_refs(js)
+                        if path in files and integrity != files[path]])
+
+
+# ---- CLI -------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true",
+                      help="offline: verify vendored files, SRI pins and the page CSP")
+    mode.add_argument("--sync-html", action="store_true",
+                      help="rewrite the SRI pins in index.html and the app's scripts")
+    mode.add_argument("--repin", action="store_true",
+                      help="fetch, write, and print a new FILES block (after a version bump)")
+    args = ap.parse_args(argv)
+
+    if args.check:
+        problems = check()
+        for p in problems:
+            print(f"vendor_ui_libs: {p}", file=sys.stderr)
+        if not problems:
+            print(f"vendor_ui_libs: {len(FILES)} vendored files, SRI pins and CSP OK")
+        return 1 if problems else 0
+
+    if args.sync_html:
+        html = (ROOT / INDEX_HTML).read_text(encoding="utf-8")
+        targets = [(INDEX_HTML, html, sync_html(html))]
+        for rel, text in read_page_scripts(html).items():
+            targets.append((STATIC / rel, text, sync_script(text)))
+        for rel_path, old, new in targets:
+            if new != old:
+                with open(ROOT / rel_path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(new)
+                print(f"vendor_ui_libs: updated {rel_path.as_posix()}")
+            else:
+                print(f"vendor_ui_libs: {rel_path.as_posix()} already in sync")
+        return 0
+
+    try:
+        files = fetch_all()
+    except (OSError, ValueError, tarfile.TarError) as e:
+        print(f"vendor_ui_libs: {e}", file=sys.stderr)
+        return 2
+    got = {rel: sri(data) for rel, data in files.items()}
+    if args.repin:
+        write_vendor(files)
+        print(files_block(files))
+        print("\nPaste the block above over FILES in scripts/vendor_ui_libs.py, then run --sync-html.")
+        return 0
+    if got != FILES:
+        for rel in sorted(set(got) | set(FILES)):
+            if got.get(rel) != FILES.get(rel):
+                print(f"vendor_ui_libs: {rel}: pinned {FILES.get(rel)!r}, upstream {got.get(rel)!r}",
+                      file=sys.stderr)
+        print("vendor_ui_libs: refusing to write files that differ from their pins "
+              "(after a deliberate version bump, use --repin)", file=sys.stderr)
+        return 1
+    write_vendor(files)
+    print(f"vendor_ui_libs: wrote {len(files)} files under {VENDOR_DIR.as_posix()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -95,8 +95,9 @@ def test_ui_routes_every_session_switch_through_setSessionId() -> None:
     """
     import re
 
+    # The UI's code is static/app.js (index.html runs no inline script).
     html = (
-        Path(server_mod.__file__).parent / "static" / "index.html"
+        Path(server_mod.__file__).parent / "static" / "app.js"
     ).read_text(encoding="utf-8")
 
     assert "function setSessionId(" in html, "the session-switch helper is gone"

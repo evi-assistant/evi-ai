@@ -240,6 +240,100 @@ fn url_origin(url: &str) -> Option<String> {
     origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
+/// The app commands the eVi web UI calls through Tauri's IPC: app.js's
+/// `DESKTOP_COMMANDS`, and the set build.rs declares. The page gets no other
+/// Tauri API — `withGlobalTauri` is off, so there is no `window.__TAURI__`.
+const UI_COMMANDS: [&str; 9] = [
+    "check_for_update_cmd",
+    "install_update_cmd",
+    "restart_app_cmd",
+    "update_available_cmd",
+    "dismiss_update_cmd",
+    "staged_update_cmd",
+    "open_logs_cmd",
+    "open_external_cmd",
+    "update_status_cmd",
+];
+
+/// The permission tauri-build generates for app command `cmd` (build.rs).
+fn command_permission(cmd: &str) -> String {
+    format!("allow-{}", cmd.replace('_', "-"))
+}
+
+/// A URLPattern matching every page of `origin` and nothing else: the IPC
+/// capability's remote URL. Characters URLPattern treats as syntax are
+/// escaped in the host (an IPv6 literal's `:`, a `*` the URL parser allows in
+/// a domain), so the host only matches itself. None for anything but an
+/// http(s) origin, or a pattern Tauri can't parse.
+fn origin_pattern(origin: &str) -> Option<String> {
+    let u = url::Url::parse(origin).ok()?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return None;
+    }
+    let mut host = String::new();
+    for c in u.host_str()?.chars() {
+        if matches!(c, ':' | '*' | '(' | ')' | '{' | '}' | '+' | '?' | '\\') {
+            host.push('\\');
+        }
+        host.push(c);
+    }
+    let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+    // No path: Tauri widens an empty path (and search/hash) to `*`.
+    let pattern = format!("{}://{host}{port}", u.scheme());
+    pattern
+        .parse::<tauri::utils::acl::RemoteUrlPattern>()
+        .ok()
+        .map(|_| pattern)
+}
+
+/// The IPC capability for the eVi page: UI_COMMANDS, in the main window, for
+/// exactly `origins` — the server's own (the sidecar on 127.0.0.1/localhost at
+/// its port, or the EVI_REMOTE_URL server), the same list the access token is
+/// bound to. Never the app's bundled pages, and never another localhost port:
+/// the static `http://localhost:*` grant this replaces let any local web page
+/// the window reached call these commands. None when no origin is usable (the
+/// UI then works without the desktop-only actions).
+fn ui_capability(origins: &[String]) -> Option<tauri::ipc::CapabilityBuilder> {
+    let patterns: Vec<String> = origins.iter().filter_map(|o| origin_pattern(o)).collect();
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut cap = tauri::ipc::CapabilityBuilder::new("evi-ui")
+        .window("main")
+        .local(false);
+    for p in patterns {
+        cap = cap.remote(p);
+    }
+    for cmd in UI_COMMANDS {
+        cap = cap.permission(command_permission(cmd));
+    }
+    Some(cap)
+}
+
+/// Navigation guard for the main window. It renders model output and holds
+/// the access token, so it may only show the eVi server (`origins`, as for
+/// the token and the IPC capability) and the app's own bundled pages (the
+/// loading shim). A link, a redirect, or a script that got past the sanitizer
+/// and the page's CSP can't take it anywhere else; the UI hands http(s) links
+/// to the system browser itself (open_external_cmd).
+fn navigation_allowed(url: &url::Url, origins: &[String]) -> bool {
+    let own = |u: &url::Url| {
+        let o = u.origin();
+        o.is_tuple() && origins.iter().any(|a| *a == o.ascii_serialization())
+    };
+    match url.scheme() {
+        // The bundled pages: tauri://localhost (macOS/Linux) or
+        // http(s)://tauri.localhost (Windows).
+        "tauri" => url.host_str() == Some("localhost"),
+        "http" | "https" => {
+            (url.host_str() == Some("tauri.localhost") && url.port().is_none()) || own(url)
+        }
+        // A blob: the page made itself (Export Chat), on the page's origin.
+        "blob" => own(url),
+        _ => false,
+    }
+}
+
 /// Thin-client mode's token for the `EVI_REMOTE_URL` server: `EVI_REMOTE_TOKEN`
 /// (`env_token`), else the token `<home>/peers.json` keeps for a peer at the
 /// same origin — the credential this machine already holds for that server.
@@ -923,9 +1017,9 @@ fn build_menu(app: &tauri::App) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> 
 }
 
 /// Run a webview-side menu action by calling the JS bridge directly. We use
-/// `eval` rather than `emit` because the window loads a remote http:// URL (the
-/// local server) where withGlobalTauri's event module isn't reliably injected —
-/// so an emitted event may have no listener. eval always reaches the page.
+/// `eval` rather than `emit` because the page has no Tauri event API
+/// (`withGlobalTauri` is off, and its capability grants only UI_COMMANDS) —
+/// so an emitted event would have no listener. eval always reaches the page.
 fn run_webview_action(app: &tauri::AppHandle, id: &str) {
     if let Some(w) = app.get_webview_window("main") {
         // ids are fixed [a-z_] literals, so no escaping is needed.
@@ -1120,11 +1214,35 @@ fn main() {
                 WebviewUrl::App("index.html".into())
             };
 
+            // IPC for the eVi page: UI_COMMANDS on the server's own origin only.
+            match ui_capability(&token_origins) {
+                Some(cap) => app.add_capability(cap)?,
+                None => eprintln!("evi: no usable server origin; desktop commands disabled"),
+            }
+            // Where the window may go: the server, plus (dev builds) the dev
+            // server that serves the loading shim in place of the bundle.
+            let mut nav_origins = token_origins.clone();
+            if tauri::is_dev() {
+                if let Some(dev) = &app.config().build.dev_url {
+                    nav_origins.push(dev.origin().ascii_serialization());
+                }
+            }
+
             let mut builder = WebviewWindowBuilder::new(app, "main", target)
                 .title("eVi")
                 .inner_size(1100.0, 800.0)
                 .min_inner_size(600.0, 400.0)
-                .resizable(true);
+                .resizable(true)
+                .on_navigation(move |url| {
+                    let ok = navigation_allowed(url, &nav_origins);
+                    if !ok {
+                        eprintln!(
+                            "evi: refused to navigate the window to {}",
+                            url.origin().ascii_serialization()
+                        );
+                    }
+                    ok
+                });
             let init = webview_init_script(local_port, webview_token.as_deref(), &token_origins);
             if !init.is_empty() {
                 builder = builder.initialization_script(init);
@@ -1430,6 +1548,135 @@ mod launch_token_tests {
         assert_eq!(url_origin("https://ai.example/").as_deref(), Some("https://ai.example"));
         assert_eq!(url_origin("not a url"), None);
         assert_eq!(url_origin("data:text/html,x"), None);
+    }
+}
+
+#[cfg(test)]
+mod ipc_guard_tests {
+    // The main window renders model output, so what it can reach is pinned
+    // here: the IPC capability names only the server's exact origin(s), and the
+    // navigation guard keeps the window on them and on the bundled shim.
+    use super::{command_permission, navigation_allowed, origin_pattern, UI_COMMANDS};
+    use std::path::Path;
+    use tauri::utils::acl::RemoteUrlPattern;
+
+    fn url(s: &str) -> url::Url {
+        url::Url::parse(s).unwrap()
+    }
+
+    fn matches(origin: &str, page: &str) -> bool {
+        let pattern: RemoteUrlPattern = origin_pattern(origin)
+            .unwrap_or_else(|| panic!("no pattern for {origin}"))
+            .parse()
+            .unwrap();
+        pattern.test(&url(page))
+    }
+
+    #[test]
+    fn capability_pattern_matches_only_its_own_origin() {
+        let o = "http://127.0.0.1:8473";
+        assert_eq!(origin_pattern(o).as_deref(), Some("http://127.0.0.1:8473"));
+        for page in [
+            "http://127.0.0.1:8473/",
+            "http://127.0.0.1:8473/?_ui=123",
+            "http://127.0.0.1:8473/static/index.html#x",
+        ] {
+            assert!(matches(o, page), "{page}");
+        }
+        // Another port on loopback — any local dev server or hostile local
+        // page — is not the sidecar (the old `http://127.0.0.1:*` grant).
+        for page in [
+            "http://127.0.0.1:8474/",
+            "http://127.0.0.1/",
+            "https://127.0.0.1:8473/",
+            "http://localhost:8473/",
+            "http://127.0.0.2:8473/",
+            "http://127.0.0.1.evil.example:8473/",
+        ] {
+            assert!(!matches(o, page), "{page}");
+        }
+    }
+
+    #[test]
+    fn remote_origin_patterns_cover_default_ports_and_ipv6() {
+        assert!(matches("https://ai.example", "https://ai.example/x/y?z"));
+        assert!(!matches("https://ai.example", "https://ai.example:8443/"));
+        assert!(!matches("https://ai.example", "https://evil.ai.example/"));
+        assert!(matches("http://gpu-box:8473", "http://GPU-box:8473/"));
+        assert!(matches("http://[::1]:8000", "http://[::1]:8000/x"));
+        assert!(!matches("http://[::1]:8000", "http://[::2]:8000/x"));
+        // A `*` is legal in a WHATWG domain but must not become a wildcard.
+        assert!(matches("http://a*b:1", "http://a*b:1/"));
+        assert!(!matches("http://a*b:1", "http://axxb:1/"));
+        for bad in ["", "not a url", "file:///C:/x", "data:text/html,x", "tauri://localhost"] {
+            assert_eq!(origin_pattern(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn ui_commands_are_the_ones_build_rs_declares() {
+        // build.rs generates `allow-<cmd>` for each declared command; the
+        // capability references exactly those, so a command added to one list
+        // and not the other fails here instead of panicking at launch.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let build_rs = std::fs::read_to_string(dir.join("build.rs")).unwrap();
+        let declared: Vec<&str> = build_rs
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|s| s.ends_with("_cmd"))
+            .collect();
+        let mut ours = UI_COMMANDS.to_vec();
+        let mut theirs = declared.clone();
+        ours.sort_unstable();
+        theirs.sort_unstable();
+        assert_eq!(ours, theirs);
+        let generated = dir.join("permissions/autogenerated");
+        for cmd in UI_COMMANDS {
+            let toml = std::fs::read_to_string(generated.join(format!("{cmd}.toml"))).unwrap();
+            assert!(
+                toml.contains(&format!("identifier = \"{}\"", command_permission(cmd))),
+                "{cmd}: {toml}"
+            );
+        }
+    }
+
+    #[test]
+    fn navigation_stays_on_the_server_and_the_bundled_shim() {
+        let origins = vec![
+            "http://127.0.0.1:8473".to_string(),
+            "http://localhost:8473".to_string(),
+        ];
+        for ok in [
+            "http://127.0.0.1:8473/?_ui=1",
+            "http://localhost:8473/?session=abc",
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/index.html",
+            "tauri://localhost/index.html",
+            "blob:http://127.0.0.1:8473/6c1f9a54-0000-4000-8000-000000000000",
+        ] {
+            assert!(navigation_allowed(&url(ok), &origins), "{ok}");
+        }
+        for bad in [
+            "https://evil.example/",
+            "http://127.0.0.1:8474/",
+            "http://127.0.0.1/",
+            "http://tauri.localhost:8080/",
+            "http://evil.tauri.localhost/",
+            "tauri://evil/",
+            "javascript:alert(1)",
+            "data:text/html,<script>x</script>",
+            "file:///C:/Windows/win.ini",
+            "about:blank",
+            "blob:https://evil.example/6c1f9a54-0000-4000-8000-000000000000",
+            "evi://session/x",
+        ] {
+            assert!(!navigation_allowed(&url(bad), &origins), "{bad}");
+        }
+        // Thin-client mode: the remote server, not this machine's loopback.
+        let remote = vec!["https://ai.example:8443".to_string()];
+        assert!(navigation_allowed(&url("https://ai.example:8443/x"), &remote));
+        assert!(!navigation_allowed(&url("http://127.0.0.1:8473/"), &remote));
     }
 }
 

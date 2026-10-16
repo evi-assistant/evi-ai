@@ -4,9 +4,10 @@ Unlike ``tests/e2e`` (Playwright against the web server in headless Chromium),
 this drives the **actual built ``evi-desktop.exe``** through ``tauri-driver`` +
 Microsoft Edge WebDriver (``msedgedriver``) against the real WebView2 runtime —
 the only layer that can prove the Tauri shell itself works: window creation,
-WebView2 rendering, the ``window.__TAURI__`` invoke bridge, and the native-menu
-→ ``window.eviUI`` dispatch path. None of that is reachable from plain Playwright
-(``withGlobalTauri`` only injects ``__TAURI__`` inside the real webview).
+WebView2 rendering, the IPC bridge (``__TAURI_INTERNALS__.invoke``, scoped to the
+desktop commands — there is no ``window.__TAURI__``), the navigation guard, and
+the native-menu → ``window.eviUI`` dispatch path. None of that is reachable from
+plain Playwright (Tauri injects its IPC only inside the real webview).
 
 Windows-only (WebView2/msedgedriver). Everything is best-effort and **skips**
 cleanly when a piece of the toolchain is absent, so a normal `pytest` (or a

@@ -6,9 +6,11 @@ are therefore invisible to the Playwright web suite:
 * the shell launches a window and WebView2 renders the eVi UI,
 * the ``__EVI_PORT__``/health handshake loads the served app (here via
   ``EVI_REMOTE_URL``), and
-* the two desktop-only JS surfaces exist and work: ``window.__TAURI__`` (the
-  invoke bridge) and ``window.eviUI.handleMenu`` (the native-menu dispatch
-  target), and
+* the two desktop-only JS surfaces exist and work: Tauri's IPC primitive
+  (``__TAURI_INTERNALS__.invoke``, scoped to the desktop commands; there is no
+  ``window.__TAURI__``) and ``window.eviUI.handleMenu`` (the native-menu
+  dispatch target),
+* the window stays on the eVi server: a navigation elsewhere is refused, and
 * the access-token handshake (SHELL_ABI 2): with ``bind_lan`` the shell's own
   server gets a generated token the UI signs in with, and a thin client injects
   ``EVI_REMOTE_TOKEN`` for its server.
@@ -16,6 +18,8 @@ are therefore invisible to the Playwright web suite:
 Opt-in, Windows-only; see ``conftest.py``. Run: ``pytest tests/desktop_e2e -m desktop``.
 """
 from __future__ import annotations
+
+import time
 
 import pytest
 
@@ -32,16 +36,33 @@ def test_shell_launches_and_renders_ui(desktop_driver, desktop_server, wait_js):
 
 
 def test_tauri_invoke_bridge_is_present(desktop_driver, wait_js):
-    # The one thing plain Playwright CANNOT verify: inside the real webview
-    # `withGlobalTauri` injects window.__TAURI__, so isDesktop() is true and the
-    # desktop commands are wired. A regression here silently breaks
-    # updates/logs/open-external in the shipped app.
-    wait_js(desktop_driver, "return !!window.__TAURI__")
+    # The one thing plain Playwright CANNOT verify: inside the real webview the
+    # page reaches the shell through Tauri's IPC primitive, so isDesktop() is
+    # true and the desktop commands are wired. A regression here silently
+    # breaks updates/logs/open-external in the shipped app.
+    assert wait_js(desktop_driver, "return !!document.querySelector('#input')"), \
+        "UI never booted"
     bridge_ok = desktop_driver.execute_script(
-        "return !!(window.__TAURI__ && window.__TAURI__.core "
-        "&& typeof window.__TAURI__.core.invoke === 'function')"
+        "return !!(window.__TAURI_INTERNALS__ "
+        "&& typeof window.__TAURI_INTERNALS__.invoke === 'function')"
     )
-    assert bridge_ok, "window.__TAURI__.core.invoke missing in the desktop webview"
+    assert bridge_ok, "Tauri IPC (__TAURI_INTERNALS__.invoke) missing in the desktop webview"
+    # ...but no global Tauri API: withGlobalTauri is off, so script that got
+    # into the page finds no window.__TAURI__ to drive the shell with.
+    assert desktop_driver.execute_script("return typeof window.__TAURI__") == "undefined"
+    # The eVi page's capability grants the desktop commands, and only those.
+    status = desktop_driver.execute_async_script(
+        "const done = arguments[arguments.length - 1];"
+        "window.__TAURI_INTERNALS__.invoke('update_status_cmd', {})"
+        "  .then(v => done({ok: v}), e => done({err: String(e)}));"
+    )
+    assert "ok" in status, status
+    core = desktop_driver.execute_async_script(
+        "const done = arguments[arguments.length - 1];"
+        "window.__TAURI_INTERNALS__.invoke('plugin:app|version', {})"
+        "  .then(v => done({ok: v}), e => done({err: String(e)}));"
+    )
+    assert "err" in core and "not allowed" in core["err"], core
     # eviUI (the menu/command bridge) exposes the desktop entry points.
     eviui_ok = desktop_driver.execute_script(
         "return !!(window.eviUI "
@@ -49,6 +70,17 @@ def test_tauri_invoke_bridge_is_present(desktop_driver, wait_js):
         "&& typeof window.eviUI.handleMenu === 'function')"
     )
     assert eviui_ok, "window.eviUI desktop bridge not fully wired"
+
+
+def test_window_stays_on_the_evi_server(desktop_driver, desktop_server, wait_js):
+    # The main window renders model output and holds the access token, so its
+    # navigation guard (main.rs navigation_allowed) keeps it on the server.
+    assert wait_js(desktop_driver, "return !!document.querySelector('#input')"), \
+        "UI never booted"
+    desktop_driver.execute_script("location.href = 'https://example.com/'")
+    time.sleep(2)
+    assert desktop_driver.current_url.startswith(desktop_server)
+    assert desktop_driver.execute_script("return !!document.querySelector('#input')")
 
 
 def test_native_menu_bridge_opens_settings(desktop_driver, wait_js):

@@ -190,7 +190,8 @@ include = ["evi*"]
 
 [tool.setuptools.package-data]
 "evi" = ["py.typed", "data/*.json"]
-"evi.apps.web" = ["static/*"]
+# static/vendor/<lib>/*: the UI's pinned JS libraries (scripts/vendor_ui_libs.py).
+"evi.apps.web" = ["static/*", "static/vendor/*/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

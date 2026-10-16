@@ -1,24 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the eVi desktop shell.",
+  "description": "The app's bundled pages (the loading shim) get no IPC. The eVi UI is served by the sidecar or EVI_REMOTE_URL; main.rs grants it the desktop commands at launch through a runtime capability scoped to that exact origin, never to every localhost port.",
   "windows": ["main"],
-  "remote": {
-    "urls": [
-      "http://localhost:*/*",
-      "http://127.0.0.1:*/*"
-    ]
-  },
-  "permissions": [
-    "core:default",
-    "allow-check-for-update-cmd",
-    "allow-install-update-cmd",
-    "allow-restart-app-cmd",
-    "allow-update-available-cmd",
-    "allow-dismiss-update-cmd",
-    "allow-staged-update-cmd",
-    "allow-open-logs-cmd",
-    "allow-open-external-cmd",
-    "allow-update-status-cmd"
-  ]
+  "permissions": []
 }

@@ -1,0 +1,4 @@
+# Vendored third-party files are pinned by their exact bytes (sha384 in
+# scripts/vendor_ui_libs.py and the SRI attributes in index.html): never
+# normalize their line endings, and do not diff minified bundles as text.
+* binary

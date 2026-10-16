@@ -7,9 +7,11 @@ Before the hotfix that was enough — `session_id='../../pwned'` wrote outside
 ~/.evi/uploads. Here a real Chromium page served from a different local port
 fires exactly that request at the real eVi server, and we assert the server
 refused it (403, seen at the network layer) and wrote nothing. The same page
-can't start a model pull through the one side-effecting GET either, while the
-real Chromium header pairs for eVi's own pages (same origin, a loopback alias
-of its port) still get through.
+can't start a model pull through the one side-effecting GET either — and
+neither can a header-less GET on eVi's own page (an <img>, an EventSource) —
+while the real Chromium header pairs for eVi's own requests (same origin, a
+loopback alias of its port; the UI's fetch with X-Evi-Client) still get
+through.
 
 The eVi home is a pytest tmp dir (see conftest.evi_base_url), so even a
 regression could only write inside the tmp tree.
@@ -21,6 +23,7 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -184,18 +187,50 @@ def test_cross_origin_page_cannot_start_a_model_pull(
         assert status == 403, (fn, status)
 
 
-def test_ui_own_model_pull_stream_still_opens(page: Page, evi_base_url: str) -> None:
-    """The first-run wizard's same-origin EventSource is not caught by the guard
-    (the handler answers 200 and streams; the bogus name makes Ollama, if it is
-    running at all, refuse rather than download)."""
+@pytest.mark.parametrize("how", ["img", "eventsource"])
+def test_evis_own_page_cannot_start_a_pull_without_the_header(
+    page: Page, evi_base_url: str, how: str
+) -> None:
+    """On eVi's own page a GET of /api/backend/pull is same-origin, so the
+    browser's labels can't tell it from the UI. An <img> (markup past the
+    sanitizer, a diagram's resource) or an EventSource can't add X-Evi-Client,
+    so the server refuses it; the UI's own fetch carries the header (next
+    test)."""
     page.goto(evi_base_url)
+    expect(page.locator("#input")).to_be_visible()
+    url = f"/api/backend/pull?model={BOGUS_MODEL}"
+    script = {
+        "img": f"document.body.appendChild(Object.assign(new Image(), {{ src: '{url}' }}))",
+        "eventsource": f"(() => {{ const es = new EventSource('{url}'); es.onerror = () => es.close(); }})()",
+    }[how]
+    sent, status = _network_view(page, script, "/api/backend/pull")
+    assert sent.get("sec-fetch-site") == "same-origin", sent
+    assert "x-evi-client" not in sent, sent
+    assert status == 403, (how, status)
+
+
+def test_ui_streams_its_own_model_pull(page: Page, evi_base_url: str) -> None:
+    """The UI reads the pull with fetch (streamModelPull), whose wrapper adds
+    X-Evi-Client, so the guard lets it through: 200 and an event stream the UI
+    parses. The bogus name makes Ollama, if it is running at all, refuse
+    rather than download, so the stream ends in an error event."""
+    page.goto(evi_base_url)
+    expect(page.locator("#input")).to_be_visible()
     with page.expect_response(lambda r: "/api/backend/pull" in r.url) as resp:
-        page.evaluate(
-            "(m) => { window.__es = new EventSource('/api/backend/pull?model=' + m); }",
-            BOGUS_MODEL,
+        events = page.evaluate(
+            """async (m) => {
+                 const out = [];
+                 await streamModelPull(m, d => { out.push(d); return true; });
+                 return out;
+               }""",
+            unquote(BOGUS_MODEL),
         )
-    assert resp.value.status == 200
-    page.evaluate("() => window.__es.close()")
+    r = resp.value
+    assert r.status == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert r.request.header_value("x-evi-client") == "web"
+    assert "token=" not in r.url
+    assert events and events[-1]["kind"] == "error", events
 
 
 def test_loopback_alias_page_works_but_cannot_post_across_aliases(
@@ -206,7 +241,9 @@ def test_loopback_alias_page_works_but_cannot_post_across_aliases(
     http://127.0.0.1:<port> (the same server by its other name) passes the
     Origin check — a loopback alias, although Chromium labels it
     `Sec-Fetch-Site: cross-site` — but a no-cors request can't carry
-    X-Evi-Client, so it is refused like any browser request without it."""
+    X-Evi-Client, so it is refused like any browser request without it.
+    (The page's CSP, connect-src 'self', stops that request in the browser
+    first; the server's refusal is checked with the CSP bypassed.)"""
     legit = _same_origin_upload(page, evi_base_url, "e2e-sec-legit")
     uploads = Path(legit["body"]["path"]).parent.parent
     port = evi_base_url.rsplit(":", 1)[1]
@@ -214,17 +251,27 @@ def test_loopback_alias_page_works_but_cannot_post_across_aliases(
     own = _same_origin_upload(page, alias, "e2e-sec-alias")
     assert own["status"] == 200, own
     assert (uploads / "e2e-sec-alias" / "legit.txt").read_text(encoding="utf-8") == "legit"
-    with page.expect_response(lambda r: r.url == evi_base_url + "/api/upload") as resp:
-        page.evaluate(
-            """async (target) => {
-              const fd = new FormData();
-              fd.append('session_id', 'e2e-sec-alias2');
-              fd.append('file', new Blob(['alias'], { type: 'text/plain' }), 'alias.txt');
-              await fetch(target + '/api/upload', { method: 'POST', mode: 'no-cors', body: fd });
-            }""",
-            evi_base_url,
-        )
-    assert resp.value.status == 403, resp.value.status
+    post_to_other_alias = """async (target) => {
+      const fd = new FormData();
+      fd.append('session_id', 'e2e-sec-alias2');
+      fd.append('file', new Blob(['alias'], { type: 'text/plain' }), 'alias.txt');
+      try {
+        await fetch(target + '/api/upload', { method: 'POST', mode: 'no-cors', body: fd });
+        return 'sent';
+      } catch (e) {
+        return 'blocked';
+      }
+    }"""
+    assert page.evaluate(post_to_other_alias, evi_base_url) == "blocked"
+    context = page.context.browser.new_context(bypass_csp=True)
+    try:
+        alias_page = context.new_page()
+        alias_page.goto(alias)
+        with alias_page.expect_response(lambda r: r.url == evi_base_url + "/api/upload") as resp:
+            assert alias_page.evaluate(post_to_other_alias, evi_base_url) == "sent"
+        assert resp.value.status == 403, resp.value.status
+    finally:
+        context.close()
     assert not (uploads / "e2e-sec-alias2").exists()
 
 

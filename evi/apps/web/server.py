@@ -16,10 +16,13 @@ Generated images saved under `IMAGE_DIR` are served from `/images/{name}`.
 from __future__ import annotations
 
 import asyncio
+import html as _htmlmod
 import json
 import logging
 import math
+import mimetypes
 import os
+import posixpath
 import secrets
 import re
 import threading
@@ -69,6 +72,129 @@ logger = logging.getLogger(__name__)
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# The UI's own files go out with `X-Content-Type-Options: nosniff` (below),
+# under which a browser runs a script only if it is labelled JavaScript and
+# applies a stylesheet only if it is labelled CSS. Their type comes from
+# `mimetypes`, which on Windows also reads the registry, where other software
+# can have mapped .js to text/plain — and that would block the whole UI. So
+# the types the UI depends on are pinned here.
+for _ext, _type in ((".js", "text/javascript"), (".css", "text/css"),
+                    (".html", "text/html"), (".json", "application/json")):
+    mimetypes.add_type(_type, _ext)
+del _ext, _type
+
+
+# ---- response security headers ---------------------------------------------
+#
+# Every response: `X-Content-Type-Options: nosniff`, so a browser never treats
+# a file as a type it isn't labelled as (an uploaded `.txt` holding HTML stays
+# text; a JSON reply never runs as a script).
+#
+# The UI page (`/`, `/static/index.html`): its Content-Security-Policy as a
+# header plus `frame-ancestors 'none'`, and `X-Frame-Options: DENY`, so no other
+# page can load eVi in a frame and steer clicks onto Approve or Settings
+# (clickjacking). A <meta> policy can't carry frame-ancestors. The policy has
+# ONE source: the <meta http-equiv="Content-Security-Policy"> in index.html,
+# which the browser enforces too, read here (page_csp) — not a copy kept in step
+# by hand. scripts/vendor_ui_libs.py --check keeps that tag in the form
+# _CSP_META reads.
+#
+# Files a person or a model put there (`/images/<name>` generated images,
+# `/uploads/<session>/<name>` attachments): a policy under which nothing loads
+# or runs, in a sandbox (an opaque origin), so an HTML or SVG file opened
+# directly can't act as eVi's page.
+_FILE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+_FILE_PREFIXES = ("/images/", "/uploads/")
+_PAGE_PATHS = frozenset({"/", "/static/index.html"})
+_NO_FRAMING = "frame-ancestors 'none'"
+_CSP_META = re.compile(
+    r"""<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]*)"\s*/?>""",
+    re.IGNORECASE,
+)
+# The page's policy if index.html has none this can read: nothing loads — a
+# broken page, never an unprotected one (the UI tests catch it first).
+_PAGE_CSP_UNREADABLE = "default-src 'none'"
+# (file key, header) for the index.html last read — one tuple, rebound whole.
+_page_csp_cached: tuple[tuple, str] | None = None
+
+
+def page_csp(index: Path | None = None) -> str:
+    """The Content-Security-Policy header for the UI page: index.html's own
+    <meta> policy (without any frame-ancestors, which a <meta> can't carry)
+    plus `frame-ancestors 'none'`. Re-read whenever the file changes (a dev
+    edit, a sidecar UI update), so the header never disagrees with the page."""
+    global _page_csp_cached
+    path = index or STATIC_DIR / "index.html"
+    try:
+        st = path.stat()
+        key: tuple | None = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    cached = _page_csp_cached
+    if key is not None and cached is not None and cached[0] == key:
+        return cached[1]
+    directives: list[str] = []
+    if key is not None:
+        try:
+            m = _CSP_META.search(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            m = None
+        if m:
+            for part in _htmlmod.unescape(m.group(1)).split(";"):
+                part = " ".join(part.split())
+                if part and part.split(" ", 1)[0].lower() != "frame-ancestors":
+                    directives.append(part)
+    if not directives:
+        logger.error("web UI: no Content-Security-Policy <meta> readable in %s; "
+                     "serving the page under %r", path, _PAGE_CSP_UNREADABLE)
+        directives = [_PAGE_CSP_UNREADABLE]
+    value = "; ".join([*directives, _NO_FRAMING])
+    if key is not None:
+        _page_csp_cached = (key, value)
+    return value
+
+
+def _security_headers(path: str, headers: Any) -> None:
+    """Set the headers above on one response (`headers`: a MutableHeaders)."""
+    headers["X-Content-Type-Options"] = "nosniff"
+    norm = posixpath.normpath("/" + (path or "/").lstrip("/"))
+    if norm.startswith(_FILE_PREFIXES):
+        headers["Content-Security-Policy"] = _FILE_CSP
+        return
+    html_page = (headers.get("content-type") or "").lower().startswith("text/html")
+    if norm in _PAGE_PATHS or (html_page and norm.startswith("/static/")):
+        headers["Content-Security-Policy"] = page_csp()
+        headers["X-Frame-Options"] = "DENY"
+    elif html_page:
+        # Any other page eVi serves (FastAPI's /docs): not frameable either.
+        if "content-security-policy" not in headers:
+            headers["Content-Security-Policy"] = _NO_FRAMING
+        headers["X-Frame-Options"] = "DENY"
+
+
+class _SecurityHeadersMiddleware:
+    """Pure ASGI, so streamed (SSE) responses pass through untouched. Added
+    last in create_app, so it wraps everything — refusals from the auth
+    middleware get the headers too."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        from starlette.datastructures import MutableHeaders
+
+        path = scope.get("path") or "/"
+
+        async def send_with_headers(message: Any) -> None:
+            if message.get("type") == "http.response.start":
+                _security_headers(path, MutableHeaders(scope=message))
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 # ---- request / session shapes -------------------------------------------
@@ -214,8 +340,10 @@ def _host_is_local(request) -> bool:
 
 _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # GETs with side effects, guarded like a POST: /api/backend/pull starts an
-# Ollama model download of whatever `?model=` names (the first-run wizard opens
-# it as a same-origin EventSource). HEAD runs the same handler.
+# Ollama model download of whatever `?model=` names. Any page can fire a GET
+# with no script — an <img>, <link> or <iframe>, a link — so without the token
+# these also need X-Evi-Client from every caller (_client_header_refusal); the
+# UI streams the pull with fetch, which sends it. HEAD runs the same handler.
 _SIDE_EFFECT_GETS = frozenset({"/api/backend/pull"})
 _LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 # The desktop shell's bundled loading page (tauri://localhost on macOS/Linux,
@@ -437,10 +565,10 @@ def lan_bind_refusal(host: str, cfg: Any = None) -> str | None:
 # `Sec-Fetch-Mode: cors` and nothing else. `Sec-Fetch-Site: none` is a request
 # the user started (an address-bar load), never one a page made. curl, the CLI
 # and peers send none of these. A state-changing /api request from a browser
-# must also carry this header unless it authenticated with a token: eVi's own
-# pages add it (the fetch wrapper in index.html), and another page can't add a
-# custom header to a cross-origin request without a CORS preflight, which eVi
-# never answers.
+# must also carry this header unless it authenticated with a token (and so must
+# any caller of a side-effecting GET): eVi's own pages add it (the fetch
+# wrapper in static/app.js), and another page can't add a custom header to a
+# cross-origin request without a CORS preflight, which eVi never answers.
 _CLIENT_HEADER = "x-evi-client"
 
 
@@ -456,10 +584,9 @@ def _client_header_refusal(request) -> str | None:
     be refused, else None. Callers skip it for token-authenticated requests."""
     path = request.url.path
     if request.method in ("GET", "HEAD") and path in _SIDE_EFFECT_GETS:
-        # The wizard opens these as an EventSource, which can't send the header,
-        # so the browser's own label decides: another site or another local port
-        # never starts one — not even with EVI_ALLOW_CROSS_ORIGIN, which waives
-        # only the Origin check (_cross_site_refusal).
+        # Another site or another local port never starts one, header or not —
+        # not even with EVI_ALLOW_CROSS_ORIGIN, which waives only the Origin
+        # check (_cross_site_refusal).
         site = (request.headers.get("sec-fetch-site") or "").strip().lower()
         if site in ("cross-site", "same-site"):
             return (
@@ -467,7 +594,21 @@ def _client_header_refusal(request) -> str | None:
                 f"(Sec-Fetch-Site: {site}): it has side effects, so only eVi's own "
                 "pages (or a client with the access token) may call it."
             )
-        return None
+        # And every caller needs the header, browser or not: a GET is what an
+        # <img>, <link>, <iframe> or a clicked link sends, on another site or
+        # in eVi's own page (markup that got past the sanitizer, a diagram) —
+        # with Sec-Fetch-Site: same-origin, or none at all from an older
+        # browser or a link opened in the system browser. None of them can
+        # add a header; eVi's UI streams the pull with fetch, which does.
+        if (request.headers.get(_CLIENT_HEADER) or "").strip():
+            return None
+        return (
+            f"Refusing a {request.method} {path} without the X-Evi-Client header: it "
+            "starts a model download, so a link or an embedded image, stylesheet or "
+            "frame must not be able to set one off. eVi's own pages send the header; "
+            "a script or curl must send `X-Evi-Client: 1` (or authenticate with the "
+            "access token)."
+        )
     if request.method not in _STATE_CHANGING_METHODS or not path.startswith("/api/"):
         return None
     # Routine webhooks: the path token is the credential (see _cross_site_refusal).
@@ -827,15 +968,82 @@ def _reserved_login(name: str) -> bool:
             or _safe_user(name).casefold() == _OWNER_LOGIN)
 
 
+def _login_dir_key(name: str) -> str:
+    """What decides that two logins share a data dir: its name (_safe_user),
+    case-folded, since Windows and macOS fold case in paths."""
+    return _safe_user(name).casefold()
+
+
+def _colliding_logins(users: list) -> dict[str, list[str]]:
+    """{login name: [the other logins it would share a data dir with]} for
+    each users.json login whose users/<dir> a differently named login maps to
+    as well: 'bob smith', 'bob_smith' and 'bob/smith' are all users/bob_smith,
+    and 'Alice' and 'alice' are one folder on Windows and macOS. None of them
+    signs in — they would read each other's transcripts and memory — until the
+    owner renames all but one. (Entries with the very same name are one login
+    with several tokens, not a collision.)"""
+    by_dir: dict[str, list[str]] = {}
+    for u in users:
+        names = by_dir.setdefault(_login_dir_key(u.name), [])
+        if u.name not in names:
+            names.append(u.name)
+    return {n: [m for m in names if m != n]
+            for names in by_dir.values() if len(names) > 1 for n in names}
+
+
+# Collision sets already logged, so the warning comes once per users.json state
+# rather than on every request (users.json is re-read per request).
+_logged_collisions: set[frozenset[str]] = set()
+
+
+def _note_login_collisions(users: list) -> None:
+    """Log each new login collision for the owner, naming every login in it
+    (a refused user is only told that one exists: _collision_refusal)."""
+    for name, others in _colliding_logins(users).items():
+        group = frozenset([name, *others])
+        if group not in _logged_collisions:
+            _logged_collisions.add(group)
+            logger.warning(
+                "users.json: the logins %s all map to the data folder users/%s; none "
+                "of them can sign in until all but one are renamed or removed",
+                ", ".join(repr(n) for n in sorted(group)), _safe_user(name))
+
+
+def _collision_refusal(name: str) -> str:
+    return (f"The login {name!r} can't sign in: another login in users.json maps to the "
+            f"same data folder (users/{_safe_user(name)}), so they would share chats and "
+            "memory. Ask the owner of this eVi to rename one of them.")
+
+
 def _authenticate_login(provided: str, users: list) -> Any:
     """The users.json login `provided` belongs to, else None. A login with a
     reserved name never signs in — it would share the owner's sessions,
-    transcripts and memory (`evi doctor` flags it)."""
+    transcripts and memory (`evi doctor` flags it) — nor does one whose data
+    dir another login maps to as well (_colliding_logins; _refused_login says
+    why)."""
     from evi.users import authenticate
 
     if not provided or not provided.isascii():  # compare_digest wants ASCII str
         return None
-    return authenticate(provided, [u for u in users if not _reserved_login(u.name)])
+    colliding = _colliding_logins(users)
+    return authenticate(provided, [u for u in users
+                                   if not _reserved_login(u.name) and u.name not in colliding])
+
+
+def _refused_login(provided: str, users: list) -> str | None:
+    """Why `provided`, a token of a users.json login that may not sign in
+    because its data dir collides with another login's, is refused — else
+    None (an unknown token stays a plain 401)."""
+    from evi.users import authenticate
+
+    if not provided or not provided.isascii():
+        return None
+    colliding = _colliding_logins(users)
+    if not colliding:
+        return None
+    user = authenticate(provided, [u for u in users
+                                   if u.name in colliding and not _reserved_login(u.name)])
+    return _collision_refusal(user.name) if user is not None else None
 
 
 def _config_snapshot(cfg: Config) -> dict[str, Any]:
@@ -1557,13 +1765,19 @@ def create_app() -> FastAPI:
         for bucket in _user_sessions.values():
             yield from bucket.values()
 
+    def _user_root() -> Path | None:
+        """The current user's data dir (HOME/users/<name>), else None → the
+        shared defaults (single-user behaviour). An agent built with it hands
+        it to its tools (ToolContext.user_root), so memory tools stay per-user."""
+        u = _CURRENT_USER.get()
+        return HOME / "users" / _safe_user(u) if u else None
+
     def _user_data_roots() -> tuple[Path | None, Path | None]:
         """(transcripts_root, memory_root) for the current user, else (None,
         None) → the shared defaults (single-user behaviour)."""
-        u = _CURRENT_USER.get()
-        if not u:
+        base = _user_root()
+        if base is None:
             return (None, None)
-        base = HOME / "users" / _safe_user(u)
         return (base / "transcripts", base / "memory")
 
     # User/plugin slash commands are a customization too — in safe mode point the
@@ -1633,6 +1847,8 @@ def create_app() -> FastAPI:
         cfg = Config.load()
         tokens = _web_tokens(cfg)
         users = load_users() if cfg.web.multi_user else []
+        if users:
+            _note_login_collisions(users)  # logged once per collision, for the owner
         request.state.evi_owner = True  # narrowed below for a users.json login
         provided = _provided_token(request)
         local = _client_is_local(request)
@@ -1730,6 +1946,11 @@ def create_app() -> FastAPI:
                     status_code=403,
                 )
             return await call_next(request)
+        # A known login that may not sign in (its data dir collides with
+        # another login's) is told why, rather than looking like a bad token.
+        refused = _refused_login(provided, users) if users else None
+        if refused is not None:
+            return JSONResponse({"detail": refused}, status_code=403)
         return JSONResponse(
             {"error": "unauthorized"},
             status_code=401,
@@ -1767,6 +1988,10 @@ def create_app() -> FastAPI:
         result: dict[str, object] = {"ok": ok, "required": True}
         if user is not None:
             result["user"] = user.name
+        elif not ok and users:
+            refused = _refused_login(provided, users)
+            if refused is not None:
+                result["error"] = refused  # the login overlay shows it
         return result
 
     def get_session(session_id: str) -> WebSession:
@@ -1786,15 +2011,17 @@ def create_app() -> FastAPI:
             tr_root, mem_root = _user_data_roots()
             # Delegate the generic Agent assembly (client/tools/memory/skills/
             # guardrails) to the SDK; the web dispatcher injects only its per-user
-            # concerns: the per-user memory root + transcript store and the CLIENT's
-            # session id (so the transcript file matches the tab, and a chat survives
-            # a server/app restart). Project context stays off here (the folder
-            # chip loads it). Hooks come from the shared registry rather than a
-            # per-session load, so a Settings → Hooks save reaches every open tab.
+            # concerns: the per-user data dir (memory index AND memory tools) +
+            # transcript store and the CLIENT's session id (so the transcript
+            # file matches the tab, and a chat survives a server/app restart).
+            # Project context stays off here (the folder chip loads it). Hooks
+            # come from the shared registry rather than a per-session load, so a
+            # Settings → Hooks save reaches every open tab.
             # permission_callback is attached per-request.
             agent = _with_user_hooks(build_agent(
                 config=config,
                 memory_root=mem_root,
+                user_root=_user_root(),
                 transcripts=TranscriptStore(root=tr_root) if toggles.get("transcripts") else None,
                 session_id=session_id,
                 enable_project=False,
@@ -1843,9 +2070,10 @@ def create_app() -> FastAPI:
         # `no-cache` = the WebView/browser MUST revalidate index.html on every
         # load (ETag still yields a cheap 304 when unchanged). Without it, a UI
         # update shipped via the sidecar channel is masked for days by a stale
-        # cached copy — the whole app's JS is inlined in this one file, so a
-        # cached index.html means a cached UI. This is what made a just-shipped
-        # feature (e.g. clipboard paste) appear "not there" in an updated app.
+        # cached copy. This is what made a just-shipped feature (e.g. clipboard
+        # paste) appear "not there" in an updated app. The app's JS
+        # (/static/app.js) revalidates the same way (the /static mount below).
+        # The CSP and no-framing headers come from _SecurityHeadersMiddleware.
         return FileResponse(
             STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
         )
@@ -2412,7 +2640,10 @@ def create_app() -> FastAPI:
     async def backend_pull(model: str | None = None) -> EventSourceResponse:
         """Stream Ollama model-pull progress over SSE — the first-run wizard's
         'downloading model' step. Defaults to the hardware-recommended model.
-        Idempotent: pulling an already-present model just re-verifies quickly."""
+        Idempotent: pulling an already-present model just re-verifies quickly.
+        Without the access token the request must carry X-Evi-Client
+        (_client_header_refusal), so the UI reads this stream with fetch: a GET
+        that starts a download must not be something an <img> can fire."""
         from evi import firstrun
         from evi.backends.ollama import OllamaBackend
 
@@ -4459,6 +4690,9 @@ def create_app() -> FastAPI:
 
         app.mount("/static", _NoCacheStatic(directory=str(STATIC_DIR)), name="static")
 
+    # Outermost (added last): every response, refusals included, gets nosniff,
+    # the page its CSP and no-framing headers, uploads and images the sandbox.
+    app.add_middleware(_SecurityHeadersMiddleware)
     return app
 
 

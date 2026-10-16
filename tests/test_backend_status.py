@@ -270,7 +270,8 @@ def test_pull_endpoint_streams_progress(client, monkeypatch):
         yield PullProgress(status="success", downloaded=100, total=100, detail="d")
 
     monkeypatch.setattr(ol.OllamaBackend, "pull_model", fake_pull)
-    r = client.get("/api/backend/pull?model=test:1b")
+    # It starts a download, so (without the token) it needs the UI's header.
+    r = client.get("/api/backend/pull?model=test:1b", headers={"X-Evi-Client": "web"})
     assert r.status_code == 200
     text = r.text
     assert "progress" in text          # progress events streamed
