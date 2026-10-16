@@ -95,3 +95,18 @@ def test_channel_is_off_and_unknown_codes_pair_nobody(
         assert status == 404, (code, status)
     store = json.loads(pairing_store.read_text(encoding="utf-8"))
     assert store["paired"] == {}, store
+
+
+def test_status_reports_the_channel_ceiling(page: Page, evi_base_url: str):
+    """The bot runs under its own policy (safety-channel-ceiling), whatever the
+    desktop's [auto] says: ask mode, nothing auto-approved, recall-only
+    memory, direct chats only. The panel lists the effective toolset."""
+    _open_channels(page, evi_base_url)
+    st = page.evaluate("() => fetch('/api/channels/telegram').then(r => r.json())")
+    assert st["policy"] == {
+        "mode": "ask", "tools": ["memory", "skills"], "auto_approve": [],
+        "memory_mode": "recall", "allow_groups": False,
+    }, st
+    assert st["tools"] == st["policy"]["tools"], st
+    expect(page.locator("#settings-content")).to_contain_text(
+        "Approved senders can use: memory, skills")

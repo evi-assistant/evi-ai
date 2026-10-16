@@ -7,6 +7,11 @@ across sessions.
 Each call works on the calling session's store (`_store_for`): in multi-user
 web mode that is the login's own ``HOME/users/<name>/memory``, the same store
 its system-prompt index lists, never the shared one or another user's.
+
+A read-only store (a chat channel's recall-only memory, `MemoryStore.read_only`)
+is honoured: `remember` hands the note to the store's ``stage`` (a channel's
+staged mode, evi/channels/inbox.py) or saves nothing, and `forget` deletes
+nothing.
 """
 
 from __future__ import annotations
@@ -34,7 +39,8 @@ def _store_for(ctx: ToolContext | None) -> MemoryStore:
         root = Path(ctx.user_root) / "memory"
         if isinstance(mem, MemoryStore) and mem.root == root:
             return mem
-        return MemoryStore(root=root)
+        # Never a writable store for an agent whose own one is read-only.
+        return MemoryStore(root=root, read_only=getattr(mem, "read_only", False))
     if isinstance(mem, MemoryStore):
         return mem
     return _store
@@ -54,6 +60,13 @@ def _store_for(ctx: ToolContext | None) -> MemoryStore:
 def remember(name: str, content: str, tags: str = "", ctx: ToolContext | None = None) -> str:
     store = _store_for(ctx)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags.strip() else None
+    if getattr(store, "read_only", False):
+        stage = getattr(store, "stage", None)
+        if not callable(stage):
+            return "ERROR: memory is read-only here (recall only), so nothing was saved."
+        stage(name, content, tags=tag_list)
+        return (f"staged memory '{name}' for the owner's review: it is not in memory "
+                "until they apply it")
     path = store.write(name, content, tags=tag_list)
     saved = store.tags_of(name)
     note = f" [tags: {', '.join(saved)}]" if saved else ""
@@ -76,7 +89,10 @@ def recall(name: str, ctx: ToolContext | None = None) -> str:
     category="memory",
 )
 def forget(name: str, ctx: ToolContext | None = None) -> str:
-    removed = _store_for(ctx).delete(name)
+    store = _store_for(ctx)
+    if getattr(store, "read_only", False):
+        return "ERROR: memory is read-only here (recall only), so nothing was deleted."
+    removed = store.delete(name)
     return "deleted" if removed else f"no memory named '{name}'"
 
 

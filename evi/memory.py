@@ -64,15 +64,24 @@ class MemoryEntry:
     tags: tuple[str, ...] = ()
 
 
+class MemoryReadOnly(PermissionError):
+    """A write to a read-only (recall-only) memory store."""
+
+
 class MemoryStore:
     """Markdown-on-disk memory keyed by safe filename (no extension).
 
     Construction is cheap (just resolves the path). All other methods touch
     the filesystem so callers can rely on `list()` reflecting current state.
+
+    A ``read_only`` store (a chat channel's recall-only memory) lists and reads
+    like any other, but every method that changes the directory (`write`,
+    `delete`, `hard_delete`, `restore_from_attic`) raises `MemoryReadOnly`.
     """
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, read_only: bool = False) -> None:
         self.root = Path(root) if root is not None else MEMORY_DIR
+        self.read_only = read_only
 
     # --- public API ------------------------------------------------------
 
@@ -121,6 +130,7 @@ class MemoryStore:
         return sorted(tags)
 
     def write(self, name: str, content: str, tags=None) -> Path:
+        self._check_writable()
         self._validate_name(name)
         if len(content.encode("utf-8")) > _MAX_CONTENT_BYTES:
             raise ValueError(
@@ -150,6 +160,7 @@ class MemoryStore:
         dream engine relies on this safety net: a mistaken `forget` during
         memory consolidation can be undone by hand.
         """
+        self._check_writable()
         path = self._path_for(name)
         if not path.is_file():
             return False
@@ -162,6 +173,7 @@ class MemoryStore:
 
     def hard_delete(self, name: str) -> bool:
         """Permanently delete (no attic). Use sparingly."""
+        self._check_writable()
         path = self._path_for(name)
         if not path.is_file():
             return False
@@ -171,6 +183,7 @@ class MemoryStore:
 
     def restore_from_attic(self, attic_filename: str) -> Path | None:
         """Move a file out of `.attic/` back into active memory."""
+        self._check_writable()
         src = self.root / ".attic" / attic_filename
         if not src.is_file():
             return None
@@ -205,6 +218,10 @@ class MemoryStore:
         return "\n".join(lines)
 
     # --- internals -------------------------------------------------------
+
+    def _check_writable(self) -> None:
+        if self.read_only:
+            raise MemoryReadOnly(f"memory at {self.root} is read-only here (recall only)")
 
     def _path_for(self, name: str) -> Path:
         self._validate_name(name)

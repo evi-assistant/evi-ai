@@ -79,9 +79,22 @@ def get_updates(token: str, offset: int | None = None, *, poll: int = 25) -> lis
     return _call(token, "getUpdates", params, timeout=poll + 15.0) or []
 
 
+# Sender ids that stand for "someone", not one person: GroupAnonymousBot (an
+# anonymous group admin), Telegram's service account (posts forwarded from a
+# linked channel) and Channel_Bot (a message sent on behalf of a channel).
+# Pairing one of them would let everyone behind it in.
+SHARED_SENDER_IDS = frozenset({1087968824, 777000, 136817688})
+
+
 def parse_message(update: dict[str, Any]) -> dict[str, Any] | None:
-    """Flatten an update into {update_id, chat_id, user_id, name, text}, or None
-    for anything that isn't a plain text message (joins, photos, edits…)."""
+    """Flatten an update into {update_id, chat_id, chat_type, user_id, name,
+    text, anonymous}, or None for anything that isn't a plain text message
+    (joins, photos, edits…).
+
+    `chat_type` is Telegram's chat.type ("private", "group", "supergroup",
+    "channel"; "" if missing). `anonymous` is True when `from` doesn't identify
+    one person: a shared sender id (`SHARED_SENDER_IDS`), a message sent on
+    behalf of a chat (`sender_chat`), or a bot."""
     msg = update.get("message") or {}
     text = msg.get("text")
     chat = msg.get("chat") or {}
@@ -93,7 +106,11 @@ def parse_message(update: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "update_id": update.get("update_id"),
         "chat_id": chat["id"],
+        "chat_type": str(chat.get("type") or ""),
         "user_id": frm.get("id"),
         "name": name,
         "text": text,
+        "anonymous": bool(
+            frm.get("id") in SHARED_SENDER_IDS or msg.get("sender_chat") or frm.get("is_bot")
+        ),
     }

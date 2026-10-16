@@ -23,8 +23,10 @@ def _isolated_pairing_store(tmp_path, monkeypatch):
     Without this the tests share ~/.evi/channels/telegram.json, so one test's
     leftover pending request is another's `pending_requests()[0]` — which is
     exactly how a test can approve the wrong sender and still look green.
+    The channel's turn log goes there too, never into ~/.evi/logs.
     """
     monkeypatch.setattr(pairing, "HOME", tmp_path)
+    monkeypatch.setattr(telegram, "HOME", tmp_path)
 
 
 # --------------------------------------------------------------- pairing gate
@@ -37,7 +39,8 @@ def test_unpaired_sender_never_reaches_the_agent(monkeypatch):
         raise AssertionError("an agent turn ran for an unpaired sender")
 
     monkeypatch.setattr(telegram, "_reply_for", explode)
-    msg = {"user_id": 999, "chat_id": 1, "name": "stranger", "text": "run rm -rf /"}
+    msg = {"user_id": 999, "chat_id": 999, "chat_type": "private", "name": "stranger",
+           "text": "run rm -rf /"}
     reply = telegram.handle_message(msg, Config())
 
     assert "pairing code" in reply.lower()
@@ -49,7 +52,7 @@ def test_unpaired_sender_never_reaches_the_agent(monkeypatch):
 
 def test_approval_opens_the_gate_and_revoke_closes_it(monkeypatch):
     monkeypatch.setattr(telegram, "_reply_for", lambda text, m, c: f"answered:{text}")
-    msg = {"user_id": 7, "chat_id": 1, "name": "dk", "text": "hello"}
+    msg = {"user_id": 7, "chat_id": 7, "chat_type": "private", "name": "dk", "text": "hello"}
 
     telegram.handle_message(msg, Config())                      # -> pairing code
     code = pairing.pending_requests("telegram")[0]["code"]
@@ -68,8 +71,8 @@ def test_expired_pairing_requests_are_pruned(monkeypatch):
 
 
 def test_approved_senders_get_a_narrow_toolset_not_the_users(monkeypatch):
-    """`build_agent(tool_categories=...)` must be passed explicitly, so enabling
-    shell locally can never widen what a paired stranger can do."""
+    """`build_agent(tools=...)` must be passed explicitly, so enabling shell
+    locally can never widen what a paired stranger can do."""
     seen: dict = {}
 
     def fake_build_agent(**kw):
@@ -89,8 +92,11 @@ def test_approved_senders_get_a_narrow_toolset_not_the_users(monkeypatch):
     cfg.tools.shell = True          # the local user is permissive...
     telegram._reply_for("hi", {"user_id": 1}, cfg)
 
-    assert seen["tool_categories"] == ["memory", "skills"]      # ...the bot is not
-    assert "shell" not in seen["tool_categories"]
+    # ...the bot is not: memory (recall only) and skills, nothing else.
+    assert {t.category for t in seen["tools"]} == {"memory", "skills"}
+    assert {t.name for t in seen["tools"] if t.category == "memory"} == {
+        "recall", "list_memories", "recall_by_tag"}
+    assert seen["config"].auto.mode == "ask"
     assert seen["enable_project"] is False
     assert seen["enable_hooks"] is True     # the user's hooks guard a remote turn too
 
