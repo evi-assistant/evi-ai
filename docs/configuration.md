@@ -541,8 +541,10 @@ One markdown file per fact:
 
 The `Agent.memory.format_for_prompt()` block shows up in every system
 prompt. The model uses the `remember(name, content)`, `recall(name)`,
-and `forget(name)` tools to manage it. **`forget` is soft-delete** — it
-moves to `.attic/`. The dreaming engine relies on this to avoid losing
+and `forget(name)` tools to manage it, in the same store the prompt lists:
+in multi-user web mode that is the login's `~/.evi/users/<name>/memory/`
+(see [Multi-user web](#multi-user-web--eviusersjson)). **`forget` is
+soft-delete** — it moves to `.attic/`. The dreaming engine relies on this to avoid losing
 data on bad consolidations.
 
 Caps: 64 KB per entry, names must match `[A-Za-z0-9_-]{1,64}`.
@@ -858,13 +860,24 @@ token instead of sharing `auth_token`.
 
 Manage with `evi web-config users add/list/remove`. Each user gets an **isolated
 workspace** — their web sessions, transcripts, and memory live under
-`~/.evi/users/<name>/` and aren't visible to other users. Drop a user from the
+`~/.evi/users/<name>/` and aren't visible to other users. Memory there means
+both the index in the system prompt and the memory tools (`remember`,
+`recall`, `forget`, `list_memories`, `recall_by_tag`), including in the
+subagents a user's chat starts; notes those tools saved to the shared
+`~/.evi/memory/` before this release stay there. Drop a user from the
 file to revoke access. Skills and installed plugins stay shared, but the routes
 that act on the host (settings, hooks, plugins, channels, peers, the runtime,
 MCP, backends, checkpoints and rewind, and host-level runs) are owner-only:
 they need `[web] auth_token` (or the launch token), and a login gets 403. A
 login named `owner` can't sign in, since that name is the owner's workspace.
-Details in [security.md](security.md#multi-user-mode).
+
+`<name>` is the login's name with every character outside `A-Z a-z 0-9 _ . -`
+replaced by `_`, and leading and trailing `.`, `_` and `-` stripped (`user` if
+nothing is left). Logins whose folders would match, ignoring case
+(`bob smith` and `bob_smith`; `Alice` and `alice`, one folder on Windows and
+macOS), can't sign in at all until all but one are renamed or removed: each
+gets a 403 that says so, and the server log names the whole group. Details in
+[security.md](security.md#multi-user-mode).
 
 ## Guardrails — `~/.evi/guardrails.toml`
 

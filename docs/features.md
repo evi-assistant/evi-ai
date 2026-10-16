@@ -200,8 +200,14 @@ from eVi's own pages (or carry the token), one turn runs per session, and an
 unanswered permission prompt is denied after `[web] decision_timeout_s`.
 [Security](security.md). **Multi-user** —
 `[web] multi_user` + `~/.evi/users.json`; each user gets an **isolated
-workspace** (sessions/transcripts/memory under `~/.evi/users/<name>/`), and
-host-level settings are owner-only.
+workspace** (sessions/transcripts/memory under `~/.evi/users/<name>/`, the
+memory tools included), host-level settings are owner-only, and two logins
+that would share a folder can't sign in. **Safe rendering** — replies render
+as markdown with highlighting and mermaid diagrams from libraries that ship
+with eVi (offline, pinned), through a sanitizer and a strict
+Content-Security-Policy, so model output can't run script or make the page
+load anything; the UI can't be framed by another site, and the desktop window
+gets IPC only from the eVi server and stays on it.
 **Deep links** — `evi://session/<id>` / `evi://workflow/<name>`; `evi link`.
 **Desktop** — native menus, tray, an **updater that asks before it installs**
 (Update & Restart / Not now), a core-only update channel with **Restart now**,
@@ -220,7 +226,8 @@ opt-in Sentry (`[telemetry] crash_reports` + `dsn`, `[telemetry]` extra).
 
 **Agent SDK** — `evi.sdk` is the curated public library surface: `build_agent()`
 (the convenience constructor the CLI itself delegates to), the streaming `Agent`
-+ all event types, `@tool`, subagents, structured output, `run_headless`,
++ all event types, `@tool` (a `ctx` parameter gets the calling session's
+`ToolContext`), subagents, structured output, `run_headless`,
 sessions/checkpoints, MCP, ultracode/workflows, and telemetry — all under one
 stable namespace (`py.typed`). Guide: [sdk.md](sdk.md); runnable scripts:
 [examples/python/](../examples/python/).

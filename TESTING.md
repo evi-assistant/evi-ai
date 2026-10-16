@@ -17,12 +17,12 @@ a standing rule: **every UI-affecting change ships with an e2e test.**
 | **Unit** | `pytest` (`tests/*.py`, plus the composite actions' tests in `.github/actions/`) | fast (run `pytest --collect-only -q` for the live count) | core logic, config, tools, backends, server endpoints (via `TestClient`), converters | every push and PR (CI `ci.yml`), every release, + locally |
 | **E2E (CLI)** | subprocess (`tests/cli_e2e/`) | medium (~100 s, no browser) | the real `evi` CLI per subsystem — arg parsing, config wiring, file I/O, output (the offline commands) | opt-in (`-m e2e`) |
 | **E2E (UI)** | Playwright (`tests/e2e/`) | medium (~25 s + browser install) | the real web UI in a real browser against the real server | PRs, pushes to main, weekly, dispatch, and every release before it publishes (CI `e2e.yml`) |
-| **E2E (desktop)** | tauri-driver + msedgedriver (`tests/desktop_e2e/`) | slow (needs a built `evi-desktop.exe`, Windows) | the native shell: the built app launches and renders the UI, the Tauri bridge is there, the native menu opens Settings, LAN access starts with a generated token, thin-client mode signs in with its token | opt-in (`-m desktop`); in `desktop-release.yml` behind a flag (see [CI gates](#ci-gates)) |
+| **E2E (desktop)** | tauri-driver + msedgedriver (`tests/desktop_e2e/`) | slow (needs a built `evi-desktop.exe`, Windows) | the native shell: the built app launches and renders the UI, the page reaches the shell only through its listed commands (no `window.__TAURI__`) and the window stays on the eVi server, the native menu opens Settings, LAN access starts with a generated token, thin-client mode signs in with its token | opt-in (`-m desktop`); in `desktop-release.yml` behind a flag (see [CI gates](#ci-gates)) |
 | **Manual** | a human + the desktop app | slow | things no harness reaches: the auto-updater, OS install/SmartScreen, voice/mic, computer-use | per desktop release (see checklist below) |
 
 The web UI **is** the desktop UI (the Tauri shell wraps the same server +
-`static/index.html`), so e2e against the web server covers the desktop UI's
-HTML/JS. Only the native shell (window, updater, sidecar spawn) needs the
+`static/index.html` and `static/app.js`), so e2e against the web server covers
+the desktop UI's HTML/JS. Only the native shell (window, updater, sidecar spawn) needs the
 desktop e2e or a human.
 
 ## Running the tests
@@ -159,7 +159,8 @@ backlog — fill the ⬜ rows as you touch each area.
 | No console errors on load / during chat | ✅ |
 | Tool call + tool result bubbles render | ⬜ |
 | Thinking blocks (`<think>`) render + collapse | ⬜ |
-| Markdown + code highlighting | ⬜ |
+| Markdown + code highlighting | ✅ `tests/e2e/test_ui_xss.py::test_markdown_keeps_what_chat_needs`, `::test_ui_renders_with_only_the_evi_server_reachable` (offline, vendored libraries) |
+| Model output renders inert (scripts, handlers, foreign images and links, diagrams) | ✅ `tests/e2e/test_ui_xss.py` (`test_streamed_reply_and_system_message_render_inert`, `test_history_rebuild_and_inbox_render_inert`, `test_images_and_links_cannot_reach_evis_own_endpoints`, `test_diagrams_cannot_make_the_page_fetch_anything`, `test_csp_stops_script_that_bypasses_the_sanitizer`, …) · 🧪 `tests/test_ui_render_safety.py` |
 | Citations rendering (P30) | ⬜ |
 | Token/usage indicator updates | ⬜ |
 
@@ -172,6 +173,7 @@ backlog — fill the ⬜ rows as you touch each area.
 | Failed switch rolls back; Run diagnostics works | ✅ `test_ui_onboarding.py::test_failed_switch_rolls_back_and_changes_nothing`, `::test_failed_switch_run_diagnostics_button_works` |
 | "Set up local AI" card: what it installs, its steps, log + diagnostics on failure | ✅ `test_ui_runtime_setup.py` (`test_first_run_download_option_opens_the_card`, `test_card_lists_what_it_will_put_on_the_machine`, `test_setup_names_its_steps`, `test_failure_offers_the_log_and_diagnostics`) |
 | Install/start/pull wizard flow | 👤 (real Ollama) |
+| Model download progress (first-run step; Settings → Model & Backend Pull) | ✅ `tests/e2e/test_ui_model_pull.py` (`test_first_run_download_shows_progress`, `test_first_run_download_reaches_the_server_and_shows_its_error`, `test_settings_pull_streams_progress_to_installed`, `test_settings_pull_reaches_the_server_and_shows_its_error`) |
 | Model picker / switcher (`/api/model-picker`) | 🧪 unit · ✅ `test_ui_model_switch.py` |
 | Starter prompts in an empty chat | ✅ `test_ui_starter_prompts.py` (`test_empty_chat_offers_three_starters`, `test_starter_sends_its_prompt_and_gives_way`, `test_starters_survive_when_nothing_answers`, `test_new_chat_gets_starters_a_restored_one_does_not`) |
 
@@ -213,6 +215,10 @@ backlog — fill the ⬜ rows as you touch each area.
 | UI sends `X-Evi-Client`; a browser POST without it is refused | ✅ `tests/e2e/test_web_hardening.py::test_ui_requests_carry_the_client_header`, `::test_browser_post_without_the_header_is_refused` |
 | Launch token (desktop LAN / container) spares this machine | ✅ `tests/e2e/test_web_hardening.py::test_launch_token_spares_this_machine` |
 | Cross-site / cross-alias requests refused | ✅ `test_ui_security.py` |
+| A model pull needs `X-Evi-Client`; the UI streams its own | ✅ `tests/e2e/test_ui_security.py::test_evis_own_page_cannot_start_a_pull_without_the_header[img, eventsource]`, `::test_ui_streams_its_own_model_pull` |
+| UI runs under its CSP header; another site can't frame it | ✅ `tests/e2e/test_ui_xss.py::test_the_ui_runs_under_its_csp_header`, `::test_another_site_cannot_frame_the_ui`, `::test_a_framed_ui_without_its_headers_stays_blank_and_inert` |
+| A login whose data folder collides is told why | ✅ `tests/e2e/test_web_hardening.py::test_a_login_sharing_a_data_folder_is_told_why` |
+| Desktop: links go to the system browser through one listed command | ✅ `tests/e2e/test_ui_xss.py::test_desktop_links_go_to_the_system_browser_through_one_listed_command` (emulated) |
 | Permission prompt dialog | ⬜ |
 | Settings → Channels: approve / revoke Telegram senders | ✅ `test_ui_channels.py` (`test_approve_then_revoke_a_sender`, `test_channel_is_off_and_unknown_codes_pair_nobody`) |
 | MCP tools available (P7) | 🧪 |
@@ -236,6 +242,8 @@ backlog — fill the ⬜ rows as you touch each area.
 |---|---|
 | Installer runs; app window opens | 👤 |
 | Sidecar spawns; chat works in the window | 👤 |
+| No `window.__TAURI__`; only the listed commands reach the shell; the window stays on the eVi server | ✅ desktop e2e, opt-in: `tests/desktop_e2e/test_desktop_smoke.py::test_tauri_invoke_bridge_is_present`, `::test_window_stays_on_the_evi_server` · 🧪 Rust `ipc_guard_tests` in `main.rs` |
+| A reply with a mermaid diagram renders in the window | 👤 |
 | In-app auto-update (check → install → relaunch) | 👤 |
 | File/Edit/View/Help menus + accelerators | 👤 |
 | Help → Check for Updates (force-update) | 👤 |

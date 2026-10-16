@@ -56,6 +56,8 @@ build_agent(
     enable_project=True,         # load EVI.md / project context
     enable_hooks=True,           # load ~/.evi/hooks.toml
     enable_guardrails=True,      # load ~/.evi/guardrails.toml (if enabled)
+    memory_root=None,            # MemoryStore folder; None = ~/.evi/memory (or user_root/memory)
+    user_root=None,              # a multi-user login's data folder (~/.evi/users/<name>)
     permission_callback=None,    # tool-permission prompt; None = non-interactive
     permission_batch_callback=None,
     transcripts=None,            # a TranscriptStore to log turns to
@@ -69,6 +71,21 @@ Tool selection precedence:
    which the SDK resolves from the registry). Pass `tools=[]` for a no-tool agent.
 2. `tool_categories=[...]` — select built-ins by category, ignoring config toggles.
 3. neither — select built-ins per the `[tools]` toggles in your config.
+
+Per-user data:
+
+- `memory_root` is the folder for the agent's `MemoryStore` (its system
+  prompt's memory index) when memory is on. `None` means the shared
+  `~/.evi/memory`, unless `user_root` is set.
+- `user_root` is a multi-user web login's data folder, which the web server
+  passes for each login's chats. The memory tools then keep that user's
+  notes in `user_root/memory`, and `memory_root` defaults to that folder too.
+  Tools see it as `ctx.user_root` (see [Custom tools](#custom-tools)).
+- `user_root=None` means: the user of the tool call that is building this
+  agent, if there is one, so a subagent works for its parent's user.
+  Otherwise single-user. An agent built on a thread you start yourself
+  without `contextvars.copy_context()` sees no tool call, so pass `user_root`
+  explicitly there.
 
 > The CLI's own agent builder delegates to `build_agent` — it adds only its
 > runtime concerns (spawning MCP servers, interactive permission prompts). There
@@ -128,6 +145,93 @@ docstring line as the description (override with `description=`). A tool may
 return a `str`, a JSON-able object, or a `ToolOutput(text, citations)` to attach
 source citations. Use `register_builtin_tools()` if you need to populate the full
 built-in `REGISTRY` yourself.
+
+`@tool(trust="untrusted")` marks a tool whose output is text an outsider wrote
+(a web page, another server); the default is `"trusted"`, and any other value
+raises `ValueError`. It is a label for now: nothing treats the two
+differently yet.
+
+### The calling session: `ctx`
+
+A tool that needs to know which session called it declares a `ctx`
+parameter. The agent passes it the call's `ToolContext`. `ctx` never appears
+in the schema, so the model can't see it, and a `ctx` argument the model
+sends is replaced by the real context:
+
+```python
+from evi.sdk import tool, ToolContext
+
+@tool(category="custom", description="Where this session works")
+def where(ctx: ToolContext | None = None) -> str:
+    return ctx.cwd if ctx and ctx.cwd else "."
+```
+
+Give `ctx` the default `None`: a call made outside an agent (`Tool.call` with
+no context, `evi mcp serve`) passes `None`. The fields:
+
+| Field | Holds |
+|---|---|
+| `agent` | The `Agent` running the call (`None` outside one). |
+| `session_id` | That agent's session id. |
+| `cwd` | The session's working folder as `Agent.cwd` holds it; `""` means the process's current folder. |
+| `turn_index` | The agent's user-turn count, 1 for its first message. A revived or resumed session counts on from its history. |
+| `user_root` | A multi-user web login's data folder (`~/.evi/users/<name>`); `None` in single-user mode. |
+| `cancel_token` | A `threading.Event` a long tool can poll. Nothing sets it yet. |
+| `parent` | The context of the tool call whose tool built this agent (a subagent); `None` at the top level. |
+| `root` | (property) The top-level session's context, at the end of the `parent` chain. |
+
+The name `ctx` is reserved. A tool that took a model argument called `ctx`
+now gets the `ToolContext` in its place, so rename that argument. Only a
+parameter named `ctx` counts (not `**kwargs`), and MCP tools are exempt:
+their arguments all go to the server.
+
+### Per-session state: `binder`
+
+A tool whose state must belong to one session, not to the process, gets a
+`binder`: a function that takes the `ToolContext` and returns the function
+that session runs. Build the `Tool` directly (`@tool` takes no binder):
+
+```python
+import json
+from evi.sdk import Tool, ToolContext, build_agent
+
+def note_binder(ctx: ToolContext):
+    notes: list[str] = []          # this session's own list
+
+    def note(text: str) -> str:
+        notes.append(text)
+        return json.dumps(notes)
+
+    return note
+
+note_tool = Tool(
+    name="note",
+    description="Keep a note for this session",
+    parameters={"type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]},
+    func=lambda text: "unbound",   # unused: calls run the binder's function
+    category="custom",
+    binder=note_binder,
+)
+agent = build_agent(tools=[note_tool])
+```
+
+- An agent binds the tool at its first call. `Tool.bind(ctx)` returns a copy
+  that runs the binder's function, keeps the name, description and schema,
+  and points back at the original (`bound_from`). The tool list the model
+  sees doesn't change.
+- The agent reuses that binding until its `session_id` changes or `reset()`
+  starts a new conversation. The next call then binds again.
+- The binder sees the context as it was at that first call, so `turn_index`
+  and `cwd` don't move afterwards: read live values from `ctx.agent`.
+- A binder may run more than once for one session (two first calls racing;
+  one result is kept), so it should only build the function, with no other
+  side effects.
+- If the binder raises, that call returns `ERROR: <type>: <message>`. The
+  agent and its other tools are unaffected.
+- Two agents given the same tool, or one agent's bound copy, never share
+  state. Called outside an agent, the tool is bound for that one call.
 
 ## Subagents
 

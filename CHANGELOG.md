@@ -169,10 +169,44 @@ All notable user-visible changes to eVi. Format loosely follows
   `EVI_ALLOW_CROSS_ORIGIN=1` turns that check off. A request counts as a
   browser's only when it has an `Origin` or a `Sec-Fetch-Site` header, so the
   CLI, peers, curl and the VS Code extension (older builds too) are
-  unaffected. A side-effecting `GET` (`/api/backend/pull`, which starts a
-  model download) started by another site or another local port is refused
-  even with `EVI_ALLOW_CROSS_ORIGIN=1`. A script calling the API from a
-  browser page should send `X-Evi-Client: 1`.
+  unaffected, except when they start a model download (below). A script
+  calling the API from a browser page should send `X-Evi-Client: 1`.
+- **Starting a model download needs eVi's own page or the token.**
+  `GET /api/backend/pull` starts an Ollama download of whatever model it
+  names, and an `<img>`, a link or a frame sends a GET with no script, on
+  another site or inside eVi's own page. Without the access token it now
+  needs an `X-Evi-Client` header (any value) from every caller, browser or not,
+  and answers `403` without one; eVi's UI reads the progress with `fetch`,
+  which sends it. A script or curl that starts a pull without the token must
+  add `-H 'X-Evi-Client: 1'`. A pull that another site or another local port
+  starts is refused, header or not, even with `EVI_ALLOW_CROSS_ORIGIN=1`.
+- **Model output can't run code or fetch anything by itself in the web and
+  desktop UI.** Replies were inserted as raw HTML, so a page, file or MCP result that
+  steered the model could make it write an `<img onerror>` that ran script
+  with eVi's API on the same origin, or an image whose address leaked the
+  chat or hit eVi's own endpoints. Replies now go through DOMPurify with a
+  profile for chat: no scripts, event handlers, SVG, frames, forms, styles,
+  ids or attributes that point at the UI's controls. Images load only from
+  inline `data:` or eVi's own `/images/<name>`; any other shows as an
+  `[image: …]` link, and a link back into eVi loses its target. Mermaid
+  diagrams render in a frame that can load nothing, a diagram that tries is
+  shown as its source, and a diagram's `%%{init}%%` can no longer set
+  `themeCSS`, `fontFamily` or similar keys. The page runs under a
+  Content-Security-Policy that allows only eVi's own script files: the UI's
+  code moved from `index.html` to `static/app.js`, and marked, DOMPurify,
+  highlight.js and mermaid ship with eVi at pinned versions (about 4.6 MB)
+  instead of loading from a CDN, so replies render offline too. Raw HTML in
+  a reply loses inline styles, ids, forms and buttons. See "The web UI" in
+  docs/security.md.
+- **Another site can't frame eVi, and the files it serves can't act as its
+  page.** Any website could load eVi in a hidden frame and steer a click onto
+  Approve or Settings. The page now sends its policy as a
+  `Content-Security-Policy` header with `frame-ancestors 'none'`, plus
+  `X-Frame-Options: DENY`, and a copy served without them (through a proxy
+  that strips headers) blanks itself inside a frame. Every response carries
+  `X-Content-Type-Options: nosniff`, and generated images (`/images/…`) and
+  attachments (`/uploads/…`) get a sandbox policy, so an HTML or SVG file
+  opened directly runs nothing.
 - **In multi-user mode, a users.json login can use only its own chats.** Any
   login could change the host's settings, hooks, plugins, channels, peers,
   managed runtime, MCP servers and backends, run its workflows, recipes and
@@ -185,6 +219,22 @@ All notable user-visible changes to eVi. Format loosely follows
   longer sign in, and `evi doctor` names it with the command to remove it
   (`evi web-config users add` still accepts the name). See "Multi-user mode"
   in docs/security.md.
+- **In multi-user mode, each login's memory tools keep to its own notes.**
+  `remember`, `recall`, `forget`, `list_memories` and `recall_by_tag` used the
+  shared `~/.evi/memory` from every login's chats, so one login could read or
+  delete what another saved, while each prompt listed the login's own
+  `users/<name>/memory`. The tools now use that folder too, and so do the
+  subagents a login's chat starts. Notes they saved in the shared folder
+  before are not moved. The owner's chats use `users/owner/memory`; the
+  host's own runs (workflows, recipes, ultracode, evals, routines, federated
+  and A2A tasks) still use `~/.evi/memory`.
+- **Logins that would share a data folder can't sign in.** `bob smith`,
+  `bob_smith` and `bob/smith` all kept their transcripts and memory in
+  `users/bob_smith`, as did `Alice` and `alice` on Windows and macOS. Each of
+  those logins now gets `403` until all but one are renamed or removed, the
+  sign-in overlay says why without naming the other login, and the server
+  log names each group once. One name listed twice (two tokens) is still one
+  login. `evi doctor` doesn't report this yet.
 - **A chat nobody is watching no longer approves tools by itself.** A channel
   push with `run: true` (`POST /api/session/<id>/channel`) runs a turn with
   no one to ask: in a session that hadn't chatted yet, every tool that would
@@ -211,6 +261,18 @@ All notable user-visible changes to eVi. Format loosely follows
   Windows looks up in the app's own folder first, so a `rundll32.exe` planted
   next to the app would have run instead. They now run by full path under
   `%SystemRoot%`.
+- **The desktop window talks only to your eVi server, and stays on it.** The
+  page had Tauri's whole JavaScript API (`window.__TAURI__`), and the app's
+  commands were granted to every `localhost` and `127.0.0.1` port, so any
+  local page the window reached could call them. Now `window.__TAURI__` is
+  gone, the page reaches the shell only through the app's nine desktop
+  commands and only from the server's own origin, the window refuses to
+  navigate anywhere else, and links in replies open in the system browser.
+  In thin-client mode, set `EVI_REMOTE_URL` to the address the server finally
+  answers on, since the window won't follow a redirect to another origin.
+  Against a server older than this release the chat works but the in-page
+  desktop actions (update prompts, Open Logs, links in the system browser)
+  don't. This comes with the desktop app itself, not a core-only update.
 - **Voice transcription uploads stop at 32 MB** (`413`), like attachments;
   `/api/transcribe` wrote whatever it was sent to disk.
 
@@ -409,6 +471,17 @@ All notable user-visible changes to eVi. Format loosely follows
   `protected_paths_remove` entry that removes nothing. `evi doctor`'s new
   `protected paths` check lists every pattern in force and warns when a
   built-in one was removed.
+- **Custom tools can tell which session called them.** A tool function that
+  declares a `ctx` parameter gets a `ToolContext`: the session id, working
+  folder and turn, a multi-user login's data folder, a cancel token, and for
+  a subagent the context it was started from. `ctx` stays out of the schema
+  the model sees, and a `ctx` the model sends is replaced. Import it with
+  `from evi.sdk import ToolContext`. A `Tool` built with a `binder` keeps its
+  state per session, `@tool(trust="untrusted")` labels a tool whose output an
+  outsider wrote, and `build_agent` takes `user_root`. The name `ctx` is now
+  reserved: a plugin or SDK tool whose model argument was called `ctx` gets
+  the context in its place, so rename that argument. See "Custom tools" in
+  docs/sdk.md.
 - **`evi doctor` checks CLI-agent backends and API keys.** For `claude_agent`,
   `codex`, `gemini`, `amp`, `qwen` and `copilot` it checks the CLI is
   installed (and names the install command), that amp is signed in and that
@@ -432,6 +505,13 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **File writes made at the same moment no longer share a checkpoint
+  number.** An agent runs up to four tools at once, and two writes could get
+  the same `seq` in `~/.evi/checkpoints/journal.jsonl`, so rewinding to it
+  undid both. Each write now gets its own. An entry made by an agent's tool
+  also records its session, turn and, in multi-user mode, login, plus the
+  top-level session and turn for a subagent's write. See "Checkpoints" in
+  docs/features/sessions.md.
 - **An apostrophe no longer breaks a user slash command.** `/fix don't panic`
   failed with "No closing quotation" (a server error in the web UI); an
   unbalanced quote in the arguments now falls back to splitting on spaces.

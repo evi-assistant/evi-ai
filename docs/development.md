@@ -98,7 +98,7 @@ evi/                core library — no IO at import time
   apps/              frontends (shipped in the wheel)
     cli/main.py      Typer CLI — every public command
     web/server.py    FastAPI + SSE + permission flow
-    web/static/      vanilla JS chat UI
+    web/static/      the UI: index.html (markup), app.js (code), vendor/ (pinned libraries)
 desktop/             Tauri 2 project (NOT a Python package)
 tests/               pytest — one file per module
 docs/                this folder
@@ -140,6 +140,81 @@ scripts/             install + dev helpers
        out = REGISTRY["the_tool"].call(json.dumps({"arg1": "x"}))
        assert ...
    ```
+
+## The web UI and its libraries
+
+The web UI, which the desktop app shows too, is plain files in
+`evi/apps/web/static/`:
+
+```
+index.html     markup and styles, plus the Content-Security-Policy <meta>
+app.js         all of the UI's code
+manifest.json  web app manifest
+vendor/        marked, DOMPurify, highlight.js, mermaid (pinned; never edit)
+```
+
+- `index.html` loads `app.js` last, as a classic script just before
+  `</body>` (no `defer`, `async` or `type="module"`). It runs after the
+  vendored libraries in `<head>` and once the markup above it is parsed, and
+  its top-level functions and constants are globals: the desktop menu bridge
+  (`window.eviUI.handleMenu`) and the tests call them by name.
+- `index.html` holds no code. The page's CSP is `script-src 'self'` with no
+  hashes, so the browser refuses an inline `<script>` or an `on*` attribute,
+  and `python scripts/vendor_ui_libs.py --check` fails on one. Put code in
+  `app.js` and attach listeners there.
+- Editing `app.js` never touches the CSP. The server sends the `<meta>`
+  policy as the page's header, with `frame-ancestors 'none'` added (see
+  [security.md](security.md#response-headers)).
+- Model output is rendered only through `renderMarkdownInto`, which runs
+  marked and then DOMPurify (`sanitizeMarkdown`); never put model text into
+  `innerHTML`. What the sanitizer keeps is in
+  [security.md](security.md#rendering-model-output).
+- A UI change ships a Playwright test in `tests/e2e/`;
+  `tests/e2e/test_ui_xss.py` holds the rendering-safety corpus.
+
+`scripts/vendor_ui_libs.py` maintains `vendor/` and the pins that load it:
+
+```bash
+python scripts/vendor_ui_libs.py --check      # offline: vendored files, SRI pins, page CSP
+python scripts/vendor_ui_libs.py --sync-html  # rewrite the SRI pins in index.html and app.js
+python scripts/vendor_ui_libs.py              # fetch the pinned releases, verify, write vendor/
+python scripts/vendor_ui_libs.py --repin      # after a version bump: fetch, write, print new pins
+```
+
+- `--check` verifies, offline, that:
+  - every file in `vendor/` matches its sha384 pin, and nothing unpinned is
+    there;
+  - the SRI pins match: the `integrity` of the `<script>` and `<link>` tags
+    in `index.html`, and the `src: '/static/vendor/…', integrity: '…'` pairs
+    in `app.js` (mermaid, which `loadMermaid()` loads on demand);
+  - each vendored script and stylesheet, and `app.js`, is loaded exactly
+    once;
+  - `index.html` has no inline code;
+  - the CSP `<meta>` is in the form the server reads and comes before every
+    `<script>` and `<link>`;
+  - its `script-src` is `'self'` alone, with no `frame-ancestors`.
+
+  `tests/test_ui_render_safety.py` runs the same check.
+- `--sync-html` only rewrites the SRI pins in `index.html` and `app.js`, and
+  drops any leftover hash from `script-src`. When they are in step it changes
+  nothing.
+- With no flag, the script downloads each library's exact npm tarball. It
+  checks the tarball against the pinned `dist.integrity` (sha512) before
+  reading anything, reads only the listed members (by exact name, regular
+  files only), and refuses to write a file that differs from its pin. Nothing
+  downloaded is executed or extracted by `tarfile`.
+- To move a library to a new release, set its `version` and `integrity` in
+  `PACKAGES`, using the registry's `dist.integrity` from
+  `https://registry.npmjs.org/<name>/<version>`. Then run `--repin`, paste
+  the printed `FILES` block over the one in the script, run `--sync-html`,
+  and run the UI tests.
+- `highlight/highlight.min.js` is derived: highlight.js's prebuilt common
+  bundle followed by every other prebuilt language file.
+- `vendor/.gitattributes` marks the files `binary`, so git never rewrites
+  their line endings (the pins are hashes of the bytes). `pyproject.toml`
+  ships them as package data (`static/vendor/*/*`).
+- Exit codes: 0 ok, 1 a check failed or a pin does not match, 2 usage or
+  network error.
 
 ## Adding a backend
 

@@ -89,6 +89,20 @@ OpenAI-shaped JSON schema, and registers a `Tool` dataclass in
 `REGISTRY`. The agent passes `[t.openai_schema() for t in tools]` to the
 LLM each turn.
 
+**The calling session.** For each call the agent builds a `ToolContext`
+(`evi/tools/base.py`): the agent itself, its session id, working folder and
+turn index, the multi-user login's data folder (`user_root`), a cancel token,
+and the `parent` context when the agent was built inside another agent's tool
+call. A tool function that declares a `ctx` parameter receives it; `ctx`
+stays out of the schema, so the model can't see or forge it. The memory tools
+use it to pick the session user's store, and `write_file`, `edit_file` and
+`apply_patch` to tag their checkpoint entries with the session and turn. A
+tool with a `binder` is bound once per session, at its first call, so the
+state it closes over belongs to that session ([sdk.md](sdk.md#per-session-state-binder)).
+The agent also sets the context in a ContextVar around each call. It flows
+down only: an `Agent` built inside a tool call (a subagent) takes its
+`user_root` from it and keeps it as its `parent`.
+
 Tool *categories* govern:
 - Whether the tool is enabled (`tools.<category>` in `config.toml`)
 - Whether tool calls auto-approve (`auto.auto_approve` list)
@@ -175,6 +189,8 @@ images/             ComfyUI output cache
 models/             huggingface_hub downloads
 screenshots/        computer-use screenshots
 transcripts/<day>/<session>.jsonl   session logs feeding the dream engine
+users/<name>/       multi-user web: a login's transcripts/ and memory/
+checkpoints/        journal.jsonl + blobs/: file writes the agent can undo
 logs/dreams/        per-dream audit logs
 logs/scheduled/     per-task run logs
 ```
@@ -217,6 +233,10 @@ still running when eVi exits are killed.
 - Local (default): spawns `py -3.13 -m uvicorn evi.apps.web.server:app` as a
   child, polls `/api/health`, opens webview at the local port.
 - Remote (`EVI_REMOTE_URL` set): skips the spawn, just navigates.
+
+In both, the webview gets IPC for the UI's nine desktop commands from the
+server's origin only, has no `window.__TAURI__`, and a navigation guard keeps
+it on that origin ([security.md](security.md#shell-isolation)).
 
 ## Testing
 

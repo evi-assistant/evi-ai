@@ -35,12 +35,20 @@ In the web UI, a session id arriving via `/?session=<id>` is revived from disk o
 
 ### Checkpoints
 
-Every `write_file` operation records the file's **prior** state first, under:
+Every `write_file`, `edit_file` and `apply_patch` call (and `evi edit --write`) records the file's **prior** state first, under:
 
 ```
-~/.evi/checkpoints/journal.jsonl     # one entry per write: {seq, ts, path, op, blob?, size?}
+~/.evi/checkpoints/journal.jsonl     # one entry per write: {seq, ts, path, op, blob?, size?, session?, turn?, user?, root_session?, root_turn?}
 ~/.evi/checkpoints/blobs/<sha256>    # prior contents, content-addressed (dedup'd)
 ```
+
+A write made by an agent's tool also records who made it:
+
+- `session` and `turn`: the agent's session id and its user-turn number (1 for the first message; a revived or resumed session counts on from its history, and `/reset` keeps counting).
+- `user`: in multi-user web mode, the login's folder name under `~/.evi/users/`.
+- `root_session` and `root_turn`: only for an agent built inside another agent's tool call (a subagent), the top-level session and turn it worked for. Its own `session` is the subagent's.
+
+Each write gets its own `seq`, even when tools run in parallel.
 
 The `op` is one of:
 

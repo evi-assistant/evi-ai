@@ -17,7 +17,7 @@ You'd use the web UI when you want a richer chat surface than the terminal (tabs
 
 ### The web server
 
-`evi web` (or `python -m uvicorn evi.apps.web.server:app`) serves a single-page app from `evi/apps/web/static/index.html`. The browser POSTs to `/api/chat` with `{session_id, message}` and reads back an SSE stream of JSON event lines. Each `session_id` maps to one `WebSession` holding an `Agent`; sessions are revived from their on-disk transcript when first requested, so closing and reopening the app restores history.
+`evi web` (or `python -m uvicorn evi.apps.web.server:app`) serves a single-page app from `evi/apps/web/static/`: `index.html` is the markup and styles, and `app.js` is all of the UI's code. Replies render as markdown with code highlighting and mermaid diagrams. The libraries for these ship with eVi under `static/vendor/`, so rendering works offline, and every reply goes through a sanitizer first, so model output can't run script or make the page load anything (see [Security → The web UI](../security.md#the-web-ui)). The browser POSTs to `/api/chat` with `{session_id, message}` and reads back an SSE stream of JSON event lines. Each `session_id` maps to one `WebSession` holding an `Agent`; sessions are revived from their on-disk transcript when first requested, so closing and reopening the app restores history.
 
 Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`, `/compact`, `/reload`, plus user commands from `~/.evi/commands/`) are dispatched **server-side** — the browser just types and reads; CLI and web behave identically.
 
@@ -33,7 +33,9 @@ Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`
 
 Menu/tray actions other than devtools and quit are routed into the page via `window.eviUI.handleMenu('<id>')` (e.g. `new_chat`, `settings`, `check_updates`, `open_logs`).
 
-**Remote (thin-client) mode:** set `EVI_REMOTE_URL` to point the desktop window at an already-running eVi elsewhere (e.g. a GPU box). The app skips the Python spawn, waits up to 15s for that URL's `/api/health`, and navigates to it. The updater is disabled in this mode (there's no local bundle to replace).
+The window is locked to the eVi server. The page has no Tauri JavaScript API (`window.__TAURI__` is undefined): it reaches the shell only through Tauri's IPC, only for the app's nine desktop commands (updates, Open Logs, opening a link), and only from the server's own origin. The window never navigates anywhere else, so an http(s) link in a reply opens in your system browser instead. Details: [Security → Shell isolation](../security.md#shell-isolation).
+
+**Remote (thin-client) mode:** set `EVI_REMOTE_URL` to point the desktop window at an already-running eVi elsewhere (e.g. a GPU box). The app skips the Python spawn, waits up to 15s for that URL's `/api/health`, and navigates to it. The updater is disabled in this mode (there's no local bundle to replace). Use the address the server finally answers on, because the window won't follow a redirect to another origin (an `http://` to `https://` upgrade, a sign-in proxy on another host). Against an eVi server older than this release the chat works, but the in-page desktop actions (update prompts, Open Logs, links in the system browser) don't.
 
 ### Settings (read/write config)
 
@@ -70,7 +72,7 @@ Email OAuth is deliberately not probed: there is no token store to check.
 
 A FastAPI middleware guards every `/api/*` route. Token auth applies when `[web] auth_token` (or a launch token, `EVI_WEB_AUTH_TOKEN`) is set **or** `[web] multi_user = true` with users present. Without a token the server answers only this machine (loopback clients), and `evi web` refuses a non-loopback `--host` — see [Security](../security.md). When active, a request must carry `Authorization: Bearer <token>` **or** `?token=<token>` (the query form covers `<img>` src and SSE streams that can't set headers). A few paths self-bootstrap and stay public: `/`, `/static/*`, `/images/*`, `/api/health`, `/api/auth/check`, `/api/backend/status`, and routine webhooks (`/api/routine/*`, which authenticate via their own unguessable path token).
 
-In **multi-user** mode, `~/.evi/users.json` holds `{name, token}` entries. Any user token authenticates and the request is scoped to that user; the owner's `auth_token` still works and resolves to the user `"owner"`. Each user gets an **isolated workspace** — sessions, transcripts (`~/.evi/users/<name>/transcripts`), and memory (`~/.evi/users/<name>/memory`) — that other users can't see. Skills, plugins, and config stay shared (capabilities, not personal data). Drop a user from the file to revoke access.
+In **multi-user** mode, `~/.evi/users.json` holds `{name, token}` entries. Any user token authenticates and the request is scoped to that user; the owner's `auth_token` still works and resolves to the user `"owner"`. Each user gets an **isolated workspace** — sessions, transcripts (`~/.evi/users/<name>/transcripts`), and memory (`~/.evi/users/<name>/memory`, used by both the system prompt's memory index and the `remember` / `recall` / `forget` / `list_memories` / `recall_by_tag` tools) — that other users can't see. Skills, plugins, and config stay shared (capabilities, not personal data). Drop a user from the file to revoke access. Two logins whose names map to the same folder (`bob smith` and `bob_smith`; `Alice` and `alice` on Windows and macOS) can't sign in until one is renamed; see [Security → Multi-user mode](../security.md#multi-user-mode).
 
 ### Deep links
 
@@ -146,7 +148,7 @@ Note the asymmetry: you *launch* the server with `evi web`, but its auth/helpers
 
 ### Web UI
 
-- **Sign in:** if auth is on, a login overlay asks for the token. It's stored in `localStorage` and attached to every same-origin request; a 401 clears it and re-prompts.
+- **Sign in:** if auth is on, a login overlay asks for the token. It's stored in `localStorage` and attached to every same-origin request; a 401 clears it and re-prompts. A multi-user login that is refused because its data folder collides with another login's shows that reason in the overlay.
 - **Settings:** click the ⚙ button or press **Ctrl+,**. Edit any config section; secret fields show `********` and are left untouched on save unless you type a new value.
 - **Open a session/workflow:** visit `/?session=<id>` to open or resume a tab, or `/?workflow=<name>` to open the dispatch panel.
 - **Keyboard:** Enter sends, Shift+Enter newline, Ctrl+N new chat, Ctrl+I switch model, Ctrl+F find, Esc closes a dialog.
@@ -157,6 +159,7 @@ Note the asymmetry: you *launch* the server with `evi web`, but its auth/helpers
 
 - **Menu bar:** File (New Chat, Open File, Export Chat, Undo File Change, Settings, Exit), Edit, View (zoom, toggle theme, devtools), Help (Documentation, Keyboard Shortcuts, Check for Updates, Run Diagnostics, Open Logs Folder, Get Support, About).
 - **Tray:** left-click shows the window; menu has Show, New Chat, Check for Updates, Quit.
+- **Links in replies** open in your system browser; the window itself stays on eVi.
 - **Check for Updates:** Help → Check for Updates (or the tray item) checks immediately and, if an update exists, asks before it downloads, installs and restarts.
 
 ## Examples
@@ -252,15 +255,18 @@ Launch the desktop app: it skips the Python spawn, waits for `http://gpu-box:847
 - **Updater is desktop-only and signature-pinned.** It will not install an unsigned or wrongly-signed bundle. The CLI/web package updates the ordinary way: `pip install -U evi-assistant` (or `evi update`). The update check is skipped entirely in `EVI_REMOTE_URL` mode and when `EVI_AUTO_UPDATE=0`.
 - **Installers are not OS-code-signed yet.** The update signature (minisign) protects in-app updates; a first download can still trigger SmartScreen or Gatekeeper warnings. See [code-signing.md](../code-signing.md).
 - **Update install kills the sidecar first.** On Windows the installer would otherwise fail with "Error opening file for writing" because the running `evi-server` locks its onedir DLLs. This is automatic; just let it restart.
+- **Replies keep only safe markdown.** Raw HTML in a reply loses scripts, inline styles, ids, forms and buttons; an image from another site shows as an `[image: …]` link instead of loading; a link back into eVi (other than to a generated image) loses its target; and a mermaid diagram that tries to load something is shown as its source. The page can't be framed by another site. See [Security → The web UI](../security.md#the-web-ui).
 - **Deep links fail safe.** Any malformed or unknown `evi://` route resolves to `/` rather than erroring — so a bad link opens the home view instead of breaking the shell.
 - **Stable-port caveat.** A second desktop instance can't take port 8473 and falls back to a random port, which means that second launch starts with a fresh webview origin (empty `localStorage` — no remembered tabs).
 
 ## Relevant source files
 
 - `evi/apps/web/server.py` — FastAPI app, auth middleware, `/api/config`, the status probes behind the health banners, multi-user scoping, session/SSE endpoints.
-- `evi/apps/web/static/index.html` — single-page UI: login overlay, settings panel (groups, explainers, banners), `?session=`/`?workflow=` handling, desktop menu bridge, update prompts.
+- `evi/apps/web/static/index.html` — the page's markup and styles, and its Content-Security-Policy `<meta>`.
+- `evi/apps/web/static/app.js` — the UI's code: login overlay, markdown rendering and its sanitizer, settings panel (groups, explainers, banners), `?session=`/`?workflow=` handling, desktop menu bridge, update prompts.
+- `evi/apps/web/static/vendor/` and `scripts/vendor_ui_libs.py` — the pinned markdown, sanitizer, highlighting and diagram libraries, and the script that maintains them ([development.md](../development.md#the-web-ui-and-its-libraries)).
 - `evi/deeplinks.py` — `build_link`, `parse_link`, `to_web_path` for the `evi://` scheme.
-- `desktop/src-tauri/src/main.rs` — Tauri shell: port pick, server/sidecar spawn, menu/tray, deep-link routing, signed updater.
+- `desktop/src-tauri/src/main.rs` — Tauri shell: port pick, server/sidecar spawn, the page's IPC capability and navigation guard, menu/tray, deep-link routing, signed updater.
 - `desktop/src-tauri/src/sidecar_update.rs` — the core-only (sidecar) update channel.
 - `evi/apps/cli/main.py` — `evi web`, `evi web-config token/users`, `evi link` commands.
 - `evi/config.py` — `WebSettings` (`auth_token`, `multi_user`) and other config sections.

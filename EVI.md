@@ -75,10 +75,19 @@ Windows PowerShell 5.1). Never mass-convert files. When `evi doctor --dev`
 reports a mismatch, run the command it prints (a re-checkout, or
 `git add --renormalize .` when the index is wrong).
 
+## Web UI
+
+UI code goes in `evi/apps/web/static/app.js`. `index.html` is markup and
+styles only: its CSP (`script-src 'self'`) refuses an inline `<script>` or
+`on*` attribute. Render model text only through `renderMarkdownInto`, never
+`innerHTML`. Never edit `static/vendor/` (pinned libraries); after touching
+`index.html` or a pin, run `python scripts/vendor_ui_libs.py --check`. See
+docs/development.md, "The web UI and its libraries".
+
 ## Map
 
 `evi/llm/agent.py` (loop), `evi/tools/`, `evi/apps/cli/main.py` (CLI),
-`evi/apps/web/server.py` + `static/index.html` (UI and `/api`), `desktop/`
+`evi/apps/web/server.py` (`/api`) + `static/app.js` (UI), `desktop/`
 (Tauri), `docs/features/<area>.md` (read first). Desktop build:
 `scripts/build-desktop.{ps1,sh}`; the sidecar freeze uses `.venv-build`
 (never add torch there).

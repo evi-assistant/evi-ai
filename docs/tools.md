@@ -7,7 +7,11 @@ invoke it *without prompting* depends on `auto.auto_approve` (see
 
 Add your own tool by decorating a function with `@tool(...)` and importing
 the module from `evi/apps/cli/main.py` + `evi/apps/web/server.py` — see
-[development.md](development.md#adding-a-tool).
+[development.md](development.md#adding-a-tool). A tool that needs to know
+which session called it (its id, working folder, turn, or a multi-user
+login's data folder) declares a `ctx` parameter and receives a `ToolContext`;
+`ctx` never appears in the schema the model sees. See
+[sdk.md](sdk.md#the-calling-session-ctx).
 
 ## `fs` — filesystem (default on)
 
@@ -37,10 +41,17 @@ wrap with a Docker hook or disable the category.
 
 | Tool              | What it does                                                |
 |-------------------|-------------------------------------------------------------|
-| `remember`        | Save markdown under `~/.evi/memory/<name>.md`. Overwrites.  |
+| `remember`        | Save markdown as `<name>.md` in the session's memory store, with optional `tags`. Overwrites. |
 | `recall`          | Return the full body of a stored memory.                    |
 | `forget`          | **Soft delete** — move the file to `.attic/`. Recoverable.  |
-| `list_memories`   | JSON of `[{name, summary}, …]` — same data agents see in the system prompt. |
+| `list_memories`   | JSON of `[{name, summary, tags}, …]` — same data agents see in the system prompt. |
+| `recall_by_tag`   | JSON of the memories carrying a tag.                        |
+
+The session's memory store is the one its system prompt's index lists:
+`~/.evi/memory/` by default, the agent's own `memory_root` for an SDK agent
+built with one, and `~/.evi/users/<name>/memory/` for a multi-user web
+login (and the subagents its chats start). A call made outside an agent
+(`evi mcp serve`) uses `~/.evi/memory/`.
 
 The memory index is regenerated on every write/delete and appears in the
 agent's system prompt automatically. The dreaming engine relies on

@@ -3,8 +3,9 @@
 `evi web` and the desktop app serve the same FastAPI app. Behind it sit tools
 that read and write files and run commands, so every request is checked before
 it reaches a handler. This page is the reference for those checks: who gets in,
-what a browser has to send, how the desktop app's LAN token works, and what
-changed for existing setups.
+what a browser has to send, how the UI keeps model output inert, how the
+desktop app's LAN token and window are locked down, and what changed for
+existing setups.
 
 ## The request matrix
 
@@ -14,6 +15,7 @@ changed for existing setups.
 | From this machine, `Host` names another site (DNS rebinding) | **403** | Needs the token |
 | Browser page on another site (`Origin` / `Sec-Fetch-Site` say so) | **403** for anything that changes state | **403** for anything that changes state |
 | Browser, state-changing `/api` call without `X-Evi-Client` | **403** | Allowed when it carries the token |
+| `GET` / `HEAD /api/backend/pull` (starts a model download) without `X-Evi-Client`, from any client | **403** | Allowed when it carries the token |
 | Non-browser client on this machine (CLI, VS Code extension, curl, peers on loopback) | Allowed | Needs the token |
 
 "No access token" means `[web] auth_token` is empty, no launch token was
@@ -61,11 +63,22 @@ or the access token. A `mode: 'no-cors'` fetch can't carry either, so it is
 always refused. Routine webhooks (`/api/routine/<token>`) are exempt: their
 path token is the credential.
 
-The side-effecting GET, `/api/backend/pull`, can't require the header,
-because the setup wizard opens it as an `EventSource`. Instead, one that the
+The side-effecting GET, `/api/backend/pull`, is stricter. Without the access
+token, `GET` and `HEAD` of it need an `X-Evi-Client` header (any value) from
+**every** caller: a browser whatever its `Sec-Fetch-Site` (`same-origin` and
+`none` included), and curl or a script too. Without the header the answer is
+403, and its detail names the header. A GET is what an `<img>`, `<link>`,
+`<iframe>` or a clicked link sends, and none of them can add a header, so
+markup on another site, or in eVi's own page, can't start a download. eVi's
+UI reads the progress stream with `fetch`, which sends it. One that the
 browser labels `Sec-Fetch-Site: cross-site` or `same-site` (another site, or
-another port on this machine) is refused, even with
-`EVI_ALLOW_CROSS_ORIGIN=1`.
+another port on this machine) is refused even with the header, and even with
+`EVI_ALLOW_CROSS_ORIGIN=1`. With the token (`Authorization` header or
+`?token=`) no `X-Evi-Client` is needed. From a script:
+
+```sh
+curl -N -H 'X-Evi-Client: 1' 'http://127.0.0.1:8473/api/backend/pull?model=<name>'
+```
 
 ### Session ids
 
@@ -161,6 +174,108 @@ only. The image's `HEALTHCHECK` calls `/api/health` over the container's
 loopback, which works with any token setup (`/api/health` is public). Sign in
 to the web UI with the token.
 
+## The web UI
+
+### Rendering model output
+
+A reply is untrusted text. A web page the agent fetched, a file in a
+repository, an MCP server's output or another session's message can get the
+model to write any HTML. The UI (`evi/apps/web/static/app.js`) renders it
+like this:
+
+- Markdown goes through marked, then DOMPurify with a profile for chat, and
+  the result is added to the page as DOM nodes, never as an HTML string. If
+  DOMPurify didn't load, the reply is shown as escaped text, never as
+  unsanitized HTML.
+- Nothing that runs or reaches the UI survives: no scripts, event handlers,
+  SVG, frames, objects, forms, buttons or other form controls, media
+  elements, `<style>` or `style=`; no `id`, `name` or `data-*` attributes; and
+  no attribute that points at an element by id (`for`, `form`, `list`,
+  `headers`, `aria-controls`, `aria-labelledby` and the other ARIA
+  references). Rendered markdown has no ids, so those could only point at the
+  UI's own controls: a `<label for="reset">` would make a click on the reply
+  press Reset. Classes are kept only when they name a code language
+  (`language-*`).
+- **Images** load only from inline `data:image/…` or from eVi's own generated
+  images, `/images/<file name>`. The name must be bare (no `/`, `\`, `%`,
+  `?`, `#` or leading dot), and it is checked again as the browser resolves
+  it, so `/images/../api/…` doesn't pass. Any other image becomes the text
+  `[image: <alt>]` (a link when its address is http(s)). A reply therefore
+  can't make the page fetch a URL on its own, which could leak the
+  conversation in its query or set off one of eVi's own endpoints.
+- **Links**: an http(s) link to another site opens in a new tab with
+  `rel="noopener noreferrer"`. `mailto:`, `#fragment` and `/images/<name>`
+  links are kept. Any other link loses its target, including a relative path
+  and an absolute link back to eVi's own address.
+- Inputs survive only as disabled checkboxes, for task lists.
+
+**Diagrams.** A `mermaid` code block is the model's code too, and laying it
+out could make the page fetch a URL the diagram chose. So mermaid loads only
+when a finished reply has a diagram, and it runs in a hidden frame of its own
+whose policy lets nothing load (`default-src 'none'; script-src 'self';
+style-src 'unsafe-inline'; img-src data:`). A diagram that tries to load
+anything there (an image shape, a `url()` in a `classDef` or `style`, a C4
+colour) is not drawn, and its source stays visible. Mermaid runs with
+`securityLevel: 'strict'`, and a diagram's `%%{init}%%` or front matter can't
+set `themeCSS`, `themeVariables`, `fontFamily`, `altFontFamily`,
+`dompurifyConfig` or `arrowMarkerAbsolute` (`theme`, `look` and flowchart
+options still work). The SVG that comes back is sanitized again and refused
+if it carries a `url()` other than an in-document `#ref`, an `@import` or
+`@font-face`, or a CSS rule not scoped to its own diagram.
+
+**Libraries.** marked 14.1.4, DOMPurify 3.4.16, highlight.js 11.12.0 and
+mermaid 11.17.2 ship inside eVi under `static/vendor/`, and the page loads
+each with a sha384 `integrity` pin. The UI renders offline, nothing loads
+from a CDN, and the browser refuses a vendored file that changed. See
+[development.md](development.md#the-web-ui-and-its-libraries).
+
+### The page's Content-Security-Policy
+
+The policy has one source: the
+`<meta http-equiv="Content-Security-Policy">` tag in `static/index.html`.
+Today it is:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'self'
+```
+
+Script runs only from files eVi serves (`app.js` and the vendored libraries):
+no inline script, inline handler, `eval` or other origin. Markup that got
+past the sanitizer still can't run script, load anything from another site,
+or post a form elsewhere. `ipc:` and `http://ipc.localhost` are the desktop
+shell's IPC transport.
+
+### Response headers
+
+- Every response carries `X-Content-Type-Options: nosniff`. The server pins
+  `.js` to `text/javascript`, `.css` to `text/css`, `.html` to `text/html` and
+  `.json` to `application/json`, so a Windows registry mapping (`.js` as
+  `text/plain`) can't block the UI.
+- `GET` and `HEAD` of `/` and `/static/index.html` carry
+  `Content-Security-Policy`, the meta policy above plus
+  `; frame-ancestors 'none'`, and `X-Frame-Options: DENY`. The server re-reads
+  the meta whenever `index.html` changes (`page_csp` in `server.py`), and
+  ignores a `frame-ancestors` written there. If it can't read a meta policy,
+  the page gets `default-src 'none'; frame-ancestors 'none'` (a blank page,
+  never an unprotected one) and an error is logged.
+- Any other HTML page (FastAPI's `/docs` and `/redoc`) gets
+  `Content-Security-Policy: frame-ancestors 'none'`, unless it sets a policy
+  of its own, and `X-Frame-Options: DENY`.
+- `/images/<name>` and `/uploads/<session>/<name>` get
+  `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`,
+  so an HTML or SVG file opened directly runs nothing, in an opaque origin.
+
+### Framing
+
+`frame-ancestors 'none'` and `X-Frame-Options: DENY` stop the browser from
+loading eVi inside another page's frame, where a click meant for that page
+could land on Approve or Settings (clickjacking). A `<meta>` policy can't
+carry `frame-ancestors`, which is why it is only in the header. A copy
+served without these headers (an older server, a proxy that strips them)
+falls back on `app.js`: when `window.top !== window.self` it blanks the page
+and stops, before it makes any `/api` call. That applies to every frame,
+eVi's own origin included.
+
 ## The desktop app
 
 ### LAN access (`[federation] bind_lan`)
@@ -205,6 +320,43 @@ keeps for a peer at the same address (scheme, host and port), and without
 either the UI shows its sign-in prompt. The app never sends this machine's own
 `[web] auth_token` to another server. The token is injected only for the
 remote server's origin.
+
+Set `EVI_REMOTE_URL` to the address the server finally answers on. The
+window stays on that origin (see [Shell isolation](#shell-isolation)), so it
+doesn't follow a redirect to another one, such as an `http://` to `https://`
+upgrade or a sign-in proxy (Cloudflare Access, oauth2-proxy) on another host.
+Pointed at an eVi server older than this release, the chat works, but the
+desktop actions in the page (update prompts, Open Logs, links in the system
+browser) don't: that server's page looks for `window.__TAURI__`, which the
+app no longer provides.
+
+### Shell isolation
+
+The window shows model output and holds the access token, so the shell limits
+what the page can reach:
+
+- **No Tauri JavaScript API.** `withGlobalTauri` is off, so
+  `window.__TAURI__` is undefined. The page calls the shell only through
+  Tauri's IPC primitive, and only for nine commands: the update check,
+  install, restart, status, dismiss and staged-update commands, Open Logs,
+  and opening an external link.
+- **IPC for the server's origin only.** At launch the app grants those
+  commands to exactly the eVi server's origin: `http://127.0.0.1:<port>` and
+  `http://localhost:<port>` for its own server, or the `EVI_REMOTE_URL`
+  origin. Tauri's built-in commands aren't granted, and the app's bundled
+  loading page gets no IPC. Earlier versions granted the commands to every
+  `localhost` and `127.0.0.1` port, so any local web page the window reached
+  could call them.
+- **Navigation guard.** The window may show only the eVi server (the same
+  origins), the app's bundled loading page (in a development build, the dev
+  server that serves it), and `blob:` URLs on the server's origin (Export
+  Chat). Any other navigation, whether a link, a redirect or a
+  script, is refused, and the shell writes
+  `evi: refused to navigate the window to <origin>` to stderr.
+- **Links.** An http(s) link in a reply opens in the system browser
+  (`open_external_cmd`, which accepts only http(s) URLs with no credentials
+  in them), never in the window.
+- The bundled loading page has a CSP of its own (`tauri.conf.json`).
 
 ### Shell and core versions (`SHELL_ABI` 2)
 
@@ -286,14 +438,45 @@ use them, and a users.json login gets 403:
   run on the host's config and memory the same way. Peers send the owner's
   token.
 
+Each login's data lives in `users/<folder>` under the eVi home. The folder
+name is the login's name with every character outside `A-Z`, `a-z`, `0-9`,
+`_`, `.` and `-` replaced by `_`, and leading and trailing `.`, `_` and `-`
+stripped (`user` when nothing is left). The memory tools (`remember`,
+`recall`, `forget`, `list_memories`, `recall_by_tag`) work in the login's
+`memory` folder, the same notes its system prompt lists, and so do the
+subagents its chats start. Notes saved before this release
+through those tools went to the shared `~/.evi/memory` and are not moved.
+
 The owner's own sessions, transcripts and memory live under the name `owner`.
 A users.json login whose name would map there (`owner` in any case, or a name
 like `owner.` or `-owner-` whose folder name is `owner`) can't sign in at all,
-so it never sees the owner's sessions.
+so it never sees the owner's sessions. The host-level runs above use the
+host's `~/.evi/memory`, not `users/owner/memory`.
+
+Two or more logins with different names whose folders match, ignoring case,
+would read each other's chats and memory, so **none of them can sign in**
+until all but one are renamed or removed. For example, `bob smith`,
+`bob_smith` and `bob/smith` are all `users/bob_smith`; `Alice` and `alice`
+are one folder on Windows and macOS; `.` and `user` are both `users/user`.
+Each such login gets 403 with:
+
+> The login '<name>' can't sign in: another login in users.json maps to the
+> same data folder (users/<folder>), so they would share chats and memory.
+> Ask the owner of this eVi to rename one of them.
+
+The other login isn't named. `/api/auth/check` answers
+`{"ok": false, "required": true, "error": "<that text>"}`, and the web
+sign-in overlay shows it, for a token typed in and for one already stored.
+The server logs one warning per group, once per process, naming every login
+in it: `users.json: the logins … all map to the data folder users/<folder>;
+none of them can sign in until all but one are renamed or removed`. One name
+listed twice (two tokens) is one login, not a collision, and logins with
+different folders (`bob-smith` and `bob_smith`) are unaffected.
 
 `evi doctor` warns when multi-user logins exist but no owner token is set,
 because then nobody can reach these routes. It also flags a login that can't
-sign in because of its name.
+sign in because of its name. It doesn't report colliding logins yet: look for
+the warning in the server log.
 
 ## Uploads
 
@@ -317,10 +500,23 @@ stop at 32 MB with a 413. Nothing is left on disk.
   the remote server; set `EVI_REMOTE_TOKEN` or a `peers.json` entry.
 - **Browser scripts** that call the API must send `X-Evi-Client` or the
   token.
+- **`GET /api/backend/pull`** needs `X-Evi-Client` (or the token) from every
+  caller: add `-H 'X-Evi-Client: 1'` to a curl or script that starts a model
+  download without a token.
+- **The web UI can't be framed** by another page, and its code is
+  `static/app.js` under a `script-src 'self'` policy with no inline script.
+  Replies keep less raw HTML: no inline styles, ids, forms or buttons, and
+  images from other sites show as `[image: …]` links.
+- **Desktop thin-client mode** needs `EVI_REMOTE_URL` to be the server's final
+  address, and a server older than this release loses the in-page desktop
+  actions.
 - **One turn per session**, a **300-second deadline** on permission prompts,
   and a channel `run: true` that denies tools that would ask.
 - **Multi-user logins** lose settings, checkpoints and host-level runs, which
-  are owner-only now, and a login named `owner` can't sign in.
+  are owner-only now, and a login named `owner` can't sign in. Logins whose
+  data folders collide can't sign in either, and each login's memory tools
+  now use its own folder, so notes they saved in the shared `~/.evi/memory`
+  stay there.
 
 ## Checking your setup
 
