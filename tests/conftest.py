@@ -7,6 +7,16 @@ the e2e tests are still excluded by default via the `e2e` marker + the
 `-m "not e2e"` addopts; run them explicitly with `pytest tests/e2e -m e2e`.
 """
 
+import os as _os
+import tempfile as _tempfile
+
+# Every test process gets a throwaway eVi home BEFORE evi is first imported:
+# evi.config.HOME (and every path derived from it at import) honours EVI_HOME,
+# so a test that forgets to patch HOME writes here, never into the developer's
+# real ~/.evi (a test once rewrote the real config.toml, and a probe once left
+# a memory there that every later prompt would have carried).
+_os.environ["EVI_HOME"] = _tempfile.mkdtemp(prefix="evi-test-home-")
+
 collect_ignore_glob: list[str] = []
 try:
     import playwright  # noqa: F401
