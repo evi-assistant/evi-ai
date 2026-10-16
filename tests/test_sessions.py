@@ -73,9 +73,10 @@ def test_find_session(tmp_path: Path) -> None:
 
 
 def test_history_from_transcript_preserves_roles(tmp_path: Path) -> None:
+    tcs = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
     f = _write_session(tmp_path, "2026-05-22", "abc", [
         {"role": "user", "content": "hi", "ts": 0},
-        {"role": "assistant", "content": "hello!", "ts": 1},
+        {"role": "assistant", "content": "hello!", "tool_calls": tcs, "ts": 1},
         {"role": "tool", "content": "ran", "tool_name": "read_file", "ts": 2},
         {"role": "assistant", "content": "done", "ts": 3},
         {"role": "system", "content": "boring", "ts": 4},  # skipped
@@ -84,7 +85,8 @@ def test_history_from_transcript_preserves_roles(tmp_path: Path) -> None:
     assert [m["role"] for m in history] == ["user", "assistant", "tool", "assistant"]
     tool_msg = next(m for m in history if m["role"] == "tool")
     assert tool_msg["name"] == "read_file"
-    assert tool_msg["tool_call_id"].startswith("resumed_")
+    # No id was logged (an older transcript): paired with its call by position.
+    assert tool_msg["tool_call_id"] == "c1"
 
 
 def test_history_preserves_tool_calls(tmp_path: Path) -> None:

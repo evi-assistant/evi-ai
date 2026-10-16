@@ -46,6 +46,12 @@ def model_supports_reasoning(model_id: str) -> bool:
 # Values that mean "don't think at all".
 _OFF = ("off", "none", "false", "0", "disabled")
 
+# eVi effort levels with no `reasoning_effort` value of the same name: OpenAI
+# takes minimal/low/medium/high, and Ollama and the harmony templates
+# low/medium/high, so "max" (`/effort max`, `/effort ultracode`) asks for the
+# highest level they share rather than a 400.
+_EFFORT_ALIASES = {"max": "high"}
+
 
 def reasoning_extra_body(effort: str, model_id: str) -> dict:
     """Request-body fragment for the configured ``reasoning_effort``.
@@ -58,13 +64,16 @@ def reasoning_extra_body(effort: str, model_id: str) -> dict:
       other backends ignore the unknown key). Mirrors Claude Code's
       "turn extended thinking off".
     - "medium" (default)  → ``{}`` (let the model use its own default)
-    - low/high/max/…      → ``{"reasoning_effort": <value>}``
+    - low/high/…          → ``{"reasoning_effort": <value>}``
+    - "max"               → ``{"reasoning_effort": "high"}`` (the highest level
+      backends accept; see _EFFORT_ALIASES)
     """
     effort = (effort or "").strip().lower()
     if not model_supports_reasoning(model_id):
         return {}
     if effort in _OFF:
         return {"think": False}
+    effort = _EFFORT_ALIASES.get(effort, effort)
     if effort and effort != "medium":
         return {"reasoning_effort": effort}
     return {}

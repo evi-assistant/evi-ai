@@ -47,3 +47,20 @@ def test_aggregates(tmp_path):
     assert set(data["busiest_days"]) == {"2026-06-01", "2026-06-02"}
     assert data["approx_tokens"] >= 0
     assert data["first_ts"] == 1.0
+
+
+def test_meta_records_are_not_messages(tmp_path):
+    """A transcript line with a `type` other than "message" is a meta record
+    (a compaction, or one a later version adds), not part of the conversation."""
+    root = tmp_path / "transcripts"
+    _write_session(root, "2026-06-01", "s1", [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"type": "compaction", "role": "system", "content": "", "summary": "they said hi"},
+        {"type": "later_meta", "role": "user", "content": "x" * 400},
+        {"type": "message", "role": "user", "content": "more"},
+    ])
+    data = stats.compute_stats(root=root)
+    assert data["messages"] == 3
+    assert data["roles"] == {"user": 2, "assistant": 1}
+    assert data["approx_tokens"] == len("hihellomore") // 4

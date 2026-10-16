@@ -113,3 +113,41 @@ def test_literal_braces_need_escaping():
     wf = _wf([WStep(id="a", prompt="json {{}}")])
     out = workflows.run_workflow(wf, run_step=_echo_step)
     assert out["a"] == "a:json {}"
+
+
+# ---- step results ----------------------------------------------------------
+
+
+def _result(text="", error=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(text=text, error=error)
+
+
+def test_step_output_fails_a_run_that_ended_in_an_error():
+    assert workflows.step_output(_result("the answer")) == "the answer"
+    assert workflows.step_output(_result("", "LLM request failed: boom")) == (
+        "ERROR: LLM request failed: boom"
+    )
+    # Partial text before the error is not the step's answer.
+    out = workflows.step_output(_result("half an ans", "LLM stream failed mid-reply: x"))
+    assert out.startswith("ERROR: LLM stream failed mid-reply: x\n")
+    assert out.endswith("(incomplete reply before the error)\nhalf an ans")
+    assert workflows.step_output(_result()) == ""
+
+
+def test_run_workflow_reports_a_step_whose_run_failed():
+    wf = _wf([WStep(id="a", prompt="go"), WStep(id="b", prompt="after {a}"),
+              WStep(id="c", prompt="x", parallel=True), WStep(id="d", prompt="y", parallel=True)])
+    results = {
+        "a": _result("partial", "LLM stream failed mid-reply: reset"),
+        "c": _result("fine"),
+        "d": _result("", "LLM request failed: 500"),
+    }
+    out = workflows.run_workflow(
+        wf, run_step=lambda prompt, step: results.get(step.id) or f"{step.id}:{prompt}"
+    )
+    assert out["a"].startswith("ERROR: LLM stream failed mid-reply: reset")
+    assert out["b"] == f"b:after {out['a']}"  # a plain string still passes through
+    assert out["c"] == "fine"
+    assert workflows.failed_steps(out) == ["a", "d"]

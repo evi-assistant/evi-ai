@@ -182,20 +182,58 @@ def fan_out(fn: Callable[[Any], Any], items: list, max_workers: int = 8) -> list
     return results
 
 
+# How a failed step's output starts (step_output), so the steps after it, and
+# whoever reads the run, see a failure rather than an answer.
+STEP_ERROR = "ERROR: "
+
+
+def step_output(result: Any) -> str:
+    """The output a step hands on, from its headless run's `result`
+    (evi.headless.HeadlessResult: `.text`, `.error`).
+
+    A run that ended in an Error failed, even when part of a reply streamed
+    first (a stream cut mid-reply keeps its partial text): the output is then
+    ``ERROR: <error>``, with any partial text after it under a label saying it
+    is incomplete, never the partial text passed off as the step's answer.
+    Otherwise it is the reply text.
+    """
+    text = str(getattr(result, "text", "") or "").strip()
+    error = getattr(result, "error", None)
+    if not error:
+        return text
+    out = f"{STEP_ERROR}{error}"
+    if text:
+        out += f"\n\n(incomplete reply before the error)\n{text}"
+    return out
+
+
+def failed_steps(outputs: dict[str, str]) -> list[str]:
+    """The ids of the steps in `outputs` (run_workflow's result) that failed."""
+    return [sid for sid, out in outputs.items() if str(out).startswith(STEP_ERROR)]
+
+
 def run_workflow(
     wf: Workflow,
     *,
-    run_step: Callable[[str, WStep], str],
+    run_step: Callable[[str, WStep], Any],
     variables: dict[str, str] | None = None,
     max_workers: int = 4,
 ) -> dict[str, str]:
     """Execute `wf`, returning {step_id: output}.
 
-    `run_step(prompt, step)` runs one step and returns its text output. Steps
-    run in file order; a contiguous run of `parallel = true` steps executes
-    concurrently and each sees only outputs produced BEFORE that block (so a
-    following sequential step is the natural fan-in point).
+    `run_step(prompt, step)` runs one step and returns its text output, or its
+    headless result, which becomes the output through `step_output` (so a step
+    whose run ended in an error is a failed step, ``ERROR: …``, even when it
+    produced some text first). Steps run in file order; a contiguous run of
+    `parallel = true` steps executes concurrently and each sees only outputs
+    produced BEFORE that block (so a following sequential step is the natural
+    fan-in point).
     """
+
+    def run(prompt: str, step: WStep) -> str:
+        out = run_step(prompt, step)
+        return step_output(out) if hasattr(out, "error") else out
+
     outputs: dict[str, str] = {}
     ctx: dict[str, str] = dict(wf.vars)
     ctx.update(variables or {})
@@ -211,14 +249,14 @@ def run_workflow(
             base = {**ctx, **outputs}  # frozen snapshot for the whole block
             pairs = [(s, _interp(s.prompt, base, s.id)) for s in block]
             block_out = fan_out(
-                lambda pair: run_step(pair[1], pair[0]), pairs, max_workers
+                lambda pair: run(pair[1], pair[0]), pairs, max_workers
             )
             for (s, _prompt), out in zip(pairs, block_out):
                 outputs[s.id] = out
         else:
             s = steps[i]
             i += 1
-            outputs[s.id] = run_step(_interp(s.prompt, {**ctx, **outputs}, s.id), s)
+            outputs[s.id] = run(_interp(s.prompt, {**ctx, **outputs}, s.id), s)
     return outputs
 
 

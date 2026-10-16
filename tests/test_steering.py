@@ -147,7 +147,12 @@ def test_follow_up_queued_before_the_turn_is_applied_immediately():
     a = _make_agent(tool_call_first=False, seen=seen)
     a.steer("extra context")
     _drain(a)
-    assert seen[0] == ["original request", "extra context"]
+    # One user message on the wire: consecutive ones are joined for templates
+    # that require user/assistant alternation (history keeps them apart).
+    assert seen[0] == ["original request\n\nextra context"]
+    assert [m["content"] for m in a.history if m["role"] == "user"] == [
+        "original request", "extra context",
+    ]
 
 
 def test_unapplied_steering_is_handed_back_not_dropped():

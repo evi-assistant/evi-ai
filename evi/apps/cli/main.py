@@ -4416,7 +4416,7 @@ def workflow_run(
             tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
             console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
         res = run_headless(agent, prompt)
-        out = res.text or (f"ERROR: {res.error}" if res.error else "")
+        out = workflows.step_output(res)  # an Error mid-reply is a failed step
         if not json_out:
             console.print(out)
         return out

@@ -4,6 +4,8 @@ Reads ``~/.evi/transcripts/`` and aggregates: session/message counts, a
 role breakdown, the most-used tools, the busiest days, and a rough token volume
 (chars/4 — not a tokenizer). Everything stays on disk; this is deliberately the
 *local* counterpart to a cloud analytics dashboard (which eVi does not do).
+Only messages count: a meta record in a transcript (a compaction, say) is not
+part of the conversation.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from evi.transcripts import MESSAGE
 
 
 def _read_entries(path: Path) -> list[dict[str, Any]]:
@@ -59,6 +63,8 @@ def compute_stats(*, root: Path | None = None, days: int | None = None) -> dict[
     for info in infos:
         per_day[info.day] += 1
         for e in _read_entries(info.path):
+            if (e.get("type") or MESSAGE) != MESSAGE:
+                continue  # a meta record (evi.transcripts), not a message
             role = str(e.get("role", "?"))
             roles[role] += 1
             total_msgs += 1

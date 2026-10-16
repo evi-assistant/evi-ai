@@ -48,12 +48,15 @@ def test_sanitized_messages_coerces_null_content() -> None:
         {"role": "assistant", "content": None, "tool_calls": [{"id": "x"}]},  # poison + keys kept
         {"role": "tool", "tool_call_id": "x", "name": "t", "content": None},  # poison
         {"role": "user", "content": "plain string stays"},
+        # (an assistant between the two user messages: consecutive ones are
+        # joined on the way out, see test_history_validity)
+        {"role": "assistant", "content": "ok"},
         {"role": "user", "content": [{"type": "text", "text": "list stays"}]},
     ]
     out = _sanitized_messages(history)
 
     assert [m.get("content") for m in out] == [
-        "sys", "", "", "", "plain string stays",
+        "sys", "", "", "", "plain string stays", "ok",
         [{"type": "text", "text": "list stays"}],
     ]
     # never None anywhere
@@ -696,9 +699,10 @@ def test_compact_history_collapses_middle(tmp_path) -> None:
 
     collapsed = agent.compact_history()
     assert collapsed == 3  # head + 3 middle + 2 tail = 6; middle = 3
-    # head + summary + 2 tail = 4
-    assert len(agent.history) == 4
-    assert agent.history[0]["role"] == "system"
+    # head + summary (user) + acknowledgement (assistant) + 2 tail = 5: the
+    # summary is never a second system message.
+    assert len(agent.history) == 5
+    assert [m["role"] for m in agent.history[:3]] == ["system", "user", "assistant"]
     assert agent.history[1]["content"].startswith("[compacted: 3 earlier messages")
     assert "SUMMARISED" in agent.history[1]["content"]
     # Tail preserved verbatim.

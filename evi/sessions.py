@@ -11,8 +11,11 @@ back into structured objects so the CLI (and eventually the web UI) can:
 Resuming is a best-effort reconstruction. We re-emit:
 
 - the user/assistant/tool messages in order
-- the assistant's `tool_calls` payload if it was logged (so role="tool"
-  messages have something to refer to via `tool_call_id`)
+- the assistant's `tool_calls` payload, with each tool result paired to the
+  call it answers (by its logged `tool_call_id`, else by position), so strict
+  OpenAI-compatible backends accept the resumed history
+- on request (`apply_compaction=True`, what a resume wants), any compaction,
+  so the history is the one the model last saw
 
 Things we DON'T try to perfectly restore:
 
@@ -30,6 +33,8 @@ from pathlib import Path
 from typing import Any
 
 from evi.config import TRANSCRIPTS_DIR
+from evi.history import compaction_messages, pair_tool_results
+from evi.transcripts import COMPACTION, MESSAGE
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,7 @@ def _summarize(path: Path, day: str) -> SessionInfo | None:
         session_id=path.stem,
         day=day,
         path=path,
-        message_count=len(entries),
+        message_count=sum(1 for e in entries if (e.get("type") or MESSAGE) == MESSAGE),
         first_user_message=first_user or "(no user message)",
         started_at=min(timestamps) if timestamps else None,
         ended_at=max(timestamps) if timestamps else None,
@@ -228,34 +233,68 @@ def find_session(session_id: str, *, root: Path | None = None) -> Path | None:
     return None
 
 
-def history_from_transcript(path: Path) -> list[dict[str, Any]]:
-    """Rebuild an Agent.history list from a stored transcript.
+def history_from_transcript(path: Path, *, apply_compaction: bool = False) -> list[dict[str, Any]]:
+    """Rebuild an Agent.history list (without its system prompt) from a stored
+    transcript.
 
     Order is preserved. Goal-reminder prefixes injected by Agent.chat are
     LEFT IN PLACE so the reconstructed history matches what the model
-    originally saw — important for KV cache symmetry on resume.
+    originally saw — important for KV cache symmetry on resume. For the same
+    reason a resume passes `apply_compaction=True`: each compaction record then
+    replaces what it summarised with the summary
+    (evi.history.compaction_messages). By default every logged message is
+    kept, which is what a reader of the whole session (`evi sessions show`,
+    fine-tune export) wants.
+
+    Each tool result is paired with the call it answers: by the
+    `tool_call_id` it was logged with, or by position for transcripts written
+    before that was logged. A call with no logged result (the turn was cut
+    short) gets a marked placeholder, and a result with no call is dropped
+    (evi.history.pair_tool_results).
     """
     history: list[dict[str, Any]] = []
     for raw in _read_entries(path):
+        kind = raw.get("type") or MESSAGE
+        if kind == COMPACTION:
+            if apply_compaction:
+                history = _apply_compaction(history, raw)
+            continue
+        if kind != MESSAGE:
+            continue  # a meta record this version doesn't replay
         role = raw.get("role")
         if role not in ("user", "assistant", "tool"):
             continue
-        msg: dict[str, Any] = {"role": role, "content": raw.get("content", "")}
+        content = raw.get("content", "")
+        msg: dict[str, Any] = {"role": role, "content": "" if content is None else content}
         if role == "tool":
-            # The transcript writer stores tool_name; OpenAI's API wants
-            # both `name` and `tool_call_id`. We synthesise the id from
-            # the position so reconstructed history is self-consistent
-            # even if we never logged the original id.
             msg["name"] = raw.get("tool_name", "")
-            msg["tool_call_id"] = f"resumed_{len(history)}"
+            msg["tool_call_id"] = raw.get("tool_call_id")  # None: paired by position
         if role == "assistant" and raw.get("tool_calls"):
             msg["tool_calls"] = raw["tool_calls"]
-            # An assistant message with tool_calls must NOT have None
-            # content but may have empty string content per the spec.
-            if msg["content"] is None:
-                msg["content"] = ""
         history.append(msg)
-    return history
+    return pair_tool_results(history)
+
+
+def _apply_compaction(history: list[dict[str, Any]], record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Replay one compaction record onto the messages rebuilt so far: keep the
+    last `kept` of them (the logged messages the kept tail held) and put the
+    summary before them. A tail that would start with a tool result (its call
+    was summarised away) drops it."""
+    summary = str(record.get("summary") or "").strip()
+    if not summary:
+        return history
+    try:
+        kept = max(0, int(record.get("kept") or 0))
+        collapsed = max(0, int(record.get("collapsed") or 0))
+    except (TypeError, ValueError):
+        return history
+    tail = history[max(0, len(history) - kept):] if kept else []
+    while tail and tail[0].get("role") == "tool":
+        tail = tail[1:]
+    if not collapsed:
+        collapsed = len(history) - len(tail)
+    head = compaction_messages(summary, collapsed, next_role=tail[0].get("role") if tail else None)
+    return [*head, *tail]
 
 
 def fmt_when(ts: float | None) -> str:

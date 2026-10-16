@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import itertools
 import json
 import secrets
 import threading
@@ -24,7 +25,7 @@ from openai import OpenAI
 
 from evi.citations import Citation, ToolOutput
 from evi.config import Config
-from evi.debug import dlog
+from evi.debug import dlog, is_enabled as debug_enabled
 from evi.hooks import HookRegistry
 
 if TYPE_CHECKING:
@@ -43,6 +44,16 @@ from evi.tools.base import (
     active_context,
     bind_context,
     unbind_context,
+)
+from evi.history import (
+    INTERRUPTED,
+    compaction_cut,
+    compaction_messages,
+    join_user_runs,
+    pair_tool_results,
+    seal_notes,
+    synthetic_tool_result,
+    validate_history,
 )
 from evi.transcripts import TranscriptStore
 from evi.audio_input import (
@@ -294,13 +305,60 @@ def _sanitized_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     each source. OpenAI tolerates null content; Ollama does not. Coerce any
     ``None`` content to ``""`` and leave string / multimodal-list content as-is.
     This copy is send-only — it never mutates the stored history.
+
+    Two more repairs on the same copy (evi.history). Every tool call gets a
+    result and every result a call (pair_tool_results): a truncate, branch or
+    edit inside a tool round, or a turn that died mid-tools, otherwise leaves a
+    history strict servers reject on every later turn. And consecutive user
+    messages are joined into one (join_user_runs) for templates that require
+    user/assistant alternation. Both leave a valid, alternating history as it
+    is. Before the join, each note from someone else is sealed (seal_notes):
+    its body quoted and closed by an end line, so a prompt joined after it
+    keeps the user's authority instead of reading as part of the note.
     """
     out: list[dict[str, Any]] = []
     for m in history:
         if m.get("content") is None:
             m = {**m, "content": ""}
         out.append(m)
-    return out
+    return join_user_runs(seal_notes(pair_tool_results(out)))
+
+
+def _iter_stream(stream: Iterable[Any], failed: list[Exception]) -> Iterator[Any]:
+    """Yield `stream`'s chunks. If the stream raises partway (httpx read error,
+    dropped connection, an error event from the server), record the exception
+    in `failed` and stop, so the loop keeps what already arrived instead of the
+    exception escaping into the REPL or worker. KeyboardInterrupt and
+    GeneratorExit still propagate."""
+    try:
+        it = iter(stream)
+    except Exception as e:  # noqa: BLE001 — any transport/server failure
+        failed.append(e)
+        return
+    while True:
+        try:
+            chunk = next(it)
+        except StopIteration:
+            return
+        except Exception as e:  # noqa: BLE001 — any transport/server failure mid-stream
+            failed.append(e)
+            close = getattr(stream, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()  # release the half-read response's connection
+            return
+        yield chunk
+
+
+def _whole_json_or_empty(arguments: str) -> str:
+    """Tool-call arguments as streamed if they parse as JSON, else "{}": a call
+    cut off mid-arguments must not leave invalid JSON in history (llama.cpp's
+    --jinja templates parse it and fail every later request)."""
+    try:
+        json.loads(arguments or "{}")
+    except ValueError:
+        return "{}"
+    return arguments or "{}"
 
 
 def _approx_tokens(messages: list[dict[str, Any]]) -> int:
@@ -395,9 +453,12 @@ class _ThinkParser:
 
 def _render_for_summary(messages: list[dict[str, Any]]) -> str:
     """Flatten a slice of Agent.history into readable plaintext for a summary
-    request. Tool messages get a label so the model knows what's what."""
+    request. Tool messages get a label so the model knows what's what. Notes
+    from someone else are sealed (evi.history.seal_notes), so a note's body
+    can't start a [USER] line of its own and have the summary, which goes back
+    in as a user message, credit its text to the user."""
     out: list[str] = []
-    for m in messages:
+    for m in seal_notes(messages):
         role = m.get("role", "?")
         content = m.get("content", "") or ""
         if role == "tool":
@@ -938,12 +999,18 @@ class Agent:
             self.compact_history()
 
     def compact_history(self, keep_recent: int | None = None) -> int:
-        """Summarise the oldest stretch of history into one system note.
+        """Summarise the oldest stretch of history.
 
-        Keeps the original system prompt (index 0) and the most recent
-        `keep_recent` messages verbatim. Everything in between is replaced
-        by one `role=system` message holding the summary. Returns the
-        number of messages collapsed (0 if nothing to do).
+        Keeps the original system prompt (index 0) and, verbatim, roughly the
+        most recent `keep_recent` messages: the cut moves forward to a turn
+        boundary, or a step boundary when that would keep too little
+        (evi.history.compaction_cut), so the tail never starts with a tool
+        result whose call was summarised away. Everything in between is
+        replaced by the summary as a user message, followed by an assistant
+        acknowledgement when the tail starts with a user message; never a
+        second system message. A compaction record goes to the transcript so a
+        resume rebuilds the same history. Returns the number of messages
+        collapsed (0 if nothing to do).
 
         Internally uses a one-shot LLM call with the same backend the
         agent is already using; if that call fails we leave history
@@ -956,9 +1023,12 @@ class Agent:
         if len(self.history) <= 1 + keep:
             return 0
 
+        cut = compaction_cut(self.history, keep)
+        if cut is None:
+            return 0
         head = self.history[0]
-        tail = self.history[-keep:]
-        middle = self.history[1:-keep]
+        tail = self.history[cut:]
+        middle = self.history[1:cut]
         if not middle:
             return 0
 
@@ -993,14 +1063,24 @@ class Agent:
         if not summary.strip():
             return 0
 
-        note = {
-            "role": "system",
-            "content": (
-                f"[compacted: {len(middle)} earlier messages summarised]\n\n"
-                + summary.strip()
-            ),
-        }
-        self.history = [head, note, *tail]
+        notes = compaction_messages(
+            summary, len(middle), next_role=tail[0].get("role") if tail else None
+        )
+        self.history = [head, *notes, *tail]
+        if self.transcripts is not None:
+            try:
+                # `kept` counts the tail's logged messages, which is all of
+                # them: a note from outside the chat is logged when it joins
+                # the history too (server._log_note). Replay keeps that many
+                # from the end of the log, so a miscount would shift the
+                # replayed tail onto a message the model no longer sees, or
+                # drop one it still does.
+                self.transcripts.write_compaction(
+                    self.session_id, summary.strip(),
+                    cut=cut, kept=len(tail), collapsed=len(middle),
+                )
+            except OSError:
+                pass  # never let disk errors break the chat loop
         return len(middle)
 
     def enable_auto_all(self) -> None:
@@ -1302,7 +1382,7 @@ class Agent:
             # 'ask': require confirmation — bypass the pre-approval short-circuit
             # (through the batch UI when that is the only one).
             return self._prompt_one(tool, args_json)
-        if self._is_pre_approved(tool):
+        if self._is_pre_approved(tool, args_json):
             return True
         if not self._has_permission_ui():
             # Nobody to ask (scheduler, subagent, SDK embed): the unattended
@@ -1849,6 +1929,13 @@ class Agent:
                     ),
                 },
             )
+            if debug_enabled():
+                # What a strict backend would reject in the live history
+                # (evi.history). The send copy repairs tool pairing
+                # (_sanitized_messages), so this names the writer that broke it.
+                problems = validate_history(self.history)
+                if problems:
+                    dlog("llm.history_invalid", problems[:10])
             try:
                 create_kwargs: dict[str, Any] = {
                     "model": active_model,
@@ -1941,11 +2028,20 @@ class Agent:
                     create_kwargs["model"] = model_id
                     if use_responses:
                         from evi.llm.responses import stream_chat_via_responses
-                        return stream_chat_via_responses(
+                        gen = stream_chat_via_responses(
                             self.client,
                             builtin_tools=self.config.llm.responses_tools,
                             **create_kwargs,
                         )
+                        # A lazy generator: the request is only made at the
+                        # first next(). Make it here, so a setup failure (a
+                        # 400, model not loaded) falls back like one on the
+                        # chat path instead of surfacing mid-stream.
+                        try:
+                            first = next(gen)
+                        except StopIteration:
+                            return iter(())
+                        return itertools.chain([first], gen)
                     return self.client.chat.completions.create(**create_kwargs)
 
                 # Model fallback chain: try the primary, then each configured
@@ -1995,6 +2091,7 @@ class Agent:
             # the UI, and flush it only if it turns out NOT to be a tool call.
             hold_text = False
             hold_decided = False
+            stream_failed: list[Exception] = []  # set by _iter_stream when the stream breaks
 
             def _maybe_hold() -> None:
                 nonlocal hold_text, hold_decided
@@ -2005,7 +2102,7 @@ class Agent:
                     hold_decided = True
                     hold_text = head[:1] in ("`", "{", "[")
 
-            for chunk in stream:
+            for chunk in _iter_stream(stream, stream_failed):
                 # The final chunk in a stream_options.include_usage stream
                 # has no choices but carries the usage tally.
                 if getattr(chunk, "usage", None) is not None:
@@ -2047,6 +2144,17 @@ class Agent:
                             slot["arguments"] += tc.function.arguments
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
+
+            # A stream that broke before the model finished (a dropped
+            # connection, an error event mid-reply) ends the turn with an Error
+            # but keeps what arrived. One that broke after the last choice
+            # (finish_reason seen) only lost its trailing usage chunk.
+            stream_error = stream_failed[0] if stream_failed and finish_reason is None else None
+            if stream_failed:
+                dlog("llm.stream_error", {
+                    "type": type(stream_failed[0]).__name__, "msg": str(stream_failed[0]),
+                    "finished": finish_reason is not None,
+                })
 
             # Drain any trailing buffered content (chunk boundaries can leave
             # a partial tag or trailing text in the parser).
@@ -2094,7 +2202,8 @@ class Agent:
             # fenced ``{"name": …, "arguments": …}`` block). Only when there are
             # no structured calls AND the reply leads with JSON / a code fence,
             # so we never execute a tool-call example buried in normal prose.
-            if not tool_buf and text_buf:
+            # Never from a reply cut off mid-stream.
+            if not tool_buf and text_buf and stream_error is None:
                 _stripped = "".join(text_buf).strip()
                 if _stripped[:1] in ("`", "{", "["):
                     _recovered = recover_text_tool_calls(_stripped, set(self.tools))
@@ -2113,6 +2222,26 @@ class Agent:
             # still renders, just non-incrementally.
             if hold_text and text_buf:
                 yield TextDelta("".join(text_buf))
+
+            if stream_error is not None:
+                # A call cut off mid-stream never runs. It is kept only if its
+                # name arrived (arguments reset to {} when cut mid-JSON), and
+                # gets a marked placeholder result below so the history stays
+                # valid. The text is kept and marked as cut off.
+                tool_buf = {
+                    i: {**slot, "arguments": _whole_json_or_empty(slot["arguments"])}
+                    for i, slot in tool_buf.items()
+                    if slot["name"]
+                }
+                if not tool_buf and not "".join(text_buf).strip():
+                    # Nothing of a reply arrived: the request failed, as when
+                    # create() raises. No assistant message is made up for it.
+                    yield Error(
+                        f"LLM request failed: {type(stream_error).__name__}: {stream_error}"
+                    )
+                    return
+                cut_note = f"{INTERRUPTED} The reply was cut off here: the model's stream failed."
+                text_buf.append(f"\n\n{cut_note}" if "".join(text_buf).strip() else cut_note)
 
             # ALWAYS set `content` (empty string on a tool-calls-only turn).
             # Ollama's OpenAI-compat endpoint rejects an assistant message with
@@ -2170,6 +2299,26 @@ class Agent:
                 assistant_msg.get("content") or "",
                 tool_calls=assistant_msg.get("tool_calls"),
             )
+
+            if stream_error is not None:
+                # History first: every consumer stops reading at the Error.
+                for call in assistant_msg.get("tool_calls") or []:
+                    placeholder = synthetic_tool_result(
+                        call["id"], call["function"]["name"],
+                        why="The model's reply was cut off before this call was complete, "
+                            "so eVi did not run it.",
+                    )
+                    self.history.append(placeholder)
+                    # Logged without tool_name: that marks a tool that ran
+                    # (stats counts executions by it). A resume takes the name
+                    # from the call.
+                    self._log_to_transcript(
+                        "tool", placeholder["content"], tool_call_id=call["id"],
+                    )
+                yield Error(
+                    f"LLM stream failed mid-reply: {type(stream_error).__name__}: {stream_error}"
+                )
+                return
 
             if not tool_buf:
                 self._maybe_autocompact()
@@ -2315,7 +2464,9 @@ class Agent:
                         "content": out_obj.text if out_obj.text is not None else "",
                     }
                 )
-                self._log_to_transcript("tool", out_obj.text, tool_name=fname)
+                self._log_to_transcript(
+                    "tool", out_obj.text, tool_name=fname, tool_call_id=call["id"]
+                )
 
         yield from self._finish_turn("max_turns_reached")
 
@@ -2356,12 +2507,22 @@ class Agent:
         """Count turns for the session this agent now holds. A revived or
         resumed one (history restored, or `session_id` set after the agent was
         built) counts on from the user messages already in its history, so a new
-        turn never reuses an earlier one's (session, turn) checkpoint tag."""
+        turn never reuses an earlier one's (session, turn) checkpoint tag. A
+        compaction folds earlier user messages into one summary, so the user
+        messages the session logged count too."""
         if self._turns_of != self.session_id:
             self._turns_of = self.session_id
-            self.turn_index = sum(
+            in_history = sum(
                 1 for m in self.history[1:] if isinstance(m, dict) and m.get("role") == "user"
             )
+            logged = 0
+            counter = getattr(self.transcripts, "message_count", None)
+            if callable(counter):
+                try:
+                    logged = int(counter(self.session_id, "user"))
+                except (OSError, TypeError, ValueError):
+                    logged = 0
+            self.turn_index = max(in_history, logged)
 
     def tools_for_session(self, tools: Iterable[Tool] | None = None) -> dict[str, Tool]:
         """This session's own tool map: `tools` (default: this agent's) with
@@ -2422,8 +2583,10 @@ class Agent:
         *,
         tool_name: str | None = None,
         tool_calls: list[dict] | None = None,
+        tool_call_id: str | None = None,
     ) -> None:
-        """Mirror one message to the on-disk transcript, if enabled."""
+        """Mirror one message to the on-disk transcript, if enabled. A tool
+        result carries the id of the call it answers, so a resume pairs them."""
         if self.transcripts is None:
             return
         try:
@@ -2433,6 +2596,7 @@ class Agent:
                 content=content or "",
                 tool_name=tool_name,
                 tool_calls=tool_calls,
+                tool_call_id=tool_call_id,
             )
         except OSError:
             pass  # never let disk errors break the chat loop
