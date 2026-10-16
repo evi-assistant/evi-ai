@@ -14,12 +14,15 @@ from evi.sdk import build_agent, run_headless, to_json
 def main(argv: list[str]) -> int:
     prompt = " ".join(argv[1:]) or "Summarise this project in one line."
 
-    # tool_categories scopes the agent to read-only filesystem + search tools —
-    # appropriate for an unattended CI run.
+    # tool_categories scopes the agent to the file tools and run_python. Nothing
+    # prompts in CI: both categories are auto-approved by default, and any call
+    # outside [auto] auto_approve is denied (an agent with nobody to ask fails
+    # closed). Secrets such as .env aren't read unless an allow rule names them.
     agent = build_agent(tool_categories=["fs", "code"])
     result = run_headless(agent, prompt, max_turns=8)
 
-    print(to_json(result))  # {"text": ..., "tools": [...], "usage": {...}, "error": ...}
+    # {"text": ..., "tools": [...], "usage": {...}, "error": ..., "policy": "deny"}
+    print(to_json(result))
     return 1 if result.error else 0
 
 

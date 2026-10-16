@@ -48,6 +48,8 @@ build_agent(
     *,
     config=None,                 # a Config; defaults to Config.load()
     system_prompt=None,          # override the base system prompt
+    model=None,                  # a different model id on the same backend
+    backend=None,                # a registered backend (entry or name) for this agent
     client=None,                 # a pre-built OpenAI-compatible client
     tools=None,                  # explicit tools (Tool objects OR @tool fns)
     tool_categories=None,        # select built-ins by category, e.g. ["fs","code"]
@@ -58,10 +60,12 @@ build_agent(
     enable_guardrails=True,      # load ~/.evi/guardrails.toml (if enabled)
     memory_root=None,            # MemoryStore folder; None = ~/.evi/memory (or user_root/memory)
     user_root=None,              # a multi-user login's data folder (~/.evi/users/<name>)
-    permission_callback=None,    # tool-permission prompt; None = non-interactive
-    permission_batch_callback=None,
+    permission_callback=None,    # (tool_name, args_json, category) -> bool; None = nobody to ask
+    permission_batch_callback=None,  # [(tool_name, args_json, category), …] -> [bool, …]
     transcripts=None,            # a TranscriptStore to log turns to
     session_id=None,
+    frontend="cli",              # "cli" | "web": the surface the agent serves
+    unattended_policy=None,      # "deny" | "allow" with no callback; None = [auto] unattended_policy
 ) -> Agent
 ```
 
@@ -90,6 +94,37 @@ Per-user data:
 > The CLI's own agent builder delegates to `build_agent` — it adds only its
 > runtime concerns (spawning MCP servers, interactive permission prompts). There
 > is one source of truth for how an Agent is assembled.
+
+### Permissions: an agent with no callback fails closed
+
+An agent built without `permission_callback` or `permission_batch_callback`
+has nobody to ask, so it is **unattended**. Calls that are pre-approved still
+run: the `[auto] auto_approve` categories (by default `fs`, `code`, `memory`,
+`skills` and `image`), your `allow` rules and trusted dirs and domains. Any
+other call that would ask is **not run**, and the model gets `PERMISSION
+DENIED: <tool>(<args>) was not run. This run is unattended (nobody can approve
+a tool call), …`. Your own `@tool`s are in categories nobody auto-approved, so
+they are denied too until you choose one of these:
+
+- **Decide each call yourself**: pass `permission_callback=` (a function of
+  `tool_name, args_json, category` that returns `True` to run the call), or
+  `permission_batch_callback=` for one answer list per batch of calls.
+- **Run what would ask**: pass `unattended_policy="allow"`. Use it for an agent
+  whose tool list you control (as in [Custom tools](#custom-tools)); it lets
+  every tool the agent has run without asking.
+- **Pre-approve a category** in `~/.evi/config.toml`, e.g. add `"math"` to
+  `[auto] auto_approve`. This applies to every eVi session, not just your
+  program.
+
+`unattended_policy=None` (the default) follows `[auto] unattended_policy`,
+which is `"deny"` unless the user set `"allow"`. Whatever the policy, an
+unattended agent never writes a protected path, never reads a protected secret
+(`.env`, a key) that no explicit `allow` rule covers, and never runs a command
+the destructive-command guard flags. `run_headless` reports how the run settled
+such calls in `HeadlessResult.policy`: `"deny"`, `"allow"`, `"allow-all"`
+(after `agent.enable_auto_all()`) or `"interactive"` (a callback decides),
+naming an `[auto] mode` that lets calls through (`"allow-all (mode=yolo)"`).
+See [Unattended runs](features/permissions-and-sandbox.md#unattended-runs).
 
 ## Streaming events
 
@@ -125,7 +160,7 @@ Event types (all exported from `evi.sdk`):
 | `Error` | `message` | Turn failed. |
 
 For a non-streaming convenience, use `run_headless(agent, prompt)` → a
-`HeadlessResult(text, tools, usage, error)`.
+`HeadlessResult(text, tools, usage, error, policy)`.
 
 ## Custom tools
 
@@ -136,9 +171,15 @@ from evi.sdk import tool, build_agent, run_headless
 def add(a: int, b: int) -> int:
     return a + b
 
-agent = build_agent(tools=[add])
+# Nobody is asked about tool calls here, and "math" isn't an auto-approved
+# category, so say that this agent's calls may run. Its only tool is `add`.
+agent = build_agent(tools=[add], unattended_policy="allow")
 print(run_headless(agent, "What is 19 + 23?").text)
 ```
+
+Without `unattended_policy="allow"` (or a `permission_callback`, see
+[Permissions](#permissions-an-agent-with-no-callback-fails-closed)) the call is
+denied and the model answers without the tool.
 
 `@tool` reads the function's type hints to build the JSON schema and the first
 docstring line as the description (override with `description=`). A tool may
@@ -214,7 +255,7 @@ note_tool = Tool(
     category="custom",
     binder=note_binder,
 )
-agent = build_agent(tools=[note_tool])
+agent = build_agent(tools=[note_tool], unattended_policy="allow")
 ```
 
 - An agent binds the tool at its first call. `Tool.bind(ctx)` returns a copy
@@ -241,7 +282,7 @@ from evi.sdk import run_subagents_parallel
 results = run_subagents_parallel(
     ["Summarise JWTs", "Summarise UUIDs"],
     system_prompt="You are terse.",
-    tool_categories=(),       # grant tool categories per subagent
+    tool_categories=(),       # tool categories (or names) per subagent; () = no tools
     max_workers=4,
 )
 for task, answer in results:   # input order preserved
@@ -251,6 +292,30 @@ for task, answer in results:   # input order preserved
 `run_subagent(...)` is the single-task form. Subagent *profiles* (named
 role + tool presets, extendable by plugins) are available via
 `SUBAGENT_PROFILES`, `all_profiles()`, and `get_profile(name)`.
+
+What a subagent may use:
+
+- `tool_categories=` takes categories or tool names, and the subagent gets
+  only the matching tools your `[tools]` toggles enable (safe mode applied). A
+  category with no toggle, such as your own `@tool(category="math")`, counts as
+  enabled.
+- `tools=` is an exact list of registered tool names instead, whatever the
+  toggles say; only safe mode still drops memory, skills and MCP tools.
+- `memory=` (single-task form) is the `MemoryStore` its memory tools use.
+  Without it they use the login's `user_root/memory` in multi-user mode, else
+  `~/.evi/memory`.
+
+How it is asked:
+
+- Called from inside a tool of an agent that has a permission callback, a
+  subagent asks through that callback, one prompt at a time however many run
+  at once, and inherits the agent's `enable_auto_all()`.
+- Called from your own code, it has nobody to ask: a call that would ask
+  follows `unattended_policy=` (`"deny"` | `"allow"`; `None` takes the spawning
+  agent's, else `[auto] unattended_policy`). Pass `"allow"` only with a
+  read-only `tools=` list. A delegate CLI-agent backend (`codex`, `gemini`,
+  `amp`, `qwen`, `copilot`) is then refused, and the result is `ERROR:
+  subagent failed: …`, unless `[llm] allow_cli_agent_unattended = true`.
 
 ## Structured output (JSON Schema)
 
@@ -278,11 +343,13 @@ preset; `as_response_format(...)` wraps a plain schema into the
 from evi.sdk import build_agent, run_headless, to_json
 
 res = run_headless(build_agent(tool_categories=["fs"]), "Does a README exist?")
-print(to_json(res))            # {"text":..., "tools":[...], "usage":{...}, "error":...}
+print(to_json(res))            # {"text":..., "tools":[...], "usage":{...}, "error":..., "policy":"deny"}
 raise SystemExit(1 if res.error else 0)
 ```
 
-See [`headless_ci.py`](../examples/python/headless_ci.py).
+Nothing prompts in CI: `fs` is auto-approved by default, so its calls run, and
+a call outside `[auto] auto_approve` is denied (`"policy": "deny"`). See
+[`headless_ci.py`](../examples/python/headless_ci.py).
 
 ## Sessions & checkpoints
 
@@ -309,10 +376,16 @@ expose their tools to an agent. (To publish *eVi itself* as an MCP server, use
 ```python
 from evi.sdk import run_ultracode, make_runner, UltraConfig, build_agent
 
-run_one = make_runner(lambda sp: build_agent(system_prompt=sp, tool_categories=["code"]))
+run_one = make_runner(lambda sp, model: build_agent(system_prompt=sp, model=model))
 result = run_ultracode("design a retry policy", run_one=run_one, cfg=UltraConfig(breadth=3))
 print(result.answer)
 ```
+
+`make_runner` calls the factory with the stage's system prompt and model id
+(`None` for the default). Every stage runs unattended under `[auto]
+unattended_policy`, and the solvers get only the read-only file tools of
+`UltraConfig.mode` (`read_file`, `list_dir`, `find_files`, `search_files`), so
+the pipeline returns text and never edits files.
 
 `fan_out(fn, items, max_workers=8)` is the shared concurrency primitive (results
 in input order); `run_workflow(...)` runs a declarative multi-step workflow. See

@@ -2,8 +2,10 @@
 
 ``run_subagents_parallel`` runs each task in its own one-shot Agent (sharing the
 parent's LLM client/config) and returns ``[(task, result), ...]`` in input
-order. Each subagent gets only the tool *categories* you grant it.
-Run with:  python examples/python/subagents.py
+order. Each subagent gets only the tool categories (or tool names) you grant
+it, cut to what your ``[tools]`` toggles enable. Started from your own code, a
+subagent has nobody to ask, so a call outside ``[auto] auto_approve`` is
+denied. Run with:  python examples/python/subagents.py
 """
 
 from evi.sdk import run_subagents_parallel

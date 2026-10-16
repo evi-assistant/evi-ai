@@ -26,6 +26,8 @@ switcher; per-turn headless: `evi run -m code`.
 
 **Headless** — `evi run "prompt" [-m mode] [-y] [--format json] [--schema f]`.
 One-shot for scripts/CI. Example: `git diff | evi run "review for bugs" -y`.
+Nothing prompts: without `-y`, a call outside `[auto] auto_approve` is denied
+(`[auto] unattended_policy`), and the JSON result names the run's `policy`.
 
 **Batch** — `evi batch prompts.jsonl -o out.jsonl -j 4`. Runs many prompts (each
 its own agent), optional parallelism. Input is `.jsonl`/`.json` objects
@@ -81,6 +83,12 @@ Settings → Tools): `fs`, `code` (`run_python`, sandboxable), `shell`, `web`
 `auto_approve` category list + first-match `rules` (`allow|deny <tool> [arg]`).
 REPL `/auto`, `/plan`. **Trusted dirs/domains** auto-approve fs/web under given
 paths/hosts. **MCP allowlist** (`tools.mcp_allow`) gates which servers load.
+**Unattended runs** (scheduled tasks, `evi run`, subagents with no UI, web
+workflow and recipe runs, SDK agents without a permission callback) deny what
+would ask unless `[auto] unattended_policy = "allow"`; federation, A2A, routine
+webhooks without `yes` and channel pushes always deny it, and delegate
+CLI-agent backends are refused unless `[llm] allow_cli_agent_unattended`.
+[Guide](features/permissions-and-sandbox.md#unattended-runs).
 
 **Content guardrails** — `~/.evi/guardrails.toml`, three layers: regex
 (block/redact), `[[judge]]` (the LLM classifies vs a policy), `[[classifier]]`
@@ -136,7 +144,9 @@ that can carry `commands/`, `skills/`, `hooks.toml`, `mcp.json`, and
 
 **Subagents** — the `delegate` tool runs a scoped sub-agent by profile
 (built-in `explore`/`plan` + plugin/user `agents.toml`); `evi agents` lists them,
-`evi agents new` scaffolds a custom one. **Agent teams** — a shared, claimable
+`evi agents new` scaffolds a custom one. A profile's tools are cut to your
+`[tools]` toggles, `explore` is read-only, and a subagent asks through the chat
+that started it. **Agent teams** — a shared, claimable
 task list (`evi team new/run`): a lead decomposes a goal into dependency-ordered
 tasks and teammates drain it in parallel (`evi/teams.py`).
 **Parallel research** — `parallel_research` tool fans out read-only explorers.
@@ -144,11 +154,13 @@ tasks and teammates drain it in parallel (`evi/teams.py`).
 `{step}`/`{var}` interpolation; `evi workflow new|run`. **Dispatch** (Web 🗂) —
 lists live sessions + runnable workflows. **Federation** — delegate a task to a
 trusted **peer eVi** (`~/.evi/peers.json`, `delegate_peer` tool, `[federation]
-serve` to answer). **Code review** — `evi review --multi` multi-agent review.
+serve` to answer). **Code review** — `evi review --multi` multi-agent review
+with read-only reviewers.
 **Multi-model routing** — `evi route` picks a model per turn. **Ultracode** —
 `evi ultracode "<task>"` / `/ultra` / `/effort ultracode` runs one hard task
 through an exhaustive decompose → fan-out solvers → adversarial verify →
-synthesize pipeline ([guide](features/ultracode.md)).
+synthesize pipeline; the solvers only read files, so it answers in text and
+never edits ([guide](features/ultracode.md)).
 
 ## MCP
 
@@ -166,9 +178,13 @@ alert into a live web session (`POST /api/session/{id}/channel`).
 **Chat channels (Telegram)** — message eVi from your phone through a bot you
 create. Off until enabled; an unknown sender gets a pairing code and no agent
 turn until you approve it (`evi channel approve <code>` or Settings →
-Channels); approved senders get their own narrow toolset (`[channels]
-telegram_tools`, memory + skills by default) and permission prompts are
-denied. `evi channel status|approve|revoke|serve`.
+Channels). Only direct chats are answered unless `allow_groups`. Approved
+senders get their own narrow toolset (`[channels] telegram_tools`, memory +
+skills by default) under the channel's own policy, never `[auto]`: only the
+`telegram_auto_approve` categories (none by default) and the channel's own
+memory and skill reads run, everything else is denied, and memory is
+recall-only by default (`memory_mode`).
+`evi channel status|approve|revoke|serve`.
 [Guide](features/channels.md).
 
 ## Structured output & evals
@@ -229,7 +245,9 @@ opt-in Sentry (`[telemetry] crash_reports` + `dsn`, `[telemetry]` extra).
 + all event types, `@tool` (a `ctx` parameter gets the calling session's
 `ToolContext`), subagents, structured output, `run_headless`,
 sessions/checkpoints, MCP, ultracode/workflows, and telemetry — all under one
-stable namespace (`py.typed`). Guide: [sdk.md](sdk.md); runnable scripts:
+stable namespace (`py.typed`). An agent built without a `permission_callback`
+fails closed: pass one, or `unattended_policy="allow"`, for tools nobody
+auto-approved. Guide: [sdk.md](sdk.md); runnable scripts:
 [examples/python/](../examples/python/).
 
 ## Machine ops

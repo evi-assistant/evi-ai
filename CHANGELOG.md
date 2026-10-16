@@ -241,6 +241,82 @@ All notable user-visible changes to eVi. Format loosely follows
   ask was approved, and in one that had, the turn waited forever on a prompt
   sent to a stream long closed. A session with no client attached now denies
   any tool that would ask, and the push returns.
+- **Runs nobody is watching no longer approve tools by themselves.** With no
+  one to ask, scheduled tasks, subagents (and so `evi team` and `evi dream`),
+  ultracode stages, the web app's workflow and recipe runs and SDK agents
+  built without a `permission_callback` ran every tool call that would have
+  asked. Such a call is now denied, and the model is told the run is
+  unattended, unless you set `[auto] unattended_policy = "allow"`. What you
+  pre-approved still runs (`auto_approve` categories, `allow` rules, trusted
+  dirs and domains). Whatever the policy, and under `-y`, `/auto on` or
+  `yolo` too, an unattended run never writes a protected path, never runs a
+  command the destructive-command guard flags and now also never reads a
+  protected secret (`.env`, a key) that no explicit `allow` rule names. Each
+  run names its policy: a scheduled task's log has a `# policy: …` line, a
+  run with a refused call gets the status `denied: <tools> (policy deny)` in
+  `evi schedule list`, and `evi run --format json`, `evi batch` and the web
+  app's workflow and recipe responses carry `policy`. A scheduled job that
+  relied on calls running unasked needs an `allow` rule, the category in
+  `auto_approve`, or the opt-in; an SDK program can pass
+  `permission_callback=` or `unattended_policy="allow"` to `build_agent`.
+  `evi workflow run` and eval runs still approve every tool. See "Unattended
+  runs" in docs/features/permissions-and-sandbox.md.
+- **Peers, webhooks and channel pushes get only what you pre-approved.** A
+  federated or A2A task, a routine webhook without `yes` and a channel push
+  with `run: true` followed your own `[auto] mode`, so on a machine set to
+  `yolo` they ran every tool (and under `accept_edits` every file and code
+  call), and a channel push also inherited the session's `/auto on` and
+  approvals. They now run only `[auto] auto_approve`, your `allow` rules and
+  trusted dirs and domains, whatever `[auto] mode` or `unattended_policy`
+  says, and a subagent they start keeps those limits. The default
+  `auto_approve` still includes `fs` and `code`: on a machine that serves
+  peers or webhooks, take them out if a remote task shouldn't write files or
+  run `run_python`.
+- **Unattended runs refuse delegate CLI-agent backends.** `codex`, `gemini`,
+  `amp`, `qwen` and `copilot` run their own shell, file and web tools outside
+  eVi's checks, and nobody was there to see them. A scheduled task,
+  `evi run`, `evi batch`, `evi team`, a subagent with no chat to ask, an
+  ultracode stage and the web app's workflow, recipe, routine, channel-push,
+  federation and A2A runs now refuse one, as `[llm] backend` or any
+  `[models] *_backend`, with a message naming the setting (`409` from the web
+  app). Set `[llm] allow_cli_agent_unattended = true` to accept the risk;
+  the Telegram channel refuses them even then.
+- **Subagents, dreams and ultracode do only what they are for.** A subagent
+  profile's tools are now cut to your `[tools]` toggles and safe mode (a
+  profile listing `shell` got `run_command` even with `shell = false`), a
+  profile may name single tools, and Explore gets `read_file`, `list_dir`,
+  `find_files` and `search_files` instead of the whole `fs` category, which
+  can write. A subagent in a chat you watch asks through that chat's prompt,
+  one at a time, instead of running everything unasked, and your `/auto on`
+  covers it. `evi dream` reads transcripts full of tool output anyone could
+  have written, so it no longer changes memory: it gets read-only file and
+  memory tools, treats the transcripts as data and ends its report with
+  `ADD` / `UPDATE` / `FORGET` proposals for you to apply. Ultracode solvers
+  (`evi ultracode`, `/ultra`, `/effort ultracode`) get only their mode's
+  read-only file tools, so the pipeline answers in text and no longer edits
+  the working tree, where parallel solvers overwrote each other.
+  `evi review --multi` and `/ultrareview` reviewers get only read-only tools
+  (their git and index readers included), and `evi review --fix` gets only
+  the file tools.
+- **The Telegram bot no longer inherits your desktop policy.** A paired
+  sender's turn ran under your `[auto]` settings, so `yolo`, `accept_edits`
+  or an auto-approved `code` on the desktop let anyone you paired run code
+  with whatever `telegram_tools` offered. The bot now has a policy of its
+  own: only the categories in the new `[channels] telegram_auto_approve`
+  (none by default) and its own memory and skill reads run, everything else
+  is denied, and nothing in `[auto]` widens that (your `hard_deny`, deny
+  rules, protected paths and the destructive-command guard still apply). It
+  answers only direct chats unless `allow_groups = true` (the TOML boolean),
+  never answers an anonymous group admin or a post sent for a channel, and
+  sends error text only to a paired sender's direct chat. Memory is
+  recall-only by default (`memory_mode = "recall"`): `"staged"` keeps each
+  `remember` in `~/.evi/inbox/channel/`, marked untrusted, until you apply it
+  (for now from Python, with `evi.channels.inbox`), and `"full"` writes
+  directly, as before. `telegram_tools = []` now means no tools, `subagent`
+  is never offered, and each turn's policy is logged to
+  `~/.evi/logs/channels/telegram.log`. If the bot should remember things,
+  answer in a group or use `fs` or `code` without asking, set `memory_mode`,
+  `allow_groups` or `telegram_auto_approve`. See docs/features/channels.md.
 - **Your hooks now guard the desktop and web app, the Telegram bridge and
   subagents.** `hooks.toml` ran only where the CLI built the agent, although
   the docs said every front end: web and desktop chats; the workflow, recipe,
@@ -317,7 +393,7 @@ All notable user-visible changes to eVi. Format loosely follows
   tools that need approval are denied in a headless turn, and `qwen` is pinned
   to `default` too. Model ids are limited to letters, digits and
   `. _ : / @ + = -`. Delegate backends still run their own tools outside eVi's
-  permission checks, unattended runs included.
+  permission checks, so unattended runs now refuse them (see Security).
 - **CLI-agent turns are time-bounded and leave nothing running.** `gemini`,
   `codex` and `claude_agent` turns had no time limit, and where there was one,
   only the direct child was killed: on Windows the `.cmd` shim's `node`
@@ -450,8 +526,35 @@ All notable user-visible changes to eVi. Format loosely follows
   `config.toml` on every request, so the old `[web] auth_token` stops working
   at once (a launch token stays valid until its server restarts). `evi web`
   no longer suggests the nonexistent `evi web token rotate`.
+- **`evi run` and `evi batch` never wait on a prompt, `-y` included.** Under
+  `-y` a command the destructive-command guard flags, or a protected write,
+  could still stop a scripted run at a terminal prompt; it is now denied.
+  Without `-y` a call that would ask is still denied unless you set
+  `[auto] unattended_policy = "allow"`. Their JSON output gains `policy`.
+- **Scheduled tasks are built like every other agent.** A scheduled run now
+  goes through `build_agent`, so safe mode, your `hooks.toml` and your
+  guardrails apply to it (a hook you wrote now also sees scheduled runs); it
+  still gets no project context. In safe mode `evi web` and the desktop app
+  don't start the scheduler. A run whose turn failed recorded `ok`; the
+  status is now `ok`, `denied: …`, `error: <message>` or, for a run that
+  couldn't start, `ERROR: …`. `evi schedule run-now` prints it, and
+  `evi scheduler` prints the policy its jobs run under.
+- **The web app's workflow and recipe runs no longer approve every tool.**
+  `POST /api/dispatch/workflow/{name}` and `POST /api/recipes/run` (Dispatch
+  and Settings → Routes & Recipes) follow `[auto] unattended_policy` and
+  return the `policy` they ran under; the panels don't show it yet.
+  `evi workflow run` still approves every tool of every step.
 
 ### Added
+- **SDK: say what an agent with nobody to ask may do.** `build_agent` takes
+  `unattended_policy="deny" | "allow"` (default: `[auto] unattended_policy`).
+  `run_subagent` and `run_subagents_parallel` take `tools=`, an exact list
+  of tool names, and `unattended_policy=`, and `run_subagent` takes
+  `memory=`, the store its memory tools use. `HeadlessResult` gains `policy`.
+  A custom `@tool` category, which has no `[tools]` toggle, counts as enabled
+  for a subagent. The custom-tool examples in docs/sdk.md and
+  examples/python/custom_tool.py now pass `unattended_policy="allow"`; see
+  "Permissions" in docs/sdk.md.
 - **`evi chat --mode chat|cowork|code`** (`-m`) picks the session's tool
   preset at launch, as `evi run --mode` does; an unknown mode exits 2.
 - **`evi doctor --dev`** checks a development checkout: the venv, git
@@ -573,6 +676,11 @@ All notable user-visible changes to eVi. Format loosely follows
   each build a session, leaving the running turn on one nobody could reach
   (so `/steer` answered "not busy"), and a follow-up sent the instant a turn
   ended could be queued on the finished turn.
+- **Restarting the Telegram channel no longer answers a message twice.** The
+  poller a **Save & apply** started fetched again the messages the old one
+  was still answering. Pollers on one bot token now share their place, an
+  update one of them took is skipped by any other, and starting the channel
+  stops the poller already running, so two restarts at once leave one.
 
 ## [1.0.53] — 2026-10-09
 

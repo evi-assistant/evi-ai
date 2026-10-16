@@ -16,6 +16,7 @@ temperature     = 0.7                         # lower (0.3) is friendlier to too
 max_tokens      = 4096
 request_timeout = 120.0
 context_size    = 32768                       # token window; the managed llama.cpp runtime sets it itself
+allow_cli_agent_unattended = false            # let unattended runs use a delegate CLI-agent backend (below)
 
 [comfy]
 base_url           = "http://localhost:8188"
@@ -82,6 +83,12 @@ block_destructive = true
 destructive_allow = ["git push --force-with-lease*"]
 # Builtin rule ids to silence without disabling the guard (see evi/shell_guard.py).
 destructive_disable_rules = ["git-commit-amend"]
+# What a call that would ask does when nobody can be asked (a scheduled task,
+# `evi run`, a subagent or workflow step with no UI, an SDK agent without a
+# permission_callback): "deny" (default; any other value means deny) or
+# "allow". Remote-triggered runs (federation, A2A, routine webhooks, channel
+# push) always deny. config.toml or a profile only; a .evi.toml can't set it.
+unattended_policy = "deny"
 ```
 
 Everyday commands are deliberately *not* flagged — `rm -rf ./build`, `rm -rf
@@ -104,6 +111,13 @@ see [Permissions & sandbox → Protected
 paths](features/permissions-and-sandbox.md#protected-paths). `evi lint` warns
 about `[auto]` entries that can never apply, and `evi doctor` lists the
 protected paths in force.
+
+A run nobody is watching denies every call that would ask unless you set
+`unattended_policy = "allow"`; the auto-approved categories, `allow` rules and
+trusted dirs and domains still run. Protected writes, secret reads and the
+guard deny there whatever the policy, `-y` and `yolo` included. See
+[Permissions & sandbox → Unattended
+runs](features/permissions-and-sandbox.md#unattended-runs).
 
 ### Unknown keys and how eVi saves `config.toml`
 
@@ -340,10 +354,16 @@ normally is killed.
 
 **Delegate backends run their own tools.** `codex`, `gemini`, `amp`, `qwen` and
 `copilot` run their tools under their own approval rules, outside eVi's
-permission checks, `hard_deny` list and protected paths, and that includes runs
-nobody is watching (a Telegram message, a scheduled task, a routine or workflow
-run, a federation / A2A request). Point `[llm] backend` and any
-`[models] *_backend` at a local or API backend on a machine that serves those.
+permission checks, `hard_deny` list and protected paths. So a run nobody is
+watching refuses one, as `[llm] backend` or as any `[models] *_backend`: a
+scheduled task, `evi run` / `evi batch` / `evi team run`, a subagent with no
+parent UI (and so `evi dream`), an ultracode stage, and the web app's
+workflow, recipe, routine, ultracode, channel-push, federation and A2A runs.
+The refusal names the setting; the web app answers `409` (an A2A task fails
+instead). Point `[llm] backend` and any `[models] *_backend` at a local or API
+backend on a machine that serves those, or set `[llm]
+allow_cli_agent_unattended = true` to accept the risk. The Telegram channel
+refuses a delegate backend even then. A chat you are watching is not affected.
 
 ## Profiles — `~/.evi/profiles/<name>.toml`
 
@@ -733,8 +753,11 @@ prompt = "Synthesize a balanced take.\nUpsides:\n{pros}\nDownsides:\n{cons}"
   concurrently. A following sequential step is the natural fan-in point.
 - Prompts interpolate workflow `[vars]` and earlier step outputs by id —
   `{topic}`, `{plan}`, … (escape literal braces as `{{` / `}}`).
-- Each step is an unattended (auto-approved) headless agent; set `mode` on a
-  step for a tool preset (`chat`/`cowork`/`code`).
+- Each step is an unattended headless agent; set `mode` on a step for a tool
+  preset (`chat`/`cowork`/`code`). `evi workflow run` auto-approves every tool
+  call; a run from the web app's Dispatch panel runs only the auto-approved
+  categories and denies anything else unless `[auto] unattended_policy =
+  "allow"`.
 
 `evi workflow new <name>` scaffolds one; `evi workflow run <name> --var topic=…`
 runs it (`--json` for machine output). The desktop **🗂 Dispatch** panel lists
@@ -780,7 +803,8 @@ Delegate a task to a trusted peer eVi (e.g. a GPU box):
 `evi peer run gpu "summarise this repo"` (or the `delegate_peer` tool, category
 `federation`, off by default) POSTs to the peer's `/api/federate`. The peer must
 opt in with `[federation] serve = true`; it runs the task non-interactively
-(tools not auto-approved are denied).
+(tools not auto-approved are denied, whatever the peer's `[auto] mode` or
+`unattended_policy` says).
 
 ### A2A (Agent2Agent) — interop with any agent
 
@@ -966,12 +990,19 @@ evi schedule add --name "morning brief" --cron "0 8 * * *" \
 evi scheduler          # foreground daemon, or just run `evi web`
 ```
 
+A scheduled run is unattended: the auto-approved categories run and anything
+that would ask follows `[auto] unattended_policy` (denied by default). Its log
+names the policy (`# policy: deny`), and a run in which a call was denied gets
+the status `denied: <tools> (policy deny)` in `evi schedule list`. A delegate
+CLI-agent backend is refused unless `[llm] allow_cli_agent_unattended = true`.
+
 ## Where things write logs
 
 | What                 | Where                            |
 |----------------------|----------------------------------|
 | Dream audit          | `~/.evi/logs/dreams/<stamp>.log` |
 | Scheduled task runs  | `~/.evi/logs/scheduled/<id>_<stamp>.log` |
+| Telegram channel turns (policy only) | `~/.evi/logs/channels/telegram.log` |
 | User-defined hooks   | Wherever your hook commands write |
 | Session transcripts  | `~/.evi/transcripts/<YYYY-MM-DD>/<session>.jsonl` |
 | ComfyUI images       | `~/.evi/images/`                 |

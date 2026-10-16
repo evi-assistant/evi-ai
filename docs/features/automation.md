@@ -32,7 +32,8 @@ The webhook endpoint `POST /api/routine/<token>` (in the web server):
 - Bypasses the normal web auth token (external callers don't have it) and instead validates the path token with a constant-time compare (`secrets.compare_digest`).
 - Returns `404` if the token matches nothing **or** the routine is disabled.
 - Runs the recipe **headless** (no streaming UI) and returns JSON: `{"ok": true, "routine": <name>, "results": [{label, prompt, text, error}, …]}`.
-- Permission policy: by default a routine runs **restricted** — only your auto-approved tool categories are allowed; everything else is **denied, never prompted** (`permission_callback` returns `False`). Set `yes` to auto-approve **all** tools for that routine (`agent.enable_auto_all()`).
+- Permission policy: by default a routine runs **restricted** — only what you pre-approved runs (the `[auto] auto_approve` categories, your `allow` rules, trusted dirs and domains); everything else is **denied, never prompted**. The webhook is triggered from outside, so the run is pinned to `deny`: `[auto] unattended_policy = "allow"` and `[auto] mode` yolo or accept_edits don't apply to it (see [Unattended runs](permissions-and-sandbox.md#unattended-runs)). Set `yes` to auto-approve **all** tools for that routine (`agent.enable_auto_all()`); protected paths, secret reads and the destructive-command guard still deny.
+- A delegate CLI-agent backend (`codex`, `gemini`, `amp`, `qwen`, `copilot`) makes the webhook answer `409` unless `[llm] allow_cli_agent_unattended = true`.
 
 ### Scheduled tasks
 
@@ -40,10 +41,12 @@ A scheduled task (`evi/scheduled.py`) is one JSON file per task under `~/.evi/sc
 
 The scheduler (`evi/scheduler.py`) wraps APScheduler's `BackgroundScheduler`:
 - On `start()` it schedules every **enabled** task. Tasks with an invalid cron string are **logged and skipped** (not fatal).
-- When a job fires, eVi builds a **fresh one-shot `Agent`** (no history carries between runs), sends the prompt with a system note that says it's running unattended, captures the assistant text (plus a tool trace), and writes it to `~/.evi/logs/scheduled/<id>_<timestamp>.log`. The run status is recorded on the task (`"ok"` or `"error: …"`).
-- For `kind="eval"`, the `prompt` field holds the **suite name**; the run executes the suite and records status as `ok (P/T)` or `fail (P/T)` so drift shows up in `evi schedule list`.
+- When a job fires, eVi builds a **fresh one-shot agent** (no history carries between runs) the way every front end does (`evi.sdk.build_agent`), so safe mode, your hooks and your guardrails apply; it gets no project context. It sends the prompt with a system note that says it's running unattended, captures the assistant text (plus a tool trace), and writes it to `~/.evi/logs/scheduled/<id>_<timestamp>.log`, whose header names the run's policy (`# policy: deny`).
+- Nobody is there to approve a tool call: the auto-approved categories (and `allow` rules, trusted dirs and domains) run, and anything that would ask follows `[auto] unattended_policy`, **denied** by default. See [Unattended runs](permissions-and-sandbox.md#unattended-runs).
+- The run status is recorded on the task: `ok`; `denied: <tools> (policy <policy>)` when a call was refused (the rest of the run still happened); `error: <message>` when the turn failed; or `ERROR: <type>: <message>` when the run couldn't start, e.g. `ERROR: CliAgentUnattended: …` for a delegate CLI-agent backend, which a scheduled task refuses unless `[llm] allow_cli_agent_unattended = true`.
+- For `kind="eval"`, the `prompt` field holds the **suite name**; the run executes the suite and records status as `ok (P/T)` or `fail (P/T)` so drift shows up in `evi schedule list`. Its cases approve every tool, as `evi eval run` does, and the log says `# policy: allow-all`.
 - `misfire_grace_time` is 300s, so a job that's slightly late still fires.
-- The scheduler runs from **either** the standalone `evi scheduler` daemon **or** automatically inside `evi web` (started in the app's lifespan). If APScheduler isn't installed, the web app logs that the scheduler didn't start and keeps serving — it does **not** crash.
+- The scheduler runs from **either** the standalone `evi scheduler` daemon **or** automatically inside `evi web` (started in the app's lifespan). If APScheduler isn't installed, the web app logs that the scheduler didn't start and keeps serving — it does **not** crash. In safe mode `evi web` and the desktop app don't start it at all.
 
 ### Channels
 
@@ -53,11 +56,13 @@ your phone is a different feature, the Telegram chat channel; see
 
 Channels are the lightest mechanism. `POST /api/session/<id>/channel` with a JSON body `{"text": "...", "source": "..."}` appends a system note (`[channel:<source>] <text>`) to that live session's history so the assistant sees it on its next turn, and records it in the session's channel log. The matching `GET` returns recent channel messages (for a UI badge). The sender authenticates with the **normal web token** (unlike routines). Channel context is **live-session only** — it is **not** persisted across reloads.
 
+With `"run": true` in the body the session acts on the text at once: eVi runs a headless turn in it and returns `{"ok": true, "source": …, "ran": true, "reply": …}` (or `"ran": false` with `"reason": "session busy"`, keeping the text as a note, while a turn is running). Nobody is watching that turn and the text comes from outside, so it is pinned to `deny`: only `[auto] auto_approve`, your `allow` rules and trusted dirs and domains let a call run. What you turned on for that session yourself (`/auto on`, its own approvals, `[auto] mode` yolo or accept_edits) does not apply during the turn and is back afterwards. A delegate CLI-agent backend makes the push answer `409` unless `[llm] allow_cli_agent_unattended = true`.
+
 ## Setup
 
 ### eVi home and config file
 
-Everything lives under `~/.evi/` (override the whole location with the `EVI_HOME` environment variable). The primary config is `~/.evi/config.toml`. Tool toggles in `[tools]` (e.g. `memory`, `skills`, `mcp`) affect what scheduled tasks and routines can do, since each builds an agent from your current config.
+Everything lives under `~/.evi/` (override the whole location with the `EVI_HOME` environment variable). The primary config is `~/.evi/config.toml`. Tool toggles in `[tools]` (e.g. `memory`, `skills`, `mcp`) affect what scheduled tasks and routines can do, since each builds an agent from your current config, and `[auto]` decides which of their calls run without asking (`auto_approve`, `rules`, trusted dirs and domains, and for scheduled tasks `unattended_policy`).
 
 Paths created/used by these features:
 
@@ -104,7 +109,11 @@ The web and desktop apps expose recipes and multi-model routes together under
 
 - **Recipes** — each saved recipe is listed with its steps; a **Run** button
   runs the recipe headless server-side (`POST /api/recipes/run`, one shared
-  agent across steps, auto-approved) and shows each step's output inline.
+  agent across steps) and shows each step's output inline. Nobody can approve
+  a call mid-run, so auto-approved categories run and anything that would ask
+  follows `[auto] unattended_policy` (denied by default); the response
+  (`{ok, name, steps, policy}`) names the policy. A delegate CLI-agent backend
+  gets `409` unless `[llm] allow_cli_agent_unattended = true`.
 - **Routes** — add / list / remove the multi-model routing rules in
   `~/.evi/routes.json` (`GET`/`POST /api/routes`, `POST /api/routes/remove`),
   the same store the CLI's `evi route` commands manage. Each rule maps a set of
@@ -135,10 +144,10 @@ evi route enable                                     # router_enabled = true
 evi routine add <name> --recipe <recipe> [--yes] [--overwrite]   # -r is short for --recipe
 evi routine list                                                 # names, target recipes, tokens
 evi routine remove <name>
-evi routine run <name>                                           # run locally, exactly as the webhook would
+evi routine run <name>                                           # run the routine's recipe locally, in this terminal
 ```
 
-`add` validates that the recipe exists first, then prints the curl command to trigger it. `--yes` here makes the routine auto-approve **all** tools when triggered. The webhook itself is `POST /api/routine/<token>` against your running `evi web` server.
+`add` validates that the recipe exists first, then prints the curl command to trigger it. `--yes` here makes the routine auto-approve **all** tools when triggered. The webhook itself is `POST /api/routine/<token>` against your running `evi web` server. `evi routine run` is not the webhook: you are at the terminal, so without `yes` a tool that would ask prompts you there instead of being denied.
 
 ### Scheduled tasks — `evi schedule` and `evi scheduler`
 
@@ -148,12 +157,12 @@ evi schedule list                  # id, name, cron, last status, on/off
 evi schedule remove <task_id>
 evi schedule enable <task_id>
 evi schedule disable <task_id>     # kept on disk, just won't fire
-evi schedule run-now <task_id>     # run immediately, ignoring cron; prints the log path
+evi schedule run-now <task_id>     # run immediately, ignoring cron; prints the log path and status
 
 evi scheduler [--reload-interval <seconds>]   # run the scheduler in the foreground (Ctrl-C to stop)
 ```
 
-You must pass **either** `--prompt` or `--eval` (not neither). `evi scheduler` re-syncs jobs with disk every `--reload-interval` seconds (default 60), so `evi schedule add/remove/...` changes are picked up without a restart. If you run `evi web`, the scheduler starts automatically — you don't need a separate `evi scheduler` process.
+You must pass **either** `--prompt` or `--eval` (not neither). `evi scheduler` prints the policy its jobs run under (`policy=deny`) and re-syncs jobs with disk every `--reload-interval` seconds (default 60), so `evi schedule add/remove/...` changes are picked up without a restart. If you run `evi web`, the scheduler starts automatically — you don't need a separate `evi scheduler` process.
 
 ### Channels — HTTP only
 
@@ -244,7 +253,7 @@ evi schedule list
 
 # Test it right now without waiting for 9am:
 evi schedule run-now 3f9a1c2d
-# ran 3f9a1c2d → /home/you/.evi/logs/scheduled/3f9a1c2d_20260609_090000.log
+# ran 3f9a1c2d → /home/you/.evi/logs/scheduled/3f9a1c2d_20260609_090000.log (ok)
 
 # Let it fire on schedule (or just run `evi web`, which starts the scheduler too):
 evi scheduler
@@ -276,7 +285,8 @@ Response: `{"ok": true, "source": "ci", "pending": 1}`. The assistant sees `[cha
 
 - **Recipes share one conversation; scheduled tasks do not.** Recipe steps run in a single shared agent so they can reference each other. Each scheduled-task firing builds a fresh agent with **no** memory of prior runs.
 - **Routine tokens are the only auth on the webhook.** Anyone with the token can trigger the routine — treat `~/.evi/routines.json` and the printed curl commands as secrets. The endpoint deliberately bypasses the web auth token so external callers can reach it; it uses a constant-time token compare.
-- **Routines fail closed on permissions.** Unless a routine is marked `yes`, any tool that isn't in your auto-approved categories is **denied, never prompted** (no human is there to approve). Use `yes` only for routines you fully trust.
+- **Routines fail closed on permissions.** Unless a routine is marked `yes`, any tool that isn't in your auto-approved categories is **denied, never prompted** (no human is there to approve), whatever `[auto] unattended_policy` or `[auto] mode` says. Use `yes` only for routines you fully trust.
+- **Scheduled tasks and web recipe runs fail closed too.** A call outside your auto-approved categories is denied unless you set `[auto] unattended_policy = "allow"`. Check `evi schedule list` for a `denied: …` status after adding a task that needs more, and see [Unattended runs](permissions-and-sandbox.md#unattended-runs).
 - **Scheduler is fail-open.** Missing APScheduler doesn't crash `evi web` — the scheduler simply doesn't start and the rest of the app keeps serving. Tasks with a bad cron string are logged and skipped, not fatal.
 - **Disable vs remove.** `evi schedule disable` keeps the task file on disk; it just won't fire. `evi routine`'s `enabled = false` similarly makes the webhook return `404`.
 - **Channels are ephemeral.** Channel pushes are live-session-only context and are **not** persisted across reloads; if the session is gone, `GET …/channel` returns an empty list.

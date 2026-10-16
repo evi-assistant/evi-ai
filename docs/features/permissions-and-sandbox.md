@@ -68,7 +68,9 @@ this order:
    pattern other than the built-in write-protected ones (`.env`, `*.pem`,
    `id_rsa`, …) **asks**, even with `fs` auto-approved, so a secret is never
    pulled into the model's context silently. `yolo` or an explicit allow rule
-   above (e.g. `allow read_file *.env.example`) lets it through.
+   above (e.g. `allow read_file *.env.example`) lets it through. In an
+   [unattended run](#unattended-runs) only the allow rule does: there the read
+   is denied even under `yolo`, `/auto on` or `evi run -y`.
 5. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
    tool's category is `fs` or `code`, the call is **allowed**.
 6. **Auto-approve categories** (`auto.auto_approve`). If the tool's category is
@@ -85,9 +87,10 @@ this order:
    or LAN address (see [What `web_fetch` will
    fetch](#what-web_fetch-will-fetch)).
 8. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
-   no UI able to prompt — e.g. the headless scheduler, a federation request, or
-   a workflow step — an unattended agent **default-denies** anything not
-   pre-approved.
+   no UI able to prompt — a scheduled task, `evi run`, a workflow step, a
+   federation request, an SDK agent built without a `permission_callback` — the
+   call follows the unattended policy and is **denied** unless you opted in
+   (see [Unattended runs](#unattended-runs)).
 
 The REPL `/auto on` toggle (and `s` at a CLI prompt) is a session override: it
 acts as `yolo` for the rest of the session, until you `/auto off`. Hard-deny,
@@ -226,6 +229,82 @@ This is a guardrail, not a sandbox. Not inspected: command strings run through
 (`cp -r payload/. .`), hard links, and paths nested inside an MCP tool's
 arguments (`{"edits": [{"path": …}]}`).
 
+### Unattended runs
+
+A run is **unattended** when nothing can show you a prompt: a scheduled task,
+`evi run` and `evi batch`, `evi team run`, `evi dream`, an ultracode stage, a
+workflow or recipe the web app runs, a subagent whose parent has no permission
+UI, an agent built with the SDK without a `permission_callback`, and the
+remote-triggered runs below. Pre-approved calls still run in it: the
+`auto_approve` categories, `allow` rules, trusted dirs and domains. A call that
+would **ask** follows `[auto] unattended_policy`:
+
+- **`"deny"`** (the default, and what any value other than `"allow"` means):
+  the call is not run, and the model is told why: `PERMISSION DENIED:
+  <tool>(<args>) was not run. This run is unattended (nobody can approve a tool
+  call), so only auto-approved tool categories run ([auto] auto_approve; [auto]
+  unattended_policy = "deny").`
+- **`"allow"`**: the call runs. This is the escape hatch for your own jobs and
+  scripts, and it opens every tool such a run has. To let one kind of call
+  through, add its category to `auto_approve` or write an `allow` rule
+  instead.
+
+Whatever the policy, and under `-y`, `/auto on` or `yolo` too, an unattended
+run never writes a protected path, never reads a protected secret (`.env`, a
+key) that no explicit `allow` rule covers, and never runs a command the
+destructive-command guard flags. A repository's `.evi.toml` can't set
+`unattended_policy`.
+
+`[auto] mode` still applies to the unattended runs you start yourself: under
+`yolo` every call runs (the checks just named aside), and under `accept_edits`
+file and code calls run. The run's policy label names this.
+
+**Remote-triggered runs are pinned to `deny`.** A federated task
+(`/api/federate`), an A2A task (`/a2a`), a routine webhook without `yes` and a
+channel push with `run: true` (`POST /api/session/<id>/channel`) come from
+outside, so nothing you turned on for yourself applies to them: not
+`unattended_policy = "allow"`, not `[auto] mode` yolo or accept_edits, not
+`/auto on` or a session's own approvals. Only `[auto] auto_approve`, your
+`allow` rules and trusted dirs and domains let a call run, and a subagent such
+a run starts gets the same limits. The Telegram channel has a policy of its
+own and never uses `[auto]`; see [channels.md](channels.md#the-channels-policy).
+
+**`deny` only covers calls that would ask.** The default `auto_approve` list
+(`fs`, `code`, `memory`, `skills`, `image`) runs in every unattended run,
+remote-triggered ones included, and that means `run_python` and file writes.
+If your scheduled jobs, peers or webhooks shouldn't have them, take `code` (and
+`fs`) out of `auto_approve`, which makes your own sessions ask for them too, or
+block specific calls with `deny` rules or `hard_deny`.
+
+**Each run names its policy**: `deny`, `allow`, `allow-all` (`-y`, a routine's
+`yes`) or `interactive`, plus the mode when it lets calls through
+(`allow-all (mode=yolo)`, `deny (mode=accept_edits: file edits run)`). It is
+the `# policy:` line of a scheduled task's log, `"policy"` in `evi run --format
+json` and `evi batch` output and in the web app's workflow and recipe
+responses, the `policy=` note `evi scheduler` and `evi team run` print, and the
+`policy:` line of a dream report. A scheduled run in which a call was denied
+records the status `denied: <tools> (policy <policy>)`, which `evi schedule
+list` shows.
+
+**Subagents** ask through the agent that started them. In a chat you are
+watching, a subagent's prompt is that chat's prompt, one at a time however many
+subagents run at once, and your `/auto on` (or an `s` answer) covers it. A
+subagent with no parent UI (`evi team run`, `evi dream`, one a scheduled task
+starts) runs unattended.
+
+**Delegate CLI-agent backends are refused.** `codex`, `gemini`, `amp`, `qwen`
+and `copilot` run their own tools outside these checks, so an unattended run
+won't use one, as `[llm] backend` or as any `[models] *_backend`. The
+scheduler records the refusal as the task's status, `evi run`, `evi batch` and
+`evi team run` exit with it, the web app's runs answer `409`, and an A2A task
+fails. Set `[llm] allow_cli_agent_unattended = true` to accept the risk; the
+Telegram channel refuses them even then.
+
+Still allow-all, as before: eval cases (`evi eval run`, the web eval runner
+and scheduled eval suites, whose log says `# policy: allow-all`), so scores
+measure what the agent can do, and `evi workflow run`, which approves every
+tool of every step. The web app's workflow runs follow the policy.
+
 ### What `web_fetch` will fetch
 
 The model picks `web_fetch`'s URL, and the page can redirect anywhere, so
@@ -346,6 +425,7 @@ protected_paths = [".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
 protected_paths_remove = []                          # protected entries to un-protect
 trusted_dirs    = []                                 # auto-approve fs/code under these paths
 trusted_domains = []                                 # auto-approve web fetches to these hosts
+unattended_policy = "deny"                           # deny | allow: a call that would ask, with nobody to ask
 ```
 
 | Key | Default | Meaning |
@@ -358,6 +438,7 @@ trusted_domains = []                                 # auto-approve web fetches 
 | `protected_paths_remove` | `[]` | Protected entries to un-protect, by exact text: a built-in write-protected path or one of your `protected_paths`. Not settable from a `.evi.toml`. |
 | `trusted_dirs` | `[]` | Paths whose `fs`/`code` calls are auto-approved when every path argument resolves inside one (`~` expanded, real path, sub-paths included). |
 | `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). Also the only way to let `web_fetch` reach a loopback or LAN address. |
+| `unattended_policy` | `"deny"` | What a call that would ask does in an [unattended run](#unattended-runs): `deny` refuses it, `allow` runs it; any other value means `deny`. Remote-triggered runs always deny. Not settable from a `.evi.toml`. |
 
 Valid modes are exactly `ask`, `accept_edits`, `plan`, `yolo`.
 
@@ -412,10 +493,18 @@ present:
 
 ### Where it can't prompt
 
-Headless contexts (the scheduler, `evi web` background runs, federation
-`/api/federate`, and workflow steps) attach a deny-only permission callback:
-anything not pre-approved via `auto_approve`/`rules`/`mode`/trusted scopes is
-**denied**, never blocked waiting on a human.
+A run with no permission UI never blocks waiting on a human: anything not
+pre-approved via `auto_approve` / `rules` / `mode` / trusted scopes follows
+`[auto] unattended_policy`, **denied** by default. To let your own scheduled
+jobs or scripts run calls that would ask, set:
+
+```toml
+[auto]
+unattended_policy = "allow"   # the escape hatch; remote-triggered runs still deny
+```
+
+Which runs count, what still denies and how a run reports its policy:
+[Unattended runs](#unattended-runs).
 
 ## Usage
 
@@ -496,7 +585,7 @@ sections, judged against your config + active profile:
 
 Everything else that loosens is ignored: `auto_approve`, `trusted_dirs`,
 `trusted_domains`, `destructive_allow`, `destructive_disable_rules`,
-`protected_paths_remove`, any other
+`protected_paths_remove`, `unattended_policy`, any other
 `[tools]` key (`transcripts`, `mcp_allow`, `search_backend`, `searxng_url`,
 `cleanup_period_days`, …). So a repo can pin a stricter `mode`, a `deny` rule or
 a `hard_deny` entry for everyone who works in it, but it can never grant itself
@@ -627,10 +716,13 @@ turn returns to your normal policy.
   path before the sub-path check, so symlink/relative tricks resolve to their
   real target. A non-string argument can't be matched by an arg-glob; rules
   only see string-valued args.
-- **Headless = strict.** In any context that can't prompt (scheduler, web
-  background runs, federation, workflow steps), unattended agents deny anything
-  not pre-approved — so make sure scheduled tasks rely only on `auto_approve` /
-  `rules` / trusted scopes, not on interactive approval.
+- **Headless = strict.** In any run that can't prompt (scheduled tasks,
+  `evi run`, subagents with no parent UI, the web app's workflow and recipe
+  runs, federation, SDK agents without a `permission_callback`), anything not
+  pre-approved is denied unless you set `[auto] unattended_policy = "allow"`,
+  and remote-triggered runs deny it even then. Make scheduled tasks rely on
+  `auto_approve` / `rules` / trusted scopes, not on interactive approval. See
+  [Unattended runs](#unattended-runs).
 - **`trusted_domains` is host-based.** It matches the URL host exactly or as a
   subdomain (`docs.python.org` also covers `x.docs.python.org`), not by path or
   scheme. For `web_fetch` an entry also unlocks that host's loopback / LAN
@@ -652,5 +744,8 @@ turn returns to your normal policy.
 - `C:\evi\evi\sandbox.py` — `wrap()` / `available()` / `status()` per-OS.
 - `C:\evi\evi\config.py` — `AutoSettings` (`[auto]`) and `ToolToggles` (`[tools]`).
 - `C:\evi\evi\tools\code.py` — where `run_python` consults `tools.sandbox`.
-- `C:\evi\evi\llm\agent.py` — wires `decide()`, `/auto`, and `/plan` into the run loop.
+- `C:\evi\evi\llm\agent.py` — wires `decide()`, `/auto`, and `/plan` into the run loop,
+  plus the unattended policy (`make_unattended`, `remote_unattended`, `policy_label`).
+- `C:\evi\evi\llm\subagent.py` — subagent tool lists and how a subagent asks its parent.
+- `C:\evi\evi\llm\cli_agent.py` — `unattended()`, the delegate CLI-agent refusal.
 - `C:\evi\evi\apps\cli\main.py` — REPL slash commands and the CLI permission prompts.

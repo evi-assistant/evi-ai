@@ -84,6 +84,40 @@ Auto-approval might be off and you're sitting at an `approve? y/a (this call)
 rest of the session. Then revisit `auto.auto_approve` in `config.toml` for a
 lasting fix.
 
+## "PERMISSION DENIED: … This run is unattended …"
+
+A call that would have asked was refused because nothing could ask you: a
+scheduled task, `evi run` or `evi batch` without `-y`, `evi team run`,
+`evi dream`, an ultracode stage, a subagent with no chat to ask through, a
+workflow or recipe the web app runs, or an SDK agent built without a
+`permission_callback`. Such a run denies every call that would ask unless you
+opted in (`[auto] unattended_policy = "deny"` is the default). For a scheduled
+task, `evi schedule list` shows the refusal as `denied: <tools> (policy deny)`
+and the log's header says `# policy: deny`.
+
+To let the call run, from narrowest to widest:
+
+- **Pre-approve that kind of call**: an `allow` rule for the tool
+  (`rules = ["allow web_fetch"]`), a `trusted_dirs` / `trusted_domains` entry,
+  or its category in `[auto] auto_approve`. Your own sessions then stop asking
+  for it too.
+- **For one run**: `evi run -y` and `evi batch -y` approve every call of that
+  run, and a routine added with `--yes` does for its webhook.
+- **For every unattended run you start**: set `unattended_policy = "allow"`
+  under `[auto]` in `config.toml`.
+- **In your own Python code**: pass `permission_callback=` or
+  `unattended_policy="allow"` to `build_agent` (see "Permissions" in
+  [sdk.md](sdk.md)).
+
+None of these opens a remote-triggered run beyond what you pre-approved: a
+federated or A2A task, a routine webhook without `yes` and a channel push with
+`run: true` deny the call whatever `unattended_policy` or `[auto] mode` says.
+A Telegram turn follows `[channels] telegram_auto_approve` (the denial names
+`[auto] auto_approve` because the bot's own policy fills that list). Protected
+writes, secret reads and commands the destructive-command guard flags stay
+denied in every unattended run; see the next section. Background: [Unattended
+runs](features/permissions-and-sandbox.md#unattended-runs).
+
 ## "PERMISSION DENIED: … writes the protected path …"
 
 The call would write a protected path: an instruction, config, hook, task or CI
@@ -98,6 +132,22 @@ lands is unknown)` means the shell line `cd`s somewhere eVi can't work out
 (`cd $DIR`, a wildcard, a drive switch) before writing a relative path: retry
 with an absolute path or without the `cd`. See [Permissions & sandbox →
 Protected paths](features/permissions-and-sandbox.md#protected-paths).
+
+`… reads the protected path …` is the same check for a secret (`.env`,
+`*.pem`, an SSH key). Unattended, the read is denied even under `-y`, `yolo`
+or `[auto] unattended_policy = "allow"`; only an explicit allow rule that names
+it, such as `allow read_file *.env.example`, lets it through.
+
+## "The … backend is a CLI agent that runs its own tools … won't use it for an unattended … run"
+
+`[llm] backend` (or a `[models] *_backend`) is `codex`, `gemini`, `amp`,
+`qwen` or `copilot`. Those CLIs run their own shell, file and web tools outside
+eVi's permission checks, so a run nobody is watching (a scheduled task,
+`evi run`, `evi batch`, `evi team run`, a subagent with no chat to ask, the web
+app's workflow, recipe, routine, channel-push, ultracode and federation runs)
+refuses them; the web app answers `409`. Point the setting the message names at
+a local or API backend, or set `allow_cli_agent_unattended = true` under
+`[llm]` to accept the risk. The Telegram channel refuses them even then.
 
 ## A repository's `.evi.toml` settings aren't applied
 
@@ -186,11 +236,14 @@ Tail the Tauri stderr to see what `py -3.13 -m uvicorn …` actually did.
 - `apscheduler` not installed: `pip install 'evi-assistant[scheduler]'`.
 - The scheduler isn't running anywhere. Pick one:
   - foreground daemon: `evi scheduler`
-  - alongside web: `evi web` (lifespan starts the scheduler)
+  - alongside web: `evi web` (lifespan starts the scheduler; not in safe mode)
 - The cron expression is invalid: check
   `~/.evi/logs/` — failed jobs get logged with the parse error.
 - The task is disabled: `evi schedule list` shows status; flip with
   `evi schedule enable <id>`.
+- It fires but its status is `denied: …`: a tool it needed would have asked,
+  and a scheduled run denies that by default; see ["PERMISSION DENIED: … This
+  run is unattended …"](#permission-denied--this-run-is-unattended-).
 
 ## `evi dream` reports zero transcripts to review
 

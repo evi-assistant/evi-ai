@@ -22,7 +22,12 @@ def multiply(a: int, b: int) -> int:
 def main() -> None:
     # tools=[...] replaces the default toolset entirely — the agent sees only
     # these two. (Use tool_categories=[...] to pick from the built-ins instead.)
-    agent = build_agent(tools=[add, multiply])
+    #
+    # Nobody is asked about tool calls here, and "math" is not an auto-approved
+    # category, so without a permission_callback every call would be denied
+    # (an agent with nobody to ask fails closed). These two tools only do
+    # arithmetic, so let this agent's calls run.
+    agent = build_agent(tools=[add, multiply], unattended_policy="allow")
     print(run_headless(agent, "What is (12 + 30) multiplied by 3?").text)
 
 

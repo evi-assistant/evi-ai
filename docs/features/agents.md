@@ -36,17 +36,38 @@ concatenated final assistant text. A short `[trace]` of tool calls (each tool
 name + a 200-char preview) is appended so you can see what it did. If the
 subagent errors, you get `ERROR: subagent failed: …` instead.
 
-Tool scoping is by **category**, not per-tool toggle. A subagent profile lists
-the tool *categories* it may use, and the runner pulls every registered tool in
-those categories — so an Explore subagent gets read-only `fs` tools even if the
-global `fs` toggle is otherwise managed elsewhere.
+A subagent profile lists the tool *categories* it may use, or tool *names* for
+a tighter list, and the subagent gets the registered tools that match, **cut to
+what your `[tools]` toggles enable** (and what safe mode allows): a profile can
+never hand a subagent a tool you switched off. A category with no toggle (an
+SDK `@tool`'s or a plugin's own) counts as on. The `explore` profile lists four
+tool names rather than the `fs` category, which also holds `write_file`,
+`edit_file` and `apply_patch`, so an Explore subagent can look around but
+never change anything.
 
 Built-in profiles (`SUBAGENT_PROFILES`):
 
-| Profile | Tool categories | Purpose |
+| Profile | Tools | Purpose |
 |---|---|---|
-| `explore` | `fs` | Read-only investigation; ends with a bulleted summary. |
+| `explore` | `read_file`, `list_dir`, `find_files`, `search_files` | Read-only investigation; ends with a bulleted summary. |
 | `plan` | *(none)* | Produces a numbered implementation plan; calls no tools. |
+
+**Permissions.** A subagent asks through the agent that spawned it. In a chat
+you are watching, its tool prompts are that chat's prompts (in the web app, with
+the same deadline), one at a time however many subagents run at once, and the
+chat's `/auto on` covers it. With no parent UI (`evi team run`, `evi dream`, a
+subagent a scheduled task starts) it runs unattended: auto-approved categories
+run, anything else follows `[auto] unattended_policy` (denied by default), and
+a delegate CLI-agent backend is refused unless `[llm]
+allow_cli_agent_unattended = true`. A subagent of a remote-triggered run
+(federation, A2A, a routine webhook, a channel push) keeps that run's limits.
+See [Unattended runs](permissions-and-sandbox.md#unattended-runs).
+
+**Code review** (`evi review --multi`, `/ultrareview`) runs one subagent per
+lens. Each reviewer gets only the read-only tools of the `fs`, `git` and
+`index` categories (`read_file`, `git_diff`, `git_log`, `find_in_project`, …),
+whatever the `[tools]` toggles say (`--no-tools` gives none), and those run
+without asking; a protected secret is still never read.
 
 These are exposed as tools (category `subagent`):
 
@@ -71,6 +92,8 @@ evi agents                # lists built-in + user + plugin profiles
 
 This writes `~/.evi/agents.toml` (same `[[agent]]` schema as below) and the
 profile is then usable by bare name via `delegate(profile="security", task=…)`.
+`--tools` takes categories or tool names; either way the subagent only gets
+the tools your `[tools]` toggles enable.
 Re-run with `--force` to overwrite; built-in names (`explore`, `plan`) are
 reserved.
 
@@ -86,7 +109,7 @@ never breaks core subagents):
 [[agent]]
 name = "security"
 system_prompt = "You are a security reviewer…"
-tools = ["fs"]            # tool *categories* the subagent may use
+tools = ["fs"]            # tool categories (or tool names) the subagent may use
 ```
 
 ### Agent teams
@@ -110,6 +133,12 @@ evi team clear
 A task whose dependency **fails** is reported (its dependents stay pending rather
 than hanging the run). The core is model-free — `TeamStore` + `drain_team(store,
 run_one)` (injected runner, like ultracode) — and re-exported from `evi.sdk`.
+
+Teammates get the `fs` and `code` tools your toggles enable and run
+unattended: auto-approved calls run (both categories are, by default) and
+anything else follows `[auto] unattended_policy`, denied by default.
+`evi team run` prints that policy, and refuses a delegate CLI-agent backend
+before any teammate starts unless `[llm] allow_cli_agent_unattended = true`.
 
 **Distributed teammates (`evi team run --peers`).** Local teammates all share one
 backend, so they serialise on a single GPU. With `--peers` (alias `--distribute`)
@@ -139,8 +168,11 @@ the known names.
 
 Workflows live at `~/.evi/workflows/<name>.toml`. Each step may set a `mode`
 (`chat` | `cowork` | `code`) to swap to that mode's tool preset; otherwise it
-uses your enabled tools. Workflow runs are **unattended**, so every step's agent
-auto-approves all tool calls.
+uses your enabled tools. Workflow runs are **unattended**, and the two ways to
+run one differ: `evi workflow run` auto-approves every tool call of every
+step, while a run from the web app (Dispatch, `POST
+/api/dispatch/workflow/{name}`) does not: auto-approved categories run and
+anything that would ask follows `[auto] unattended_policy`, denied by default.
 
 ### Federation
 
@@ -152,10 +184,16 @@ trust model. Default delegation timeout is **180 s**.
 
 On the **serving** side, `/api/federate` is **off unless** the peer sets
 `[federation] serve = true` (otherwise HTTP 403). When enabled, the served task
-runs **non-interactively**: the peer's agent denies any tool not already in its
-auto-approve list (`permission_callback` returns `False`), so a remote task can't
-trigger surprises like shell or network tools. A peer-side error comes back as a
-JSON `error`, surfaced to the caller as `ERROR: peer <name>: …`.
+runs **non-interactively**: the peer's agent runs only what it pre-approved
+(`[auto] auto_approve`, `allow` rules, trusted dirs and domains) and denies the
+rest, whatever its `[auto] unattended_policy` or `[auto] mode` (yolo,
+accept_edits) says, so a remote task can't trigger surprises like shell or
+network tools. The default `auto_approve` list still includes `fs` and `code`,
+so a peer's task can write files and run `run_python` there; take them out of
+the serving machine's list if it shouldn't. A delegate CLI-agent backend on the
+peer answers `409` unless `[llm] allow_cli_agent_unattended = true`. A
+peer-side error comes back as a JSON `error`, surfaced to the caller as
+`ERROR: peer <name>: …`.
 
 **Fail-safe (LAN):** an eVi serving federation (`serve = true`) while bound to the
 network (`bind_lan = true`, or `evi web --host 0.0.0.0`) **without** `[web]
@@ -374,7 +412,10 @@ The web UI's Dispatch view (`GET /api/dispatch`) shows every live session with
 its mode, message count, token usage/ceiling, and pending tool count, alongside
 the workflows you can launch. You can run a workflow headless server-side via
 `POST /api/dispatch/workflow/{name}` (body `{ "vars": { ... } }`), where each
-step runs as its own auto-approved agent and the response is `{step_id: output}`.
+step runs as its own unattended agent (auto-approved categories run, anything
+else follows `[auto] unattended_policy`) and the response is `{ "ok": true,
+"outputs": {step_id: output}, "policy": "deny" }`. A delegate CLI-agent backend
+gets `409` unless `[llm] allow_cli_agent_unattended = true`.
 
 **Live agent-watch.** While the Dispatch panel is open it subscribes to
 `GET /api/dispatch/stream` (Server-Sent Events) and re-renders the session list
@@ -479,8 +520,8 @@ evi peer list
 evi peer run gpu "Summarize the architecture of the repo at /srv/project and list its top 5 risks."
 ```
 
-The big model on the GPU box runs the task non-interactively (only its
-auto-approved tools are available) and returns the final text.
+The big model on the GPU box runs the task non-interactively (only the tools it
+auto-approved run; the rest are denied) and returns the final text.
 
 ### Example 3 — A plugin-supplied "security" subagent
 
@@ -491,14 +532,15 @@ Drop an `agents.toml` into a plugin directory to add a namespaced profile:
 [[agent]]
 name = "security"
 system_prompt = "You are a security reviewer. Read code and report vulnerabilities. Do not modify anything."
-tools = ["fs"]
+# Tool names, not the fs category (which also holds write_file / edit_file):
+tools = ["read_file", "list_dir", "find_files", "search_files"]
 ```
 
 Confirm it's registered, then use it from a chat via the generic delegate tool:
 
 ```text
 evi agents
-# →   <plugin>:security  (fs · plugin)
+# →   <plugin>:security  (read_file, list_dir, find_files, search_files · plugin)
 #       You are a security reviewer. Read code and report vulnerabilities…
 ```
 
@@ -510,9 +552,10 @@ Inside a chat (with `subagent` tools enabled), the model invokes it as
 - **Subagent tools are off by default.** Set `[tools] subagent = true` (it's also
   included in `code` mode). Spawns are not auto-approved unless you add
   `subagent` to `[auto] auto_approve`.
-- **Category-level scoping only.** Profiles grant whole tool *categories*; there
-  is no per-tool allow-list inside a profile. The `explore` profile is read-only
-  (`fs`); the `plan` profile gets no tools at all.
+- **Scoping by category or name, within your toggles.** A profile grants whole
+  tool *categories* or individual tools by name, and either way only the tools
+  your `[tools]` toggles enable. The `explore` profile is read-only (four named
+  `fs` readers); the `plan` profile gets no tools at all.
 - **Parallelism is bounded.** `parallel_research` caps at **6** concurrent
   Explore subagents; the parallel runner uses up to 4 workers by default. A
   single local model serialises inference regardless, so expect speedups mainly
@@ -520,16 +563,20 @@ Inside a chat (with `subagent` tools enabled), the model invokes it as
 - **Subagent depth.** Each subagent runs at most `max_turns=6` and returns text
   plus a short tool trace; it's meant for bounded, one-shot delegation, not
   open-ended sessions.
-- **Workflows are unattended.** Every step auto-approves all tool calls
-  (`enable_auto_all`). Don't put steps that touch dangerous tools (shell,
-  computer control, network writes) into a workflow you run unsupervised unless
-  you trust the prompts. Malformed workflow files are skipped by `list`, and
-  template errors (e.g. an unknown `{ref}` or unescaped brace) raise a clear
-  `WorkflowError`.
+- **Workflows are unattended.** With `evi workflow run` every step
+  auto-approves all tool calls (`enable_auto_all`); from the web app, a call
+  outside your auto-approved categories is denied unless `[auto]
+  unattended_policy = "allow"`. Don't put steps that touch dangerous tools
+  (shell, computer control, network writes) into a workflow you run
+  unsupervised unless you trust the prompts. Malformed workflow files are
+  skipped by `list`, and template errors (e.g. an unknown `{ref}` or unescaped
+  brace) raise a clear `WorkflowError`.
 - **Federation is opt-in on both ends.** The caller needs `[tools] federation =
   true` and a `peers.json` entry; the responder needs `[federation] serve =
   true`. Serving is **deny-by-default** for tools — a federated task can only use
-  the responder's already-auto-approved tools, never trigger fresh prompts.
+  the responder's already-auto-approved tools, never trigger fresh prompts, and
+  the responder's own `[auto] mode` or `unattended_policy = "allow"` doesn't
+  widen that.
 - **Security of tokens.** Federation reuses the peer's **web bearer token** over
   plain HTTP — there's no separate trust model and no TLS by default. Keep peers
   on a trusted network (LAN/VPN); `peers.json` lives outside synced config so
