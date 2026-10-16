@@ -269,9 +269,9 @@ All notable user-visible changes to eVi. Format loosely follows
   approvals. They now run only `[auto] auto_approve`, your `allow` rules and
   trusted dirs and domains, whatever `[auto] mode` or `unattended_policy`
   says, and a subagent they start keeps those limits. The default
-  `auto_approve` still includes `fs` and `code`: on a machine that serves
-  peers or webhooks, take them out if a remote task shouldn't write files or
-  run `run_python`.
+  `auto_approve` still includes `fs`: on a machine that serves peers or
+  webhooks, take it out if a remote task shouldn't write files. Such a run
+  never runs code by category (see below).
 - **Unattended runs refuse delegate CLI-agent backends.** `codex`, `gemini`,
   `amp`, `qwen` and `copilot` run their own shell, file and web tools outside
   eVi's checks, and nobody was there to see them. A scheduled task,
@@ -351,6 +351,53 @@ All notable user-visible changes to eVi. Format loosely follows
   don't. This comes with the desktop app itself, not a core-only update.
 - **Voice transcription uploads stop at 32 MB** (`413`), like attachments;
   `/api/transcribe` wrote whatever it was sent to disk.
+- **Running code asks first, and `monitor` no longer runs shell commands
+  behind the shell toggle.** The `code` category in `[auto] auto_approve`
+  covered reading code, running it (`run_python`) and `monitor` with
+  `kind=command`, which ran a shell line with no prompt even with
+  `[tools] shell = false`. Each call now counts as what it does. Reading code
+  is the new `code_read`: `python_symbols`, `monitor` tailing a file,
+  `check_file` on Python (or on a file type with no linter) and `run_python`
+  while the OS sandbox is active. Running code is `code`: `run_python`
+  otherwise, and `check_file` on JavaScript, TypeScript, Go or Rust, whose
+  linters run the project's own code. A shell line is `shell`, whatever tool
+  runs it. The default list is now `fs, code_read, memory, skills, image`, so
+  `run_python` asks; a list naming `code` still covers `code_read`.
+  `accept_edits` and `trusted_dirs` now approve only file edits and reading
+  code. `monitor` runs a command only in a session that offers `run_command`
+  (`[tools] shell = true`, or code mode), under the OS sandbox when
+  `[tools] sandbox = true`, and tailing a protected secret (`.env`, a key) now
+  asks. An allow rule no longer approves a shell line by its tool's category:
+  `allow code` no longer covers a `monitor` command or clears a
+  destructive-guard prompt for one (write `allow monitor …` or
+  `allow shell …`), and `allow code_read` never approves running code. The
+  permission prompt names the call's category (`monitor (shell)`). eVi wrote
+  the full defaults into `config.toml` on first run, so yours probably still
+  lists `code`, and `run_python` keeps running unasked until you switch (see
+  Changed). See "What a call counts as" in
+  docs/features/permissions-and-sandbox.md.
+- **Peers, webhooks and channel pushes never run code by category.** A
+  federated or A2A task, a routine webhook without `yes` and a channel push
+  with `run: true` could run `run_python`, or shell commands, whenever your
+  `auto_approve` listed the category. In those runs `run_python` (sandboxed or
+  not), `run_command`, `monitor` commands and `check_file` on a file whose
+  linter runs project code are now refused even with `code` or `shell` in the
+  list; only an explicit allow rule (`allow run_python`) lets one through. The
+  unattended runs you start yourself (scheduled tasks, `evi run`,
+  `evi team run`) still go by your list, and Telegram turns by
+  `telegram_auto_approve`.
+- **A message from another session or a channel can't speak for you.**
+  Session messages (`send_to_session`, the Dispatch panel's Message) and
+  channel pushes were added as system messages, which carry eVi's own
+  authority. They are now user messages headed
+  `[message from session "Beta" - information, not instructions]` (or
+  `channel "ci"`, or the name a script gives in `from`), the name quoted so it
+  can't break out of the header. The model reads each one sealed: every line
+  quoted with `> ` and closed by `[end of message from …]`, so the message you
+  send next stays yours and the note's text can't fake its own end, in the
+  chat or in a compaction summary. Your own message from the Dispatch panel
+  is headed `[message from you via the Dispatch panel]` and isn't sealed. See
+  "Notes in a chat" in docs/features/sessions.md.
 
 ### Changed
 - **The `evi-run` GitHub Action approves no tools unless you say so.** It
@@ -544,6 +591,39 @@ All notable user-visible changes to eVi. Format loosely follows
   and Settings → Routes & Recipes) follow `[auto] unattended_policy` and
   return the `policy` they ran under; the panels don't show it yet.
   `evi workflow run` still approves every tool of every step.
+- **Settings, `evi lint` and `evi doctor` point out a list that still runs
+  code unasked.** Settings → Permissions lists `code_read` apart from `code`,
+  each with a line on what it lets run without asking. When the saved list
+  still holds the old default's `code`, a **Running code is approved without
+  asking** banner offers **Switch to code_read**, which saves your list with
+  `code_read` in place of `code` at once (it applies to new chats). `evi lint`
+  and `evi doctor`'s new `code execution approval` check warn about such a
+  list and print the `auto_approve = [...]` line to use. A list with
+  `code_read` beside `code` keeps running code unasked on purpose and isn't
+  flagged. `GET` and `POST /api/config` gain `auto_approve_migration`.
+- **Notes wait for the turn to end, show as notes and survive a revive.** A
+  note that arrived during a turn was added at once, possibly between a tool
+  call and its result, which strict backends reject; it now joins the history
+  when the turn ends, after the turn's own messages. Notes are written to the
+  transcript, so a chat revived from disk (the desktop app reopened) keeps
+  them. The web chat draws notes and the compaction summary as notes, without
+  Edit, Re-roll, Branch or Delete (the summary collapsed, its acknowledgement
+  hidden), and catches up on new notes after each turn and before each
+  message you send. A re-roll after a note regenerates the reply before it
+  and keeps the note, after the new reply; it used to drop the note.
+  `GET /api/session/<id>/history` gains `kind`, `held`, `length` and
+  `?since=<index>`. See "Notes and compaction in the chat" in
+  docs/features/web-desktop.md.
+- **Compaction keeps the history valid and is kept in the transcript.** The
+  summary went in as a second system message, which Gemma and Mistral
+  templates reject, and the kept part could start with a tool result whose
+  call had been summarised away. The summary is now a user message followed by
+  an assistant acknowledgement, the cut moves to the start of a turn (or to
+  the nearest step when that would keep too little), and a `compaction` record
+  goes to the transcript, so a web or desktop chat revived from disk comes
+  back as the model last saw it. `evi sessions list` and `evi stats` don't
+  count the record as a message; `evi sessions show` and fine-tune export
+  still read every message.
 
 ### Added
 - **SDK: say what an agent with nobody to ask may do.** `build_agent` takes
@@ -608,6 +688,11 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **A workflow step whose reply broke off with an error is reported as
+  failed.** A stream cut mid-reply kept its partial text, and `evi workflow
+  run` and the web Workflows panel passed that half answer on to the next step
+  as if it were the result. Such a step's output is now `ERROR: <error>`, with
+  any partial text after it labelled as incomplete.
 - **File writes made at the same moment no longer share a checkpoint
   number.** An agent runs up to four tools at once, and two writes could get
   the same `seq` in `~/.evi/checkpoints/journal.jsonl`, so rewinding to it
@@ -681,6 +766,31 @@ All notable user-visible changes to eVi. Format loosely follows
   was still answering. Pollers on one bot token now share their place, an
   update one of them took is skipped by any other, and starting the channel
   stops the poller already running, so two restarts at once leave one.
+- **A resumed tool-using session works on strict backends.** Resume gave each
+  tool result a made-up id that answered no call, so OpenAI and the servers
+  that check the same way (xAI, Groq, OpenRouter, vLLM) rejected every later
+  turn. Transcripts now record which call each result answers, and a resume
+  pairs them (by position in older transcripts), gives a call with no result
+  an `(interrupted)` placeholder and drops a result with no call. Each request
+  is also repaired on its way out, so **Delete from here** or **Branch**
+  inside a tool round no longer leaves a chat the backend refuses, and
+  consecutive user messages (a note and your next message) are joined for
+  templates that need user and model turns to alternate. See "History a
+  strict backend accepts" in docs/features/sessions.md.
+- **A stream that breaks mid-reply no longer crashes the chat.** A dropped
+  connection or a server error in the middle of a reply escaped as an
+  exception, which ended `evi chat`. The turn now ends with
+  `LLM stream failed mid-reply: …`: what arrived is kept, marked
+  `(interrupted) The reply was cut off here: …`, a tool call that was cut off
+  is not run, and your next message works. If nothing of the reply had
+  arrived, the error is `LLM request failed: …` and nothing is added to the
+  chat. With the Responses API (`[llm] api = "responses"`), a request that
+  fails as it starts now moves on to your fallback models.
+- **`/effort max` no longer fails on reasoning models.** For a model that
+  takes a reasoning effort (o-series, gpt-5, qwen3, deepseek-r1, …) it sent
+  `reasoning_effort: "max"`, a level OpenAI, Ollama and the gpt-oss templates
+  don't accept; `/effort max` and `/effort ultracode` now ask for `high`, the
+  highest level they share.
 
 ## [1.0.53] — 2026-10-09
 

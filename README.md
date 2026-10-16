@@ -266,8 +266,13 @@ See [docs/development.md](docs/development.md) for architecture notes, and
   `voice`, `computer`, `gmail`, `outlook`, `image`, and `mcp` are all OFF
   until you flip them in `config.toml`.
 - **`auto.auto_approve`** lists categories that run without prompting.
-  The defaults are `fs, code, memory, skills, image`. `computer` is never
-  in this list — every mouse click / keystroke prompts.
+  The defaults are `fs, code_read, memory, skills, image`: reading code runs
+  unasked, running it (`run_python`, `code`) and shell commands (`shell`, which
+  covers `monitor` commands too) ask. A run a peer, a routine webhook or a
+  channel push starts never runs code by category. `computer` is never in
+  this list — every mouse click / keystroke prompts. A config saved with the
+  old default's `code` still runs code unasked: `evi lint`, `evi doctor` and
+  Settings → Permissions offer the one-line fix.
 - **The web server answers only this machine** until you set an access token,
   and `evi web` won't bind a LAN address without one. The desktop app and the
   Docker image generate their own when they serve the network. Another

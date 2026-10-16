@@ -36,8 +36,8 @@ scopes    = ["Mail.Read", "User.Read"]
 
 [tools]
 fs          = true     # read_file / write_file / list_dir
-code        = true     # run_python in a subprocess
-shell       = false    # not implemented; never default-on
+code        = true     # run_python, python_symbols, check_file, monitor
+shell       = false    # run_command (and monitor's commands); never default-on
 gmail       = false    # Phase 2
 outlook     = false    # Phase 2
 image       = false    # ComfyUI text2img
@@ -51,10 +51,17 @@ computer    = false    # never default-on; mouse/keyboard control
 transcripts = true     # write session JSONL for dreaming
 
 [auto]
-# Categories listed here run without prompting. `computer` is never here.
-auto_approve = ["fs", "code", "memory", "skills", "image"]
+# Categories listed here run without prompting, matched against what each
+# call does: "code_read" is reading code (python_symbols, check_file on
+# Python, monitor tailing a file, run_python while the OS sandbox is active),
+# "code" is running it (run_python, linters that run project code) and covers
+# code_read, and a shell line (run_command, monitor kind=command) is "shell".
+# A remote-triggered run never runs code by category. `computer` is never here.
+auto_approve = ["fs", "code_read", "memory", "skills", "image"]
 # First-match "allow|deny <tool-name-or-category-glob> [arg-glob]"; "shell"
-# also matches monitor kind=command. e.g. "deny shell rm*", "allow web".
+# also matches monitor kind=command. e.g. "deny shell rm*", "allow web". An
+# allow rule never approves a shell line by its tool's category ("allow code"
+# doesn't cover monitor kind=command) or running code by "code_read".
 rules = []
 # Denied before everything else, yolo and /auto on included. Same syntax.
 hard_deny = []
@@ -91,6 +98,14 @@ destructive_disable_rules = ["git-commit-amend"]
 unattended_policy = "deny"
 ```
 
+**An `auto_approve` list saved before `code_read`.** Up to 1.0.53 the default
+list held `code`, and eVi writes the defaults into `config.toml` on first run,
+so an older config lets `run_python` run without asking. eVi doesn't rewrite
+your list. `evi lint`, `evi doctor` and Settings → Permissions offer the fix:
+`code_read` in place of `code`, every other entry kept. To keep running code
+unasked on purpose, list `code_read` beside `code`. See
+[Permissions & sandbox](features/permissions-and-sandbox.md#what-a-call-counts-as).
+
 Everyday commands are deliberately *not* flagged — `rm -rf ./build`, `rm -rf
 node_modules`, `git reset --soft`, `git branch -d`, `chmod 644`, `terraform
 plan`, `apt remove <app>` all run as normal. Only genuinely destructive,
@@ -102,20 +117,26 @@ so `allow run_command git*` does not clear `git log; git reset --hard`. A broad
 `allow run_command` / `allow run_command *` never clears it, and no allow rule
 clears a **block**-severity hit (`rm -rf ~`, a force-push, `curl … | sh`): only a
 `destructive_allow` glob exempts one. Rules, here and in the permission policy,
-may name the tool (`run_command`) or its category (`shell`). Details in
+may name the tool (`run_command`) or its category (`shell`); for a `monitor`
+command an allow rule names `monitor` or `shell`, never `code`. Details in
 [Permissions & sandbox → Shell command
 lines](features/permissions-and-sandbox.md#shell-command-lines).
 
 Writes to protected paths ask in every mode and are denied when nothing can ask;
 see [Permissions & sandbox → Protected
 paths](features/permissions-and-sandbox.md#protected-paths). `evi lint` warns
-about `[auto]` entries that can never apply, and `evi doctor` lists the
-protected paths in force.
+about `[auto]` entries that can never apply and an `auto_approve` list that
+still holds the old default's `code`, and `evi doctor` lists the protected
+paths in force and says whether running code asks.
 
 A run nobody is watching denies every call that would ask unless you set
 `unattended_policy = "allow"`; the auto-approved categories, `allow` rules and
 trusted dirs and domains still run. Protected writes, secret reads and the
-guard deny there whatever the policy, `-y` and `yolo` included. See
+guard deny there whatever the policy, `-y` and `yolo` included. A run a remote
+trigger drives (federation, A2A, a routine webhook without `yes`, a channel
+push with `run: true`) never runs code by category, even with `code` or
+`shell` in `auto_approve`: only an explicit allow rule lets `run_python`,
+`run_command` or a `monitor` command run there. See
 [Permissions & sandbox → Unattended
 runs](features/permissions-and-sandbox.md#unattended-runs).
 
@@ -543,8 +564,9 @@ hard_deny = ["run_command rm -rf*"]         # applies in every mode, even yolo
 ```
 
 `rules` and `hard_deny` entries match the tool name (`run_command`,
-`run_python`, `write_file`, `edit_file`, …) or its `[tools]` category, so
-`"deny shell rm*"` and `"deny fs *.env"` work too. A `.evi.toml` can add
+`run_python`, `write_file`, `edit_file`, …), its `[tools]` category or the
+call's category (`code_read`, `shell`), so `"deny shell rm*"` and
+`"deny fs *.env"` work too. A `.evi.toml` can add
 `protected_paths` entries but can't set `protected_paths_remove`.
 
 ## Memory — `~/.evi/memory/`

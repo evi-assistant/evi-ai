@@ -21,6 +21,25 @@ You'd use the web UI when you want a richer chat surface than the terminal (tabs
 
 Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`, `/compact`, `/reload`, plus user commands from `~/.evi/commands/`) are dispatched **server-side** — the browser just types and reads; CLI and web behave identically.
 
+### Notes and compaction in the chat
+
+Some messages in a chat's history were neither typed in it nor said by the model: **notes** (a message from another session, a channel push, your own message from the Dispatch panel; see [sessions.md](sessions.md#notes-in-a-chat)) and the **compaction summary** ([memory-context.md](memory-context.md#context-management-compaction)). The chat draws them as notes, not as your or the model's bubbles:
+
+- A note is a dashed block headed `📨 message from …`, with no Edit, Re-roll, Branch or Delete. It takes no bubble of its own in the numbering the message actions use, so editing, branching or deleting the messages around it still hits the right one.
+- The compaction summary is one collapsed note, **Summary of N earlier messages (compacted)**, that opens to show the summary. The model's acknowledgement after it isn't drawn.
+- A note that arrives while a turn runs waits for the turn to end before it joins the history. If the chat is redrawn meanwhile (a re-roll redraws it), the note shows at the bottom, marked *arrives when the current turn ends*, and new replies, the re-roll's included, appear above it. When the turn ends it moves into place after the reply.
+- The chat catches up on notes after every turn and re-roll, and before each message you send while no turn is running, so a note delivered while the tab sat idle shows up in its place before your next message. Separately, an open tab flags a new note within a few seconds with a live `📨 Message from …` line.
+
+The page rebuilds the chat from `GET /api/session/<id>/history`, which returns:
+
+| Field | Meaning |
+|---|---|
+| `messages` | `{index, role, content, tool_calls, name}` per message, plus `kind` for one drawn as something other than a plain message: `note`, `compaction` (the summary, at index 1) or `compaction_ack` (the acknowledgement at index 2, only right after that summary); user messages may carry `images` |
+| `held` | notes waiting for the running turn to end (`role`, `content`, `kind: "note"`); they have no index yet |
+| `length` | how many messages the whole history holds |
+
+`?since=<index>` returns only the messages from that index on, which is how the page catches up on notes. The history and the held notes are read together, so a note is in exactly one of them.
+
 ### The desktop app
 
 `desktop/src-tauri/src/main.rs` is the native shell. On launch it:
@@ -45,6 +64,7 @@ The settings panel reads `GET /api/config` and writes `POST /api/config` with a 
 - **Unknown sections/keys are ignored** (forward-compatible with newer configs).
 - **Hot-apply.** Touched sections in `llm`, `auto`, `tools`, `telemetry`, `comfy`, `web`, `google`, `microsoft`, `obsidian` are pushed onto every live session so changes take effect on the next turn without a new chat. The LLM client is rebuilt when `[llm]` changes. `tools` and `auto` only fully bind at session creation, so the response flags them as `deferred` ("applies to new chats").
 - **Unsaved changes are obvious.** Editing a field shows an amber **● Unsaved changes — click Save to apply**; the save status turns green on success and red on failure. Fields and banners show *saved* config, so a value you typed but didn't save does nothing yet.
+- **Auto-approve migration.** Both calls also return `auto_approve_migration`: when the auto-approve list in force still holds the old default's `code` (which now lets `run_python` run unasked), the same list with `code_read` in place of `code`, else `null`. It isn't a config section, so posting it back changes nothing. Settings → Permissions shows it as a **Running code is approved without asking** banner above the auto-approve checkboxes; its **Switch to code_read** button posts `{auto: {auto_approve: <that list>}}` straight away. Other unsaved edits stay pending (an unsaved edit of the auto-approve list itself is replaced), and if an active profile still lists `code` the status line says so. The checkboxes list `code_read` just before `code`, and `code_read`, `code` and `shell` each say what they let run unasked. See [Permissions & sandbox](permissions-and-sandbox.md#what-a-call-counts-as).
 
 ### Settings groups, explainers and health banners
 
@@ -60,6 +80,7 @@ Sections with live state show a banner in the same ✓ / ⚠ / ✕ language, ref
 | Tools | which tool categories lack an installed dependency | `GET /api/config` (`availability`) |
 | Server | an open surface (A2A, multi-user or LAN binding) with no access token | the saved config |
 | Permissions | reduced safety: yolo mode, or the destructive-command guard off | the saved config |
+| Permissions (auto-approve list) | the list still holds the old default's `code`, so running code is approved without asking; one click switches it to `code_read` | `GET /api/config` (`auto_approve_migration`) |
 | Integrations | ComfyUI answers; SearXNG too when it is the search engine | `GET /api/integrations/status` |
 | Voice | the selected TTS engine is installed | `GET /api/voice/status` |
 | Specialty models | each configured OCR, vision and guard backend answers; the speech-to-text dependency | `GET /api/specialty/status` |

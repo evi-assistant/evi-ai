@@ -6,13 +6,15 @@ eVi runs language models locally and lets them call **tools** — read and write
 files, run Python, search the web, control the mouse, talk to MCP servers, and
 more. Permissions decide *which* of those calls happen automatically, which get
 blocked, and which pause to ask you first. The **sandbox** is a separate,
-defence-in-depth layer that confines the one tool that runs arbitrary code
-(`run_python`) to a read-only filesystem with no network.
+defence-in-depth layer that confines the tools that run code (`run_python`,
+and the shell lines `run_command` and `monitor` run) to a read-only filesystem
+with no network.
 
 You'd use these features to:
 
-- Let trusted, low-risk tools (reading files, recalling memory) run silently
-  while risky ones (shell, deleting things, network calls) still prompt.
+- Let trusted, low-risk tools (reading files, reading code, recalling memory)
+  run silently while risky ones (running code, shell, deleting things, network
+  calls) still prompt.
 - Hard-block specific dangerous calls regardless of mode (e.g. `rm` in shell).
 - Pre-approve only files under a project directory, or web fetches to a domain
   you trust, without opening up a whole tool category.
@@ -55,38 +57,52 @@ this order:
    - `accept_edits` and `ask` fall through to the lower layers.
 3. **Rules** (`auto.rules`). A **first-match** allow/deny list. Each rule is a
    string `<allow|deny> <tool-glob> [arg-glob]`. The tool glob is matched
-   (`fnmatch`) against the tool name **or** its `[tools]` category, so
-   `deny shell rm*`, `deny fs *.env` and `allow web` work as well as
-   `deny run_command rm*`; `shell` also matches any call that runs a shell line
-   (`monitor` with `kind=command` too). The optional arg glob is matched against
+   (`fnmatch`) against the tool name, its `[tools]` category **or** the call's
+   own category ([What a call counts as](#what-a-call-counts-as)), so
+   `deny shell rm*`, `deny fs *.env`, `allow web` and `deny code_read *.env`
+   work as well as `deny run_command rm*`; `shell` also matches any call that
+   runs a shell line (`monitor` with `kind=command` too). An **allow** rule
+   never approves a shell line by its tool's category (`allow code` doesn't
+   cover `monitor` with `kind=command`; `allow monitor` or `allow shell` does),
+   nor running code by `code_read`. The optional arg glob is matched against
    the call's string-valued arguments. The first rule that matches wins — **so
    an explicit `deny` here beats trusted dirs/domains below.** Calls that run a
    shell command line (`run_command`, `monitor` with `kind=command`) are matched
    command by command instead — see [Shell command
    lines](#shell-command-lines).
-4. **Secret reads.** An `fs`/`code` call whose path argument matches a protected
-   pattern other than the built-in write-protected ones (`.env`, `*.pem`,
-   `id_rsa`, …) **asks**, even with `fs` auto-approved, so a secret is never
-   pulled into the model's context silently. `yolo` or an explicit allow rule
-   above (e.g. `allow read_file *.env.example`) lets it through. In an
+4. **Secret reads.** An `fs`, `code` or `code_read` call whose path argument
+   matches a protected pattern other than the built-in write-protected ones
+   (`.env`, `*.pem`, `id_rsa`, …) **asks**, even with `fs` auto-approved, so a
+   secret is never pulled into the model's context silently. That includes the
+   file `monitor` tails. `yolo` or an explicit allow rule above (e.g.
+   `allow read_file *.env.example`) lets it through. In an
    [unattended run](#unattended-runs) only the allow rule does: there the read
    is denied even under `yolo`, `/auto on` or `evi run -y`.
-5. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
-   tool's category is `fs` or `code`, the call is **allowed**.
-6. **Auto-approve categories** (`auto.auto_approve`). If the tool's category is
-   in this list, it's **allowed** without prompting.
-7. **Trusted scopes.** An `fs`/`code` call is **allowed** when every one of its
-   path arguments resolves (against the working folder, on its real path) under
-   a `trusted_dirs` entry. Only path arguments count — `path`, `paths`,
-   `file_path`, `cwd`, `dir`, and for an MCP tool the arguments named like paths
-   — never a file's content, and a call with no path argument (`run_python`) is
-   never approved this way. A `find_files` / `search_files` glob that is
+5. **Code execution in a remote-triggered run.** In a run a remote trigger
+   drives (a federated or A2A task, a routine webhook without `yes`, a channel
+   push with `run: true`), a call that runs code goes no further: call category
+   `code` or `shell`, or any `run_python` call, sandboxed or not. It **asks**,
+   and the run's `deny` policy refuses it. Only an explicit allow rule (step 3)
+   lets one through. See [Unattended runs](#unattended-runs).
+6. **`accept_edits` mode shortcut.** If the mode is `accept_edits` and the
+   call's category is `fs` or `code_read` (file edits and reading code, never
+   running code), the call is **allowed**.
+7. **Auto-approve categories** (`auto.auto_approve`). If the call's category is
+   in this list, it's **allowed** without prompting. `code` in the list also
+   covers `code_read`.
+8. **Trusted scopes.** An `fs` or `code_read` call is **allowed** when every
+   one of its path arguments resolves (against the working folder, on its real
+   path) under a `trusted_dirs` entry. Only path arguments count — `path`,
+   `paths`, `file_path`, `cwd`, `dir`, the file `monitor` tails, and for an MCP
+   tool the arguments named like paths — never a file's content, and a call
+   that runs code (`run_python`, `check_file` on a `.js` file) is never
+   approved this way. A `find_files` / `search_files` glob that is
    absolute or climbs out with `..` isn't either. For `web` tools whose URL host
    matches a `trusted_domains` entry (exact host or any subdomain) → **allow**.
    A `trusted_domains` entry also lets `web_fetch` reach that host on a loopback
    or LAN address (see [What `web_fetch` will
    fetch](#what-web_fetch-will-fetch)).
-8. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
+9. **Otherwise → ask.** eVi prompts you (in the CLI/REPL or web UI). If there is
    no UI able to prompt — a scheduled task, `evi run`, a workflow step, a
    federation request, an SDK agent built without a `permission_callback` — the
    call follows the unattended policy and is **denied** unless you opted in
@@ -95,6 +111,47 @@ this order:
 The REPL `/auto on` toggle (and `s` at a CLI prompt) is a session override: it
 acts as `yolo` for the rest of the session, until you `/auto off`. Hard-deny,
 protected paths and the destructive-command guard still apply under it.
+
+### What a call counts as
+
+Every tool sits in a `[tools]` category, the toggle that switches it on:
+`run_python`, `python_symbols`, `check_file` and `monitor` are all in `code`.
+The policy checks each call under what that call does, its **call category**:
+
+| Call | Call category |
+|---|---|
+| Any call that runs a shell line: `run_command`, `monitor` with `kind=command` | `shell` |
+| `python_symbols`; `monitor` tailing a file (`kind=file`); `check_file` on a `.py` file (ruff, pyflakes) or on a file type eVi has no linter for | `code_read` |
+| `run_python` while the OS sandbox is active (`[tools] sandbox = true` and `bwrap` or `sandbox-exec` on `PATH`) | `code_read` |
+| `run_python` otherwise; `check_file` on a `.js`, `.jsx`, `.ts`, `.tsx`, `.go` or `.rs` file | `code` |
+| Any other call | its tool's category |
+
+`check_file` on JavaScript, TypeScript, Go or Rust counts as running code
+because its linter runs the project's own code: eslint loads
+`eslint.config.js`, `cargo clippy` builds the crate (`build.rs`, proc macros)
+and `go vet` may run cgo or fetch a toolchain. The file's extension decides,
+not which linter happens to be installed.
+
+`auto_approve`, `accept_edits` and trusted dirs go by the call category, so
+the default list (`fs`, `code_read`, `memory`, `skills`, `image`) reads code
+without asking and asks before running it. Add `code` to let running code
+through unasked as well; `code` also covers `code_read`. The permission prompt
+names the call category, e.g. `permission: monitor (shell) args=…`.
+
+A sandboxed `run_python` can't write outside its temp folder or reach the
+network, but it can still read every file you can, secrets included, and print
+them into the chat. If that matters to you, take `code_read` out of
+`auto_approve`: a sandboxed `run_python` then asks, and so do `python_symbols`,
+`monitor` on a file and `check_file` on Python.
+
+`monitor` with `kind=command` is held to everything `run_command` is. It is
+checked as `shell`, so rules, `hard_deny` and the destructive-command guard
+apply and it runs unasked only where `run_command` would (`shell` in
+`auto_approve`, an `allow monitor …` / `allow shell …` rule, `yolo`). It
+runs only in a session that offers `run_command` (`[tools] shell = true`, or
+code mode, which turns the shell tools on), and elsewhere returns an error
+without running anything. It runs under the OS sandbox when
+`[tools] sandbox = true`.
 
 ### Shell command lines
 
@@ -152,12 +209,13 @@ whole:
 
 The destructive-command guard uses the same split. Its rules come in two
 severities. A **prompt**-severity hit (`git reset --hard`, `git stash drop`,
-`find … -delete`, …) is cleared by a specific allow rule
-(matching the tool by name or category, with a real arg-glob) only when the rule
-covers every command in the line, the line can be split and its redirects stay
-inside the working folder; a broad allow never clears it. A **block**-severity
-hit (`rm -rf ~`, a force-push, `curl … | sh`, a disk format, …) is never cleared
-by an allow rule: only a `destructive_allow` glob exempts one.
+`find … -delete`, …) is cleared by a specific allow rule (naming the tool or
+`shell`, never the toggle category `monitor` is in, with a real arg-glob) only
+when the rule covers every command in the line, the line can be split and its
+redirects stay inside the working folder; a broad allow never clears it. A
+**block**-severity hit (`rm -rf ~`, a force-push, `curl … | sh`, a disk
+format, …) is never cleared by an allow rule: only a `destructive_allow` glob
+exempts one.
 `destructive_allow` globs are matched per command too: a hit is exempt only if
 every command it touches matches a glob and it touches no redirect, and never
 on a line that can't be split. A glob whose first word (the command) holds a
@@ -203,8 +261,9 @@ and each path is checked as written, normalised and on its real path, so a
 symlink or junction to a protected file is caught (on Windows, `EVI.md.`,
 `EVI.md::$DATA`, `\\?\C:\…` and `\\localhost\C$\…` spellings count as the file
 they open). Any tool counts as a writer except eVi's built-in read-only ones
-(`read_file`, `list_dir`, `find_files`, `search_files`, the `git_*` readers, …),
-so an MCP tool that names `AGENTS.md` asks too.
+(`read_file`, `list_dir`, `find_files`, `search_files`, the `git_*` readers, …)
+and a call that only reads code (`monitor` tailing a file), so an MCP tool that
+names `AGENTS.md` asks too.
 
 For a shell line eVi inspects its `>` / `>>` targets (followed through `cd` /
 `pushd` / `Set-Location`). It also inspects the files named by `tee`, `cp`,
@@ -257,7 +316,8 @@ destructive-command guard flags. A repository's `.evi.toml` can't set
 
 `[auto] mode` still applies to the unattended runs you start yourself: under
 `yolo` every call runs (the checks just named aside), and under `accept_edits`
-file and code calls run. The run's policy label names this.
+file edits and code reading run (never running code). The run's policy label
+names this.
 
 **Remote-triggered runs are pinned to `deny`.** A federated task
 (`/api/federate`), an A2A task (`/a2a`), a routine webhook without `yes` and a
@@ -266,15 +326,24 @@ outside, so nothing you turned on for yourself applies to them: not
 `unattended_policy = "allow"`, not `[auto] mode` yolo or accept_edits, not
 `/auto on` or a session's own approvals. Only `[auto] auto_approve`, your
 `allow` rules and trusted dirs and domains let a call run, and a subagent such
-a run starts gets the same limits. The Telegram channel has a policy of its
-own and never uses `[auto]`; see [channels.md](channels.md#the-channels-policy).
+a run starts gets the same limits. Running code is held back further: no
+category, `accept_edits` or trusted dir approves `run_python` (sandboxed or
+not), `run_command`, a `monitor` command or a `check_file` whose linter runs
+project code there, even with `code` or `shell` in `auto_approve`. Only an
+explicit allow rule (`allow run_python`, `allow shell npm test*`) lets one
+run. The Telegram channel has a policy of its own and never uses `[auto]`; see
+[channels.md](channels.md#the-channels-policy).
 
 **`deny` only covers calls that would ask.** The default `auto_approve` list
-(`fs`, `code`, `memory`, `skills`, `image`) runs in every unattended run,
-remote-triggered ones included, and that means `run_python` and file writes.
-If your scheduled jobs, peers or webhooks shouldn't have them, take `code` (and
-`fs`) out of `auto_approve`, which makes your own sessions ask for them too, or
-block specific calls with `deny` rules or `hard_deny`.
+(`fs`, `code_read`, `memory`, `skills`, `image`) runs in every unattended run,
+remote-triggered ones included: file writes and reading code, but no code
+execution. A list that adds `code` or `shell` (or one saved before
+`code_read` existed, which holds `code`) runs that code unasked in the
+unattended runs you start yourself, such as scheduled tasks, `evi run` and
+`evi team run`, but never in a remote-triggered one. If your scheduled jobs,
+peers or webhooks shouldn't write files, take `fs` out of `auto_approve`,
+which makes your own sessions ask for it too, or block specific calls with
+`deny` rules or `hard_deny`.
 
 **Each run names its policy**: `deny`, `allow`, `allow-all` (`-y`, a routine's
 `yes`) or `interactive`, plus the mode when it lets calls through
@@ -389,21 +458,27 @@ ask.
 
 ### The sandbox
 
-The sandbox (`evi/sandbox.py`) wraps the `run_python` subprocess so it runs with
-the filesystem read-only except a throwaway temp work directory, and (by
-default) no network:
+With `[tools] sandbox = true`, the sandbox (`evi/sandbox.py`) wraps the
+processes that run code so they run with the filesystem read-only except one
+writable work directory, and with no network. The work directory is a
+throwaway temp folder for `run_python`, the command's working folder for
+`run_command`, and the eVi process's own folder for a `monitor` command.
 
 - **Linux** — `bwrap` (bubblewrap): `--ro-bind / /` plus a writable bind for the
   work dir, plus `--unshare-net` to cut the network.
 - **macOS** — `sandbox-exec` with a generated SBPL profile that denies
   `file-write*` outside `/tmp` and the work dir, and denies network.
 - **Windows / no sandboxer on PATH** — **not available.** The wrapper returns
-  the command unchanged, so the snippet runs *unsandboxed* and `run_python`
-  prepends a note saying so.
+  the command unchanged, so it runs *unsandboxed*, with a note saying so in
+  front of its output.
 
-The sandbox only confines `run_python`. It is not the same thing as the
+The sandbox confines only those three. It is not the same thing as the
 permission policy — a call can be permitted and still be sandboxed, or permitted
-and unsandboxed.
+and unsandboxed. The one link between them: while the sandbox is active (on,
+and a sandboxer present), a `run_python` call counts as `code_read` rather
+than `code`, so the default `auto_approve` list runs it without asking (see
+[What a call counts as](#what-a-call-counts-as)). Without a sandboxer it stays
+`code` and asks.
 
 ## Setup
 
@@ -416,31 +491,49 @@ file, then restart or run `/reload` in the REPL.
 ```toml
 [auto]
 mode            = "ask"                              # ask | accept_edits | plan | yolo
-auto_approve    = ["fs", "code", "memory", "skills", "image"]
+auto_approve    = ["fs", "code_read", "memory", "skills", "image"]
 rules           = []                                 # first-match "allow|deny <tool-or-category> [arg]"
 hard_deny       = []                                 # always deny, in every mode
 protected_paths = [".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
                    ".bashrc", ".zshrc", ".bash_profile", ".profile",
                    "*.pem", "id_rsa", "id_ed25519"]
 protected_paths_remove = []                          # protected entries to un-protect
-trusted_dirs    = []                                 # auto-approve fs/code under these paths
+trusted_dirs    = []                                 # auto-approve fs/code_read under these paths
 trusted_domains = []                                 # auto-approve web fetches to these hosts
 unattended_policy = "deny"                           # deny | allow: a call that would ask, with nobody to ask
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `mode` | `"ask"` | Top-level policy. `ask` prompts for anything not pre-approved; `accept_edits` auto-allows `fs`/`code`; `plan` denies all tools; `yolo` allows all tools (hard-deny, protected paths and the destructive-command guard still apply). |
-| `auto_approve` | `["fs","code","memory","skills","image"]` | Tool **categories** that run without prompting. Note `shell`, `subagent`, `computer`, `web` are deliberately **not** here. |
-| `rules` | `[]` | First-match list of `allow` / `deny` `<tool-name-or-category-glob> [arg-glob]` entries; `shell` also matches `monitor` with `kind=command`. An explicit `deny` overrides trusted dirs/domains. Shell lines are matched command by command. |
+| `mode` | `"ask"` | Top-level policy. `ask` prompts for anything not pre-approved; `accept_edits` auto-allows file edits and reading code (`fs`, `code_read`), never running code; `plan` denies all tools; `yolo` allows all tools (hard-deny, protected paths and the destructive-command guard still apply). |
+| `auto_approve` | `["fs","code_read","memory","skills","image"]` | **Call categories** that run without prompting ([What a call counts as](#what-a-call-counts-as)). `code` (running code: `run_python`, linters that run project code) also covers `code_read`. Note `code`, `shell`, `subagent`, `computer`, `web` are deliberately **not** here. In a remote-triggered run no category approves running code. |
+| `rules` | `[]` | First-match list of `allow` / `deny` `<tool-name-or-category-glob> [arg-glob]` entries, matched against the tool name, its category and the call's category; `shell` also matches `monitor` with `kind=command`. An allow rule never approves a shell line by its tool's category, nor running code by `code_read`. An explicit `deny` overrides trusted dirs/domains. Shell lines are matched command by command. |
 | `hard_deny` | `[]` | `<tool-name-or-category-glob> [arg-glob]` entries denied before everything else, `yolo` and `/auto on` included. |
 | `protected_paths` | the secret and shell start-up files above | Writing one asks in every mode; reading one asks even with `fs` auto-approved. The built-in write-protected paths always apply on top (see [Protected paths](#protected-paths)). |
 | `protected_paths_remove` | `[]` | Protected entries to un-protect, by exact text: a built-in write-protected path or one of your `protected_paths`. Not settable from a `.evi.toml`. |
-| `trusted_dirs` | `[]` | Paths whose `fs`/`code` calls are auto-approved when every path argument resolves inside one (`~` expanded, real path, sub-paths included). |
+| `trusted_dirs` | `[]` | Paths whose `fs` and `code_read` calls are auto-approved when every path argument resolves inside one (`~` expanded, real path, sub-paths included). Never running code. |
 | `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). Also the only way to let `web_fetch` reach a loopback or LAN address. |
 | `unattended_policy` | `"deny"` | What a call that would ask does in an [unattended run](#unattended-runs): `deny` refuses it, `allow` runs it; any other value means `deny`. Remote-triggered runs always deny. Not settable from a `.evi.toml`. |
 
 Valid modes are exactly `ask`, `accept_edits`, `plan`, `yolo`.
+
+**Lists saved before `code_read`.** The default list used to hold `code`, and
+eVi writes the full defaults into `config.toml` on first run, so most existing
+configs still list `code`, which now means running code without asking. eVi
+leaves your list as it is. `evi lint`, `evi doctor` (its `code execution
+approval` check) and Settings → Permissions point it out and offer the same
+fix: your list with `code_read` in place of `code`, every other entry kept,
+for example
+
+```toml
+[auto]
+auto_approve = ["fs", "code_read", "memory", "skills", "image"]
+```
+
+In Settings it is a banner, **Running code is approved without asking**, whose
+**Switch to code_read** button saves the list at once (it applies to new
+chats). A list that names `code_read` beside `code` keeps running code unasked
+on purpose, and nothing warns about it.
 
 ### Checking your policy
 
@@ -448,20 +541,24 @@ A rule or `hard_deny` entry that matches no tool does nothing, and nothing
 used to say so. Two commands check the policy as written:
 
 - **`evi lint`** also checks `config.toml`'s own `[auto]` section (it reads the
-  file and writes nothing). It warns about a `rules` entry that isn't
+  file and writes nothing). It warns about an `auto_approve` list that still
+  holds the old default's `code` (above), a `rules` entry that isn't
   `<allow|deny> <tool-glob> [arg-glob]`, and a `rules` or `hard_deny` entry
-  whose tool-glob matches no tool name, tool category (`shell` and `mcp`
-  included) or configured MCP server. It also warns about a `hard_deny` entry
-  that starts with `allow`, a `destructive_allow` glob with a wildcard in its
-  command word (the guard ignores it), a `destructive_disable_rules` id that
-  names no guard rule, and a `protected_paths_remove` entry that removes
-  nothing, is also listed in `protected_paths`, or removes `~/.evi/**` without
-  `.evi/**`. An MCP rule such as `deny github.delete_*` is checked by its server
-  part only; the tool part can't be checked without connecting.
+  whose tool-glob matches no tool name, tool or call category (`shell`,
+  `code_read` and `mcp` included) or configured MCP server. It also warns
+  about a `hard_deny` entry that starts with `allow`, a `destructive_allow`
+  glob with a wildcard in its command word (the guard ignores it), a
+  `destructive_disable_rules` id that names no guard rule, and a
+  `protected_paths_remove` entry that removes nothing, is also listed in
+  `protected_paths`, or removes `~/.evi/**` without `.evi/**`. An MCP rule
+  such as `deny github.delete_*` is checked by its server part only; the tool
+  part can't be checked without connecting.
 - **`evi doctor`** has a `protected paths` check. It lists every protected
   pattern in force — `[auto] protected_paths`, plus the built-in
   write-protected ones, minus `protected_paths_remove` — and warns when a
-  built-in one was removed.
+  built-in one was removed. Its `code execution approval` check says whether
+  `run_python` asks, and warns, with the fix, when the list in force still
+  holds the old default's `code`.
 
 ### `[tools]` — the sandbox toggle (and tool categories)
 
@@ -471,19 +568,23 @@ The sandbox is one toggle here:
 ```toml
 [tools]
 fs       = true     # read_file / write_file / list_dir          (category: fs)
-code     = true     # run_python                                  (category: code)
-shell    = false    # not auto-approved by default
+code     = true     # run_python, python_symbols, check_file, monitor (category: code)
+shell    = false    # run_command (and monitor's commands); not auto-approved by default
 web      = false    # web_search / web_fetch — network, opt in
 computer = false    # mouse/keyboard control — never default-on
 # ... other categories: memory, skills, image, subagent, mcp, voice,
 #     transcripts, pdf, sqlite, index, git, federation, ocr, calendar ...
 
-sandbox  = false    # run_python under an OS sandbox where available
+sandbox  = false    # run_python, run_command and monitor commands under an OS sandbox where available
 ```
 
-Set `sandbox = true` to run `run_python` under `bwrap`/`sandbox-exec`. There are
-**no pip extras required** for the sandbox itself, but the OS launcher must be
-present:
+These are toggle categories: the policy checks each call under its own call
+category ([What a call counts as](#what-a-call-counts-as)), so the four `code`
+tools are approved as `code_read`, `code` or `shell` depending on the call.
+
+Set `sandbox = true` to run `run_python`, `run_command` and `monitor`'s
+commands under `bwrap`/`sandbox-exec`. There are **no pip extras required**
+for the sandbox itself, but the OS launcher must be present:
 
 - Linux: install bubblewrap (e.g. `apt install bubblewrap`) so `bwrap` is on
   `PATH`.
@@ -551,6 +652,16 @@ diagnostics endpoint reports the live sandbox state — `{enabled, platform,
 launcher, available}` — which the desktop/web settings surface so you can see
 whether a sandboxer is actually present on this machine.
 
+**Settings → Permissions** lists the auto-approve categories as checkboxes,
+with `code_read` just before `code`. `code_read`, `code` and `shell` each carry
+a line saying what they let run unasked. When the saved list still holds the
+old default's `code`, the banner described in
+[Lists saved before `code_read`](#auto--the-permission-policy) appears above
+them with its one-click switch. `GET /api/config` (and the reply to
+`POST /api/config`) carries the switch as `auto_approve_migration`: the
+migrated list, or `null` when there is nothing to change. It isn't a setting,
+so posting it back changes nothing.
+
 ### Per-project and per-profile overrides
 
 Because `[auto]` and `[tools]` are ordinary config sections, a profile
@@ -577,7 +688,7 @@ sections, judged against your config + active profile:
 | Key | What a `.evi.toml` can do |
 |---|---|
 | `[tools] <category> = false` | Switch a tool category off. `= true` is ignored. |
-| `[tools] sandbox = true` | Turn the `run_python` / `run_command` OS sandbox on. `= false` is ignored. |
+| `[tools] sandbox = true` | Turn the OS sandbox on (`run_python`, `run_command`, `monitor` commands). `= false` is ignored. |
 | `[auto] mode` | Applies only if **stricter** than yours (`yolo` < `accept_edits` < `ask` < `plan`). |
 | `[auto] rules` | Only `deny …` rules apply, and they are evaluated **before** your rules (so your broad `allow` can't shadow them). `allow` rules are dropped. Like all `rules`, they are **skipped in `yolo`** mode. |
 | `[auto] hard_deny`, `protected_paths` | **Added** to your lists — never replace or shrink them. `hard_deny` applies in **every** mode, `yolo` included. |
@@ -591,8 +702,9 @@ Everything else that loosens is ignored: `auto_approve`, `trusted_dirs`,
 a `hard_deny` entry for everyone who works in it, but it can never grant itself
 more. A `deny` rule alone does nothing for someone on `yolo`: for a block that
 must hold for everyone, use `hard_deny` (or also set `mode`). Rule and
-`hard_deny` entries match the tool name (`run_command`, `write_file`, …) or its
-`[tools]` category, e.g. `hard_deny = ["shell rm -rf*"]`. Outside
+`hard_deny` entries match the tool name (`run_command`, `write_file`, …), its
+`[tools]` category or the call's category, e.g.
+`hard_deny = ["shell rm -rf*"]`. Outside
 `[tools]`/`[auto]` a `.evi.toml` may only set model/sampling preferences — see
 [Per-project config](../configuration.md#per-project-config--evitoml) for the
 full list. Ignored keys are named once per process in a warning (e.g. `eVi:
@@ -624,7 +736,7 @@ git   = true
 
 [auto]
 mode         = "ask"
-auto_approve = ["fs", "code", "memory", "skills", "image", "git"]
+auto_approve = ["fs", "code_read", "memory", "skills", "image", "git"]
 rules = [
   "deny run_command rm*",    # block any command in the line that starts with "rm"
   "deny run_command *sudo*", # ...or mentions sudo
@@ -667,8 +779,11 @@ you> run this python: open('/etc/evi-probe','w').write('x'); import urllib.reque
 
 With `bwrap` present, the filesystem is read-only outside the temp work dir and
 `--unshare-net` removes networking, so the write and the fetch both error out.
-On Windows (or any machine with no sandboxer on `PATH`), the same call runs
-**unsandboxed** and `run_python` prefixes its output with:
+The call itself runs without a prompt: a sandboxed `run_python` counts as
+`code_read`, which the default list approves. On Windows (or any machine with
+no sandboxer on `PATH`), `run_python` asks first, as running code always does
+unless you approved `code`, and if you approve it the snippet runs
+**unsandboxed**, its output prefixed with:
 
 ```text
 (sandbox requested but no sandboxer on PATH — ran unsandboxed)
@@ -691,9 +806,11 @@ turn returns to your normal policy.
 ## Notes / limits
 
 - **Fail-open sandbox.** If `sandbox = true` but no sandboxer is on `PATH`
-  (always the case on Windows), `run_python` does **not** refuse — it runs
-  unsandboxed and tells you. Treat the sandbox as best-effort hardening, not a
-  guarantee, and don't rely on it existing on Windows.
+  (always the case on Windows), `run_python`, `run_command` and `monitor` do
+  **not** refuse — they run unsandboxed and tell you. `run_python` then counts
+  as running code again, so it asks unless you approved `code`. Treat the
+  sandbox as best-effort hardening, not a guarantee, and don't rely on it
+  existing on Windows.
 - **`run_python` is not otherwise a sandbox.** Even sandboxed, it's an OS-level
   confinement (read-only FS + no net), not a full container. The source itself
   notes it's "acceptable for personal-assistant use on a trusted machine."
@@ -707,10 +824,15 @@ turn returns to your normal policy.
   destructive-command guard still apply. It resets when you `/auto off` or
   exit; it is not persisted to config.
 - **Categories, not individual tools, are auto-approved.** `auto_approve` works
-  at the category granularity (`fs`, `code`, `web`, …). To approve or block a
-  single tool, use a `rules` entry with the tool name. `shell`, `subagent`,
-  `computer`, and `web` are intentionally left out of the defaults because they
-  can act broadly or reach the network.
+  at the granularity of a call's category (`fs`, `code_read`, `code`, `web`,
+  …). To approve or block a single tool, use a `rules` entry with the tool
+  name. `code`, `shell`, `subagent`, `computer`, and `web` are intentionally
+  left out of the defaults because they run code, act broadly or reach the
+  network.
+- **`monitor` commands and deferred tool search.** With `[tools] tool_search`
+  on, `run_command` may sit in the deferred catalog until the model looks it up
+  with `search_tools`. Until then `monitor` with `kind=command` says the session
+  has no shell tools and runs nothing, even with `[tools] shell = true`.
 - **Trusted-dir matching is path-resolved.** Only path arguments are checked,
   and each is `~`-expanded and resolved against the working folder to its real
   path before the sub-path check, so symlink/relative tricks resolve to their
@@ -733,9 +855,14 @@ turn returns to your normal policy.
 
 - `C:\evi\evi\permissions.py` — the `decide()` policy, rule/trust matching and
   protected paths (`effective_protected_paths`, `protected_write`).
-- `C:\evi\evi\tools\base.py` — which arguments are paths (`Tool.path_args`) and
-  which tools only read (`READ_ONLY_TOOLS`).
+- `C:\evi\evi\tools\base.py` — which arguments are paths (`Tool.path_args`),
+  which tools only read (`READ_ONLY_TOOLS`) and a call's category
+  (`Tool.category_for`, with `classify_call` in permissions.py).
+- `C:\evi\evi\tools\monitor.py` — `monitor`'s shell-tools check, sandbox and
+  tailed-file path argument.
 - `C:\evi\evi\configlint.py` — the `[auto]` checks `evi lint` runs.
+- `C:\evi\evi\doctor.py` — the `protected paths` and `code execution approval`
+  checks.
 - `C:\evi\evi\shellsplit.py` — splits a shell line into the commands rules are
   matched against.
 - `C:\evi\evi\shell_guard.py` — the destructive-command guard.
@@ -743,7 +870,9 @@ turn returns to your normal policy.
 - `C:\evi\evi\gitsafe.py` — the hardened git calls.
 - `C:\evi\evi\sandbox.py` — `wrap()` / `available()` / `status()` per-OS.
 - `C:\evi\evi\config.py` — `AutoSettings` (`[auto]`) and `ToolToggles` (`[tools]`).
-- `C:\evi\evi\tools\code.py` — where `run_python` consults `tools.sandbox`.
+- `C:\evi\evi\tools\code.py` — where `run_python` consults `tools.sandbox`
+  (`sandbox.requested()` / `sandbox.active()`), for running and for its call
+  category.
 - `C:\evi\evi\llm\agent.py` — wires `decide()`, `/auto`, and `/plan` into the run loop,
   plus the unattended policy (`make_unattended`, `remote_unattended`, `policy_label`).
 - `C:\evi\evi\llm\subagent.py` — subagent tool lists and how a subagent asks its parent.

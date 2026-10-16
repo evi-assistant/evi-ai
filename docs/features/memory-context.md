@@ -47,9 +47,10 @@ Two things drive **automatic compaction** (`_maybe_autocompact`), checked after 
 
 When either fires, `compact_history()` runs:
 
-- The original system prompt (index 0) and the most recent `llm.compact_keep_recent` messages are kept verbatim.
-- Everything in between is sent to your *same* LLM backend in a one-shot call that produces a concise summary (under ~400 words, preserving facts, decisions, file paths, preferences, and unfinished tasks).
-- That summary replaces the middle as a single `system` message prefixed `[compacted: N earlier messages summarised]`.
+- The original system prompt (index 0) and roughly the most recent `llm.compact_keep_recent` messages are kept verbatim. The cut moves forward to the start of a turn (your next message), so a tool result is never kept without the call it answers. If that would keep fewer than half of `compact_keep_recent` (a short exchange after a long tool turn, or one turn longer than the setting), the cut goes to the nearest step instead: the next message of yours or of the model's.
+- Everything in between is sent to your *same* LLM backend in a one-shot call that produces a concise summary (under ~400 words, preserving facts, decisions, file paths, preferences, and unfinished tasks). Notes from outside the chat (another session, a channel push) go into that call sealed, the way the model reads them (see [Notes in a chat](sessions.md#notes-in-a-chat)), so a note's text can't pass as yours in the summary.
+- That summary replaces the middle as a **user** message prefixed `[compacted: N earlier messages summarised]`, followed by an assistant acknowledgement (`Understood. I'll continue from that summary.`) when the kept part starts with a message of yours. It is never a second `system` message, which Gemma and Mistral chat templates reject, and user and model turns keep alternating.
+- A **compaction record** is written to the session's transcript (summary, where the cut was, how many messages were kept and how many summarised), so a web or desktop chat revived from disk comes back as the model last saw it. See [Transcripts](sessions.md#transcripts).
 - **Fail-safe**: if the summary call fails or comes back empty, history is left untouched — a transient model outage never loses context. A `before_compact` lifecycle hook can also veto compaction.
 
 The **context report** (`evi/context_report.py`) categorises history into four buckets — `system`, `user` (you), `assistant`, and `tools` (tool calls + tool results) — and reports tokens per bucket, total used, the ceiling, and percent full.
@@ -71,7 +72,7 @@ If you want memory writes/reads/deletes to happen without a permission prompt, t
 
 ```toml
 [auto]
-auto_approve = ["fs", "code", "memory", "skills", "image"]
+auto_approve = ["fs", "code_read", "memory", "skills", "image"]
 ```
 
 **Compaction + context window** — section `[llm]`. Defaults shown:
@@ -101,7 +102,7 @@ Core memory and compaction need **no extra dependencies** — it's plain Markdow
 ### REPL slash commands (CLI and Web both)
 
 - `/context` or `/ctx` — show the per-bucket context breakdown (system prompt / you / assistant / tools), total tokens, ceiling, and percent full. The bar turns green/yellow/red as you approach the limit.
-- `/compact` — force compaction now (summarise older history into a single note to free context). Prints how many messages were collapsed, or notes that history is too short.
+- `/compact` — force compaction now (summarise older history into one summary to free context). Prints how many messages were collapsed, or notes that history is too short.
 
 The assistant uses the `remember` / `recall` / `forget` / `list_memories` / `recall_by_tag` tools on its own during conversation — just talk to it ("remember that I prefer tabs over spaces", "what do you have stored about project-x?").
 
@@ -109,6 +110,7 @@ The assistant uses the `remember` / `recall` / `forget` / `list_memories` / `rec
 
 - Slash commands above work in the chat input.
 - The **context usage chip** in the UI shows how full the window is; clicking it surfaces the same breakdown as `/context`.
+- When the chat is drawn from the server (a reload, a tab switch, a revived session), a compaction shows as one collapsed **Summary of N earlier messages (compacted)** note with no edit actions; the acknowledgement isn't drawn.
 
 ### CLI commands
 
@@ -181,7 +183,8 @@ recall(name="preferences")
 ## Notes / limits
 
 - **Token counts are approximate.** The ~4-chars/token estimate ignores image/data-URL parts and isn't a real tokenizer. Treat `/context` percentages as guidance, not gospel.
-- **Compaction is lossy by design.** Older turns are replaced by a summary; details the summary omits are gone from the live context (though full transcripts remain on disk if `[tools] transcripts` is on). The original system prompt and the most recent `compact_keep_recent` messages are always preserved verbatim.
+- **Compaction is lossy by design.** Older turns are replaced by a summary; details the summary omits are gone from the live context (though full transcripts remain on disk if `[tools] transcripts` is on: `evi sessions show` and fine-tune export still read every message). The original system prompt and roughly the most recent `compact_keep_recent` messages, cut at a turn or step boundary, are always preserved verbatim.
+- **Compaction runs between turns.** Automatic compaction is checked when a turn ends with a plain reply, not between the steps of a long tool loop.
 - **Fail-open behavior.** If the summarisation call fails or returns nothing, history is left unchanged rather than dropped — a model outage never silently destroys your conversation. A `before_compact` hook can veto compaction.
 - **Deletes are recoverable.** `forget` / `evi dream` removals move files to `~/.evi/memory/.attic/` with a timestamp; restore by moving the file back (a restore won't clobber a current entry of the same name). Only the internal hard-delete bypasses the attic.
 - **Name and size constraints.** Memory names are restricted to `[A-Za-z0-9_\-]` (max 64 chars) and bodies to 64 KB; oversized or badly-named writes are rejected rather than truncated.

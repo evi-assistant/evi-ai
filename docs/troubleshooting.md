@@ -62,6 +62,27 @@ eVi can't reach the backend. Check, in order:
 4. Are you behind a proxy / VPN that's blocking localhost? Check
    `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`.
 
+## "LLM stream failed mid-reply: …"
+
+The connection to the backend broke while the reply was streaming (the server
+dropped it, restarted or sent an error event). eVi keeps what arrived, marked
+`(interrupted) The reply was cut off here: the model's stream failed.`, and a
+tool call that was cut off is not run. The chat carries on: send your next
+message, or re-roll the reply. If nothing of the reply had arrived, the error
+reads `LLM request failed: …` instead and nothing is added to the chat; check
+the backend as in the section above.
+
+## The backend rejects the chat: tool call ids, roles that must alternate, a system message
+
+Strict OpenAI-compatible servers reject a tool result that doesn't answer a
+call, and Gemma or Mistral templates (llama.cpp `--jinja`, LM Studio) reject a
+`system` message after the first or two user messages in a row. eVi keeps its
+history within those rules and repairs each request on its way out, resumed
+sessions included (see [History a strict backend
+accepts](features/sessions.md#history-a-strict-backend-accepts)). If a backend
+still refuses a chat, run with `EVI_DEBUG=1` (or `evi -d chat`): a
+`llm.history_invalid` line names what is wrong in the stored history.
+
 ## "The model can't seem to call tools — it just describes them"
 
 The model isn't tool-capable, or the temperature is too high.
@@ -84,6 +105,37 @@ Auto-approval might be off and you're sitting at an `approve? y/a (this call)
 rest of the session. Then revisit `auto.auto_approve` in `config.toml` for a
 lasting fix.
 
+## `run_python` asks first (or `evi doctor` says it runs unasked)
+
+Reading code and running it are separate categories. The default
+`auto_approve` holds `code_read` (`python_symbols`, `check_file` on Python,
+`monitor` tailing a file), so `run_python`, `check_file` on a JavaScript,
+TypeScript, Go or Rust file and `monitor` commands ask. To let `run_python`
+run without asking, either:
+
+- turn the OS sandbox on (`[tools] sandbox = true`, with `bwrap` on Linux or
+  `sandbox-exec` on macOS): a sandboxed `run_python` counts as `code_read`;
+- or add `code` to `auto_approve` (it covers `code_read` too), or write an
+  `allow run_python` rule.
+
+A `config.toml` saved before `code_read` existed still lists `code`, so there
+`run_python` runs unasked. `evi lint` and `evi doctor` (its `code execution
+approval` check) warn about it and print the fix, your list with `code_read` in
+place of `code`; Settings → Permissions offers the same switch as a button. To
+keep running code unasked on purpose, list `code_read` beside `code` and the
+warning stops. A peer, a routine webhook or a channel push never runs code by
+category either way. See [What a call counts
+as](features/permissions-and-sandbox.md#what-a-call-counts-as).
+
+## `monitor` says "this session has no shell tools"
+
+`monitor` with `kind=command` runs a shell command, so it runs only where
+`run_command` is offered: `[tools] shell = true`, or code mode (`evi chat -m
+code`, the web mode switcher). With `[tools] tool_search` on, `run_command`
+may still be in the deferred catalog: once the model looks it up with
+`search_tools`, `monitor` commands work too. Tailing a file (`kind=file`)
+needs neither.
+
 ## "PERMISSION DENIED: … This run is unattended …"
 
 A call that would have asked was refused because nothing could ask you: a
@@ -99,8 +151,9 @@ To let the call run, from narrowest to widest:
 
 - **Pre-approve that kind of call**: an `allow` rule for the tool
   (`rules = ["allow web_fetch"]`), a `trusted_dirs` / `trusted_domains` entry,
-  or its category in `[auto] auto_approve`. Your own sessions then stop asking
-  for it too.
+  or the call's category in `[auto] auto_approve` (`code` for `run_python`,
+  `shell` for a `monitor` command). Your own sessions then stop asking for it
+  too.
 - **For one run**: `evi run -y` and `evi batch -y` approve every call of that
   run, and a routine added with `--yes` does for its webhook.
 - **For every unattended run you start**: set `unattended_policy = "allow"`
@@ -112,6 +165,9 @@ To let the call run, from narrowest to widest:
 None of these opens a remote-triggered run beyond what you pre-approved: a
 federated or A2A task, a routine webhook without `yes` and a channel push with
 `run: true` deny the call whatever `unattended_policy` or `[auto] mode` says.
+There, running code takes more: `run_python`, `run_command` and `monitor`
+commands run only under an explicit allow rule (`allow run_python`), not
+because `code` or `shell` is in `auto_approve`.
 A Telegram turn follows `[channels] telegram_auto_approve` (the denial names
 `[auto] auto_approve` because the bot's own policy fills that list). Protected
 writes, secret reads and commands the destructive-command guard flags stay

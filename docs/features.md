@@ -68,26 +68,36 @@ see [configuration.md](configuration.md#the-cli-agent-backends-at-a-glance).
 
 Dozens of built-in tools (the exact count is in HANDOFF.md's generated facts),
 grouped in categories that each have a `[tools]` toggle in `config.toml` (Web:
-Settings → Tools): `fs`, `code` (`run_python`, sandboxable), `shell`, `web`
+Settings → Tools): `fs`, `code` (`run_python`, `python_symbols`, `check_file`,
+`monitor`), `shell`, `web`
 (search/fetch), `image` (ComfyUI), `vision`, `memory`, `pdf`, `sqlite`, `index`
 (semantic search), `git`, `ocr`, `calendar`, `computer`, `voice`, `mcp`,
 `subagent`, `federation`. REPL: `/tools` lists active; `/notools`,
 `/forcetool <name>` per turn.
 
-**Sandboxed code** — `[tools] sandbox = true` runs `run_python` under bwrap
-(Linux) / sandbox-exec (macOS): read-only FS + no network. Falls back gracefully.
+**Sandboxed code** — `[tools] sandbox = true` runs `run_python`, `run_command`
+and `monitor` commands under bwrap (Linux) / sandbox-exec (macOS): read-only FS +
+no network. Falls back gracefully. A sandboxed `run_python` counts as reading
+code, so the default policy runs it without asking.
 
 ## Permissions & guardrails
 
 **Permission modes** — `[auto] mode = ask|accept_edits|plan|yolo` + an
 `auto_approve` category list + first-match `rules` (`allow|deny <tool> [arg]`).
-REPL `/auto`, `/plan`. **Trusted dirs/domains** auto-approve fs/web under given
+REPL `/auto`, `/plan`. Each call is checked by what it does: reading code
+(`code_read`, in the default list) runs unasked, running it (`code`: `run_python`,
+linters that run project code) asks, and a shell line is `shell` whatever tool
+runs it (`monitor` commands too). `evi lint`, `evi doctor` and Settings →
+Permissions offer a one-line fix for a list still holding the old default's
+`code`. **Trusted dirs/domains** auto-approve fs/code_read/web under given
 paths/hosts. **MCP allowlist** (`tools.mcp_allow`) gates which servers load.
 **Unattended runs** (scheduled tasks, `evi run`, subagents with no UI, web
 workflow and recipe runs, SDK agents without a permission callback) deny what
 would ask unless `[auto] unattended_policy = "allow"`; federation, A2A, routine
-webhooks without `yes` and channel pushes always deny it, and delegate
-CLI-agent backends are refused unless `[llm] allow_cli_agent_unattended`.
+webhooks without `yes` and channel pushes always deny it and never run code by
+category (only an explicit allow rule lets `run_python` or a shell line run
+there); delegate CLI-agent backends are refused unless
+`[llm] allow_cli_agent_unattended`.
 [Guide](features/permissions-and-sandbox.md#unattended-runs).
 
 **Content guardrails** — `~/.evi/guardrails.toml`, three layers: regex
@@ -100,9 +110,10 @@ CLI-agent backends are refused unless `[llm] allow_cli_agent_unattended`.
 **Memory** — the `memory` tool persists notes to `~/.evi/memory/`; supports
 **tags**. Auto-recalled into context.
 
-**Context management** — automatic compaction (`[llm] compact_*`). REPL
-`/context` (`/ctx`) shows a per-bucket breakdown (system/you/assistant/tools);
-Web: click the usage chip. `/compact` forces it.
+**Context management** — automatic compaction (`[llm] compact_*`), cut at a
+turn boundary and kept in the transcript, so a revived web chat resumes from
+the summary. REPL `/context` (`/ctx`) shows a per-bucket breakdown
+(system/you/assistant/tools); Web: click the usage chip. `/compact` forces it.
 
 **Predicted outputs** — `/predict <text|file>` speculative-decoding hint.
 
@@ -111,7 +122,11 @@ Web: click the usage chip. `/compact` forces it.
 Per-day JSONL transcripts (`tools.transcripts`). `evi sessions list|show|resume|
 fork|continue|handoff|search|export|purge`; REPL `/recent`. **Cross-device handoff**:
 `evi sessions handoff` → resume on another machine after `evi sync` (or open
-`/?session=<id>`). **Import**: `evi sessions import [--write]` brings your Claude
+`/?session=<id>`). A resumed session's tool results are paired with their
+calls, so strict backends accept it. **Notes** (another session's message, a
+channel push, the Dispatch panel) join a chat as framed user messages, wait for
+a running turn to end, are kept in the transcript and show as notes in the web
+chat. **Import**: `evi sessions import [--write]` brings your Claude
 Code and Codex conversations into eVi's store (read-only on the source; a dry
 run until `--write`). **Checkpoints/rewind**: `evi rewind` (Web: rewind dialog)
 undoes file writes. [Guide](features/sessions.md).
@@ -173,7 +188,8 @@ never edits ([guide](features/ultracode.md)).
 recipe (`evi routine`, `POST /api/routine/{token}`). **Scheduled tasks** —
 `evi schedule add --cron … (--prompt | --eval <suite>)`; runs on cron, incl.
 **scheduled evals** for drift watch. **Session channels** — push an external
-alert into a live web session (`POST /api/session/{id}/channel`).
+alert into a live web session (`POST /api/session/{id}/channel`), as a note the
+model reads as information, not instructions.
 
 **Chat channels (Telegram)** — message eVi from your phone through a bot you
 create. Off until enabled; an unknown sender gets a pairing code and no agent

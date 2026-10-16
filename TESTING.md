@@ -161,6 +161,8 @@ backlog — fill the ⬜ rows as you touch each area.
 | Thinking blocks (`<think>`) render + collapse | ⬜ |
 | Markdown + code highlighting | ✅ `tests/e2e/test_ui_xss.py::test_markdown_keeps_what_chat_needs`, `::test_ui_renders_with_only_the_evi_server_reachable` (offline, vendored libraries) |
 | Model output renders inert (scripts, handlers, foreign images and links, diagrams) | ✅ `tests/e2e/test_ui_xss.py` (`test_streamed_reply_and_system_message_render_inert`, `test_history_rebuild_and_inbox_render_inert`, `test_images_and_links_cannot_reach_evis_own_endpoints`, `test_diagrams_cannot_make_the_page_fetch_anything`, `test_csp_stops_script_that_bypasses_the_sanitizer`, …) · 🧪 `tests/test_ui_render_safety.py` |
+| Notes and the compaction summary render as notes (no message actions, acknowledgement hidden); a held note stays visible through a re-roll | ✅ `tests/e2e/test_ui_notes.py` (`test_a_note_renders_as_a_note_and_stays_visible_through_a_reroll`, `test_a_revived_session_shows_its_compaction_and_notes_as_notes`) · 🧪 `tests/test_web_notes.py` |
+| A message sent mid-turn lands after the turn as a user note; a re-roll keeps it after the new reply | ✅ `tests/e2e/test_ui_features.py::test_message_sent_mid_turn_lands_after_the_turn_as_a_user_note` · 🧪 `tests/test_history_validity.py` |
 | Citations rendering (P30) | ⬜ |
 | Token/usage indicator updates | ⬜ |
 
@@ -183,7 +185,7 @@ backlog — fill the ⬜ rows as you touch each area.
 | New tab (+), close tab, switch tabs | ⬜ |
 | Reset / new chat | ⬜ |
 | Auto-title after first exchange | 🧪 · ⬜ |
-| Resume past session | ⬜ |
+| Resume past session | ✅ revive from disk, compaction replayed: `tests/e2e/test_ui_notes.py::test_a_revived_session_shows_its_compaction_and_notes_as_notes` · 🧪 `tests/test_history_validity.py` (tool-result pairing, strict-backend check) |
 
 ### Slash commands & modes (Phase 10, 11)
 | Feature | Status |
@@ -233,6 +235,7 @@ backlog — fill the ⬜ rows as you touch each area.
 | Sections grouped (Assistant / This computer / Extend / App, "More"); active one scrolled into view | ✅ `test_ui_settings_groups.py` (`test_sections_are_grouped`, `test_ungrouped_section_lands_under_more`, `test_active_section_is_scrolled_into_view`) |
 | "How this works" explainers + live health banners (backend, integrations, voice, guardrails, plugins) | ✅ `test_ui_settings_health.py` |
 | Unsaved-changes cue; a banner moves only after Save | ✅ `test_ui_settings_unsaved.py` (`test_unsaved_cue_then_green_saved_and_red_failure`, `test_banner_moves_only_after_save`) |
+| Permissions: `code_read` apart from `code`; the old-default migration banner and its one-click switch | ✅ `test_ui_permissions_code_read.py` (`test_code_read_toggle_and_the_migration_banner`, `test_the_switch_keeps_other_unsaved_edits`) · 🧪 `tests/test_code_exec_parity.py` |
 | In-app docs render offline (`/api/docs`, mdlite) | ✅ `test_docs_dialog_renders` |
 | Diagnostics panel (`/api/doctor`) | ✅ `test_diagnostics_dialog_renders` |
 | Theme toggle (system/dark/light) | 👤 (verified via preview) |

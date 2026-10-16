@@ -3,7 +3,10 @@
 Every tool eVi ships with, grouped by category. Each tool is enabled via
 `tools.<category> = true` in `~/.evi/config.toml`. Whether the agent can
 invoke it *without prompting* depends on `auto.auto_approve` (see
-[configuration.md](configuration.md#tools)).
+[configuration.md](configuration.md#tools)), matched against what each call
+does rather than the tool's category: a `code` tool's call can count as
+`code_read`, `code` or `shell` (see [Permissions & sandbox → What a call
+counts as](features/permissions-and-sandbox.md#what-a-call-counts-as)).
 
 Add your own tool by decorating a function with `@tool(...)` and importing
 the module from `evi/apps/cli/main.py` + `evi/apps/web/server.py` — see
@@ -27,15 +30,26 @@ login's data folder) declares a `ctx` parameter and receives a `ToolContext`;
 Safety: 256 KB read cap prevents loading huge blobs into context. There's
 no implicit traversal check — combine with a hook for that.
 
-## `code` — code execution (default on)
+## `code` — code execution and reading (default on)
 
-| Tool         | What it does                                                |
-|--------------|-------------------------------------------------------------|
-| `run_python` | Run a Python 3 snippet in a subprocess with a 10s timeout. Combined stdout+stderr, capped at 16 KB. Fresh temp cwd. |
-| `monitor`    | Watch for a bounded window (≤300s): `kind=file` tails NEW lines of a log; `kind=command` runs a shell command and collects output. Returns early when an `until` regex matches — for babysitting a build/CI run or tailing a log. |
+| Tool             | What it does                                                | Checked as |
+|------------------|-------------------------------------------------------------|------------|
+| `run_python`     | Run a Python 3 snippet in a subprocess with a 10s timeout. Combined stdout+stderr, capped at 16 KB. Fresh temp cwd. | `code`; `code_read` while the OS sandbox is active |
+| `python_symbols` | Outline a Python file from its AST: functions (with args), classes (with methods) and imports. | `code_read` |
+| `check_file`     | Run the installed linter for a file's type (ruff or pyflakes, eslint, `go vet`, `cargo clippy`) and return its diagnostics. | `code_read` for `.py` and file types with no linter; `code` for `.js`/`.jsx`/`.ts`/`.tsx`/`.go`/`.rs`, whose linters run project code |
+| `monitor`        | Watch for a bounded window (≤300s): `kind=file` tails NEW lines of a log; `kind=command` runs a shell command and collects output. Returns early when an `until` regex matches — for babysitting a build/CI run or tailing a log. | `code_read` for a file; `shell` for a command |
 
-**Not a sandbox.** Acceptable for trusted local use. For untrusted code,
-wrap with a Docker hook or disable the category.
+The default `auto_approve` list holds `code_read`, not `code`: reading code
+runs unasked, running it asks. `monitor` with `kind=command` is approved
+exactly like `run_command`, runs only in a session that offers the shell
+tools (`[tools] shell = true`, or code mode), and runs under the OS sandbox
+when `[tools] sandbox = true`. The file `monitor` tails counts as its path
+argument, so tailing a protected secret (`.env`, a key) asks.
+
+**Not a sandbox** unless `[tools] sandbox = true` and a sandboxer is present
+(see [Permissions & sandbox → The sandbox](features/permissions-and-sandbox.md#the-sandbox)).
+Acceptable for trusted local use. For untrusted code, wrap with a Docker hook
+or disable the category.
 
 ## `memory` — long-term memory (default on)
 
@@ -187,7 +201,8 @@ This feeds `evi dream` and `evi sessions list/resume`.
 | Category    | Default | In default auto_approve | Notes |
 |-------------|---------|-------------------------|-------|
 | `fs`        | on      | ✅                       | Read/write to anywhere user can access |
-| `code`      | on      | ✅                       | Not sandboxed; subprocess timeout 10s |
+| `code`      | on      | reading code only (`code_read`) | Running code asks unless sandboxed; subprocess timeout 10s |
+| `shell`     | off     | ❌                       | `run_command`; `monitor` commands count as `shell` too |
 | `memory`    | on      | ✅                       | Soft-delete keeps data recoverable |
 | `skills`    | on      | ✅                       | Read-only on shipped skill files |
 | `image`     | off     | ✅                       | Network: ComfyUI on localhost only |
