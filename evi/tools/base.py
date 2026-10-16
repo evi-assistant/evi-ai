@@ -65,6 +65,15 @@ READ_ONLY_TOOLS = frozenset({
     "git_status", "read_pdf", "ocr_image", "describe_image", "find_in_project",
     "project_index_stats", "sqlite_schema",
 })
+# Built-in "code" tools whose calls only read code. The permission policy
+# checks them as "code_read" (`Tool.category_for`), which is auto-approved by
+# default, while "code" itself means running code (run_python) and asks. They
+# stay in the "code" category for the `[tools] code` toggle, modes and every
+# other category list, so the tool list doesn't change. `monitor` counts for a
+# call that tails a file; one that runs a command is "shell". `check_file`
+# runs the project's linter, so it counts only for a file whose linters run no
+# project code (`evi.permissions.classify_call`).
+CODE_READ_TOOLS = frozenset({"python_symbols", "monitor"})
 # Built-in tools whose glob argument picks files below their `path` argument.
 # A glob with a ".." part (or an absolute one) reaches outside that folder,
 # so `[auto] trusted_dirs` never approves such a call (evi/permissions.py).
@@ -226,6 +235,17 @@ class Tool:
     # On a copy `bind` made: the tool it was bound from, so any other agent
     # handed the copy binds that tool for itself instead of sharing the state.
     bound_from: Tool | None = field(default=None, repr=False, compare=False)
+    # What only the tool knows about one call's permission category: given the
+    # call's arguments, a category, or None for the default (`category_for`).
+    categorize: Callable[[dict[str, Any]], str | None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    # What only the tool knows about one call's path arguments: given the
+    # call's arguments, the paths it takes, or None for the default
+    # (`path_args`). For an argument that is a path in some calls only.
+    locate: Callable[[dict[str, Any]], list[str] | None] | None = field(
+        default=None, repr=False, compare=False
+    )
     # Whether `func` takes the call's ToolContext (a ``ctx`` parameter), read
     # once here. MCP tools never do: their arguments all go to the server.
     takes_ctx: bool = field(default=False, init=False, repr=False, compare=False)
@@ -247,6 +267,32 @@ class Tool:
             return self
         return dataclasses.replace(self, func=self.binder(ctx), binder=None, bound_from=self)
 
+    def category_for(self, arguments: str | dict[str, Any]) -> str:
+        """The category the permission policy checks this one call under
+        (`evi.permissions.decide`'s ``call_category``). `category` stays the
+        toggle / group the tool is switched on by; this is what a call does:
+        ``"shell"`` for a call that runs a shell line (``monitor``
+        kind=command), ``"code_read"`` for one of `CODE_READ_TOOLS` or a
+        ``check_file`` whose linters run no project code
+        (`evi.permissions.classify_call`), then the tool's own `categorize`
+        hook, which can't turn a shell call into anything else."""
+        from evi.permissions import classify_call
+
+        cat = classify_call(self.name, self.category, arguments)
+        if cat == "shell" or self.categorize is None:
+            return cat
+        try:
+            args = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+            return cat
+        if not isinstance(args, dict):
+            return cat
+        try:
+            own = self.categorize(args)
+        except Exception:  # noqa: BLE001 — a hook that fails leaves the default
+            return cat
+        return own if isinstance(own, str) and own else cat
+
     def path_param_names(self) -> tuple[str, ...]:
         if self.path_params is not None:
             return tuple(self.path_params)
@@ -260,13 +306,22 @@ class Tool:
         relative to the session working folder). A path argument the call
         leaves out counts with its schema default (``list_dir()`` reads "."),
         and without explicit `path_params` an argument the schema doesn't
-        declare counts too when its name is a path name."""
+        declare counts too when its name is a path name. A tool's `locate`
+        hook, when it answers, says instead (``monitor``'s target is a path
+        only when it tails a file)."""
         try:
             args = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
         except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
             return []
         if not isinstance(args, dict):
             return []
+        if self.locate is not None:
+            try:
+                own = self.locate(dict(args))
+            except Exception:  # noqa: BLE001 — a hook that fails leaves the default
+                own = None
+            if isinstance(own, list):
+                return [v for v in own if isinstance(v, str)]
         names = set(self.path_param_names())
         if self.path_params is None:
             names.update(k for k in args if is_path_param(str(k), self.category))
@@ -371,6 +426,8 @@ def tool(
     long: bool = False,
     read_only: bool | None = None,
     trust: str = "trusted",
+    category_for: Callable[[dict[str, Any]], str | None] | None = None,
+    path_args_for: Callable[[dict[str, Any]], list[str] | None] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator: register a function as an LLM tool.
 
@@ -378,9 +435,13 @@ def tool(
     is used as the description if `description` is not supplied. Pass
     ``long=True`` for known-slow tools so the agent announces progress as soon
     as they start (see Agent's ToolProgress), ``read_only=True`` for one
-    that never writes its path arguments (`Tool.read_only`), and
-    ``trust="untrusted"`` for one returning text an outsider wrote. A ``ctx``
-    parameter receives the call's ToolContext and stays out of the schema.
+    that never writes its path arguments (`Tool.read_only`),
+    ``trust="untrusted"`` for one returning text an outsider wrote,
+    ``category_for`` for one whose calls the permission policy checks under a
+    category that depends on the arguments (`Tool.category_for`), and
+    ``path_args_for`` for one whose path arguments depend on the call
+    (`Tool.path_args`). A ``ctx`` parameter receives the call's ToolContext
+    and stays out of the schema.
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -414,6 +475,8 @@ def tool(
             long=long,
             read_only=read_only,
             trust=trust,
+            categorize=category_for,
+            locate=path_args_for,
         )
         REGISTRY[tool_name] = t
         return fn

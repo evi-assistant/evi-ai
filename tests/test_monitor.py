@@ -5,13 +5,23 @@ from __future__ import annotations
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import evi.tools.monitor  # noqa: F401  registers the tool
-from evi.tools.base import REGISTRY
+from evi.config import Config
+from evi.tools.base import REGISTRY, ToolContext
 
 
-def _call(**kwargs) -> str:
-    return REGISTRY["monitor"].call(json.dumps(kwargs))
+def _shell_on() -> ToolContext:
+    """The context of a session whose [tools] shell is on: command mode is
+    refused while it is off (tests/test_code_exec_parity.py)."""
+    cfg = Config()
+    cfg.tools.shell = True
+    return ToolContext(agent=SimpleNamespace(config=cfg))
+
+
+def _call(ctx: ToolContext | None = None, **kwargs) -> str:
+    return REGISTRY["monitor"].call(json.dumps(kwargs), ctx)
 
 
 def test_tail_file_collects_new_lines(tmp_path):
@@ -47,6 +57,7 @@ def test_command_collects_output_and_exit(tmp_path):
     import sys
 
     out = _call(
+        _shell_on(),
         target=f'{sys.executable} -c "print(\'build ok\')"',
         kind="command", timeout=15,
     )
@@ -59,7 +70,7 @@ def test_command_until_matches_early(tmp_path):
 
     # prints READY then would sleep; until=READY returns immediately
     code = "import time;print('READY',flush=True);time.sleep(30)"
-    out = _call(target=f'{sys.executable} -c "{code}"', kind="command",
+    out = _call(_shell_on(), target=f'{sys.executable} -c "{code}"', kind="command",
                 until="READY", timeout=20)
     assert "READY" in out and "matched" in out
 

@@ -1010,8 +1010,35 @@ class Agent:
     def disable_auto_all(self) -> None:
         self.auto_all = False
 
-    def _is_pre_approved(self, tool: Tool) -> bool:
-        return self.auto_all or tool.category in self.auto_approve_categories
+    def _call_category(self, tool: Tool, args_json: str) -> str:
+        """The category the permission policy checks this call under
+        (`Tool.category_for`: monitor kind=command is "shell", reading code is
+        "code_read"), shown in the prompt too; the tool's own category for a
+        tool without one."""
+        fn = getattr(tool, "category_for", None)
+        if callable(fn):
+            try:
+                return fn(args_json)
+            except Exception:  # noqa: BLE001 — fall back to the static category
+                pass
+        return getattr(tool, "category", "")
+
+    def _is_pre_approved(self, tool: Tool, args_json: str = "{}") -> bool:
+        """`/auto on`, or `[auto] auto_approve` approves this call's own
+        category (`permissions.approved_by_category`); never code execution
+        in a remote-triggered run."""
+        if self.auto_all:
+            return True
+        from evi.permissions import approved_by_category
+
+        return approved_by_category(
+            self.auto_approve_categories,
+            tool.name,
+            getattr(tool, "category", ""),
+            args_json,
+            call_category=self._call_category(tool, args_json),
+            remote_trigger=bool(getattr(self, "remote_trigger", False)),
+        )
 
     def _guarded_command(self, tool: Tool, args_json: str) -> str | None:
         """The shell command a guarded tool would execute, or None if `tool`
@@ -1039,8 +1066,9 @@ class Agent:
         (headless fail-safe) — or ``None`` when the guard doesn't apply.
 
         Sits above yolo / accept_edits / auto-approve / `/auto on`. Explicit
-        *specific* user allow-rules (matching the tool by name OR category and
-        carrying a non-trivial arg-glob) are honoured as intent and clear a
+        *specific* user allow-rules (naming the tool or ``shell``, never the
+        toggle category a command-runner like `monitor` is in, and carrying a
+        non-trivial arg-glob) are honoured as intent and clear a
         ``prompt``-severity hit, but only when they cover EVERY segment of the
         command line (`evi.shellsplit`), the line parses, and its redirects stay
         inside the working folder: ``allow run_command git*`` must not clear
@@ -1068,7 +1096,8 @@ class Agent:
 
         act = shell_rule_action(
             getattr(auto, "rules", []) or [],
-            # rules keyed on the name, the category and "shell" (monitor too)
+            # deny rules keyed on the name, the category and "shell" (monitor
+            # too); allow rules on the name and "shell" (`shell_rule_action`)
             rule_keys(tool.name, getattr(tool, "category", ""), cmd),
             _arg_values(args_json),
             cmd,
@@ -1154,11 +1183,12 @@ class Agent:
         """Ask the user about one call: the per-call callback, else the batch
         one with a single item. False when there is neither, or it fails."""
         try:
+            category = self._call_category(tool, args_json)
             if self.permission_callback is not None:
-                return bool(self.permission_callback(tool.name, args_json, tool.category))
+                return bool(self.permission_callback(tool.name, args_json, category))
             batch = getattr(self, "permission_batch_callback", None)
             if batch is not None:
-                answers = list(batch([(tool.name, args_json, tool.category)]))
+                answers = list(batch([(tool.name, args_json, category)]))
                 return bool(answers[0]) if answers else False
         except Exception:
             return False
@@ -1254,6 +1284,8 @@ class Agent:
             workdir=getattr(self, "cwd", "") or None,
             path_args=self._tool_path_args(tool, args_json),
             read_only=getattr(tool, "read_only", None),
+            call_category=self._call_category(tool, args_json),
+            remote_trigger=bool(getattr(self, "remote_trigger", False)),
         )
 
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
@@ -2480,7 +2512,8 @@ class Agent:
 
         if self.permission_batch_callback is not None and len(need_prompt) >= 2:
             triples = [
-                (m["tool"].name, m["args"], m["tool"].category) for m in need_prompt
+                (m["tool"].name, m["args"], self._call_category(m["tool"], m["args"]))
+                for m in need_prompt
             ]
             try:
                 decisions = list(self.permission_batch_callback(triples))

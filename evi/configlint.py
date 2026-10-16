@@ -111,7 +111,7 @@ def _lint_rules(auto: dict) -> list[Issue]:
     ``<server>.<tool>``; their tool part can't be checked offline)."""
     from fnmatch import fnmatch
 
-    from evi.permissions import unmatched_rules
+    from evi.permissions import CALL_CATEGORIES, unmatched_rules
 
     out: list[Issue] = []
     rules, hard_deny = _str_list(auto.get("rules")), _str_list(auto.get("hard_deny"))
@@ -138,7 +138,8 @@ def _lint_rules(auto: dict) -> list[Issue]:
     registry = register_builtin_tools()
     servers = _mcp_server_names()
     names = [*registry, *(f"{s}." for s in servers)]
-    categories = {t.category for t in registry.values()} | {"mcp", "shell"}
+    # A rule also matches a call's own category ("code_read", "shell").
+    categories = {t.category for t in registry.values()} | {"mcp"} | CALL_CATEGORIES
     unmatched = set(unmatched_rules([r for _, r in well_formed], names, categories))
     for key, r in well_formed:
         if r not in unmatched:
@@ -183,16 +184,39 @@ def _lint_protected_remove(auto: dict) -> list[Issue]:
     return out
 
 
+def _lint_auto_approve(auto: dict) -> list[Issue]:
+    """An `auto_approve` list saved with the old default's "code", which now
+    means running code (run_python) unasked, not just reading it. The fix
+    keeps every other entry (`evi.permissions.auto_approve_migration`); a list
+    naming "code_read" beside "code" keeps running code unasked on purpose."""
+    from evi.config import _fmt
+    from evi.permissions import auto_approve_migration
+
+    if not isinstance(auto.get("auto_approve"), list):
+        return []
+    migrated = auto_approve_migration(_str_list(auto.get("auto_approve")))
+    if migrated is None:
+        return []
+    return [Issue(
+        "config.toml [auto] auto_approve", "warn",
+        "'code' auto-approves running code (run_python, linters that run project "
+        "code), not only reading it; reading code is now 'code_read'. To have code "
+        f"execution ask, set auto_approve = {_fmt(migrated)}; to keep it unasked on "
+        "purpose, add 'code_read' beside 'code'",
+    )]
+
+
 def lint_auto(auto: object) -> list[Issue]:
-    """Lint the `[auto]` permission settings as written in config.toml: rules
-    and hard_deny entries that never apply, destructive_allow globs the guard
-    ignores, destructive_disable_rules ids that name no guard rule, and
+    """Lint the `[auto]` permission settings as written in config.toml: an
+    auto_approve list from before "code_read", rules and hard_deny entries
+    that never apply, destructive_allow globs the guard ignores,
+    destructive_disable_rules ids that name no guard rule, and
     protected_paths_remove entries that remove nothing."""
     if not isinstance(auto, dict):
         return []
     from evi.shell_guard import RULE_IDS, rejected_allow_globs
 
-    out = _lint_rules(auto)
+    out = _lint_auto_approve(auto) + _lint_rules(auto)
     for g in rejected_allow_globs(_str_list(auto.get("destructive_allow"))):
         out.append(Issue("config.toml [auto] destructive_allow", "warn",
                          f"glob {g!r} has a wildcard in its command word and is ignored; "

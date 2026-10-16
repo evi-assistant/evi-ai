@@ -1,7 +1,13 @@
-"""Code execution tool — runs Python in a subprocess with a timeout.
+"""Code tools — run Python in a subprocess with a timeout, outline a Python
+file, lint a file.
 
-Not a sandbox. Acceptable for personal-assistant use on a trusted machine.
-Future: containerize via Docker if exposing the assistant beyond localhost.
+`run_python` is not a sandbox unless `[tools] sandbox` is on and a sandboxer
+is present (evi/sandbox.py). The permission policy checks its calls as
+"code" (running code), which is not auto-approved by default, so it asks;
+a sandboxed run is "code_read" (`Tool.category_for`). `python_symbols` only
+reads (always "code_read"), and `check_file` is "code_read" only on a file
+whose linters run no project code (`evi.permissions.classify_call`). All
+three stay in the "code" category for the `[tools] code` toggle and modes.
 """
 
 from __future__ import annotations
@@ -37,6 +43,16 @@ def _python_exe() -> str | None:
     return sys.executable
 
 
+def _run_python_category(_args: dict) -> str | None:
+    """A run under an active OS sandbox (read-only filesystem except its temp
+    folder, no network) is checked as "code_read"; otherwise the default,
+    "code", which asks unless the user auto-approved running code. Reads the
+    same `[tools] sandbox` setting run_python does when it runs."""
+    from evi import sandbox
+
+    return "code_read" if sandbox.active() else None
+
+
 @tool(
     description=(
         "Execute a Python 3 snippet in a fresh subprocess (10s timeout). "
@@ -47,6 +63,7 @@ def _python_exe() -> str | None:
         "to run it, or launch it via the shell tool."
     ),
     category="code",
+    category_for=_run_python_category,
 )
 def run_python(code: str) -> str:
     exe = _python_exe()
@@ -63,11 +80,9 @@ def run_python(code: str) -> str:
         argv = [exe, str(script)]
         note = ""
         try:
-            from evi.config import Config
+            from evi import sandbox
 
-            if Config.load().tools.sandbox:
-                from evi import sandbox
-
+            if sandbox.requested():
                 if sandbox.available():
                     argv = sandbox.wrap(argv, tmp, allow_network=False)
                 else:

@@ -14,32 +14,49 @@ Layered on top of eVi's existing per-category auto-approve:
    a guardrail, not a sandbox: code a tool runs (``run_python``, a script) can
    still write anywhere.
 1. **Modes** (`auto.mode`): ``yolo`` allows everything, ``plan`` denies every
-   tool (read-only planning), ``accept_edits`` auto-allows file edits
-   (fs/code), ``ask`` (default) is the normal behaviour.
+   tool (read-only planning), ``accept_edits`` auto-allows file edits and
+   code reading (fs, code_read; never running code), ``ask`` (default) is the
+   normal behaviour.
 2. **Rules** (`auto.rules`): a first-match allow/deny list. Each rule is
    ``<allow|deny> <tool-glob> [arg-glob]`` — e.g. ``deny shell rm*``,
-   ``allow web``, ``deny fs *.env``. The tool-glob matches the tool's name or
-   its category (and ``shell`` for any call that runs a shell line, so
-   ``monitor`` kind=command too); the arg-glob (fnmatch) is checked against
-   the tool call's string arguments. For a call that runs a shell command line
-   (``run_command``, ``monitor`` kind=command) the line is split into segments
-   (`evi.shellsplit`) and the rules are matched per segment: an allow rule
-   approves only if every segment is allowed, the line parses and every
-   redirect stays inside the working folder (see `shell_rule_action`). For
+   ``allow web``, ``deny fs *.env``. The tool-glob matches the tool's name,
+   its category or the call's own category (`classify_call`: ``shell`` for
+   any call that runs a shell line, so ``monitor`` kind=command too;
+   ``code_read`` for one that only reads code), though an allow rule never
+   approves a shell line by its tool's category (``allow code`` doesn't cover
+   ``monitor`` kind=command) or running code by ``code_read``
+   (`allow_rule_keys`); the arg-glob (fnmatch) is
+   checked against the tool call's string arguments. For a call that runs a
+   shell command line (``run_command``, ``monitor`` kind=command) the line is
+   split into segments (`evi.shellsplit`) and the rules are matched per
+   segment: an allow rule approves only if every segment is allowed, the line
+   parses and every redirect stays inside the working folder (see
+   `shell_rule_action`). For
    such a call a specific allow rule's arg-glob is matched against the command
    segments only, never the other arguments: ``allow run_command C:\\proj*``
    no longer approves every command run with ``cwd`` in that folder. A deny
    rule still matches any string argument, ``cwd`` included.
-   Then **secret reads**: an fs/code call whose path argument matches a
-   protected pattern other than the write-only defaults (``.env``, ``*.pem``,
-   ``id_rsa`` ...; `protected_read`) asks, so auto-approve never pulls a secret
-   into the model's context silently. An explicit allow rule above still wins.
-3. **Auto-approve categories** (`auto.auto_approve`), then **trusted scopes**:
-   an fs/code call whose path arguments ALL resolve (against the working
-   folder, on their real path) under a `trusted_dirs` entry, and whose glob
-   argument (`find_files`, `search_files`) can't climb out with ``..``, or a
-   web call to a `trusted_domains` host. A call with no path argument
-   (``run_python``) is never approved by a trusted dir.
+   Then **secret reads**: an fs/code/code_read call whose path argument
+   matches a protected pattern other than the write-only defaults (``.env``,
+   ``*.pem``, ``id_rsa`` ...; `protected_read`) asks, so auto-approve never
+   pulls a secret into the model's context silently. An explicit allow rule
+   above still wins.
+3. **Auto-approve categories** (`auto.auto_approve`), matched against the
+   call's own category: ``code`` is running code (``run_python``, a linter
+   that runs project code) and also covers ``code_read`` (``python_symbols``,
+   ``monitor`` tailing a file, ``check_file`` with ruff); a shell line is
+   ``shell`` whatever tool runs it. In a run a **remote trigger** drives
+   (federation, A2A, a routine, a channel push: ``remote_trigger``) a call
+   that runs code (`runs_code`) is never approved by a category, by
+   accept_edits or by a trusted dir: only an explicit allow rule lets it
+   through, else the run's "deny" policy refuses it. A local unattended run
+   (the scheduler, ``evi run``, a teammate, a Telegram turn) goes by the list
+   the user wrote, ``shell`` or ``code`` included. Then **trusted
+   scopes**: an fs/code_read call whose path arguments ALL resolve (against
+   the working folder, on their real path) under a `trusted_dirs` entry, and
+   whose glob argument (`find_files`, `search_files`) can't climb out with
+   ``..``, or a web call to a `trusted_domains` host. A call with no path
+   argument (``run_python``) is never approved by a trusted dir.
 4. Otherwise → **ask** (prompt, if there's a UI to prompt with).
 
 Pure + side-effect-free so it's easy to test; the Agent calls `decide()`.
@@ -60,9 +77,35 @@ from urllib.parse import urlparse
 
 from evi import shellsplit
 from evi import workdir as _workdir
-from evi.tools.base import READ_ONLY_TOOLS, glob_values, path_values
+from evi.tools.base import CODE_READ_TOOLS, READ_ONLY_TOOLS, glob_values, path_values
 
-_EDIT_CATEGORIES = ("fs", "code")
+# A call's own category (`classify_call`, `Tool.category_for`) when it only
+# reads code: auto-approved by default, unlike "code", which runs it.
+CODE_READ = "code_read"
+# Call categories that run code: "code" (run_python, a linter that runs
+# project code) and "shell" (a shell line). In a remote-triggered run no
+# category approves one (`runs_code`).
+EXEC_CATEGORIES = frozenset({"code", "shell"})
+# Tools that run arbitrary code whatever category one call of theirs has: a
+# sandboxed run_python is "code_read", but still runs code, so a
+# remote-triggered run never approves it by category, and an `allow
+# code_read` rule never approves it (`allow_rule_keys`).
+CODE_EXEC_TOOLS = frozenset({"run_python"})
+# Linters `check_file` may run that read only the file and their own static
+# config, so a call that can only reach them is "code_read". eslint loads the
+# project's eslint.config.js, cargo clippy builds the crate (build.rs, proc
+# macros) and go vet may run cgo or fetch a toolchain: those run project code,
+# so such a call stays "code" and asks (`classify_call`).
+READ_ONLY_LINTERS = frozenset({"ruff", "pyflakes"})
+# Every call category a rule's tool-glob or auto_approve can name beyond the
+# tools' own categories (for a config linter).
+CALL_CATEGORIES = frozenset({CODE_READ, "shell"})
+# Calls whose path arguments are files the tool reads or writes: a protected
+# secret among them asks (`protected_read`).
+_FILE_CATEGORIES = ("fs", "code", CODE_READ)
+# What accept_edits allows unasked, and what a trusted dir approves: file
+# edits and code reading, never running code.
+_EDIT_CATEGORIES = ("fs", CODE_READ)
 # The protected paths every config gets (`effective_protected_paths`). Patterns
 # without a "/" match a file's name; ones with a "/" match its path (a
 # relative one at any depth); "~" is the home folder. Matching ignores case.
@@ -313,13 +356,146 @@ def shell_command_of(tool_name: str, tool_category: str, tool_args: str | dict) 
     return value if isinstance(value, str) else None
 
 
-def rule_keys(tool_name: str, tool_category: str, command: str | None) -> tuple[str, ...]:
+def rule_keys(
+    tool_name: str, tool_category: str, command: str | None, call_category: str = ""
+) -> tuple[str, ...]:
     """What a rule's tool-glob is matched against: the tool's name, its
-    category, and ``shell`` when the call runs a shell line (`command`, see
-    `shell_command_of`): ``monitor`` kind=command is category "code" but runs
-    a shell line, so ``hard_deny = ["shell rm -rf*"]`` must cover it too."""
-    keys = (tool_name, tool_category, "shell" if command is not None else "")
+    category, the call's own category (`classify_call`) and ``shell`` when the
+    call runs a shell line (`command`, see `shell_command_of`): ``monitor``
+    kind=command is category "code" but runs a shell line, so ``hard_deny =
+    ["shell rm -rf*"]`` must cover it too."""
+    keys = (tool_name, tool_category, call_category, "shell" if command is not None else "")
     return tuple(dict.fromkeys(k for k in keys if k))
+
+
+def _runs_shell(tool_name: str, tool_category: str, data: dict | None) -> bool:
+    """True if the call runs a shell line, even one `shell_command_of` can't
+    read: a ``monitor`` kind=command call whose target isn't a string, or
+    arguments that don't parse, still count (fail closed)."""
+    if tool_category == "shell":
+        return True
+    if tool_name not in SHELL_EXEC_TOOLS:
+        return False
+    if tool_name == "monitor":
+        return data is None or data.get("kind") == "command"
+    return True
+
+
+def _lints_read_only(data: dict | None) -> bool:
+    """True if a ``check_file`` call can only reach a linter that runs no
+    project code (`READ_ONLY_LINTERS`), or none: its file's type has no
+    linter (`evi.codeintel`), or only ruff / pyflakes. Decided by the file's
+    extension, not by what is installed, so it is the same everywhere."""
+    path = (data or {}).get("path")
+    if not isinstance(path, str):
+        return False
+    from evi import codeintel
+
+    cmds = codeintel._LINTERS.get(Path(path).suffix.lower())
+    return not cmds or all(c[0] in READ_ONLY_LINTERS for c in cmds)
+
+
+def classify_call(tool_name: str, tool_category: str, tool_args: str | dict) -> str:
+    """The category the policy checks one call under, from what the call does
+    rather than the toggle its tool is in: ``"shell"`` when it runs a shell
+    line (``run_command``, ``monitor`` kind=command), ``"code_read"`` for a
+    "code" tool that only reads code (`evi.tools.base.CODE_READ_TOOLS`, and
+    ``check_file`` on a file whose linters run no project code), else
+    `tool_category`. Pure; `evi.tools.base.Tool.category_for` adds what only
+    the tool knows (``run_python`` while a sandbox is active)."""
+    data = _arg_dict(tool_args)
+    if _runs_shell(tool_name, tool_category, data):
+        return "shell"
+    if tool_category == "code" and (
+        tool_name in CODE_READ_TOOLS or (tool_name == "check_file" and _lints_read_only(data))
+    ):
+        return CODE_READ
+    return tool_category
+
+
+def runs_code(tool_name: str, tool_category: str, call_category: str) -> bool:
+    """True if the call runs code: its own category is "code" or "shell", or
+    the tool is one of `CODE_EXEC_TOOLS` (sandboxed or not)."""
+    return call_category in EXEC_CATEGORIES or (
+        tool_name in CODE_EXEC_TOOLS and tool_category == "code"
+    )
+
+
+def allow_rule_keys(
+    tool_name: str, tool_category: str, command: str | None, call_category: str = ""
+) -> tuple[str, ...]:
+    """The `rule_keys` an allow rule's tool-glob may match; a deny rule (and
+    hard_deny) matches every one, so it never gets looser. A call that runs a
+    shell line is allowed only by its tool's name or ``shell``, never by the
+    toggle category its tool is in, so ``allow code`` approves ``monitor``
+    kind=command no more than it does ``run_command``. A call that runs code
+    (`runs_code`) is never allowed by ``code_read``, the category a sandboxed
+    run_python has, so ``allow code_read`` stays a rule about reading code."""
+    keys = rule_keys(tool_name, tool_category, command, call_category)
+    if command is not None or call_category == "shell":
+        return tuple(k for k in keys if k in (tool_name, "shell"))
+    if runs_code(tool_name, tool_category, call_category):
+        return tuple(k for k in keys if k != CODE_READ)
+    return keys
+
+
+def approved_categories(auto_approve: Iterable[str]) -> set[str]:
+    """The call categories `[auto] auto_approve` lets run unasked: the list,
+    plus "code_read" when it names "code" (running code covers reading it, so
+    a list saved before "code_read" existed keeps python_symbols unasked)."""
+    out = {str(c).strip() for c in auto_approve or () if str(c).strip()}
+    if "code" in out:
+        out.add(CODE_READ)
+    return out
+
+
+def _call_category(
+    tool_name: str, tool_category: str, tool_args: str | dict, call_category: str | None
+) -> str:
+    """`call_category` as given (`Tool.category_for`), else `classify_call`;
+    "shell" for a call that runs a shell line whatever the caller passed."""
+    own = classify_call(tool_name, tool_category, tool_args)
+    if own == "shell":
+        return own
+    return call_category or own
+
+
+def approved_by_category(
+    auto_approve: Iterable[str],
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    *,
+    call_category: str | None = None,
+    remote_trigger: bool = False,
+) -> bool:
+    """True if `[auto] auto_approve` alone lets this call run unasked: its
+    own category (`call_category`, default `classify_call`) is approved
+    (`approved_categories`), and it doesn't run code in a run a remote
+    trigger drives (`remote_trigger`). The category step of `decide`, for a
+    caller that short-cuts it (the agent's pre-approval check); protected
+    paths and rules aren't looked at."""
+    cat = _call_category(tool_name, tool_category, tool_args, call_category)
+    if remote_trigger and runs_code(tool_name, tool_category, cat):
+        return False
+    return cat in approved_categories(auto_approve)
+
+
+def auto_approve_migration(auto_approve: Iterable[str]) -> list[str] | None:
+    """`[auto] auto_approve` with "code" replaced by "code_read", every other
+    entry kept in order, or None when it needs no change. Lists written before
+    "code_read" existed hold the old default's "code", which now means running
+    code (run_python) unasked; one that names "code_read" beside "code" keeps
+    that on purpose, so it is left alone."""
+    cats = [str(c).strip() for c in auto_approve or () if str(c).strip()]
+    if "code" not in cats or CODE_READ in cats:
+        return None
+    out: list[str] = []
+    for c in cats:
+        c = CODE_READ if c == "code" else c
+        if c not in out:
+            out.append(c)
+    return out
 
 
 def _cwd_arg(tool_args: str | dict) -> str:
@@ -407,12 +583,17 @@ def shell_rule_action(
     dialect: str | None = None,
     broad: bool = True,
     split: shellsplit.Split | None = None,
+    allow_keys: Iterable[str] | None = None,
 ) -> str | None:
     """First-match rule decision for a call that runs `command` through a shell.
 
     The line is split (`evi.shellsplit`) and each command segment is matched
     against the rules on its own; a rule's tool-glob is tried against each of
-    `tool_keys` (the tool name, and optionally its category). The result is:
+    `tool_keys` (the tool name first, then optionally its category), an allow
+    rule's only against those also in `allow_keys` (default: the tool name and
+    ``shell``, as `allow_rule_keys` gives for a shell line, so an ``allow code
+    git*`` rule clears the destructive guard for ``monitor`` kind=command no
+    more than for ``run_command``). The result is:
 
     - ``"deny"`` if the first rule matching the call as a whole (`values`, every
       string argument) is a deny, or the first rule matching ANY segment is;
@@ -429,10 +610,13 @@ def shell_rule_action(
     """
     rules = list(rules or ())
     keys = [k for k in tool_keys if k]
+    allowing = set([*keys[:1], "shell"] if allow_keys is None else allow_keys)
 
     def action(rule: str, vals: list[str]) -> str | None:
         for key in keys:
             act = _rule_action(rule, key, vals)
+            if act == "allow" and key not in allowing:
+                continue  # this key can't allow the call; another one may
             if act == "allow" and not broad and _is_broad(rule):
                 return None
             if act:
@@ -777,9 +961,10 @@ def protected_write(
     (as written), or None.
 
     The paths are the call's path arguments, unless the tool only reads
-    (`read_only`, default: a built-in in `evi.tools.base.READ_ONLY_TOOLS`),
-    and for a shell line its output redirect targets and the files its
-    writing commands name (``tee``, ``cp``, ``Set-Content`` ...;
+    (`read_only`, default: a built-in in `evi.tools.base.READ_ONLY_TOOLS`) or
+    the call does (`classify_call` is "code_read"), and for a shell line its
+    output redirect targets and the files its writing commands name (``tee``,
+    ``cp``, ``Set-Content`` ...;
     `_written_by_commands`). `path_args` defaults to the arguments named like
     paths (`evi.tools.base.path_values`). Relative paths resolve against
     `workdir`, a shell line's against its cwd and every folder a ``cd`` in it
@@ -792,7 +977,9 @@ def protected_write(
     targets: list[tuple[str, Path, str]] = []
     if read_only is None:
         read_only = tool_name in READ_ONLY_TOOLS
-    if not read_only:
+    # A call that only reads code (monitor tailing a file) writes none of its
+    # path arguments either.
+    if not read_only and classify_call(tool_name, tool_category, tool_args) != CODE_READ:
         if path_args is None:
             path_args = path_values(_arg_dict(tool_args) or {}, tool_category)
         targets += [(v, base, v) for v in path_args if v]
@@ -828,12 +1015,12 @@ def protected_read(
     workdir: str | Path | None = None,
     path_args: list[str] | None = None,
 ) -> str | None:
-    """The first path argument of an fs/code call that matches a protected
-    pattern other than the write-only ones (`WRITE_PROTECTED_PATHS` and eVi's
-    home), or None: a secret or start-up file (``.env``, ``id_rsa`` ...) the
-    call could pull into the model's context. `path_args` defaults to the
-    arguments named like paths."""
-    if tool_category not in _EDIT_CATEGORIES:
+    """The first path argument of an fs/code/code_read call that matches a
+    protected pattern other than the write-only ones (`WRITE_PROTECTED_PATHS`
+    and eVi's home), or None: a secret or start-up file (``.env``, ``id_rsa``
+    ...) the call could pull into the model's context. `path_args` defaults to
+    the arguments named like paths."""
+    if tool_category not in _FILE_CATEGORIES:
         return None
     if path_args is None:
         path_args = path_values(_arg_dict(tool_args) or {}, tool_category)
@@ -859,6 +1046,8 @@ def decide(
     dialect: str | None = None,
     path_args: list[str] | None = None,
     read_only: bool | None = None,
+    call_category: str | None = None,
+    remote_trigger: bool = False,
 ) -> str:
     """Return 'allow', 'deny', or 'ask' for one tool call.
 
@@ -870,11 +1059,25 @@ def decide(
     arguments named like paths) and `read_only` whether the tool only reads
     them (default: `evi.tools.base.READ_ONLY_TOOLS`). `protected_paths` is
     used as given: `effective_protected_paths` adds the defaults.
+
+    `tool_category` is the tool's own (toggle) category and `call_category`
+    this call's (`evi.tools.base.Tool.category_for`; default:
+    `classify_call`), which auto_approve, accept_edits and trusted dirs go by;
+    a call that runs a shell line is "shell" whatever is passed. An allow
+    rule matches only `allow_rule_keys`. `remote_trigger` is True when a
+    remote peer drives the run (federation, A2A, a routine, a channel push):
+    a call that runs code (`runs_code`) is then never approved by a category,
+    accept_edits or a trusted dir, only by an explicit allow rule (or yolo,
+    which such a run never gets). A local unattended run passes False: the
+    user's own list decides there, "shell" or "code" included.
     """
     values = _arg_values(tool_args)
     data = _arg_dict(tool_args) or {}
     command = shell_command_of(tool_name, tool_category, tool_args)
-    keys = rule_keys(tool_name, tool_category, command)
+    cat = _call_category(tool_name, tool_category, tool_args, call_category)
+    exec_held = remote_trigger and runs_code(tool_name, tool_category, cat)
+    keys = rule_keys(tool_name, tool_category, command, cat)
+    allow_keys = allow_rule_keys(tool_name, tool_category, command, cat)
     sp = shellsplit.split(command, dialect) if command is not None else None
     if path_args is None:
         path_args = path_values(data, tool_category)
@@ -899,10 +1102,16 @@ def decide(
             return shell_rule_action(
                 rules, keys, values, command,
                 workdir=workdir, cwd=exec_cwd_of(tool_name, tool_args), split=sp,
+                allow_keys=allow_keys,
             )
         for rule in rules or ():
-            action = _rule_action(rule, tool_name, values, tool_category)
-            if action:  # first match wins (deny or allow); explicit deny beats trust
+            # first match wins (deny or allow); explicit deny beats trust
+            action = next(
+                (a for k in keys
+                 if (a := _rule_action(rule, k, values)) and (a == "deny" or k in allow_keys)),
+                None,
+            )
+            if action:
                 return action
         return None
 
@@ -927,17 +1136,22 @@ def decide(
     # Reading a secret file (.env, a key) is never silent either, unless an
     # explicit allow rule above said so.
     if protected_read(
-        tool_category, tool_args, protected_paths, workdir=workdir, path_args=path_args
+        cat if cat in _FILE_CATEGORIES else tool_category, tool_args, protected_paths,
+        workdir=workdir, path_args=path_args,
     ) is not None:
         return "ask"
-    if mode == "accept_edits" and tool_category in _EDIT_CATEGORIES:
+    # Driven by a remote trigger, code execution goes no further: it asks,
+    # and the run's "deny" policy refuses it.
+    if exec_held:
+        return "ask"
+    if mode == "accept_edits" and cat in _EDIT_CATEGORIES:
         return "allow"
-    if tool_category in set(auto_approve or ()):
+    if cat in approved_categories(auto_approve):
         return "allow"
     # Trusted scopes: files under a trusted dir (with no glob argument that
     # climbs out of it), or web fetches to a trusted host.
     if (
-        tool_category in _EDIT_CATEGORIES
+        cat in _EDIT_CATEGORIES
         and not any(_glob_escapes(g) for g in glob_values(tool_name, data))
         and _under_trusted_dir(path_args, trusted_dirs, workdir)
     ):

@@ -76,7 +76,9 @@ def test_effort_max() -> None:
     cfg.llm.reasoning_effort = "max"
     agent, cc = _make_agent(cfg)
     list(agent.chat("hi"))
-    assert cc.calls[0]["extra_body"] == {"reasoning_effort": "max"}
+    # "max" is eVi's level, not a backend's: it asks for the highest one they
+    # accept (OpenAI and Ollama 400 on reasoning_effort="max").
+    assert cc.calls[0]["extra_body"] == {"reasoning_effort": "high"}
 
 
 def test_effort_not_sent_to_non_reasoning_model() -> None:

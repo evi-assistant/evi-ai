@@ -7,18 +7,30 @@ when an optional `until` regex matches. Because eVi tools are synchronous
 or-timeout) rather than an open-ended background stream: the model calls it,
 waits for the window, and gets back what happened. Good for "babysit this build
 / CI run and tell me when it finishes" and "tail the server log for an error".
+
+One tool, two kinds of call. Tailing a file only reads, and the permission
+policy checks it as "code_read" (auto-approved by default), with the file as
+its path argument, so tailing a protected secret (``.env``, a key) asks. A
+command runs a shell line, so it is held to everything `run_command` is: the
+call is checked as "shell" (`Tool.category_for`: the shell rules, hard_deny
+and the destructive guard apply, and it is never auto-approved unless "shell"
+is), it is refused outright in a session that doesn't offer the shell tools
+(`[tools] shell = false`, outside a mode that turns them on), and it runs
+under the OS sandbox when `[tools] sandbox` is on.
 """
 
 from __future__ import annotations
 
+import os
 import queue
 import re
 import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
-from evi.tools.base import tool
+from evi.tools.base import ToolContext, tool
 
 _MAX_TIMEOUT = 300.0
 _MAX_LINES = 400
@@ -52,10 +64,66 @@ def _tail_file(path: Path, until_rx, deadline: float, poll: float) -> str:
     return _clip(collected) + "\n[timed out]"
 
 
-def _watch_command(command: str, until_rx, deadline: float, poll: float) -> str:
+def _tool_settings(ctx: ToolContext | None) -> Any:
+    """The `[tools]` settings of the session making the call (its agent's
+    config), else `Config.load()`'s. None when they can't be read."""
+    agent = getattr(ctx, "agent", None) if ctx is not None else None
+    config = getattr(agent, "config", None)
+    try:
+        if config is None:
+            from evi.config import Config
+
+            config = Config.load()
+        return config.tools
+    except Exception:  # noqa: BLE001 — unreadable settings enable nothing
+        return None
+
+
+def _shell_offered(ctx: ToolContext | None, tools: Any) -> bool:
+    """Whether the session making the call offers the shell tools: its
+    agent's tool set holds one in the "shell" category (run_command), which
+    `[tools] shell` or a mode that turns them on (code mode) put there, so a
+    command runs here exactly where run_command could. Without a session's
+    tool set (a direct call, MCP publish), `tools` (`[tools]`) says."""
+    agent = getattr(ctx, "agent", None) if ctx is not None else None
+    offered = getattr(agent, "tools", None)
+    if isinstance(offered, dict):
+        offered = list(offered.values())
+    if isinstance(offered, (list, tuple)):
+        return any(getattr(t, "category", None) == "shell" for t in offered)
+    return bool(getattr(tools, "shell", False))
+
+
+def _file_target(args: dict) -> list[str]:
+    """The call's path arguments (`Tool.path_args`): the file it tails
+    (kind='file', the default), so the permission policy's secret-read check
+    and trusted dirs see it; a command line is none."""
+    target = args.get("target")
+    if args.get("kind", "file") == "file" and isinstance(target, str):
+        return [target]
+    return []
+
+
+def _watch_command(
+    command: str, until_rx, deadline: float, poll: float, *, sandboxed: bool = False
+) -> str:
+    # Like run_command: under the OS sandbox when [tools] sandbox is on and a
+    # sandboxer is present. It runs in the eVi process's cwd, as it always has
+    # (evi.permissions.exec_cwd_of judges its redirects there).
+    argv: str | list[str] = command
+    use_shell = True
+    prefix = ""
+    if sandboxed:
+        from evi import sandbox
+
+        if sandbox.available():
+            argv = sandbox.wrap(["/bin/sh", "-c", command], os.getcwd(), allow_network=False)
+            use_shell = False
+        else:
+            prefix = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
     try:
         proc = subprocess.Popen(
-            command, shell=True, stdout=subprocess.PIPE,
+            argv, shell=use_shell, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
     except OSError as exc:
@@ -102,7 +170,7 @@ def _watch_command(command: str, until_rx, deadline: float, poll: float) -> str:
         except subprocess.TimeoutExpired:
             proc.kill()
     body = _clip(collected) if collected else "(no output)"
-    return body + "\n" + note
+    return prefix + body + "\n" + note
 
 
 @tool(
@@ -110,12 +178,38 @@ def _watch_command(command: str, until_rx, deadline: float, poll: float) -> str:
         "Watch something for up to `timeout` seconds, returning early if the "
         "`until` regex matches. kind='file' tails NEW lines appended to a log "
         "file; kind='command' runs a shell command and collects its output "
-        "(good for babysitting a build/CI run). Returns what was observed."
+        "(good for babysitting a build/CI run). kind='command' needs the shell "
+        "tools enabled ([tools] shell) and is approved like run_command. "
+        "Returns what was observed."
     ),
     category="code",
     long=True,
+    path_args_for=_file_target,
 )
-def monitor(target: str, kind: str = "file", until: str = "", timeout: float = 30.0) -> str:
+def monitor(
+    target: str,
+    kind: str = "file",
+    until: str = "",
+    timeout: float = 30.0,
+    ctx: ToolContext | None = None,
+) -> str:
+    # The permission policy reads `kind` the same way (evi.permissions
+    # .classify_call): exactly "command" runs a shell line, so reject anything
+    # that isn't one of the two kinds rather than guess.
+    if kind not in ("file", "command"):
+        return f"ERROR: kind must be 'file' or 'command', not {kind!r}"
+    if not isinstance(target, str) or not target.strip():
+        return "ERROR: target must be a non-empty string (a file path or a command line)"
+    tools = None
+    if kind == "command":
+        tools = _tool_settings(ctx)
+        if not _shell_offered(ctx, tools):
+            return (
+                "ERROR: kind='command' runs a shell command, and this session has no "
+                "shell tools (off: [tools] shell = false, or not enabled for it), so "
+                "nothing was run. Tail a log file with kind='file', or ask the user "
+                "to enable the shell tools."
+            )
     timeout = min(max(float(timeout), 1.0), _MAX_TIMEOUT)
     try:
         until_rx = re.compile(until) if until else None
@@ -124,5 +218,7 @@ def monitor(target: str, kind: str = "file", until: str = "", timeout: float = 3
     deadline = time.monotonic() + timeout
     poll = 0.2
     if kind == "command":
-        return _watch_command(target, until_rx, deadline, poll)
+        return _watch_command(
+            target, until_rx, deadline, poll, sandboxed=bool(getattr(tools, "sandbox", False))
+        )
     return _tail_file(Path(target).expanduser(), until_rx, deadline, poll)

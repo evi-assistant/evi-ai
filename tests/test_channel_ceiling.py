@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -370,6 +371,32 @@ def test_telegram_auto_approve_is_what_lets_a_category_run(home, channel_turn, f
 
     assert reply == "done"
     assert target.read_text(encoding="utf-8") == "ok"
+
+
+@pytest.mark.parametrize("category", ["code", "shell"])
+def test_telegram_auto_approve_can_opt_in_to_running_code(
+    home, channel_turn, fake_llm, category
+):
+    """`telegram_auto_approve` naming "code" or "shell" is the owner's opt-in to
+    running code from the bot. A Telegram turn has nobody to ask but is not a
+    remote trigger, so that list decides (tests/test_code_exec_parity.py); and
+    "code" alone never opens a shell line through monitor."""
+    marker = home.parent / "ran-shell.txt"
+    script = (
+        [("run_python", {"code": "print(6 * 7)"}),
+         ("monitor", {"target": f"echo x > {marker}", "kind": "command"})]
+        if category == "code"
+        else [("run_command", {"command": f'"{sys.executable}" -c "print(6 * 7)"'})]
+    )
+    cfg = _config(home, telegram_tools=[category], telegram_auto_approve=[category])
+
+    reply, agent, client = channel_turn(cfg, [fake_llm.call(*script), fake_llm.text("done")])
+
+    assert reply == "done" and not getattr(agent, "remote_trigger", False)
+    results = _tool_messages(client)
+    assert "42" in results[0] and not results[0].startswith("PERMISSION DENIED"), results
+    if category == "code":
+        assert results[1].startswith(("PERMISSION DENIED", "ERROR")) and not marker.exists()
 
 
 def test_channel_config_keeps_only_what_tightens():

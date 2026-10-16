@@ -238,6 +238,35 @@ def _check_protected_paths() -> list[Check]:
     return [Check(name, "ok", detail)]
 
 
+def _check_auto_approve() -> list[Check]:
+    """Whether running code asks: `[auto] auto_approve` as in force. A list
+    saved with the old default's "code" auto-approves run_python; the fix is
+    the same list with "code_read" for "code", every other entry kept
+    (`evi.permissions.auto_approve_migration`)."""
+    name = "code execution approval"
+    try:
+        from evi import config as _config
+        from evi.permissions import auto_approve_migration
+
+        exists = _config.CONFIG_PATH.is_file()
+        auto = _config.Config.load().auto if exists else _config.AutoSettings()
+        cats = [str(c) for c in (auto.auto_approve or [])]
+    except Exception:  # noqa: BLE001
+        return [Check(name, "warn", "skipped (config did not load)")]
+    listed = f"auto_approve: {', '.join(cats) or '(none)'}"
+    migrated = auto_approve_migration(cats)
+    if migrated is not None:
+        return [Check(
+            name, "warn",
+            f"run_python runs unasked: 'code' (the old default) auto-approves running "
+            f"code; reading code is now 'code_read' ({listed})",
+            fix=(f"in config.toml [auto]: auto_approve = {_config._fmt(migrated)}",),
+        )]
+    if "code" in cats:
+        return [Check(name, "ok", f"run_python runs unasked, by choice ({listed})")]
+    return [Check(name, "ok", f"run_python asks unless sandboxed ({listed})")]
+
+
 def _check_optional_deps() -> list[Check]:
     out: list[Check] = []
     for import_name, extra, what in _OPTIONAL_DEPS:
@@ -430,6 +459,7 @@ def run_checks() -> list[Check]:
     checks += _check_home()
     checks += _check_config()
     checks += _check_protected_paths()
+    checks += _check_auto_approve()
     checks += _check_backend()
     checks += _check_hardware()
     checks += _check_binaries()

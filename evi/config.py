@@ -399,8 +399,15 @@ class ToolToggles:
 class AutoSettings:
     """Permission policy. Categories listed here run without prompting.
 
-    `subagent` and `shell` deliberately default to NOT auto-approved — they
-    spawn things you may want to see before they happen.
+    `subagent`, `shell` and `code` deliberately default to NOT auto-approved —
+    they spawn things you may want to see before they happen. `code` is
+    running code (run_python, a linter that runs project code); `code_read`
+    (python_symbols, check_file with ruff, monitor tailing a file) only reads
+    it, and is in the default. A call is matched by what it does
+    (`Tool.category_for`): monitor kind=command is `shell`, and a sandboxed
+    run_python is `code_read`. In a run a remote trigger drives (federation,
+    A2A, a routine, a channel push) running code is never auto-approved
+    (evi/permissions.py `decide`); a local unattended run goes by this list.
 
     `mode` layers on top (see evi/permissions.py): "ask" (default) prompts for
     non-approved tools, "accept_edits" auto-allows file edits, "plan" denies all
@@ -408,8 +415,10 @@ class AutoSettings:
     `<allow|deny> <tool-glob> [arg-glob]` strings (e.g. "deny shell rm*").
     """
 
+    # Lists saved with the old default ("code" for "code_read") keep running
+    # code unasked; `evi lint` / `evi doctor` flag them with the migrated list.
     auto_approve: list[str] = field(
-        default_factory=lambda: ["fs", "code", "memory", "skills", "image"]
+        default_factory=lambda: ["fs", "code_read", "memory", "skills", "image"]
     )
     mode: str = "ask"  # ask | accept_edits | plan | yolo
     # First-match "allow|deny <tool-name-or-category-glob> [arg-glob]"

@@ -1,8 +1,9 @@
 """Best-effort OS sandboxing for code execution.
 
 Wraps a subprocess argv so it runs with the filesystem read-only except a
-writable work dir, and (by default) no network — used by the `run_python` tool
-when `[tools] sandbox` is on. Sandboxers:
+writable work dir, and (by default) no network — used by the `run_python`,
+`run_command` and `monitor` (kind=command) tools when `[tools] sandbox` is
+on. Sandboxers:
 
 - **Linux**: ``bwrap`` (bubblewrap) — ``--ro-bind / /`` + writable workdir +
   ``--unshare-net``.
@@ -21,6 +22,7 @@ from __future__ import annotations
 import platform
 import shutil
 from pathlib import Path
+from typing import Any
 
 
 def _system() -> str:
@@ -35,6 +37,26 @@ def available() -> bool:
     if s == "Darwin":
         return shutil.which("sandbox-exec") is not None
     return False
+
+
+def requested(config: Any = None) -> bool:
+    """True iff `[tools] sandbox` is on in `config` (default: `Config.load()`).
+    False when the config can't be read."""
+    try:
+        if config is None:
+            from evi.config import Config
+
+            config = Config.load()
+        return bool(getattr(getattr(config, "tools", None), "sandbox", False))
+    except Exception:  # noqa: BLE001 — an unreadable config requests nothing
+        return False
+
+
+def active(config: Any = None) -> bool:
+    """True iff code execution runs sandboxed now: `[tools] sandbox` is on
+    (`requested`) and a sandboxer is on PATH (`available`). The permission
+    policy checks a sandboxed run_python as reading code, not running it."""
+    return requested(config) and available()
 
 
 def status() -> dict:

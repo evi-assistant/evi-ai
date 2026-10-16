@@ -146,9 +146,12 @@ def test_evi_loads_the_config_and_its_tools_need_approval(tmp_path, backend_env,
 
     for name, category, args in calls:
         assert verdict(cfg.auto, name, category, args) != "allow", name
-    # eVi's stock policy would have allowed them: the hole this config closes.
+    # eVi's stock policy would have allowed the workspace write (fs is
+    # auto-approved): the hole this config closes. Running code no longer rides
+    # the stock defaults at all (auto_approve has code_read, not code).
     stock = config_mod.AutoSettings()
-    assert verdict(stock, *calls[0]) == "allow"
+    assert verdict(stock, *calls[2]) == "allow"
+    assert verdict(stock, *calls[0]) != "allow"
 
 
 def test_the_action_writes_its_config_with_the_helper():
