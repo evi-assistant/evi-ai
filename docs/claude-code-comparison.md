@@ -29,7 +29,8 @@ planned (philosophy mismatch / separate big track).
 | Checkpointing (rewind edits + convo) | file rewind (Ph 64) + convo edit/branch/reroll | ✅ |
 | Continue / resume / fork | `evi sessions continue` / `fork` (Ph 71) | ✅ |
 | Remote control (drive from a phone) | Telegram chat channel (paired senders, own narrow toolset; [channels.md](features/channels.md)) + `evi sessions handoff` + remote-backend mode | ⚠️ one message = one turn; no live attach to a running session |
-| Send a message while it works | steering: queued, applied at the turn's next step ([steering.md](features/steering.md)) | ✅ web/desktop; no stop button yet |
+| Send a message while it works | steering: queued, applied at the turn's next step ([steering.md](features/steering.md)) | ✅ web/desktop |
+| Stop a running turn | Stop button (web/desktop, `POST /api/session/<id>/cancel`), Ctrl+C in `evi chat` and `evi run` (exit 130); commands' process trees are killed ([steering.md](features/steering.md#stopping-a-turn)) | ✅ |
 | Import history from other tools | `evi sessions import` (Claude Code + Codex logs → eVi sessions) | ✅ eVi-unique |
 | Deep links (open from a URL) | `evi://session/<id>`, `evi://workflow/<name>`, `evi link` | ✅ |
 

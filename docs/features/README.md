@@ -26,6 +26,7 @@ tokens, the desktop app's LAN token, containers) see
 - [Hooks](hooks.md) — tool + lifecycle events, command or HTTP
 - [Structured Outputs & Batch](structured-and-batch.md) — JSON-Schema output + `evi batch`
 - [Permissions & Sandbox](permissions-and-sandbox.md) — modes, rules, trusted dirs/domains, OS sandbox
+- [Secret redaction](secret-redaction.md) — API keys and tokens become `[REDACTED:<kind>]` in transcripts, logs and tool-call displays
 - [MCP](mcp.md) — client (`mcp.json`) + server (`evi mcp serve`)
 - [Recipes, Routines, Scheduled tasks, Channels](automation.md) — session channels (alerts into a live web session)
 - [Web & Desktop](web-desktop.md) — settings (groups, explainers, health banners), multi-user, deep links, updater

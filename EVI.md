@@ -8,6 +8,9 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 ## Never
 
 - Commit to `main`, push, tag, release, or set a task's status.
+- Mark your own work verified: only the director's attestation does.
+  Director tooling (`evi task verify|reject`, `evi attest`), its key
+  (`~/.evi/director`) and `EVI_AGENT` are denied to you in every mode.
 - Edit `.github/workflows/`, the version (`pyproject.toml`, `evi/__init__.py`)
   or a released CHANGELOG entry unless the task says so.
 - Touch `~/.evi` or `$EVI_HOME`; tests use `tmp_path` + `monkeypatch`.

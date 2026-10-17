@@ -43,6 +43,13 @@ this order:
    category, as in `rules` below. For a shell command line it is also checked
    against each command in the line, so `ls && rm -rf x` is denied too (see
    [Shell command lines](#shell-command-lines)).
+
+   Right after it comes the **director's ground**, denied the same way, in
+   every mode and whatever rule matches: a call that reaches the director's
+   attestation key (its folder, `~/.evi/director`), sets or clears
+   `EVI_AGENT` / `EVI_DIRECTOR`, or runs director tooling (`evi task
+   verify|reject`, `evi attest`). See [The director's
+   ground](#the-directors-ground).
 1. **Protected paths** (`auto.protected_paths`, plus eVi's built-in
    write-protected paths). Right after hard-deny and before the mode: a call
    that would **write** a protected path **asks**, in every mode — `yolo` and
@@ -110,7 +117,8 @@ this order:
 
 The REPL `/auto on` toggle (and `s` at a CLI prompt) is a session override: it
 acts as `yolo` for the rest of the session, until you `/auto off`. Hard-deny,
-protected paths and the destructive-command guard still apply under it.
+the director's ground, protected paths and the destructive-command guard still
+apply under it.
 
 ### What a call counts as
 
@@ -248,6 +256,11 @@ The patterns in force are:
   `EVI_HOME` folder when it is set), `.git/hooks/**`, `.git/config`,
   `.git/modules/**/hooks/**`, `.git/modules/**/config`, `.github/workflows/**`
   and `.vscode/tasks.json`. Reading them is normal and never asks.
+- **The director's key folder**, `~/.evi/director` (and `<EVI_HOME>/director`
+  when `EVI_HOME` is set), is in every list, reads included, and
+  `protected_paths_remove` can't take it out. A call that reaches it isn't
+  asked about but denied, before this check (see [The director's
+  ground](#the-directors-ground)).
 - **minus `[auto] protected_paths_remove`**, which un-protects an entry by its
   exact text: a built-in one, or one of your own `protected_paths` entries.
   For example, `protected_paths_remove = ["AGENTS.md"]` lets an unattended
@@ -287,6 +300,62 @@ This is a guardrail, not a sandbox. Not inspected: command strings run through
 `core.hooksPath` folder such as `.husky/`, the contents of a recursive copy
 (`cp -r payload/. .`), hard links, and paths nested inside an MCP tool's
 arguments (`{"edits": [{"path": …}]}`).
+
+### The director's ground
+
+eVi never marks its own work verified: a task's verdict counts only with an
+attestation signed by the director's key (`evi.attest`; see [The director's
+attestation key](../security.md#the-directors-attestation-key)). So an agent
+must not reach that key or the tooling that signs with it. `decide()` denies
+these calls right after `hard_deny`, in every mode (`yolo` and `/auto on`
+included), whatever `allow` rule, trusted folder or unattended policy says,
+and without a prompt a user could rubber-stamp:
+
+- **A path in the key folder**: any tool whose path argument is in
+  `~/.evi/director` (or `<EVI_HOME>/director`), reading or writing, MCP tools
+  included; a `find_files` / `search_files` glob counts with the folder it
+  searches. Paths are matched as in [Protected paths](#protected-paths), so a
+  symlink or another spelling of the folder counts. On Windows a device path
+  that names no drive (`\\?\Volume{…}`, `\\?\GLOBALROOT\…`) is denied as
+  well, since what it opens can't be told and a volume path reaches `C:\`
+  too; another host's `C$` share is read as this machine's `C:`.
+- **A shell line** (`run_command`, `monitor` commands) that writes into that
+  folder, or that, as code, names the key (`evi-director`, `.evi/director`,
+  `director.key`), sets or clears `EVI_DIRECTOR` / `EVI_AGENT` (`VAR=`,
+  `export`, `unset`, `env -u`, `Remove-Item env:…`), imports or patches
+  `evi.attest` (`python -c "from evi import attest…"`), or runs director
+  tooling: `evi task verify|reject` or `evi attest`, through `python -m evi`,
+  `uv run` and other launchers too, or handed to another program to run
+  (`schtasks /tr "…"`, `ssh host …`, `find -exec`, `watch`, a git `!` alias,
+  a pipe into `sh`). A line eVi can't split (`bash -c "…"`, `cmd /c …`) is
+  matched as plain text.
+- **`run_python` code** that does any of that. Code has no data positions:
+  every mention counts, reading `EVI_AGENT` included.
+
+A mention that is only data is left alone: a search pattern
+(`grep -rn director.key .`), a git commit message in double quotes or a
+`--grep` value, an `echo`'s words, a heredoc body nothing runs. A shell line is
+read as each shell would split it, cmd included, where single quotes don't
+quote, so `git commit -m 'wip evi attest'` is denied; use double quotes.
+
+These rules sit outside the destructive-command guard's settings: they are not
+in its rule list, `block_destructive = false` doesn't turn them off, and
+`destructive_allow` or `destructive_disable_rules` can't clear them (`evi lint`
+says a director rule id in `destructive_disable_rules` disables nothing). With
+the guard on, a denied shell line tells the model why (`BLOCKED by the
+destructive-command guard: … director tooling …`); any other denied call reads
+`PERMISSION DENIED: …`.
+
+**`EVI_AGENT`.** Every process eVi starts for an agent gets `EVI_AGENT=1` in
+its environment (see [What a command's environment
+holds](#what-a-commands-environment-holds)), and director tooling refuses to
+run in it or in anything it starts. It also refuses inside an `evi chat`
+session (`EVI_INTERACTIVE=1`) and under an eVi process (`evi chat`,
+`evi serve`, the desktop app's server), and never reads the key there.
+
+This raises the bar; it is not a wall. An agent runs as your OS user, so a
+script it writes to a file and then runs can still do what `evi.attest` does.
+See [Notes / limits](#notes--limits).
 
 ### Unattended runs
 
@@ -364,15 +433,19 @@ starts) runs unattended.
 **Delegate CLI-agent backends are refused.** `codex`, `gemini`, `amp`, `qwen`
 and `copilot` run their own tools outside these checks, so an unattended run
 won't use one, as `[llm] backend` or as any `[models] *_backend`. The
-scheduler records the refusal as the task's status, `evi run`, `evi batch` and
-`evi team run` exit with it, the web app's runs answer `409`, and an A2A task
-fails. Set `[llm] allow_cli_agent_unattended = true` to accept the risk; the
-Telegram channel refuses them even then.
+scheduler records the refusal as the task's status, `evi run`, `evi batch`,
+`evi workflow run` and `evi team run` exit with it, the web app's runs answer
+`409`, and an A2A task fails. Set `[llm] allow_cli_agent_unattended = true` to
+accept the risk; the Telegram channel refuses them even then.
 
 Still allow-all, as before: eval cases (`evi eval run`, the web eval runner
 and scheduled eval suites, whose log says `# policy: allow-all`), so scores
 measure what the agent can do, and `evi workflow run`, which approves every
-tool of every step. The web app's workflow runs follow the policy.
+tool of every step. `evi workflow run` is still an unattended entry point,
+though: it refuses a delegate CLI-agent backend as above, and its steps'
+commands get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables ([What a command's
+environment holds](#what-a-commands-environment-holds)). The web app's
+workflow runs follow the policy.
 
 ### What `web_fetch` will fetch
 
@@ -455,6 +528,32 @@ apart from identity and date variables, the prompt, lock and trace switches,
 `GIT_EDITOR=true` and `GIT_PAGER=cat`) or `LD_PRELOAD` / `LD_LIBRARY_PATH` /
 `DYLD_*`, in bash, cmd or PowerShell form: it asks, or denies when nothing can
 ask.
+
+### What a command's environment holds
+
+The processes eVi starts for an agent (`run_command`, `run_python` and
+`monitor` commands, and the delegate CLI-agent backends) inherit eVi's
+environment, with two changes:
+
+- **`EVI_AGENT=1` is always added**, whatever environment the caller passed.
+  It marks the process as an agent's: director tooling refuses to run in it,
+  or in anything it starts ([The director's ground](#the-directors-ground)),
+  and a shell line that sets or clears it is denied.
+- **Secrets are dropped when nobody is watching.** A `run_command`,
+  `run_python` or `monitor` command gets no variable whose name ends in
+  `_KEY`, `_TOKEN` or `_SECRET` (in any case) when it runs sandboxed, or in a
+  run nobody watches: an agent with no permission callback (a scheduled task,
+  `evi run`, a subagent of an unattended run), a remote-triggered run (a
+  federated or A2A task, a routine, a channel push, a Telegram turn), and
+  anything inside an unattended entry point (`evi run`, `evi batch`,
+  `evi workflow run`, scheduled tasks, ultracode, the web app's workflow and
+  recipe runs). So a scheduled task's `gh` or `curl` doesn't see `GH_TOKEN`
+  or `OPENAI_API_KEY`. Your own chats keep the full environment.
+
+A `run_command`, `run_python` or `monitor` command runs with no stdin (the
+null device) as the root of its own process tree: at its timeout, or when the
+turn is stopped ([Stopping a turn](steering.md#stopping-a-turn)), the whole
+tree is killed and the output so far comes back.
 
 ### The sandbox
 
@@ -850,6 +949,15 @@ turn returns to your normal policy.
   scheme. For `web_fetch` an entry also unlocks that host's loopback / LAN
   addresses (see [What `web_fetch` will fetch](#what-web_fetch-will-fetch)), so
   list only hosts you mean the model to reach.
+- **The director's ground stops direct routes, not a determined agent.** An
+  agent runs as your OS user. A script it writes with `write_file` and then
+  runs, or code the checks don't recognise (a module name built from pieces),
+  can drop `EVI_AGENT`, patch `evi.attest` or read the key file or keyring
+  entry. The checks keep that from happening by accident or unnoticed; full
+  isolation needs the agent under a separate OS account. Nor does the guard
+  catch a command handed to a scheduler on its stdin (`echo "…" | at now`, a
+  line piped into `crontab -`): it runs later, outside eVi's process tree and
+  without `EVI_AGENT`.
 
 ### Relevant source files
 
@@ -865,7 +973,13 @@ turn returns to your normal policy.
   checks.
 - `C:\evi\evi\shellsplit.py` — splits a shell line into the commands rules are
   matched against.
-- `C:\evi\evi\shell_guard.py` — the destructive-command guard.
+- `C:\evi\evi\shell_guard.py` — the destructive-command guard, and the director
+  rules (`director_hit`, `director_code_hit`).
+- `C:\evi\evi\attest.py` — the director's key and attestations, and who may
+  sign (`agent_parent`, `authorize`); `director_ground` in permissions.py.
+- `C:\evi\evi\proc.py` — how commands run for an agent: `EVI_AGENT`
+  (`agent_env`), the secret-free environment (`scrubbed_env`,
+  `runs_unattended`), and the process-tree runner (`run`).
 - `C:\evi\evi\netguard.py` — `web_fetch`'s address, redirect and size checks.
 - `C:\evi\evi\gitsafe.py` — the hardened git calls.
 - `C:\evi\evi\sandbox.py` — `wrap()` / `available()` / `status()` per-OS.

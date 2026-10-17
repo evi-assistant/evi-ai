@@ -27,7 +27,9 @@ switcher; per-turn headless: `evi run -m code`.
 **Headless** — `evi run "prompt" [-m mode] [-y] [--format json] [--schema f]`.
 One-shot for scripts/CI. Example: `git diff | evi run "review for bugs" -y`.
 Nothing prompts: without `-y`, a call outside `[auto] auto_approve` is denied
-(`[auto] unattended_policy`), and the JSON result names the run's `policy`.
+(`[auto] unattended_policy`), and the JSON result names the run's `policy` and
+why the turn ended (`stop_reason`). Ctrl+C or a SIGINT still prints the result
+(`"stop_reason": "interrupted"`, or the text so far) and exits 130.
 
 **Batch** — `evi batch prompts.jsonl -o out.jsonl -j 4`. Runs many prompts (each
 its own agent), optional parallelism. Input is `.jsonl`/`.json` objects
@@ -39,6 +41,14 @@ its own agent), optional parallelism. Input is `.jsonl`/`.json` objects
 message is applied at the turn's next step instead of interrupting it
 (`POST /api/session/{id}/steer`). If the turn ends first, it is sent as a normal
 message. [Guide](features/steering.md).
+
+**Stopping a turn** — Web: **Stop** next to Send, or **Stop turn** on an open
+permission prompt (`POST /api/session/{id}/cancel`); REPL: Ctrl+C (a second
+one within 2 s quits); `evi run`: Ctrl+C / SIGINT. The turn ends with `Done`
+reason `interrupted`: text so far is kept and marked as cut off, running
+commands have their whole process tree killed, unanswered calls read
+`(cancelled)`, and the session takes your next message at once.
+[Guide](features/steering.md#stopping-a-turn).
 
 ## Models & backends
 
@@ -73,7 +83,11 @@ Settings → Tools): `fs`, `code` (`run_python`, `python_symbols`, `check_file`,
 (search/fetch), `image` (ComfyUI), `vision`, `memory`, `pdf`, `sqlite`, `index`
 (semantic search), `git`, `ocr`, `calendar`, `computer`, `voice`, `mcp`,
 `subagent`, `federation`. REPL: `/tools` lists active; `/notools`,
-`/forcetool <name>` per turn.
+`/forcetool <name>` per turn. `run_command`, `run_python` and `monitor`
+commands run as a process tree with no stdin: a timeout or a stop kills the
+whole tree and returns the output so far. A command that exits while a
+background job it started still holds its output returns 2 s later; the job
+keeps running, and `run_command`'s result says so.
 
 **Sandboxed code** — `[tools] sandbox = true` runs `run_python`, `run_command`
 and `monitor` commands under bwrap (Linux) / sandbox-exec (macOS): read-only FS +
@@ -96,9 +110,27 @@ workflow and recipe runs, SDK agents without a permission callback) deny what
 would ask unless `[auto] unattended_policy = "allow"`; federation, A2A, routine
 webhooks without `yes` and channel pushes always deny it and never run code by
 category (only an explicit allow rule lets `run_python` or a shell line run
-there); delegate CLI-agent backends are refused unless
-`[llm] allow_cli_agent_unattended`.
+there); delegate CLI-agent backends are refused there, and by
+`evi workflow run` (which still approves every tool), unless
+`[llm] allow_cli_agent_unattended`; and the commands these runs start, like
+sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 [Guide](features/permissions-and-sandbox.md#unattended-runs).
+
+**Secret redaction** — API keys and tokens a tool printed show as
+`[REDACTED:<kind>]` in transcripts (from now on; older ones aren't
+rewritten), tool-call displays (web events and `/history`, CLI tool lines and
+permission prompts), `evi run` JSON, scheduled-task logs, subagent traces and
+crash reports. Found by token shape and by the keys this machine has (env
+`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD`, eVi's own config files). The
+model's own context isn't redacted. [Guide](features/secret-redaction.md).
+
+**Director attestation** — eVi never marks its own work verified: a task's
+verdict counts only with an attestation signed by the director's key
+(`evi/attest.py`, OS keyring or `~/.evi/director/`). In every mode an agent's
+calls that touch that folder, set or clear `EVI_AGENT` / `EVI_DIRECTOR` or run
+director tooling (`evi task verify|reject`, `evi attest`) are denied, and every
+process an agent starts carries `EVI_AGENT=1`. The signing commands come with
+the Phase 1 task loop. [Security](security.md#the-directors-attestation-key).
 
 **Content guardrails** — `~/.evi/guardrails.toml`, three layers: regex
 (block/redact), `[[judge]]` (the LLM classifies vs a policy), `[[classifier]]`
@@ -119,7 +151,8 @@ the summary. REPL `/context` (`/ctx`) shows a per-bucket breakdown
 
 ## Sessions
 
-Per-day JSONL transcripts (`tools.transcripts`). `evi sessions list|show|resume|
+Per-day JSONL transcripts (`tools.transcripts`), [redacted](features/secret-redaction.md)
+as they are written. `evi sessions list|show|resume|
 fork|continue|handoff|search|export|purge`; REPL `/recent`. **Cross-device handoff**:
 `evi sessions handoff` → resume on another machine after `evi sync` (or open
 `/?session=<id>`). A resumed session's tool results are paired with their

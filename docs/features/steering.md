@@ -31,8 +31,8 @@ event, so `Done` is the last frame — and the web UI resends each one as a
 normal message. A re-roll hands queued follow-ups back the same way.
 
 Steering never cancels anything. A long tool (a big download, a slow test run)
-finishes first; the correction applies right after it. Stopping a turn from
-every surface is on the roadmap ([roadmap.md](../roadmap.md), Phase 4).
+finishes first; the correction applies right after it. To end the turn
+instead, stop it ([Stopping a turn](#stopping-a-turn)).
 
 ## Usage
 
@@ -60,9 +60,60 @@ An empty `text` is a 400. The `Steering` events arrive on the stream of the
 `POST /api/chat` request that runs the turn: `{"kind": "Steering", "text":
 "...", "applied": true}`.
 
+## Stopping a turn
+
+A turn can be stopped from every surface. Whatever it was doing, it ends
+with `Done` reason `interrupted`, and the session stays usable:
+
+- A reply being streamed stops; its text so far is kept, marked as cut off.
+- Running commands (`run_command`, `run_python`, `monitor`) have their whole
+  process tree killed, child processes included, and keep the output they
+  had so far.
+- Calls that never ran, and a tool still running two seconds after the stop
+  (one that ignores it is left behind), are answered `(cancelled)`, so the
+  history stays valid for the next message. The `stop` hook fires.
+- A permission question the turn is waiting on is answered no, and nothing
+  more is asked.
+
+### Web and desktop
+
+While a turn you started from this page runs (a message or a re-roll), a red
+**Stop** button shows next to **Send**. It reads *Stopping…* until the turn
+has ended, then goes away; you can send your next message at once.
+
+```http
+POST /api/session/<session_id>/cancel
+```
+
+| Response | Meaning |
+|---|---|
+| `{"cancelled": true, "busy": false}` | Stopped; the session is free for the next message |
+| `{"cancelled": false, "reason": "not busy", "busy": false}` | No turn was running |
+
+It answers once the session is free again: normally well under a second,
+within a few seconds when a tool ignores the stop. Only your own live
+sessions can be stopped; any other id is a 404. The stopped turn's own
+`POST /api/chat` stream ends with `{"kind": "Done", "reason": "interrupted"}`.
+
+### Terminal (`evi chat`)
+
+Press **Ctrl+C** while a turn runs to stop it; the REPL is back at its prompt
+with the session intact. An open permission prompt is answered no. A second
+Ctrl+C within two seconds quits eVi.
+
+### `evi run`
+
+Ctrl+C (or a SIGINT from a script or CI runner) stops the turn and still
+reports a result: `--format json` prints the usual object with
+`"stop_reason": "interrupted"` (a run that finished says why it stopped,
+e.g. `"stop"`), text mode prints what streamed before it plus a note on
+stderr, and the exit code is **130**. A second Ctrl+C stops waiting for the
+turn to wind down.
+
 ## Notes / limits
 
-- **Web and desktop only.** The terminal REPL and `evi run` have no steering.
+- **Steering is web and desktop only.** The terminal REPL and `evi run` have
+  no steering (stopping works everywhere).
 - **Applied between steps, not mid-step.** A model that is still writing its
   answer finishes it first; if it then makes no tool call the turn ends, and
   your message is sent as the next turn.
@@ -71,6 +122,10 @@ An empty `text` is a 400. The `Steering` events arrive on the stream of the
 
 ## Relevant source files
 
-- `evi/llm/agent.py`: `Agent.steer`, `take_pending_steering`, the `Steering` event
-- `evi/apps/web/server.py`: `POST /api/session/{session_id}/steer`, leftovers at turn end
+- `evi/llm/agent.py`: `Agent.steer`, `take_pending_steering`, the `Steering` event; `Agent.cancel`
+- `evi/apps/web/server.py`: `POST /api/session/{session_id}/steer`, leftovers at turn end;
+  `POST /api/session/{session_id}/cancel`
 - `evi/apps/web/static/index.html`: the Queue button and the queued/applied tags
+- `evi/apps/web/static/app.js`: the Stop button
+- `evi/apps/cli/main.py`: REPL Ctrl+C (`_ReplCtrlC`), `evi run`'s exit code 130
+- `evi/proc.py`: commands run as a process tree that a cancel kills whole

@@ -72,6 +72,49 @@ message, or re-roll the reply. If nothing of the reply had arrived, the error
 reads `LLM request failed: …` instead and nothing is added to the chat; check
 the backend as in the section above.
 
+## Stopping a turn: Ctrl+C, Stop, and `evi run` exiting 130
+
+- **`evi chat`:** Ctrl+C while a turn runs stops the turn, prints
+  `interrupted` and brings the prompt back with the session intact; an open
+  permission prompt is answered no. A second Ctrl+C within 2 seconds quits
+  (`bye.`), and so does Ctrl+C at the idle prompt.
+- **Web and desktop:** **Stop** next to Send (or **Stop turn** on an open
+  permission prompt). The chat then says `Stopped — the turn was cancelled.`
+- **`evi run`:** Ctrl+C or a SIGINT stops the turn and still prints a result:
+  `--format json` gives the usual object with `"stop_reason": "interrupted"`,
+  text mode prints what streamed so far and `interrupted: the run was
+  cancelled (Ctrl+C / SIGINT)` on stderr. The exit code is **130** either way,
+  so a script can tell a stopped run from a finished one. A second Ctrl+C
+  stops waiting for the turn to wind down.
+
+A stopped reply keeps its text, marked `(interrupted) The reply was cut off
+here: …`; running `run_command`, `run_python` and `monitor` commands have
+their whole process tree killed and keep their output so far; calls that
+never ran read `(cancelled) Not run: …`. The stop lands within about a tenth
+of a second. A tool that ignores it, such as an MCP tool call, is given 2
+seconds, then answered `(cancelled)` and left behind to finish on its own
+timeout. With a delegate CLI-agent backend as the model, the CLI's own process
+also runs on until its timeout (or until eVi exits). See [Stopping a
+turn](features/steering.md#stopping-a-turn).
+
+## `run_command` timed out, or "left a process running in the background"
+
+`ERROR: command timed out after <N>s; its process tree was killed. Output so
+far: …` means the command outlived its `timeout` (60 s by default, at most
+600). eVi killed it and everything it started, and kept what it printed. Ask
+for a longer `timeout`, or run a long job in the background and watch it with
+`monitor`.
+
+`(it left a process running in the background that still holds its output;
+eVi stopped reading and left that process running)` means the command itself
+exited, but something it started (a dev server, a build daemon) kept its
+output open. eVi returns 2 seconds after the exit instead of waiting on it,
+and leaves that process running on purpose. Stop it yourself when you are done
+with it; a timeout or a stop would have killed it.
+
+Commands run with no stdin, so one that waits for input reads end-of-file at
+once: pass the input as an argument or a file (`--yes`, `< answers.txt`).
+
 ## The backend rejects the chat: tool call ids, roles that must alternate, a system message
 
 Strict OpenAI-compatible servers reject a tool result that doesn't answer a
@@ -194,16 +237,68 @@ Protected paths](features/permissions-and-sandbox.md#protected-paths).
 or `[auto] unattended_policy = "allow"`; only an explicit allow rule that names
 it, such as `allow read_file *.env.example`, lets it through.
 
+## "BLOCKED … director tooling" or a denied call that names the director key
+
+The call reached what only the director may touch: the attestation key folder
+(`~/.evi/director`), the `evi-director` keyring entry, `EVI_AGENT` /
+`EVI_DIRECTOR`, `evi.attest`, or director tooling (`evi task verify|reject`,
+`evi attest`). eVi never marks its own work verified, so it denies such a call
+in every mode, without asking, and nothing in `[auto]` (an allow rule,
+`destructive_allow`, `destructive_disable_rules`, `block_destructive = false`,
+`protected_paths_remove`) changes that. Run director tooling from your own
+terminal, not from inside `evi chat` or through the agent. See [The director's
+ground](features/permissions-and-sandbox.md#the-directors-ground).
+
+A mention that is only data is allowed: a `grep` pattern, an `echo`, a commit
+message in **double** quotes. eVi reads a shell line as cmd would too, where
+single quotes don't quote, so `git commit -m 'docs: evi attest'` is denied;
+write `git commit -m "docs: evi attest"`. In `run_python` code every mention
+counts. On Windows, a path argument that is a device path naming no drive
+(`\\?\Volume{…}`, `\\?\GLOBALROOT\…`) is denied for the same reason: use the
+drive path.
+
+## `[REDACTED:…]` in a transcript, an export or a tool's output
+
+eVi replaced a secret with a marker naming where it came from:
+`[REDACTED:OPENAI_API_KEY]` (an environment variable), `[REDACTED:llm.api_key]`
+(a `config.toml` field), `[REDACTED:github_token]` (a token's shape). It does
+this in transcripts, tool-call displays, `evi run` JSON, scheduled-task logs
+and crash reports; the model itself still got the real value. A session
+resumed or revived from its transcript has the marker in place of the value,
+so if the model needs it again it has to read it again. See [Secret
+redaction](features/secret-redaction.md).
+
+If ordinary text is redacted, it is the value of an environment variable whose
+name ends in `_KEY`, `_TOKEN`, `_SECRET` or `_PASSWORD` (or of a secret-named
+field in eVi's config files): every such value of 12 or more characters, with
+no spaces, is treated as a secret wherever it appears (placeholders such as
+`sk-no-key-required`, `env:` references and paths to files that exist
+aside). The marker names the variable; rename or unset it if its value isn't
+secret. Transcripts written by an eVi without redaction are not rewritten.
+
+## A command can't see my API key or token
+
+In a run nobody is watching (a scheduled task, `evi run`, `evi batch`,
+`evi workflow run`, a remote-triggered run such as a webhook, a channel push or
+a federated task) and in a sandboxed run, `run_command`, `run_python` and
+`monitor` commands get no environment variable whose name ends in `_KEY`,
+`_TOKEN` or `_SECRET`. Use the tool's own stored login instead (`gh auth
+login`, a credential helper, a config file the tool reads), or run the job
+from your own chat, where commands keep the full environment. See [What a
+command's environment
+holds](features/permissions-and-sandbox.md#what-a-commands-environment-holds).
+
 ## "The … backend is a CLI agent that runs its own tools … won't use it for an unattended … run"
 
 `[llm] backend` (or a `[models] *_backend`) is `codex`, `gemini`, `amp`,
 `qwen` or `copilot`. Those CLIs run their own shell, file and web tools outside
 eVi's permission checks, so a run nobody is watching (a scheduled task,
-`evi run`, `evi batch`, `evi team run`, a subagent with no chat to ask, the web
-app's workflow, recipe, routine, channel-push, ultracode and federation runs)
-refuses them; the web app answers `409`. Point the setting the message names at
-a local or API backend, or set `allow_cli_agent_unattended = true` under
-`[llm]` to accept the risk. The Telegram channel refuses them even then.
+`evi run`, `evi batch`, `evi workflow run`, `evi team run`, a subagent with no
+chat to ask, the web app's workflow, recipe, routine, channel-push, ultracode
+and federation runs) refuses them; the web app answers `409`. Point the
+setting the message names at a local or API backend, or set
+`allow_cli_agent_unattended = true` under `[llm]` to accept the risk. The
+Telegram channel refuses them even then.
 
 ## A repository's `.evi.toml` settings aren't applied
 

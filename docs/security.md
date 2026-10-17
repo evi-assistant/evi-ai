@@ -5,7 +5,10 @@ that read and write files and run commands, so every request is checked before
 it reaches a handler. This page is the reference for those checks: who gets in,
 what a browser has to send, how the UI keeps model output inert, how the
 desktop app's LAN token and window are locked down, and what changed for
-existing setups.
+existing setups. Two sections cover what holds however you reach eVi: the
+[secrets it redacts](#secrets-in-what-evi-writes-and-shows) from what it
+writes and shows, and [the director's attestation
+key](#the-directors-attestation-key), which eVi's own agents can't reach.
 
 ## The request matrix
 
@@ -392,6 +395,13 @@ A session runs one turn at a time. While a turn runs:
   re-roll routes. Read-only commands (`/help`, `/tools`, `/model`, `/goal`,
   `/auto` with no argument) still answer.
 - A channel push with `run: true` falls back to a note.
+- `POST /api/session/<id>/cancel` stops it (the web UI's **Stop** button):
+  it ends with `Done` reason `interrupted`, a permission question it waits on
+  is denied, and the call answers once the session is free again. Only your
+  own live sessions can be stopped (any other id is a 404, another login's
+  sessions included), and a browser must send `X-Evi-Client` like for any
+  other state-changing call. See [Stopping a
+  turn](features/steering.md#stopping-a-turn).
 
 The VS Code extension uses one session per window. Earlier versions shared a
 single `vscode` session between all windows.
@@ -414,6 +424,10 @@ waits for `POST /api/decide`. The wait has a deadline:
   another user's.
 - When no client is watching a session (between turns, or during a channel
   `run: true`), a tool that would ask is denied immediately.
+- When the turn is stopped (`POST /api/session/<id>/cancel`), the question it
+  waits on is denied at once, the UI closes its prompt, and nothing more is
+  asked in that turn, a subagent's question included.
+- The arguments the event shows are [redacted](#secrets-in-what-evi-writes-and-shows).
 
 The VS Code extension shows the prompt with Approve and Deny buttons.
 
@@ -483,6 +497,124 @@ the warning in the server log.
 `/api/upload` and `/api/transcribe` stream to `~/.evi/uploads/<session>/` and
 stop at 32 MB with a 413. Nothing is left on disk.
 
+## Secrets in what eVi writes and shows
+
+A tool's output can hold a secret: `env`, a config file, a `curl -v` that
+prints an `Authorization` header. Wherever eVi writes a turn down or shows a
+tool call, it replaces each secret with a marker that names what was there,
+never its value: `[REDACTED:OPENAI_API_KEY]`, `[REDACTED:llm.api_key]`,
+`[REDACTED:github_token]`. It looks for token formats with a distinctive shape
+(`sk-`, `ghp_`, `AKIA`, `xoxb-`, JWTs, PEM private keys, `Authorization`
+credentials and others) and for the secrets this machine actually has:
+environment variables whose name ends in `_KEY`, `_TOKEN`, `_SECRET` or
+`_PASSWORD`, the secret fields of `config.toml`, the active profile,
+`backends.json`, `peers.json`, `users.json`, `mcp.json` and `routines.json`,
+and the [director's key](#the-directors-attestation-key). A known value
+shorter than 12 characters is never redacted. The full rules are in [Secret
+redaction](features/secret-redaction.md).
+
+| Where | What is redacted |
+|---|---|
+| Transcripts (`~/.evi/transcripts/…`) | Every line, as it is written, so resume, the web revive, exports, fine-tune data and dreaming read the markers. Lines written by an earlier version are not rewritten. |
+| Web and desktop | `ToolCall` arguments, `ToolResult` output and citations, `PermissionRequest` arguments, and the tool calls and results `GET /api/session/<id>/history` redraws. |
+| Terminal | The tool-call and result lines and the permission prompts of `evi chat`, and the tool lines of `evi recipe run`, `evi review` and the voice loop. |
+| `evi run --format json` | Each tool's `output`. |
+| Scheduled tasks | The whole log under `~/.evi/logs/scheduled/` and the status `evi schedule list` shows. |
+| Subagents | The tool trace a subagent hands back to the agent that started it. |
+| Crash reports (opt-in) | Every string. Secrets now read `[REDACTED:<kind>]` instead of `<redacted>`; the fields dropped whole (local variables, the environment, headers) still read `<redacted>`. |
+
+Anything shown cut short (a 200- or 400-character preview, a tool output cut
+to 2000 characters) is redacted before it is cut, so no prefix of a secret
+shows either.
+
+Not redacted:
+
+- **What the model works from.** A tool's output goes back to the model as it
+  was, so a turn that needs a value still has it. A resumed or revived session
+  is rebuilt from the transcript, so it shows the marker where the live
+  session had the value.
+- **Text as it streams.** A reply is shown as the model writes it, and
+  `/history` redraws your messages and the replies as they were (their
+  transcript lines are redacted).
+- **What a tool sends elsewhere itself**, or a secret kept where eVi doesn't
+  look that has no recognisable shape.
+
+Separately, commands eVi runs for an unattended or sandboxed agent get no
+`*_KEY`, `*_TOKEN` or `*_SECRET` environment variables at all (see [What a
+command's environment
+holds](features/permissions-and-sandbox.md#what-a-commands-environment-holds)).
+
+## The director's attestation key
+
+eVi develops itself: an agent implements a task, and a *director* reviews,
+verifies and commits it ([self-build.md](self-build.md)). eVi never marks its
+own work verified. A task's verdict counts only when it carries an
+**attestation**: an HMAC-SHA256, under a key only the director holds, over the
+task record, the branch head, the evidence bundle's hash, the verdict, the
+review rounds and the review gate's result (`evi review --multi --exit-code`
+on the branch). A task whose file says `status = "verified"` without one, or
+one edited (or whose evidence changed) after it was signed, reads as
+unverified, and no `Verified-by` commit trailer is made for it. The commands
+that sign (`evi task verify|reject`, `evi attest`) come with the Phase 1 task
+loop; this release has the key handling and the checks below, so the checks
+are in place before anything signs.
+
+**Where the key lives.** The key is 32 random bytes, made once. It goes in
+the OS keyring (service `evi-director`) when the optional `keyring` package is
+installed and its backend works; otherwise in
+`<eVi home>/director/director.key`, readable only by you (0600 in a 0700
+folder on macOS and Linux; on Windows its access list is cut down to your
+account, best effort). The file's first byte isn't
+valid UTF-8, so text tools such as `search_files` and `grep` skip it as
+binary. An `EVI_HOME` other than `~/.evi` gets a keyring entry of its own.
+The key is never an environment variable: `EVI_DIRECTOR` means nothing to eVi.
+
+**Who may sign.** Signing, and creating the key, are refused in any process
+an eVi agent may have started: one with `EVI_AGENT` in its environment, one
+with `EVI_INTERACTIVE=1` (inherited from an `evi chat` session), or one with
+an eVi process above it (`evi chat`, `evi serve`, the desktop app's server).
+The process must itself be director tooling, and the director confirms on a
+terminal or passes `--yes` from their own shell. Where an agent may have
+started the process, the key isn't even read: a check there reports no key,
+so a task reads as unverified.
+
+**What agents can't do.** In every mode (`yolo` and `/auto on` included), and
+whatever allow rule, trusted folder or unattended policy applies, eVi denies
+without asking:
+
+- a tool call whose path argument is in the key folder (`~/.evi/director`,
+  and `<EVI_HOME>/director` when that is set), to read it or to write it, MCP
+  tools and search globs included; on Windows also a device path that names
+  no drive (`\\?\Volume{…}`, `\\?\GLOBALROOT\…`), since it may open that
+  folder;
+- a shell line that names the key (`evi-director`, `.evi/director`,
+  `director.key`), sets or clears `EVI_DIRECTOR` or `EVI_AGENT`, imports or
+  patches `evi.attest`, or runs director tooling, itself or through a program
+  it hands the command to (`schtasks /tr "…"`, `ssh host …`, `find -exec`, a
+  git `!` alias). A mention that is only data is left alone: a `grep`
+  pattern, an `echo`, a double-quoted commit message, a heredoc body nothing
+  runs;
+- `run_python` code that does any of that; there every mention counts,
+  reading `EVI_AGENT` included.
+
+These rules are not part of the destructive-command guard's settings:
+`block_destructive = false`, `destructive_allow` and
+`destructive_disable_rules` leave them in force, and `protected_paths_remove`
+can't drop the key folder.
+
+**`EVI_AGENT`.** Every process eVi starts for an agent carries `EVI_AGENT=1`:
+`run_command`, `run_python` and `monitor` commands and the delegate CLI-agent
+backends, whether the chat runs in the terminal, the web app or the desktop
+app. Director tooling refuses to run in such a process, or in anything it
+starts, and never reads the key there.
+
+**Limits.** An agent runs as the same OS user as the director. Code it writes
+to a file and then runs, or code these checks don't recognise, can do what
+`evi.attest` does: drop `EVI_AGENT`, patch the checks, read the keyring entry
+or the key file, and sign. The checks stop the direct routes and keep the rest
+from happening by accident or unnoticed; they don't stop an agent set on it.
+Full isolation needs the agent under a separate OS account.
+
 ## What changed for existing setups
 
 - **No token means this machine only.** Other machines, and anything a
@@ -517,6 +649,16 @@ stop at 32 MB with a 413. Nothing is left on disk.
   data folders collide can't sign in either, and each login's memory tools
   now use its own folder, so notes they saved in the shared `~/.evi/memory`
   stay there.
+- **Secrets are redacted** in transcripts, tool-call displays, scheduled-task
+  logs and `evi run` JSON. A resumed or revived session shows
+  `[REDACTED:<kind>]` where the live one had the value, and crash reports use
+  the same markers instead of `<redacted>`.
+- **The director's key folder is out of every tool's reach**, in every mode.
+  On Windows a path argument that is a device path naming no drive
+  (`\\?\Volume{…}`) is now denied rather than asked. A single-quoted commit
+  message that names director tooling or the key (`-m 'wip evi attest'`) is
+  denied too, since eVi also reads the line as cmd does, where single quotes
+  don't quote; use double quotes.
 
 ## Checking your setup
 
@@ -544,3 +686,4 @@ server a token of its own (see [Containers](#containers)).
 | `EVI_ALLOW_ANY_HOST=1` | No-token mode: accept any `Host` header (still loopback clients only). |
 | `EVI_ALLOW_CROSS_ORIGIN=1` | Turn off the cross-site `Origin` check. |
 | `EVI_TRUSTED_PROXY=1` | Trust `X-Forwarded-Host` / `X-Forwarded-Port` from a reverse proxy. |
+| `EVI_AGENT` | Set by eVi, not by you: `1` in every process its agents start. Director tooling refuses to run there and never reads the director key ([above](#the-directors-attestation-key)). |

@@ -275,11 +275,11 @@ All notable user-visible changes to eVi. Format loosely follows
 - **Unattended runs refuse delegate CLI-agent backends.** `codex`, `gemini`,
   `amp`, `qwen` and `copilot` run their own shell, file and web tools outside
   eVi's checks, and nobody was there to see them. A scheduled task,
-  `evi run`, `evi batch`, `evi team`, a subagent with no chat to ask, an
-  ultracode stage and the web app's workflow, recipe, routine, channel-push,
-  federation and A2A runs now refuse one, as `[llm] backend` or any
-  `[models] *_backend`, with a message naming the setting (`409` from the web
-  app). Set `[llm] allow_cli_agent_unattended = true` to accept the risk;
+  `evi run`, `evi batch`, `evi workflow run`, `evi team`, a subagent with no
+  chat to ask, an ultracode stage and the web app's workflow, recipe, routine,
+  channel-push, federation and A2A runs now refuse one, as `[llm] backend` or
+  any `[models] *_backend`, with a message naming the setting (`409` from the
+  web app). Set `[llm] allow_cli_agent_unattended = true` to accept the risk;
   the Telegram channel refuses them even then.
 - **Subagents, dreams and ultracode do only what they are for.** A subagent
   profile's tools are now cut to your `[tools]` toggles and safe mode (a
@@ -398,6 +398,58 @@ All notable user-visible changes to eVi. Format loosely follows
   chat or in a compaction summary. Your own message from the Dispatch panel
   is headed `[message from you via the Dispatch panel]` and isn't sealed. See
   "Notes in a chat" in docs/features/sessions.md.
+- **API keys a tool prints no longer end up in transcripts, logs or on
+  screen.** `env`, a config file or a `curl -v` could put a key into the
+  session transcript (and so into exports, fine-tune data and resumed chats),
+  a scheduled task's log, `evi run`'s JSON and every tool-call display. Each
+  secret is now replaced by a marker that names where it came from, never its
+  value: `[REDACTED:OPENAI_API_KEY]`, `[REDACTED:llm.api_key]`,
+  `[REDACTED:github_token]`. eVi finds token formats by shape (`sk-`, `ghp_`,
+  `AKIA`, `xoxb-`, JWTs, PEM private keys, `Authorization` credentials and
+  more) and the secrets this machine has: environment variables named
+  `*_KEY`, `*_TOKEN`, `*_SECRET` or `*_PASSWORD` and the secret fields of
+  `config.toml`, the active profile, `backends.json`, `peers.json`,
+  `users.json`, `mcp.json` and `routines.json` (values under 12 characters
+  never count). It applies to every transcript line as it is written; the web
+  and desktop `ToolCall`, `ToolResult` and `PermissionRequest` events and the
+  tool calls `/history` redraws; the CLI's tool lines and permission prompts;
+  `evi run --format json` tool outputs; scheduled-task logs and statuses;
+  subagent traces; and crash reports, which now say `[REDACTED:<kind>]`
+  instead of `<redacted>`. A preview is redacted before it is cut. The model
+  itself still gets the real value, so a session resumed or revived from its
+  transcript shows the marker where the live one had it. Transcripts written
+  before this release are not rewritten. See docs/features/secret-redaction.md.
+- **eVi can't mark its own work verified.** A task's `verified` or `rejected`
+  status will count only with an attestation signed by the director's key.
+  This release adds the key handling and the guards around it; the commands
+  that make the key and sign come with the task loop. The key will live in
+  the OS keyring (`evi-director`) when the optional `keyring` package works,
+  else in `~/.evi/director/director.key`, readable only by you. In every
+  mode, `yolo` and `/auto on` included, and whatever allow rule or unattended
+  policy applies, eVi now denies a tool call that reads or writes that
+  folder, and a shell line or `run_python` code that names the key, sets or
+  clears `EVI_AGENT` / `EVI_DIRECTOR`, patches `evi.attest` or runs
+  `evi task verify|reject` or `evi attest` (directly or through `ssh`,
+  `schtasks`, `find -exec` and the like). Every process eVi
+  starts for an agent carries `EVI_AGENT=1`, where director tooling refuses
+  to run. `destructive_allow`, `destructive_disable_rules`,
+  `block_destructive = false` and `protected_paths_remove` don't loosen any of
+  this. Two side effects: on Windows a path argument that is a device path
+  naming no drive (`\\?\Volume{…}`, `GLOBALROOT`) is now denied instead of
+  asked, and a single-quoted commit message naming `evi attest` is denied
+  (eVi also reads the line as cmd does); use double quotes. An agent running
+  as your OS user can still get round this with a script it writes and then
+  runs. See "The director's attestation key" in docs/security.md.
+- **Commands in a run nobody watches no longer see your API keys.** A
+  `run_command`, `run_python` or `monitor` command now gets no environment
+  variable ending in `_KEY`, `_TOKEN` or `_SECRET` when it runs sandboxed, in
+  an agent with nobody to ask (a scheduled task, `evi run`, `evi batch`,
+  `evi workflow run`, ultracode, the web app's workflow and recipe runs), or
+  in a remote-triggered run (federation, A2A, routines, channel pushes,
+  Telegram). A scheduled job that relied on `GH_TOKEN` or an API key in the
+  environment should use the tool's own stored login instead. Your own chats
+  keep the full environment. See "What a command's environment holds" in
+  docs/features/permissions-and-sandbox.md.
 
 ### Changed
 - **The `evi-run` GitHub Action approves no tools unless you say so.** It
@@ -624,8 +676,50 @@ All notable user-visible changes to eVi. Format loosely follows
   back as the model last saw it. `evi sessions list` and `evi stats` don't
   count the record as a message; `evi sessions show` and fine-tune export
   still read every message.
+- **A command the agent runs can no longer hang a turn or outlive it.**
+  `run_command`, `run_python` and `monitor` killed only the direct child at
+  their timeout, and on Windows then waited for a grandchild that still held
+  the output, so one command could hang a turn for good. Each now runs as the
+  root of its own process tree: at the timeout, or when the turn is stopped,
+  the whole tree is killed and the output so far comes back
+  (`ERROR: command timed out after 60s; its process tree was killed. Output so
+  far: …`). A command that exits while a background job it started still
+  holds its output returns 2 s later and leaves that job running, with a note
+  saying so. Commands get no stdin, so one that waits for input reads
+  end-of-file instead of the terminal. On Windows they run in their own
+  process group: a Ctrl+C in eVi's console reaches eVi, which decides what to
+  stop. Commands still running when eVi exits (Ctrl+C at `evi serve` or
+  `evi scheduler`) are stopped with it instead of holding up the exit.
 
 ### Added
+- **Stop a running turn, from every surface.** The web and desktop chat has
+  a **Stop** button next to Send while a turn runs, and an open permission
+  prompt has **Stop turn** (`POST /api/session/<id>/cancel`, which answers
+  `{"cancelled": true, "busy": false}` once the session is free, or
+  `{"cancelled": false, "reason": "not busy", "busy": false}`; a session that
+  isn't one of your own live ones is a `404`). In `evi chat`, Ctrl+C during a
+  turn stops it and keeps the session; a second Ctrl+C within 2 s quits.
+  `evi run` stops on Ctrl+C or SIGINT and
+  still prints its result, with `"stop_reason": "interrupted"` in the JSON
+  (or the text so far plus a note on stderr), and exits with code 130. A
+  stopped turn ends with `Done` reason `interrupted` within about a tenth of
+  a second: streamed text is kept and marked as cut off, running commands
+  have their process trees killed, calls that never ran are answered
+  `(cancelled)`, a pending permission prompt is answered no and nothing more
+  is asked, and the `stop` hook fires. A tool that ignores the stop is left
+  behind after 2 s; MCP calls and a delegate CLI-agent backend's own process
+  run on until their own timeout. `evi run --format json` also reports why a
+  finished turn stopped (`"stop_reason": "stop"`, `"max_turns_reached"`, …).
+  See "Stopping a turn" in docs/features/steering.md.
+- **SDK: stop a turn.** `Agent.cancel(reason)` ends the running turn as above
+  and is safe to call from another thread or a signal handler.
+  `ToolContext.cancel_token` is set when the turn is stopped; each turn has
+  its own, so read it from the call's `ctx`. `chat()` and `continue_chat()`
+  start the turn when called, so a cancel sent before the first event still
+  ends it, and closing the generator while tools run now stops them (after a
+  2 s grace) instead of waiting for them. `run_headless(...,
+  cancel_on_sigint=True)` turns a Ctrl+C into the cancel, and
+  `HeadlessResult` gains `stop_reason` and `interrupted`.
 - **SDK: say what an agent with nobody to ask may do.** `build_agent` takes
   `unattended_policy="deny" | "allow"` (default: `[auto] unattended_policy`).
   `run_subagent` and `run_subagents_parallel` take `tools=`, an exact list
@@ -748,9 +842,10 @@ All notable user-visible changes to eVi. Format loosely follows
 - **The `stop` hook fires.** It was set to run after a turn's last event, but
   every front end stops reading at that event, so it never ran. It now fires
   once per completed turn, just before it ends, with the finish reason
-  (`stop`, `length`, `max_turns_reached`) in `EVI_HOOK_ARGS_JSON`. A re-roll
-  fires it once; a prompt blocked by a hook or guardrail, or a turn that ends
-  in an LLM error, doesn't fire it.
+  (`stop`, `length`, `max_turns_reached`, or `interrupted` for a turn you
+  stopped) in `EVI_HOOK_ARGS_JSON`. A re-roll fires it once; a prompt blocked
+  by a hook or guardrail, or a turn that ends in an LLM error, doesn't fire
+  it.
 - **A follow-up sent as a turn ends is no longer lost.** A follow-up the turn
   never got to apply came back after the turn's `Done` event, which the web
   UI could miss when it arrived in a later read, leaving the message marked
@@ -786,6 +881,12 @@ All notable user-visible changes to eVi. Format loosely follows
   arrived, the error is `LLM request failed: …` and nothing is added to the
   chat. With the Responses API (`[llm] api = "responses"`), a request that
   fails as it starts now moves on to your fallback models.
+- **A tool call with brackets in its arguments no longer garbles or crashes
+  the terminal.** The CLI printed tool arguments, results and permission
+  prompts as Rich markup, so `[red]` in a file the agent wrote changed the
+  colours and a `[/bold]` raised an error that ended `evi chat`. They are now
+  printed as plain text, in `evi chat`, `evi recipe run`, `evi review` and
+  the voice loop.
 - **`/effort max` no longer fails on reasoning models.** For a model that
   takes a reasoning effort (o-series, gpt-5, qwen3, deepseek-r1, …) it sent
   `reasoning_effort: "max"`, a level OpenAI, Ollama and the gpt-oss templates

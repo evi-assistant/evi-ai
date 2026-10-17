@@ -137,7 +137,8 @@ A change, driven by eVi:
 3. eVi runs the tests and lint for the files it touched ([section 4](#4-test-and-lint)).
 4. eVi records each bug it fixed with `record_fix`, updates the feature doc and
    `examples/` when behaviour changed, and writes the hand-off that `EVI.md`
-   describes. The director reviews and commits.
+   describes. The director reviews, verifies and commits; eVi can't mark its
+   own work verified ([section 6](#6-shipping-director-only)).
 
 Tips: `evi workflow` splits a large change into plan, implement and test stages.
 An eval suite (`evi eval`) is a regression gate for behaviour you care about.
@@ -220,6 +221,21 @@ template in `EVI.md`, merges and releases; CI runs the unit, lint and e2e suites
 on the way. Docs under `docs/` are published to the wiki automatically from
 `main` by `.github/workflows/docs-publish.yml`; nobody edits the wiki directly.
 See [releasing.md](releasing.md).
+
+**Only the director marks work verified.** In the Phase 1 task loop a task's
+`verified` or `rejected` status counts only when it carries an attestation
+signed with the director's key (`evi/attest.py`), which lives in the OS
+keyring or in `~/.evi/director/`. A status the implementer writes into a task
+file itself, or a task edited after it was signed, reads as unverified, and no
+`Verified-by` trailer is made for it. The implementer can't reach the key or
+the tooling that signs with it: in an eVi session a tool call that touches the
+key folder, sets or clears `EVI_AGENT` / `EVI_DIRECTOR`, or runs
+`evi task verify|reject` or `evi attest` is denied in every mode, `yolo` and
+`/auto on` included, and every command eVi runs for an agent carries
+`EVI_AGENT=1`, where director tooling refuses to run and never reads the key.
+So the director signs from their own shell, never from inside `evi chat`. The
+signing commands come with the task loop; the key handling and these checks
+are in place already. Details and limits: [security.md](security.md#the-directors-attestation-key).
 
 ## Local-model notes (from dogfooding)
 

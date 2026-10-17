@@ -58,6 +58,7 @@ under `docs/`, or CI's docs-freshness check fails it; see
 ```
 evi/                core library — no IO at import time
   agent.py           Agent class + Event types
+  attest.py          director attestation: the key, sign / verify, who signs
   backends/          LM Studio / Ollama / llama.cpp / OpenAI-compat
   commands.py        ~/.evi/commands/ loader
   config.py          Config dataclasses + load/save + dir constants
@@ -74,15 +75,17 @@ evi/                core library — no IO at import time
     manager.py       MCPManager — boots stdio servers, registers tools
     servers.py       MCPServer dataclass + JSON loader
   memory.py          MemoryStore with .attic/ soft-delete
+  proc.py            spawn() / run(): killable process trees, EVI_AGENT
   profiles.py        partial TOML overlay merge
   project.py         find_project_file → ProjectContext
   recommend.py       tiered model picks per VRAM
+  redact.py          secret redaction: transcripts, logs, tool-call displays
   scheduled.py       ScheduledTask + TaskStore
   scheduler.py       Scheduler — APScheduler wrapper
   skills.py          SkillStore + minimal frontmatter parser
   tools/
     base.py          @tool decorator + REGISTRY + Tool dataclass
-    code.py          run_python tool (subprocess)
+    code.py          run_python tool (evi.proc.run)
     computer.py      pyautogui wrappers — screenshot/click/type/key/scroll
     fs.py            read_file/write_file/list_dir
     image_comfy.py   ComfyUI text2img
@@ -140,6 +143,93 @@ scripts/             install + dev helpers
        out = REGISTRY["the_tool"].call(json.dumps({"arg1": "x"}))
        assert ...
    ```
+
+### A tool that runs a command
+
+Run it through `evi.proc.run`, as `run_command`, `run_python` and `monitor`
+do, never `subprocess.run(timeout=)`, which kills only the direct child and,
+on Windows, then waits for pipes a grandchild still holds:
+
+```python
+from evi import proc
+from evi.tools.base import ToolContext, tool
+
+@tool(description="…", category="shell")
+def the_tool(command: str, ctx: ToolContext | None = None) -> str:
+    res = proc.run(
+        command, shell=True, timeout=60,
+        cancel_token=getattr(ctx, "cancel_token", None),
+        env=proc.scrubbed_env() if proc.runs_unattended(ctx) else None,
+    )
+    if res.cancelled or res.timed_out:
+        ...  # the whole tree is dead; res.output is what it wrote until then
+    return res.output
+```
+
+- `run` starts the command with `spawn`, as the root of a tree it can kill (a
+  Job Object on Windows, a process group or session elsewhere), with stdin
+  the null device unless you pass `input=`, and with `EVI_AGENT=1` added to
+  its environment (`agent_env`), which makes director tooling refuse to run in
+  it.
+- It kills the whole tree at `timeout`, as soon as `cancel_token` is set (the
+  turn was stopped) or eVi is exiting, or once `until` matches a line, and
+  returns what was read so far in a `RunResult` (`timed_out`, `cancelled`,
+  `matched`, `killed`, `detached`). It raises `OSError` only when the command
+  can't start.
+- Pass `env=proc.scrubbed_env()` (no `*_KEY` / `*_TOKEN` / `*_SECRET`) when
+  the run is sandboxed or `proc.runs_unattended(ctx)` says nobody is
+  watching.
+- Take a `ctx` parameter for the cancel token, and poll it in any other long
+  loop. Each turn has its own token, so read it from the call's `ctx`; never
+  keep one across calls.
+
+## Redacting secrets (`evi.redact`)
+
+What eVi writes down or shows of a turn (a transcript line, a log, a report, a
+tool-call display) goes through `evi.redact`, which replaces each secret with
+`[REDACTED:<kind>]`. What the model works from (`Agent.history`) is never
+redacted. The API is stable:
+
+```python
+from evi.redact import Redactor, redact, redact_obj
+
+red = Redactor()                      # one per event, line or report
+preview = red(output)[:400]           # redact first, then cut
+args = red.args(event.arguments)      # tool-call arguments: still JSON
+calls = red.tool_calls(msg["tool_calls"])   # ids, types and names kept
+payload = red.obj(payload)            # every string in a JSON-like value
+red.counts, red.total                 # what it replaced, by kind
+redact(text), redact_obj(value)       # one-offs
+```
+
+- **Redact, then truncate.** A known value cut in half no longer matches, and
+  neither does a token shorter than its pattern's minimum.
+- **Arguments go through `Redactor.args` / `tool_calls`**, not `redact()` on
+  the JSON text. `args` decodes them first (a token right after an escaped
+  `\n` is found), redacts keys and numbers too, and always returns JSON: the
+  very same string when there was nothing to redact, so clean arguments stay
+  byte for byte.
+- **One `Redactor` per unit of output**, not per string and not per process:
+  it looks the known values up when it is made. They follow the environment
+  and eVi's credential files (`config.toml`, the active profile,
+  `backends.json`, `peers.json`, `users.json`, `mcp.json`, `routines.json`)
+  on their own, so nothing has to refresh after a `Config.save`.
+- `extra=` adds values the caller knows of (`[REDACTED:secret]`). A known
+  value shorter than `MIN_KNOWN_LEN` (12) is never redacted.
+- A secret kept where `evi.redact` doesn't look (a keyring entry, a key file
+  of your own): `register_source(name, fn)`, where `fn()` returns `(kind,
+  value)` pairs (`None` removes it), and `refresh()` when the value changes.
+  `fn` runs under the module's lock, so it must not call back into
+  `evi.redact`. The director's key is built in, read only through
+  `evi.attest` and only where that module would read it.
+- `prime()` builds the set now: the REPL calls it before it sets
+  `EVI_INTERACTIVE=1`, after which `evi.attest` no longer reads the director
+  key in that process.
+- `marker(kind)` builds a marker, `MARKER_RE` finds them (to count what an
+  artifact had redacted), and `PATTERNS` is the table of token shapes.
+
+Tests get a throwaway `EVI_HOME` (`tests/conftest.py`), so the known values
+come from there and the test's own environment.
 
 ## The web UI and its libraries
 
@@ -276,6 +366,16 @@ Then add a delegate tool in `evi/tools/subagent.py` that wraps
 - **MCP bridge ownership**: `MCPManager` constructs its own bridge by
   default. If you pass one in (tests do), `manager.stop()` doesn't stop
   the bridge — the caller is responsible.
+- **Tests that sign or verify attestations** (`evi.attest`) stub
+  `attest._process_chain` and clear `EVI_AGENT` / `EVI_INTERACTIVE`, as
+  `tests/test_attest.py` does. Otherwise they fail when an eVi agent runs the
+  suite: `evi.attest` refuses to sign, and never reads the director key, in a
+  process an agent may have started.
+- **The director's ground in your own eVi session**: while eVi works on its
+  own repo, a shell line that runs `evi task verify|reject` or `evi attest`,
+  or names `director.key`, is denied. Mentions in double-quoted commit
+  messages, `grep` patterns and `echo` are fine; see
+  [permissions-and-sandbox.md](features/permissions-and-sandbox.md#the-directors-ground).
 
 ## Bumping a phase
 

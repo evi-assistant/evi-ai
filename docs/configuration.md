@@ -1043,6 +1043,7 @@ CLI-agent backend is refused unless `[llm] allow_cli_agent_unattended = true`.
 | `EVI_REMOTE_TOKEN` | Tauri desktop: the access token for the `EVI_REMOTE_URL` server |
 | `EVI_WEB_AUTH_TOKEN` | Web server: launch token that gates other machines ([Web access](#web-access--web-in-configtoml)) |
 | `EVI_DECISION_TIMEOUT_S` | Web server: permission-prompt deadline in seconds; overrides `[web] decision_timeout_s` |
+| `EVI_AGENT`        | Set by eVi, not by you: `1` in every process its agents start (`run_command`, `run_python`, `monitor`, delegate CLI agents). Director tooling refuses to run there and never reads the director key ([Secret redaction](features/secret-redaction.md#notes--limits)) |
 
 The web server's other variables (`EVI_ALLOW_ANY_HOST`,
 `EVI_ALLOW_CROSS_ORIGIN`, `EVI_TRUSTED_PROXY`) are listed in
