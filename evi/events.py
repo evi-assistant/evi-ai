@@ -179,6 +179,9 @@ _REPORT_FIELDS: dict[str, Any] = {
     "policy": _nullable(_STR),
     # What was redacted from the report, by kind: {"OPENAI_API_KEY": 1}.
     "redactions": {"type": "object", "additionalProperties": _INT},
+    # What a run isolated in a git worktree (`evi run --worktree`) left there
+    # (evi.worktree.worktree_report); None when the run was not isolated.
+    "worktree": _nullable({"$ref": "#/$defs/worktree"}),
 }
 
 SCHEMA: dict[str, Any] = {
@@ -294,6 +297,44 @@ SCHEMA: dict[str, Any] = {
                 "deleted": _nullable({"type": "integer", "minimum": 0}),
             },
             "required": ["path", "status", "added", "deleted"],
+        },
+        # evi.worktree.worktree_report: what git can't tell is None.
+        "worktree": {
+            "type": "object",
+            "properties": {
+                "path": _STR,
+                # As checked out when the report was made; None on a detached HEAD.
+                "branch": _nullable(_STR),
+                # The run made the worktree (else it reused one).
+                "created": _BOOL,
+                # The commit checked out when the run started, and the one now.
+                "base": _STR,
+                "head": _nullable(_STR),
+                # base..head, oldest first, at most 200.
+                "commits": _nullable({"type": "array", "items": {"$ref": "#/$defs/commit"}}),
+                # Uncommitted or untracked files left, and their `git status
+                # --porcelain` lines (at most 200).
+                "dirty": _nullable(_BOOL),
+                "dirty_files": _nullable(_STRS),
+                # The work tree against base, untracked files included.
+                "diffstat": _nullable({"$ref": "#/$defs/diffstat"}),
+            },
+            "required": ["path", "branch", "created", "base", "head", "commits",
+                         "dirty", "dirty_files", "diffstat"],
+        },
+        "commit": {
+            "type": "object",
+            "properties": {"sha": _STR, "subject": _STR},
+            "required": ["sha", "subject"],
+        },
+        "diffstat": {
+            "type": "object",
+            "properties": {
+                "files": {"type": "integer", "minimum": 0},
+                "insertions": {"type": "integer", "minimum": 0},
+                "deletions": {"type": "integer", "minimum": 0},
+            },
+            "required": ["files", "insertions", "deletions"],
         },
     },
 }

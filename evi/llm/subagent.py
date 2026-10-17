@@ -24,12 +24,20 @@ unattended: a call that would ask follows ``[auto] unattended_policy``, deny
 by default. A profile's tool categories are intersected with the ``[tools]``
 toggles (and safe mode): a profile can never hand a subagent a tool the user
 switched off.
+
+``isolate="worktree"`` (a profile's ``isolate = "worktree"``) runs the subagent
+in a git worktree of its own, a fresh ``fix-<task>`` branch under
+``<repo>/.worktrees/`` of the repository it would otherwise work in, and its
+report ends with where that work is. Nothing is merged back. A worktree that
+can't be opened fails the delegation: it never runs unisolated.
 """
 
 from __future__ import annotations
 
 import contextlib
 import contextvars
+import logging
+import os
 import threading
 import weakref
 from pathlib import Path
@@ -48,9 +56,14 @@ from evi.memory import MemoryStore
 from evi.redact import Redactor
 from evi.tools.base import REGISTRY, Tool, active_context
 
+logger = logging.getLogger(__name__)
+
 # Default for `hooks=` / `skill_scope=`: take the spawning agent's (None outside
 # a tool call).
 INHERIT = object()
+
+# What `isolate` (a profile's `isolate = ...`) may say.
+ISOLATE_MODES: tuple[str, ...] = ("worktree",)
 
 # Pinned tool-NAME lists for agents that must not change anything on disk.
 # Names, not categories: the `fs` category also holds write_file, edit_file
@@ -166,6 +179,8 @@ def run_subagent(
     tools: Iterable[str] | None = None,
     unattended_policy: str | None = None,
     memory: MemoryStore | None = None,
+    isolate: str | None = None,
+    worktree: Any = None,
 ) -> str:
     """Run a one-shot scoped Agent and return its final assistant text.
 
@@ -188,6 +203,14 @@ def run_subagent(
     ``[auto] unattended_policy``, deny by default), and a delegate CLI-agent
     backend is refused unless ``[llm] allow_cli_agent_unattended`` is set.
     Only pass "allow" with a pinned read-only `tools` list.
+
+    `isolate="worktree"` runs it in a fresh git worktree (`fix-<task>`) of the
+    repository at its working folder instead (`_open_worktree`), locked
+    while it runs, and appends a ``[worktree]`` line saying where the work
+    is; nothing is merged. `worktree` (an `evi.worktree.IsolatedWorktree`
+    the caller opened, and releases: a team task's) runs it in that one.
+    Either way its folder is the worktree's, and the tools that work in the
+    process's folder instead (`evi.worktree.confined_tools`) are left out.
     """
     from evi.llm.cli_agent import CliAgentUnattended, unattended
     from evi.sdk.builder import build_agent
@@ -211,6 +234,19 @@ def run_subagent(
     attended = permission_callback is not None or permission_batch_callback is not None
 
     config = Config.load()
+    if isolate and worktree is not None:
+        raise ValueError("pass isolate or worktree, not both")
+    iso = None
+    if isolate:
+        from evi.worktree import WorktreeError
+
+        try:
+            iso = _open_worktree(isolate, task, cwd, config)
+        except WorktreeError as exc:
+            return f"ERROR: subagent failed: worktree isolation: {exc}"
+    held = iso if iso is not None else worktree
+    if held is not None:
+        cwd = str(held.path)
     text_parts: list[str] = []
     tool_trace: list[str] = []
     error: str | None = None
@@ -224,7 +260,9 @@ def run_subagent(
             agent = build_agent(
                 config=config,
                 client=make_client(config.llm),
-                tools=select_tools(config, tool_categories=tool_categories, tools=tools),
+                tools=_held_tools(
+                    select_tools(config, tool_categories=tool_categories, tools=tools), held,
+                ),
                 system_prompt=system_prompt,
                 enable_memory=False,
                 enable_skills=False,
@@ -269,9 +307,17 @@ def run_subagent(
                     break
     except CliAgentUnattended as exc:
         error = str(exc)
+    finally:
+        where = ""
+        if iso is not None:
+            from evi import worktree as wt
 
+            try:  # what it left there, then the run's lock comes off
+                where = f"\n\n[worktree] {wt.summary_line(wt.worktree_report(iso))}"
+            finally:
+                wt.release(iso)
     if error:
-        return f"ERROR: subagent failed: {error}"
+        return f"ERROR: subagent failed: {error}{where}"
 
     result = "".join(text_parts).strip()
     if not result:
@@ -279,7 +325,34 @@ def run_subagent(
     if tool_trace:
         trace = "\n".join(f"  - {t}" for t in tool_trace)
         result = f"{result}\n\n[trace]\n{trace}"
-    return result
+    return result + where
+
+
+def _held_tools(tools: list[Tool], held: Any) -> list[Tool]:
+    """A subagent's tools, without the ones that work in the process's folder
+    when it is held to a worktree (`evi.worktree.confined_tools`)."""
+    if held is None:
+        return tools
+    from evi.worktree import confined_tools
+
+    return confined_tools(tools)
+
+
+def _open_worktree(isolate: str, task: str, cwd: str | None, config: Config):
+    """The worktree a `run_subagent(isolate=...)` works in: a fresh
+    `fix-<task>` branch of the repository at its working folder (`cwd`, else
+    the session's, else the process's), from HEAD. Raises WorktreeError for
+    an unknown mode, a folder outside git, or a backend that can't be held to
+    the worktree (evi.worktree.check_thread_isolation)."""
+    from evi import worktree as wt
+
+    if isolate not in ISOLATE_MODES:
+        raise wt.WorktreeError(
+            f"unknown isolate {isolate!r} (only {', '.join(ISOLATE_MODES)})"
+        )
+    wt.check_thread_isolation(config)
+    start = Path(cwd or workdir.session_cwd() or os.getcwd())
+    return wt.open_isolated(wt.AUTO, task=task, start=start)
 
 
 def run_subagents_parallel(
@@ -294,6 +367,7 @@ def run_subagents_parallel(
     skill_scope: skillscope.Scope | None | object = INHERIT,
     tools: Iterable[str] | None = None,
     unattended_policy: str | None = None,
+    isolate: str | None = None,
 ) -> list[tuple[str, str]]:
     """Run several subagents concurrently and return [(task, result), …] in the
     original order.
@@ -302,8 +376,9 @@ def run_subagents_parallel(
     from overlapping the orchestration + tool calls; note that a single local
     backend serialises the actual model inference (one model, one GPU), so the
     big speedups are on tool-heavy work or a remote / multi-GPU backend.
-    `hooks` / `cwd` / `skill_scope` / `tools` / `unattended_policy` are as for
-    `run_subagent`; each worker starts from a copy of the caller's context, so
+    `hooks` / `cwd` / `skill_scope` / `tools` / `unattended_policy` /
+    `isolate` are as for `run_subagent` (isolated, each task gets a worktree
+    of its own); each worker starts from a copy of the caller's context, so
     the defaults (and the permission UI) inherit from the caller.
     """
     import concurrent.futures as _futures
@@ -332,6 +407,7 @@ def run_subagents_parallel(
                     {"unattended_policy": unattended_policy}
                     if unattended_policy is not None else {}
                 ),
+                **({"isolate": isolate} if isolate else {}),
             ): i
             for i, task in enumerate(tasks)
         }
@@ -371,12 +447,14 @@ SUBAGENT_PROFILES: dict[str, dict[str, object]] = {
 def load_plugin_profiles(root: Path | None = None) -> dict[str, dict[str, object]]:
     """Subagent profiles bundled by installed plugins, from
     ``<plugin>/agents.toml``. Each profile is namespaced ``<plugin>:<name>`` so
-    it can't shadow a built-in. Malformed files/entries are skipped.
+    it can't shadow a built-in. Malformed files/entries are skipped (an
+    unknown ``isolate`` too: that profile would run unisolated).
 
         [[agent]]
         name = "security"
         system_prompt = "You are a security reviewer…"
         tools = ["fs"]          # tool categories (or tool names) the subagent may use
+        isolate = "worktree"    # optional: work in a git worktree of its own
 
     Whatever a profile lists, the subagent only gets tools the ``[tools]``
     toggles enable (`select_tools`).
@@ -402,7 +480,9 @@ def load_plugin_profiles(root: Path | None = None) -> dict[str, dict[str, object
                     continue
                 raw = entry.get("tools", entry.get("tool_categories", [])) or []
                 cats = tuple(str(c) for c in raw) if isinstance(raw, list) else ()
-                out[f"{pd.name}:{name}"] = {"system_prompt": sp, "tool_categories": cats}
+                profile = _profile(sp, cats, entry, where=f"{pd.name}:{name}")
+                if profile is not None:
+                    out[f"{pd.name}:{name}"] = profile
     except Exception:  # plugin scanning must never break core subagents
         pass
     return out
@@ -416,9 +496,16 @@ def _user_profiles_path():
 
 def load_user_profiles(path: Path | None = None) -> dict[str, dict[str, object]]:
     """User-defined subagent profiles from ``~/.evi/agents.toml`` (same
-    ``[[agent]]`` schema as a plugin's agents.toml, but referenced by bare name).
-    Missing file = {}; malformed file/entries are skipped."""
-    f = path or _user_profiles_path()
+    ``[[agent]]`` schema as a plugin's agents.toml, ``isolate`` included, but
+    referenced by bare name). Missing file = {}; malformed file/entries are
+    skipped (an unknown ``isolate`` with a warning)."""
+    return _read_user_profiles(path or _user_profiles_path())
+
+
+def _read_user_profiles(f: Path, *, keep_unknown_isolate: bool = False) -> dict[str, dict[str, object]]:
+    """`load_user_profiles`; with `keep_unknown_isolate` a profile whose
+    ``isolate`` eVi doesn't know is kept too, with that value as written (so
+    `add_user_profile` writes it back rather than drop it)."""
     out: dict[str, dict[str, object]] = {}
     try:
         if not f.is_file():
@@ -435,8 +522,35 @@ def load_user_profiles(path: Path | None = None) -> dict[str, dict[str, object]]
             continue
         raw = entry.get("tools", entry.get("tool_categories", [])) or []
         cats = tuple(str(c) for c in raw) if isinstance(raw, list) else ()
-        out[name] = {"system_prompt": sp, "tool_categories": cats}
+        profile = _profile(sp, cats, entry, where=name, keep_unknown_isolate=keep_unknown_isolate)
+        if profile is not None:
+            out[name] = profile
     return out
+
+
+def _profile(
+    system_prompt: str, cats: tuple[str, ...], entry: dict, *, where: str = "",
+    keep_unknown_isolate: bool = False,
+) -> dict[str, object] | None:
+    """A profile from an ``[[agent]]`` entry; None (skipped, with a warning)
+    when its ``isolate`` is not one eVi knows: run unisolated, it could edit
+    the very checkout it was meant to keep away from. `keep_unknown_isolate`
+    keeps it, with that value as written, for writing the file back."""
+    profile: dict[str, object] = {"system_prompt": system_prompt, "tool_categories": cats}
+    written = str(entry.get("isolate") or "").strip()
+    isolate = written.lower()
+    if isolate:
+        if isolate not in ISOLATE_MODES:
+            if keep_unknown_isolate:
+                profile["isolate"] = written
+                return profile
+            logger.warning(
+                "subagent profile %r skipped: isolate = %r is not one of %s",
+                where, written, ", ".join(ISOLATE_MODES),
+            )
+            return None
+        profile["isolate"] = isolate
+    return profile
 
 
 def add_user_profile(
@@ -446,22 +560,30 @@ def add_user_profile(
     *,
     path: Path | None = None,
     overwrite: bool = False,
+    isolate: str = "",
 ) -> Path:
     """Append (or overwrite) a profile in ``~/.evi/agents.toml`` and return the
-    file path. Raises ValueError on a bad name or an existing name without
-    ``overwrite``. Used by ``evi agents new``."""
+    file path. Raises ValueError on a bad name, an unknown ``isolate`` or an
+    existing name without ``overwrite``. Used by ``evi agents new``. The other
+    profiles are written back as they were, ``isolate`` included: also one eVi
+    doesn't know, so that profile stays (skipped until it is fixed) rather
+    than vanish."""
     slug = name.strip()
     if not slug or ":" in slug or any(c.isspace() for c in slug):
         raise ValueError("agent name must be non-empty with no spaces or ':'")
     if slug in SUBAGENT_PROFILES:
         raise ValueError(f"'{slug}' is a built-in profile; pick another name")
+    isolate = isolate.strip().lower()
+    if isolate and isolate not in ISOLATE_MODES:
+        raise ValueError(f"isolate must be one of: {', '.join(ISOLATE_MODES)}")
     f = path or _user_profiles_path()
-    existing = load_user_profiles(f)
+    existing = _read_user_profiles(f, keep_unknown_isolate=True)
     if slug in existing and not overwrite:
         raise ValueError(f"profile '{slug}' already exists (use --force to overwrite)")
     existing[slug] = {
         "system_prompt": system_prompt.strip(),
         "tool_categories": tuple(tool_categories),
+        **({"isolate": isolate} if isolate else {}),
     }
     lines: list[str] = [
         "# eVi user subagent profiles. Reference one with the `delegate` tool",
@@ -475,6 +597,8 @@ def add_user_profile(
         lines.append(f"name = {_toml_str(nm)}")
         lines.append(f"system_prompt = {_toml_str(sp)}")
         lines.append(f"tools = {_toml_str_list(cats)}")
+        if prof.get("isolate"):
+            lines.append(f"isolate = {_toml_str(str(prof['isolate']))}")
         lines.append("")
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("\n".join(lines), encoding="utf-8")

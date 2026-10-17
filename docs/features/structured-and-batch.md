@@ -78,6 +78,7 @@ The event shapes live in `evi/events.py`: `SCHEMA` is the JSON Schema (draft 202
 | `checks` | Always `[]` for now: reserved for test and lint results a later step attaches. |
 | `policy` | How a call that would ask was settled: `deny` (the default), `allow` (`[auto] unattended_policy = "allow"`) or `allow-all` (`-y`), with an `[auto] mode` that lets calls through named after it, such as `allow-all (mode=yolo)`. |
 | `redactions` | What was redacted from the tool calls and the error, by kind: `{"github_token": 1}`. |
+| `worktree` | What a run isolated with `--worktree` left in its git worktree (see below); `null` for a run that wasn't isolated, and in `evi batch`. |
 
 Redaction (`[REDACTED:<kind>]`, see [Secret redaction](secret-redaction.md)) happens before anything is cut short, so no prefix of a secret survives the cut. A tool's name, arguments and output and the error are redacted; the model's answer is not, so a secret the model repeats appears in `text`.
 
@@ -87,6 +88,18 @@ Redaction (`[REDACTED:<kind>]`, see [Secret redaction](secret-redaction.md)) hap
 - Outside git, or in a folder git ignores, it compares the size and modification time of the files under `cwd`, skipping `.git`, `node_modules`, virtualenvs and caches, with line counts only for new files. Over 5,000 files, or a walk that takes over a second (a home directory, say), gives `null`.
 - It is also `null` when git fails or reports more than 20,000 dirty files.
 - What eVi itself writes is left out: its home folder and transcripts when they are inside `cwd`, and the file stdout or stderr is redirected to (`evi run --format stream-json … > run.ndjson`).
+
+**`worktree`** is filled in for a run isolated with [`--worktree`](#cli-single-headless-run). It holds `{"path", "branch", "created", "base", "head", "commits", "dirty", "dirty_files", "diffstat"}`:
+
+- `path`: the worktree's folder, which is also the report's `cwd` and where `files_changed` is tracked.
+- `branch`: the branch checked out there when the run ended; `null` on a detached HEAD.
+- `created`: `true` when this run made the worktree, `false` when it reused one.
+- `base` and `head`: the full commit ids checked out when the run started and when it ended.
+- `commits`: the commits from `base` to `head`, oldest first, as `{"sha", "subject"}` (at most 200).
+- `dirty`: whether uncommitted or untracked files are left; `dirty_files` gives their `git status --porcelain` lines (at most 200). Untracked files count whatever `status.showUntrackedFiles` says.
+- `diffstat`: `{"files", "insertions", "deletions"}` of the work tree against `base`: commits, uncommitted edits and new files together.
+
+A value git couldn't give is `null`. Nothing is merged: the branch waits for you to review it (`git log main..fix-1`, `git diff main...fix-1`) and merge it. `evi.events.report_schema()` describes this object too.
 
 ### Stop reasons and exit codes
 
@@ -103,7 +116,7 @@ Redaction (`[REDACTED:<kind>]`, see [Secret redaction](secret-redaction.md)) hap
 | `stop_hook_exhausted` | 6 | Reserved, like `step_budget`. |
 | `interrupted` | 130 | Ctrl+C or a SIGINT cancelled the run (128 + SIGINT). See [Stopping a turn](steering.md#stopping-a-turn). |
 
-Exit code **2** is a usage error: no run happened, nothing goes to stdout, and the reason goes to stderr. That covers no prompt, an unknown `--format`, `--max-turns` below 1, `--resume` together with `--continue`, a session id that doesn't exist or no session to continue, a `--backend` name that isn't saved, a `--cwd` that isn't a directory, and a bad `--schema`.
+Exit code **2** is a usage error: no run happened, nothing goes to stdout, and the reason goes to stderr. That covers no prompt, an unknown `--format`, `--max-turns` below 1, `--resume` together with `--continue`, a session id that doesn't exist or no session to continue, a `--backend` name that isn't saved, a `--cwd` that isn't a directory, a bad `--schema`, `--base` without `--worktree`, and a `--worktree` that can't be opened (an invalid branch name, a branch checked out elsewhere, one that differs from an existing branch only in case, a worktree another run holds locked, a folder outside git).
 
 ### stream-json: the run as events
 
@@ -169,6 +182,7 @@ Inside the interactive REPL:
 evi run "<prompt>" [--format text|json|stream-json] [--schema <file|inline-json>]
         [--mode chat|cowork|code] [--yes] [--max-turns N] [--cwd DIR]
         [--model ID] [--backend NAME] [--resume ID | --continue]
+        [--worktree BRANCH|auto [--base REF]]
 ```
 
 - **Prompt** — the argument, or, when it is omitted, everything on stdin. The two don't combine: with a prompt argument, piped input is ignored, so put the text you want the model to read in the prompt (or pipe the whole prompt).
@@ -182,6 +196,8 @@ evi run "<prompt>" [--format text|json|stream-json] [--schema <file|inline-json>
 - `--continue` / `-c` — add this run to the most recently active session. That is the newest session anywhere, not the newest for this folder, so prefer `--resume` when several jobs run side by side.
 - `--mode` / `-m` — the tool preset: `chat`, `cowork` or `code`.
 - `--yes` / `-y` — approve every tool call. Without it, tool calls that aren't already auto-approved are **denied** (so a scripted run never blocks waiting for a permission prompt), and the run still counts as `done` if the model finishes.
+- `--worktree BRANCH|auto` — run isolated in a git worktree, so the checkout you work in is never touched. The worktree is `<repo>/.worktrees/<branch>` (a `/` in the name becomes `__`) of the repository at `--cwd`, or here. `<repo>` is always the main checkout, also when you start inside another worktree, so worktrees never nest, and `.git/info/exclude` keeps `.worktrees/` out of `git status`. `auto` makes a fresh branch, `fix-1`, `fix-2`, …; a branch name reuses that branch's worktree under `.worktrees/`, checks an existing branch out in a new one, or creates the branch. The worktree becomes the run's folder: `EVI.md` and `.evi/anatomy.md` come from it alone, its `.evi.toml` applies when the repository is trusted (a worktree shares its repository's [trust](../configuration.md#trusting-a-folder)), and `files_changed` is tracked there. While the run goes on, the worktree stays locked (`git worktree lock`, reason `eVi isolated run (pid N)`), so [`evi worktree prune`](../features.md#machine-ops) and other runs leave it alone; the lock comes off when the run ends. The report's [`worktree`](#the-run-report) says what the run left there, and the text format prints it in one line on stderr. Nothing is merged back. A branch checked out anywhere else (your main checkout above all), a name that differs from an existing branch only in case (Windows and macOS treat them as one branch), a worktree another run holds locked, an invalid name or a folder outside git is a usage error (exit **2**) and nothing runs. Here `auto` always means a new branch, so a branch named `auto` can't be used with `--worktree`.
+- `--base REF` — with `--worktree`, the branch or commit a new branch starts from (default: `[worktree] base_ref`, else `HEAD`). A branch or worktree that already exists is used as it is.
 
 ### CLI: batch
 
@@ -262,7 +278,8 @@ The report is printed on one line; spread out, it reads:
   "files_changed": [],
   "checks": [],
   "policy": "deny",
-  "redactions": {}
+  "redactions": {},
+  "worktree": null
 }
 ```
 
@@ -299,7 +316,7 @@ evi batch jobs.jsonl --out out.jsonl --parallel 4 --yes
 eVi prints a summary (`wrote 3 results (3 ok) -> out.jsonl`) and `out.jsonl` holds one JSON object per line, keyed by your `id`, each with a full run report. The first line, for example:
 
 ```jsonl
-{"id": "a1", "prompt": "Extract contacts from: Bob Lee, CTO, bob@x.io", "schema_version": 1, "session_id": "9c04e1b2aa31", "transcript_path": "/home/you/.evi/transcripts/2026-10-16/9c04e1b2aa31.jsonl", "backend": "lmstudio", "model": "qwen2.5-7b-instruct", "cwd": "/home/you/project", "trust": null, "turns_used": 1, "max_turns": 12, "stop_reason": "done", "done_reason": "stop", "text": "{\"name\":\"Bob Lee\",\"email\":\"bob@x.io\",\"title\":\"CTO\"}", "error": null, "tool_calls": [], "denied_tools": [], "usage": {"prompt": 90, "completion": 22, "total": 112}, "duration_s": 0.912, "files_changed": null, "checks": [], "policy": "allow-all", "redactions": {}}
+{"id": "a1", "prompt": "Extract contacts from: Bob Lee, CTO, bob@x.io", "schema_version": 1, "session_id": "9c04e1b2aa31", "transcript_path": "/home/you/.evi/transcripts/2026-10-16/9c04e1b2aa31.jsonl", "backend": "lmstudio", "model": "qwen2.5-7b-instruct", "cwd": "/home/you/project", "trust": null, "turns_used": 1, "max_turns": 12, "stop_reason": "done", "done_reason": "stop", "text": "{\"name\":\"Bob Lee\",\"email\":\"bob@x.io\",\"title\":\"CTO\"}", "error": null, "tool_calls": [], "denied_tools": [], "usage": {"prompt": 90, "completion": 22, "total": 112}, "duration_s": 0.912, "files_changed": null, "checks": [], "policy": "allow-all", "redactions": {}, "worktree": null}
 ```
 
 To see how each item went:
@@ -344,6 +361,31 @@ sid=$(head -n 1 run.ndjson | jq -r .session_id)
 evi run --resume "$sid" --format json "Now add a pytest cache entry too" | jq .stop_reason
 ```
 
+### Example 4 — Let a run work in a worktree of its own
+
+Give the change a branch and a folder of its own, so a run that goes wrong can't break the checkout you work in:
+
+```bash
+evi run --worktree auto -m code -y --format json "Add a .gitignore for Python" > run.json
+jq .worktree run.json
+```
+
+```json
+{
+  "path": "/home/you/project/.worktrees/fix-1",
+  "branch": "fix-1",
+  "created": true,
+  "base": "3f9a1c2d7b40e8a5c6d1f20b9e7a4c3d2b1a0f9e",
+  "head": "3f9a1c2d7b40e8a5c6d1f20b9e7a4c3d2b1a0f9e",
+  "commits": [],
+  "dirty": true,
+  "dirty_files": ["?? .gitignore"],
+  "diffstat": {"files": 1, "insertions": 12, "deletions": 0}
+}
+```
+
+Your checkout is unchanged. Review the work in `.worktrees/fix-1`, commit it there and merge `fix-1` yourself; a later `evi run --worktree fix-1 …` carries on in the same worktree. Once the branch is merged and its worktree is clean, `evi worktree prune` removes the worktree.
+
 ## Notes / limits
 
 - **Schema enforcement is backend-dependent.** Only backends that support OpenAI-style `response_format` actually *guarantee* the shape. Others ignore it and return best-effort JSON — design your downstream parsing to tolerate the occasional non-conforming reply when running against such a backend.
@@ -355,3 +397,4 @@ evi run --resume "$sid" --format json "Now add a pytest cache entry too" | jq .s
 - **Tool calls are cut short in the report.** Each call's arguments and output are redacted and then cut to 2000 characters, and `max_turns` defaults to 12 — raise `--max-turns` for long multi-tool tasks (a run that runs out exits **3**).
 - **Exit codes.** `evi run` exits with the code for its `stop_reason` in every format (0 done, 1 error, 3 max_turns, 4 guardrail, 130 interrupted; [table above](#stop-reasons-and-exit-codes)) and **2** on a usage error. `evi batch` exits **2** on unparseable input or a bad item, **1** when the file holds no prompts, and **0** once it has written its results.
 - **Privacy.** Like the rest of eVi, these run locally against your configured backend; no data leaves your machine beyond what your chosen backend itself sends.
+- **A killed worktree run leaves its lock behind.** A `--worktree` run that is killed outright (not stopped with Ctrl+C) can't take its lock off, so prune keeps that worktree and the next run on its branch is refused. See [Troubleshooting](../troubleshooting.md#a-worktree-cant-be-locked-for-this-run).

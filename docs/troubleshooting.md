@@ -356,6 +356,74 @@ top level, so a `.evi.toml`, `EVI.md` or `AGENTS.md` in a folder above the
 repository doesn't apply inside it. See [Trusting a
 folder](configuration.md#trusting-a-folder).
 
+## `--worktree` refuses a branch: "checked out at …" or "differs … only in case"
+
+An isolated run (`evi run --worktree`, see [the run
+report](features/structured-and-batch.md#cli-single-headless-run)) never
+edits a checkout someone may be working in, so it refuses a branch that is
+checked out anywhere but its own worktree under `<repo>/.worktrees/`: your
+main checkout's branch above all (`branch main is checked out at …`). Use
+`--worktree auto` for a fresh `fix-<n>` branch, or another name; `--base main`
+starts the new branch from `main`. `branch Main differs from the existing
+branch main only in case` means the name would be the same branch on Windows
+and macOS, whose file systems ignore case, so a worktree on it would move
+your checkout's branch: pick another name. The same check catches a checkout
+whose HEAD spells its branch in another case (after `git checkout MAIN` on
+Windows); `git checkout main` there puts it right.
+
+## A worktree "can't be locked for this run"
+
+An isolated run locks its worktree while it runs (`git worktree list` shows
+it `locked`; the reason is `eVi isolated run (pid N)`, or git's own words on
+git older than 2.36), so prune leaves it alone and no second run shares it.
+This message names the worktree another run still holds. If no eVi process
+with that pid is running, the run was killed outright (a crash, `kill -9`, a
+power cut) and couldn't take its lock off: unlock it with
+`git worktree unlock <path>`, the command the message prints. A lock you put
+on yourself is respected the same way; eVi only ever removes the lock its own
+run took.
+
+## `evi worktree prune` keeps a worktree
+
+Prune removes only a worktree whose work is safe elsewhere, and prints why it
+kept each other one:
+
+- `locked`: a run is using it, a killed run left its lock
+  ([above](#a-worktree-cant-be-locked-for-this-run)), or you locked it;
+- `N uncommitted or untracked file(s)`: commit the work there, or delete it;
+- `branch fix-1 is not merged into HEAD`: merge the branch first, or pass
+  `--into BRANCH` for the branch it was merged into;
+- `detached HEAD`: there is no branch to keep its commits, so check one out
+  there (`git switch -c <name>`) or remove the worktree yourself;
+- `it holds another worktree (…)`: removing it would delete that one too;
+- `its directory is missing`: `git worktree prune` drops the leftover record;
+- `git did not remove it: …`: git's own check refused (prune never passes
+  `--force`), or a file in it is in use (Windows).
+
+`--into` defaults to `HEAD` of the folder you run prune in, so run it from the
+main checkout: from inside a worktree, that worktree's own branch counts as
+merged. `evi worktree prune --dry-run` lists what it would remove.
+
+## An isolated workflow step, team task or subagent can't use `monitor`, git or MCP tools
+
+That's by design. These runs share eVi's process with other work, and
+`monitor`, the git tools and MCP servers work in the folder eVi was started
+in, not the run's worktree, so they would reach the checkout the run is kept
+out of. eVi leaves them out of such runs. Run the task with `evi run
+--worktree` instead, which moves the whole process into the worktree and keeps
+every tool. For the same reason a delegate CLI-agent backend (`codex`,
+`gemini`, `amp`, `qwen`, `copilot`) is refused there with `the … backend is a
+CLI agent that runs its own tools in eVi's process folder, so it can't be held
+to a worktree here`. See [Agents → Isolated
+runs](features/agents.md#isolated-runs-git-worktrees).
+
+## The web app won't run a workflow: "… ask for isolate = "worktree", which this runner can't honour"
+
+A step of that workflow says `isolate = "worktree"`, and for now only
+`evi workflow run` can give a step a worktree of its own. Dispatch answers
+`400` before any step runs rather than run it in the server's folder. Run the
+workflow with `evi workflow run <name>`, or drop `isolate` from the step.
+
 ## "eVi: unknown settings in … config.toml"
 
 A key in `config.toml` (or the active profile) isn't one this eVi knows: a

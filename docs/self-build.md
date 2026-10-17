@@ -60,13 +60,19 @@ The bootstrap:
    `--reinstall` repeats the install into an existing venv, `--extras` changes
    the list, and `--playwright` also downloads Chromium;
 4. with `--worktree BRANCH`, creates a worktree for the branch
-   ([section 3](#3-worktrees-until-the-phase-1-task-loop));
-5. finishes with `python -m evi doctor --dev --strict`.
+   ([section 3](#3-worktrees-one-per-task));
+5. finishes with `python -m evi doctor --dev --strict`, in the worktree when
+   there is one;
+6. with `--test [ARGS]` (put it last: every argument after it goes to
+   pytest), then runs `python -m pytest -q -p no:cacheprovider ARGS` where the
+   check ran, once it has passed, and exits with pytest's exit code.
 
 `--dry-run` prints every step and changes nothing. An option that takes a value
 refuses one that starts with `-`, so `--extras --dry-run` is an error, not a real
 run. The PowerShell script takes the same options in PowerShell style: `-Venv`,
-`-Recreate`, `-Worktree`, `-DryRun` and so on.
+`-Recreate`, `-Worktree`, `-DryRun`, `-Test` and so on. After `-Test`, the
+arguments no option takes go to pytest; put a pytest option PowerShell would
+read as one of its own (`-v`, `--verbose`, `-p`) in `$env:PYTEST_ADDOPTS`.
 
 ### `evi doctor --dev`
 
@@ -145,27 +151,59 @@ An eval suite (`evi eval`) is a regression gate for behaviour you care about.
 `evi route` sends coding turns to a strong local coder model
 ([examples/routes.json](../examples/routes.json)).
 
-## 3. Worktrees (until the Phase 1 task loop)
+## 3. Worktrees: one per task
 
-The director gives each task its own git worktree, and the implementer works
-only there:
+Every task gets a git worktree and branch of its own, and the implementer works
+only there: a change in progress can't break the checkout eVi runs from, and
+several fixes can go on side by side. Nothing is merged by the implementer; the
+director reviews each branch and merges it.
+
+**A headless run.** `evi run --worktree auto --mode code "<task brief>"` makes
+a fresh branch `fix-1` (then `fix-2`, …) at `.worktrees/fix-1` and runs there;
+`--worktree <branch>` names the branch instead, and a later run with the same
+name carries on in its worktree. `--base REF` picks where a new branch starts
+(default `[worktree] base_ref`, else `HEAD`). The worktree is the run's folder:
+`EVI.md` and the anatomy come from it alone, its `.evi.toml` applies when the
+repository is trusted (a worktree shares its repository's folder trust), and
+the main checkout is never touched. The worktree stays locked while the run goes on, and with
+`--format json` the report's `worktree` field gives the branch, its commits,
+what is left uncommitted and the diffstat. A branch checked out in the main
+checkout is refused. See [the run
+report](features/structured-and-batch.md#the-run-report). `evi team run
+--worktree` and workflow steps with `isolate = "worktree"` give each task a
+worktree the same way ([Isolated runs](features/agents.md#isolated-runs-git-worktrees)).
+
+**A worktree to work in.** The bootstrap makes one for a session you drive
+yourself, and runs the tests in it:
 
 ```bash
 bash scripts/dev-bootstrap.sh --worktree fix/doctor-eol
+bash scripts/dev-bootstrap.sh --worktree fix/doctor-eol --test tests/test_doctor_dev.py
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\dev-bootstrap.ps1 -Worktree fix/doctor-eol -Test tests/test_doctor_dev.py
 ```
 
 This creates the branch `fix/doctor-eol` (from `HEAD`, or from `--base REF`) at
 `.worktrees/fix__doctor-eol` (a `/` in the branch name becomes `__`). It adds
 `.worktrees/` to `.git/info/exclude`, so the main checkout never stages a
-worktree, and runs `doctor --dev` in the new worktree. Run again, it reuses the
+worktree, and runs `doctor --dev` in the new worktree; `--test` then runs
+pytest there with the arguments after it. Run again, it reuses the
 worktree only while it is still on that branch: `fix/x` and `fix__x` would share
 a directory, so the second one is refused. The worktree shares the venv, whose editable install points at the
-main checkout, so run eVi and the tests from the worktree as modules:
+main checkout, so run eVi and the tests from the worktree as modules
+(`python -m` puts the worktree first on the import path, which is also how
+`--test` runs them):
 
 ```bash
 python -m evi chat --mode code
 python -m pytest -q -n auto tests/test_doctor_dev.py
 ```
+
+Once a branch is merged, `evi worktree prune` (run from the main checkout)
+removes its worktree if nothing is left uncommitted or untracked there; it
+keeps the others and says why, and leaves the branches alone.
 
 ## 4. Test and lint
 

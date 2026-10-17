@@ -213,6 +213,51 @@ def test_a_frame_that_breaks_the_contract_does_not_validate() -> None:
             jsonschema.Draft202012Validator(events.SCHEMA).validate(bad)
 
 
+def _isolated_report() -> dict:
+    """A report as `evi run --worktree` leaves it: the worktree field is what
+    evi.worktree.worktree_report returns."""
+    res = HeadlessResult(text="done", stop_reason="done")
+    res.worktree = {
+        "path": "/repo/.worktrees/fix-1", "branch": "fix-1", "created": True,
+        "base": "a" * 40, "head": "b" * 40,
+        "commits": [{"sha": "b" * 40, "subject": "add x"}],
+        "dirty": True, "dirty_files": ["?? x.txt"],
+        "diffstat": {"files": 2, "insertions": 3, "deletions": 0},
+    }
+    return res.to_dict()
+
+
+def test_the_report_schema_describes_the_worktree_field() -> None:
+    """`worktree` is always present: null for a run that wasn't isolated, else
+    every key of worktree_report, each of the type it has there."""
+    _validate_report(HeadlessResult(text="x", stop_reason="done").to_dict())  # "worktree": null
+    good = _isolated_report()
+    _validate_report(good)
+    wt = good["worktree"]
+    # What git couldn't tell is null (a detached HEAD has no branch).
+    _validate_report({**good, "worktree": {
+        **wt, "branch": None, "head": None, "commits": None, "dirty": None,
+        "dirty_files": None, "diffstat": None}})
+    for bad_wt in (
+        {k: v for k, v in wt.items() if k != "diffstat"},  # a key missing
+        {**wt, "dirty": "yes"},
+        {**wt, "created": None},  # never unknown
+        {**wt, "base": None},
+        {**wt, "commits": [{"sha": "b" * 40}]},  # a commit without its subject
+        {**wt, "dirty_files": [1]},
+        {**wt, "diffstat": {"files": 1, "insertions": -1, "deletions": 0}},
+        {**wt, "diffstat": {"files": 1, "insertions": 1}},
+        "fix-1",
+    ):
+        with pytest.raises(jsonschema.ValidationError):
+            _validate_report({**good, "worktree": bad_wt})
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_report({k: v for k, v in good.items() if k != "worktree"})
+    # The RunResult event carries the same report.
+    _validate_event(events.EventStream().frame(headless.result_payload(
+        HeadlessResult(text="done", stop_reason="done", worktree=wt))))
+
+
 # ---- stop reasons and exit codes (run_headless) ----------------------------------
 
 

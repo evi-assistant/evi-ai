@@ -4591,12 +4591,25 @@ def workflow_run(
         None, "--var", help="Override a workflow var: k=v (repeatable)."
     ),
     json_out: bool = typer.Option(False, "--json", help="Print {step: output} as JSON."),
+    worktree: bool = typer.Option(
+        False, "--worktree",
+        help='Run every step in a git worktree of its own (as if each said isolate = '
+             '"worktree"). Nothing is merged back.',
+    ),
 ) -> None:
     """Run a workflow — each step is its own headless agent; parallel blocks run
     concurrently (tools auto-approved, since runs are unattended). Like `evi
     run`, it is an unattended entry point: a delegate CLI-agent backend is
     refused unless [llm] allow_cli_agent_unattended, and the steps' commands
-    get no *_KEY / *_TOKEN / *_SECRET environment variables."""
+    get no *_KEY / *_TOKEN / *_SECRET environment variables.
+
+    A step with isolate = "worktree" (every step, with --worktree) works in
+    a worktree of the repository here, branch fix-<workflow>-<step> under
+    <repo>/.worktrees/ forked from [worktree] base_ref (else HEAD), with that
+    worktree's EVI.md and without the tools that work in eVi's process folder
+    (monitor, the git tools, MCP tools); its output ends with where the work
+    is. A step whose worktree can't be made fails rather than run
+    unisolated."""
     from evi import workflows
     from evi.headless import run_headless
     from evi.llm.cli_agent import CliAgentUnattended, check_unattended, unattended
@@ -4622,21 +4635,76 @@ def workflow_run(
         k, _, v = kv.partition("=")
         variables[k.strip()] = v
 
+    def isolated(step) -> bool:
+        return worktree or step.isolate == "worktree"
+
+    repo = Path.cwd()
+    if any(isolated(s) for s in w.steps):
+        from rich.markup import escape
+
+        from evi import worktree as _wt
+
+        try:  # before any step runs
+            _wt.check_thread_isolation(settings)
+            _wt.repo_root(repo)
+        except _wt.WorktreeError as exc:
+            console.print(f"[red]worktree isolation:[/red] {escape(str(exc))}", highlight=False)
+            raise typer.Exit(1)
+
     def run_step(prompt: str, step) -> str:
+        from evi import worktree as _wt
+
         # Per step: a parallel block runs steps on threads of their own, and
         # the marker is per context (proc.runs_unattended reads it).
+        iso = None
         with unattended("workflow", settings):
-            agent = _build_agent()
-            if step.mode:
-                agent.tools = {t.name: t for t in mode_tools(step.mode)}
-            agent.enable_auto_all()  # workflows are unattended
-            if not json_out:
-                tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
-                console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
-            res = run_headless(agent, prompt)
+            if isolated(step):
+                try:
+                    iso = _wt.open_isolated(
+                        _wt.AUTO, task=f"{w.name}-{step.id}", start=repo,
+                        base=settings.worktree.base_ref or None,
+                    )
+                except _wt.WorktreeError as exc:
+                    out = f"{workflows.STEP_ERROR}worktree isolation: {exc}"
+                    if not json_out:
+                        console.print(f"\n[bold cyan]> {step.id}[/bold cyan]")
+                        console.print(out, markup=False, highlight=False)
+                    return out
+            try:
+                agent = _build_agent()
+                if step.mode:
+                    agent.tools = {t.name: t for t in mode_tools(step.mode)}
+                agent.enable_auto_all()  # workflows are unattended
+                if iso is not None:
+                    # The step's folder is its worktree: tools resolve there,
+                    # its one project context is the worktree's own, and the
+                    # tools that work in this process's folder (the main
+                    # checkout) are left out.
+                    agent.cwd = str(iso.path)
+                    agent.tools = _wt.confined_tools(agent.tools)
+                    if not _safe_mode():
+                        agent.project = load_project_context(start=iso.path)
+                        # The system prompt was composed when the agent was
+                        # built, from the main checkout's EVI.md: re-stitch it.
+                        agent.refresh_prompt()
+                if not json_out:
+                    tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
+                    console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
+                res = run_headless(agent, prompt,
+                                   track_files=iso.path if iso is not None else None)
+                if iso is not None:
+                    res.worktree = _wt.worktree_report(iso)
+            finally:
+                if iso is not None:
+                    _wt.release(iso)
         out = workflows.step_output(res)  # an Error mid-reply is a failed step
         if not json_out:
             console.print(out)
+        if iso is not None:
+            where = f"[worktree] {_wt.summary_line(res.worktree)}"
+            if not json_out:
+                console.print(where, markup=False, highlight=False)
+            out = f"{out}\n\n{where}"
         return out
 
     if not json_out:
@@ -4649,7 +4717,8 @@ def workflow_run(
             )
         )
     try:
-        outputs = workflows.run_workflow(w, run_step=run_step, variables=variables)
+        outputs = workflows.run_workflow(w, run_step=run_step, variables=variables,
+                                         isolates=True)
     except workflows.WorkflowError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -4697,6 +4766,17 @@ def run(
     continue_session: bool = typer.Option(
         False, "--continue", "-c", help="Continue the most recently active session."
     ),
+    worktree: str = typer.Option(
+        "", "--worktree",
+        help="Run isolated in a git worktree under <repo>/.worktrees/: a branch name "
+             "(its worktree is reused, or made), or 'auto' for a new fix-<n> branch. "
+             "Nothing is merged back.",
+    ),
+    base: str = typer.Option(
+        "", "--base",
+        help="With --worktree: the branch or commit a new branch starts from "
+             "(default: [worktree] base_ref, else HEAD).",
+    ),
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
@@ -4706,7 +4786,7 @@ def run(
     stop_reason, done_reason, text, error, tool_calls (name, args, status,
     duration_ms, output), denied_tools, usage (summed), duration_s,
     files_changed (path, status, added, deleted lines), checks, policy,
-    redactions. stream-json → one JSON event per line as the run goes:
+    redactions, worktree. stream-json → one JSON event per line as the run goes:
     RunStart, the turn's events, and RunResult (the report) last; the same
     versioned events as the web UI's stream (evi/events.py).
 
@@ -4732,7 +4812,20 @@ def run(
     loaded first). Ctrl+C / SIGINT cancels the turn (its commands' process
     trees are killed) and still reports a result: stop_reason "interrupted"
     and exit code 130, whatever the format, with whatever text streamed
-    before it."""
+    before it.
+
+    --worktree BRANCH|auto runs isolated: in <repo>/.worktrees/<branch>/ of
+    the repository at --cwd (or here), so the checkout you work in is never
+    touched. auto makes a fresh fix-<n> branch from --base; a named branch's
+    managed worktree is reused, an existing branch is checked out, a new one
+    starts from --base; a branch checked out elsewhere (or one differing
+    from an existing branch only in case), a worktree another run holds
+    locked, an invalid name or a folder outside git is a usage error (2).
+    The worktree is the run's folder (its .evi.toml, if the repository is
+    trusted, and its EVI.md), it stays locked while the run goes on (so
+    `evi worktree prune` leaves it alone), and the report's worktree says
+    what the run left there: path, branch, base and head, commits, dirty,
+    dirty_files and diffstat. Nothing is merged back."""
     import sys as _sys
 
     from evi import headless as _hl
@@ -4744,6 +4837,8 @@ def run(
         _run_usage_error(f"unknown --format {format!r} (choose: {' | '.join(_RUN_FORMATS)})")
     if resume.strip() and continue_session:
         _run_usage_error("--resume and --continue can't be used together")
+    if base.strip() and not worktree.strip():
+        _run_usage_error("--base needs --worktree")
     stream = EventStream() if format == "stream-json" else None
 
     def emit(item) -> None:
@@ -4783,13 +4878,20 @@ def run(
                     f"no saved backend named {backend.strip()!r} (see `evi backend list`)"
                 )
 
-        previous_cwd = os.getcwd() if folder is not None else None
-        agent = res = None
+        previous_cwd = os.getcwd() if folder is not None or worktree.strip() else None
+        agent = res = iso = None
         try:
             if folder is not None:
                 # The run's folder is the process's: Config.load reads its
                 # .evi.toml (applied only if the folder is trusted), EVI.md
                 # comes from it, and files_changed is tracked there.
+                os.chdir(folder)
+            if worktree.strip():
+                # Isolated: the worktree becomes the run's folder, the same
+                # way (its trust is the repository's, evi/trust.py, and
+                # project discovery stops at its top, evi/project.py).
+                iso = _run_open_worktree(worktree.strip(), base.strip())
+                folder = iso.path
                 os.chdir(folder)
             settings = Config.load()
             with unattended("evi run", settings):
@@ -4824,6 +4926,8 @@ def run(
         except CliAgentUnattended as exc:
             print(f"error: {exc}", file=_sys.stderr)
             if format == "text":
+                if iso is not None:
+                    _print_worktree_note(_run_worktree_report(iso))
                 raise typer.Exit(_hl.exit_code("error"))
             res = _hl.stopped_result(agent, "error", error=str(exc), max_turns=max_turns)
         except KeyboardInterrupt:
@@ -4839,7 +4943,50 @@ def run(
         finally:
             if previous_cwd is not None:
                 os.chdir(previous_cwd)
+            if iso is not None:
+                # What the run left there, then the run's lock comes off
+                # (until now prune and other runs left the worktree alone).
+                if res is not None:
+                    res.worktree = _run_worktree_report(iso)
+                from evi.worktree import release
+
+                release(iso)
         _finish_run(res, format, stream)
+
+
+def _run_open_worktree(spec: str, base: str):
+    """`evi run --worktree`: open the run's worktree (evi.worktree.open_isolated)
+    in the repository at the process's folder, forked from `base`, else
+    [worktree] base_ref, else HEAD; it stays locked until the run's release.
+    Anything git or the name checks refuse is a usage error (exit 2): no run
+    happened."""
+    from evi import worktree as _wt
+
+    try:
+        fork = base or (Config.load().worktree.base_ref or "")
+        return _wt.open_isolated(spec, start=Path.cwd(), base=fork or None)
+    except _wt.WorktreeError as exc:
+        _run_usage_error(f"--worktree {spec}: {exc}")
+
+
+def _run_worktree_report(iso) -> dict | None:
+    """The report's worktree (evi.worktree.worktree_report); never raises."""
+    from evi import worktree as _wt
+
+    try:
+        return _wt.worktree_report(iso)
+    except Exception:  # noqa: BLE001 — the report says less rather than fail
+        return {"path": str(iso.path), "branch": iso.branch, "created": iso.created,
+                "base": iso.base, "head": None, "commits": None, "dirty": None,
+                "dirty_files": None, "diffstat": None}
+
+
+def _print_worktree_note(report: dict | None) -> None:
+    """Where an isolated run's work is, on stderr (text format)."""
+    if report:
+        from evi.worktree import summary_line
+
+        print(summary_line(report), file=sys.stderr)
 
 
 @contextmanager
@@ -4943,6 +5090,7 @@ def _finish_run(res, format: str, stream) -> NoReturn:
         note = _run_stop_note(res)
         if note:
             print(note, file=sys.stderr)
+        _print_worktree_note(getattr(res, "worktree", None))
     raise typer.Exit(_hl.exit_code(res.stop_reason))
 
 
@@ -6673,12 +6821,16 @@ def team_list() -> None:
 
 
 def _team_print(tasks) -> None:
+    from rich.markup import escape
+
     for t in tasks:
         color = _team_status_color(t.status)
         dep = f" [dim](after {', '.join(t.blocked_by)})[/dim]" if t.blocked_by else ""
         console.print(f"  [{color}]{t.status:<11}[/{color}] [bold]{t.id}[/bold] {t.subject}{dep}")
         if t.result and t.status in ("completed", "failed"):
             console.print(f"      [dim]{t.result[:160].splitlines()[0] if t.result else ''}[/dim]")
+        if t.worktree:
+            console.print(f"      [dim]worktree: {escape(t.worktree)}[/dim]", highlight=False)
 
 
 @team_app.command("run")
@@ -6688,16 +6840,29 @@ def team_run(
         False, "--peers", "--distribute",
         help="Distribute tasks across reachable federation peers + local (cross-machine parallelism).",
     ),
+    worktree: bool = typer.Option(
+        False, "--worktree",
+        help="Run every task in a git worktree of its own (branch fix-<task id> under "
+             "<repo>/.worktrees/). Nothing is merged back.",
+    ),
 ) -> None:
     """Spawn teammates to drain the shared list in dependency order.
 
     Teammates run unattended: fs and code calls run if auto-approved, anything
-    else follows [auto] unattended_policy (denied by default)."""
+    else follows [auto] unattended_policy (denied by default). With
+    --worktree each task works in its own worktree of the repository here,
+    forked from [worktree] base_ref (else HEAD), recorded on the task, so
+    parallel teammates never edit the same checkout, or yours; a task whose
+    worktree can't be made fails rather than run unisolated."""
     from evi import teams
     from evi.llm.agent import config_policy_label
     from evi.llm.cli_agent import CliAgentUnattended, check_unattended
     from evi.llm.subagent import run_subagent
 
+    if worktree and peers:
+        console.print("[red]--worktree and --peers can't be used together[/red] "
+                      "(a peer works on its own machine, not in a worktree here)")
+        raise typer.Exit(2)
     store = teams.TeamStore()
     if not teams.ready_tasks(store.load()) and not store.any_active():
         console.print("[yellow]nothing to run[/yellow] — add tasks with `evi team new`/`evi team add`")
@@ -6708,6 +6873,17 @@ def team_run(
     except CliAgentUnattended as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
+    if worktree:
+        from rich.markup import escape
+
+        from evi import worktree as _wt
+
+        try:  # before any teammate starts, too
+            _wt.check_thread_isolation(cfg)
+            _wt.repo_root(Path.cwd())
+        except _wt.WorktreeError as exc:
+            console.print(f"[red]--worktree:[/red] {escape(str(exc))}", highlight=False)
+            raise typer.Exit(1)
     console.print(
         f"[dim]teammates run unattended · policy={config_policy_label(cfg)}[/dim]"
     )
@@ -6718,6 +6894,20 @@ def team_run(
             task=task.subject,
             tool_categories=("fs", "code"),
             max_turns=8,
+        )
+
+    if worktree:
+        def run_in(task, iso) -> str:
+            return run_subagent(
+                system_prompt=_TEAM_MATE_PROMPT,
+                task=task.subject,
+                tool_categories=("fs", "code"),
+                max_turns=8,
+                worktree=iso,
+            )
+
+        run_one = teams.isolated_runner(
+            run_in, store=store, start=Path.cwd(), base=cfg.worktree.base_ref or None,
         )
 
     if peers:
@@ -7486,7 +7676,12 @@ def worktree_remove(
 
 
 @worktree_app.command("chat")
-def worktree_chat(branch: str) -> None:
+def worktree_chat(
+    branch: str,
+    mode: str = typer.Option(
+        "", "--mode", "-m", help="Tool preset for the session: chat | cowork | code."
+    ),
+) -> None:
     """Open the chat REPL with cwd inside the named worktree."""
     from evi.worktree import WorktreeError, find_worktree_for
 
@@ -7501,12 +7696,50 @@ def worktree_chat(branch: str) -> None:
             f"[dim](create one with `evi worktree create {branch}`)[/dim]"
         )
         raise typer.Exit(1)
+    # The process moves too: Config.load and the folder-trust prompt read the
+    # process's folder (the worktree shares its repository's trust).
     os.chdir(path)
     console.print(f"[dim]cwd → {path}[/dim]")
-    # Reuse the regular chat command. It'll pick up EVI.md from the new cwd.
-    # Pass every option: called directly, a Typer command gets OptionInfo
-    # objects, not values, for the ones left out.
-    chat(cwd="", mode="")
+    # Reuse the regular chat command with the worktree as the session folder,
+    # so EVI.md comes from the worktree alone. Pass every option: called
+    # directly, a Typer command gets OptionInfo objects, not values, for the
+    # ones left out.
+    chat(cwd=str(path), mode=mode)
+
+
+@worktree_app.command("prune")
+def worktree_prune(
+    into: str = typer.Option(
+        "", "--into", help="The branch the work must be merged into (default: HEAD here)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Say what would be removed; remove nothing."
+    ),
+) -> None:
+    """Remove the worktrees under <repo>/.worktrees/ whose work is safe.
+
+    Only a clean (no uncommitted or untracked files), unlocked worktree on a
+    branch already merged into --into, holding no other worktree, is
+    removed; every other one is kept, with the reason (a running isolated
+    run keeps its worktree locked). Branches are left as they are, and
+    nothing is merged."""
+    from rich.markup import escape
+
+    from evi.worktree import WorktreeError, prune_worktrees
+
+    try:
+        result = prune_worktrees(into=into.strip() or None, dry_run=dry_run)
+    except WorktreeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1)
+    verb = "would remove" if dry_run else "removed"
+    for path in result.removed:
+        console.print(f"[yellow]{verb}[/yellow] {escape(str(path))}", highlight=False)
+    for path, why in result.kept:
+        console.print(f"[dim]kept[/dim] {escape(str(path))} [dim]({escape(why)})[/dim]",
+                      highlight=False)
+    if not result.removed and not result.kept:
+        console.print("[dim]no managed worktrees.[/dim]")
 
 
 profile_app = typer.Typer(help="Manage config profiles for different machines.")

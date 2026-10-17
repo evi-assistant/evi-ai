@@ -15,6 +15,10 @@ The core is model-free and thread-safe: :class:`TeamStore` guards every mutation
 with a lock and persists atomically, and :func:`drain_team` takes an injected
 ``run_one(task) -> str`` (exactly like ``ultracode.run_ultracode``), so the
 draining logic is unit-testable without a backend.
+
+With :func:`isolated_runner` (``evi team run --worktree``) every task runs in a
+git worktree of its own, branch ``fix-<task id>`` under ``<repo>/.worktrees/``,
+recorded on the task. Nothing is merged back: each branch waits for review.
 """
 
 from __future__ import annotations
@@ -43,6 +47,7 @@ class TeamTask:
     owner: str = ""
     blocked_by: list[str] = field(default_factory=list)
     result: str = ""
+    worktree: str = ""  # the git worktree the task ran in (isolated_runner)
 
 
 def _default_path() -> Path:
@@ -74,6 +79,7 @@ class TeamStore:
                     status=str(d.get("status", PENDING)), owner=str(d.get("owner", "")),
                     blocked_by=[str(b) for b in d.get("blocked_by", []) or []],
                     result=str(d.get("result", "")),
+                    worktree=str(d.get("worktree", "") or ""),
                 ))
         return out
 
@@ -117,6 +123,15 @@ class TeamStore:
 
     def fail(self, task_id: str, error: str) -> None:
         self._finish(task_id, FAILED, error)
+
+    def set_worktree(self, task_id: str, path: str) -> None:
+        """Record the git worktree a task runs in."""
+        with self._lock:
+            tasks = self.load()
+            for t in tasks:
+                if t.id == task_id:
+                    t.worktree = path
+            self._save(tasks)
 
     def _finish(self, task_id: str, status: str, text: str) -> None:
         with self._lock:
@@ -184,6 +199,38 @@ def drain_team(store, run_one, *, max_workers: int = 3, poll: float = 0.02) -> l
     n = max(1, max_workers)
     fan_out(worker, list(range(n)), n)
     return store.load()
+
+
+def isolated_runner(run_in, *, store: TeamStore | None = None, start: Path | None = None,
+                    base: str | None = None):
+    """A ``run_one`` for :func:`drain_team` that gives every task a git worktree
+    of its own: branch ``fix-<task id>`` (``-2``, ... when that is taken) under
+    ``<repo>/.worktrees/`` of the repository at ``start`` (default cwd), forked
+    from ``base`` (default HEAD) by ``evi.worktree.open_isolated``. Parallel
+    teammates then never edit the same files, or the checkout you work in.
+
+    ``run_in(task, iso) -> str`` runs the task in that worktree
+    (``evi.worktree.IsolatedWorktree``: its folder is ``iso.path``; pass it on
+    as ``run_subagent(worktree=iso)``, which also leaves out the tools that
+    work in the process's folder). The worktree is recorded on the task
+    (``store``), stays locked while the task runs, and the result ends with a
+    line saying where the work is and what it amounts to. Nothing is merged.
+    A worktree that can't be opened fails the task: it never runs
+    unisolated."""
+    from evi import worktree as wt
+
+    def run_one(task: TeamTask) -> str:
+        iso = wt.open_isolated(wt.AUTO, task=task.id, start=start, base=base)
+        try:
+            if store is not None:
+                store.set_worktree(task.id, str(iso.path))
+            out = run_in(task, iso)
+            where = wt.summary_line(wt.worktree_report(iso))
+        finally:
+            wt.release(iso)
+        return f"{out}\n\n[worktree] {where}"
+
+    return run_one
 
 
 def make_distributed_runner(local_run_one, peers, *, mode: str = ""):

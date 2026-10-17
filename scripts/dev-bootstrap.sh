@@ -20,13 +20,19 @@
 #   --base REF         start point for a new worktree branch (default HEAD)
 #   --repo DIR         the checkout (default: the one holding this script)
 #   --dry-run          print what would happen and change nothing
+#   --test [ARGS]      once the check passes, run the venv's
+#                      `python -m pytest -q -p no:cacheprovider ARGS` in the
+#                      checkout (in the worktree, with --worktree) and exit
+#                      with pytest's code. Every argument after --test goes
+#                      to pytest, so put it last.
 #
 # A working venv is reused. One that is plainly foreign (the interpreter its
 # pyvenv.cfg names does not exist on this machine) and outside any git
 # checkout is moved aside, never deleted, and recreated with uv, else with
 # python -m venv. Any other venv that does not start, or is older than 3.12,
 # and any foreign venv inside a git checkout is replaced only with --recreate.
-# The script ends with `python -m evi doctor --dev --strict`. git
+# The script ends with `python -m evi doctor --dev --strict`, and with --test
+# then runs the tests where the check ran (a failed check runs none). git
 # safe.directory and line-ending problems are reported with their fix command,
 # never applied.
 set -euo pipefail
@@ -47,6 +53,8 @@ PLAYWRIGHT=0
 DRY_RUN=0
 WORKTREE=""
 BASE="HEAD"
+TEST=0
+TEST_ARGS=()
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAFE_DIR_FIX=""
 
@@ -70,6 +78,8 @@ while [ $# -gt 0 ]; do
     --base) need "$1" "${2-}"; BASE="$2"; shift 2 ;;
     --repo) need "$1" "${2-}"; REPO="$(cd "$2" && pwd)"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
+    # pytest's own options follow, so they never reach this loop.
+    --test) TEST=1; shift; TEST_ARGS=("$@"); break ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
@@ -237,8 +247,14 @@ if [ -n "$WORKTREE" ]; then
 fi
 
 # --- check ---------------------------------------------------------------
+# pytest from the checkout's own folder: `python -m` puts that folder first on
+# sys.path, so a worktree's tests import the worktree's evi, not the main
+# checkout the venv's editable install points at. (${a[@]+...}: an empty
+# array is "unbound" to `set -u` in bash before 4.4.)
+PYTEST=("$PY" -m pytest -q -p no:cacheprovider ${TEST_ARGS[@]+"${TEST_ARGS[@]}"})
 if [ "$DRY_RUN" = 1 ]; then
   echo "+ (cd $TARGET && $PY -m evi doctor --dev --repo $(winpath "$TARGET") --venv $(winpath "$VENV") --strict)"
+  if [ "$TEST" = 1 ]; then echo "+ (cd $TARGET && ${PYTEST[*]})"; fi
   say "dry run: nothing was changed"
   exit 0
 fi
@@ -252,5 +268,21 @@ if [ -n "$SAFE_DIR_FIX" ]; then
 fi
 if [ "$code" = 0 ]; then
   say "ready: $PY (work in $TARGET)"
+fi
+if [ "$TEST" = 1 ]; then
+  if [ "$code" != 0 ]; then
+    say "the check failed (exit $code), so the tests were not run"
+    exit "$code"
+  fi
+  echo "+ (cd $TARGET && ${PYTEST[*]})"
+  set +e
+  "${PYTEST[@]}"
+  code=$?
+  set -e
+  if [ "$code" = 0 ]; then
+    say "tests passed in $TARGET"
+  else
+    say "tests failed in $TARGET (pytest exit $code)"
+  fi
 fi
 exit "$code"

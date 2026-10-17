@@ -22,15 +22,23 @@ Set up or repair an eVi development environment (Windows PowerShell 5.1+).
   -Base REF         start point for a new worktree branch (default HEAD)
   -Repo DIR         the checkout (default: the one holding this script)
   -DryRun           print what would happen and change nothing
+  -Test [ARGS]      once the check passes, run the venv's
+                    `python -m pytest -q -p no:cacheprovider ARGS` in the
+                    checkout (in the worktree, with -Worktree) and exit with
+                    pytest's code. The arguments no option takes go to
+                    pytest, except any PowerShell reads as a parameter
+                    (-v is -Venv, --verbose is -Verbose, -p is ambiguous):
+                    pass those in $env:PYTEST_ADDOPTS instead.
 
 A working venv is reused. One that is plainly foreign (the interpreter its
 pyvenv.cfg names does not exist on this machine) and outside any git checkout
 is moved aside, never deleted, and recreated with uv, else with
 `py -<version> -m venv`. Any other venv that does not start, or is older than
 3.12, and any foreign venv inside a git checkout is replaced only with
--Recreate. The script ends with `python -m evi doctor --dev --strict`. git
-safe.directory and line-ending problems are reported with their fix command,
-never applied.
+-Recreate. The script ends with `python -m evi doctor --dev --strict`, and
+with -Test then runs the tests where the check ran (a failed check runs
+none). git safe.directory and line-ending problems are reported with their
+fix command, never applied.
 Keep this file ASCII-only: Windows PowerShell 5.1 reads scripts as cp1252.
 #>
 [CmdletBinding(PositionalBinding = $false)]
@@ -44,7 +52,11 @@ param(
     [string]$Worktree = '',
     [string]$Base = 'HEAD',
     [string]$Repo = '',
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Test,
+    # With -Test: pytest's arguments (whatever no option above takes).
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$TestArgs = @()
 )
 $ErrorActionPreference = 'Stop'
 
@@ -55,6 +67,13 @@ function Fail([string]$Msg) {
 }
 function Get-FullPath([string]$Path) {
     $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+# Arguments no option takes are pytest's, and only with -Test: without it they
+# are a typo, never something to run or ignore.
+$TestArgs = @($TestArgs | Where-Object { $null -ne $_ })
+if ($TestArgs.Count -gt 0 -and -not $Test) {
+    Fail "unknown argument(s): $($TestArgs -join ' ') (see Get-Help; pytest's arguments go after -Test)"
 }
 
 # Run a native command and capture stdout+stderr as text. Windows PowerShell 5.1
@@ -256,8 +275,13 @@ if ($Worktree) {
 }
 
 # --- check -------------------------------------------------------------------
+# pytest from the checkout's own folder: `python -m` puts that folder first on
+# sys.path, so a worktree's tests import the worktree's evi, not the main
+# checkout the venv's editable install points at.
+$PytestArgs = @('-m', 'pytest', '-q', '-p', 'no:cacheprovider') + $TestArgs
 if ($DryRun) {
     Write-Host "+ (cd $Target; $Py -m evi doctor --dev --repo $Target --venv $Venv --strict)"
+    if ($Test) { Write-Host ("+ (cd $Target; $Py " + ($PytestArgs -join ' ') + ')') }
     Say 'dry run: nothing was changed'
     exit 0
 }
@@ -272,4 +296,19 @@ if ($script:SafeDirFix) {
     Say "git trusted the checkout for this run only; make it permanent with: $($script:SafeDirFix)"
 }
 if ($code -eq 0) { Say "ready: $Py (work in $Target)" }
+if ($Test) {
+    if ($code -ne 0) {
+        Say "the check failed (exit $code), so the tests were not run"
+        exit $code
+    }
+    Write-Host ("+ (cd $Target; $Py " + ($PytestArgs -join ' ') + ')')
+    Push-Location -LiteralPath $Target
+    try {
+        & $Py @PytestArgs
+        $code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($code -eq 0) { Say "tests passed in $Target" } else { Say "tests failed in $Target (pytest exit $code)" }
+}
 exit $code

@@ -10,10 +10,16 @@ which fails the probe, or any venv inside a checkout, needs --recreate /
 
 The dry-run flag always comes right after the script path, so an option that
 swallowed the next word could never turn a test into a real run.
+
+`--test` / `-Test` runs pytest in the checkout (a worktree too) once the
+doctor check passes: the real runs below put stand-ins for `python -m evi`
+and `python -m pytest` on PYTHONPATH, so they record where and how they were
+called and never run the real suite.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -262,6 +268,137 @@ def test_worktree_is_reused_only_for_its_own_branch(shell, tmp_path):
     out = other.stdout + other.stderr
     assert other.returncode == 2, out
     assert "branch fix/x, not fix__x" in out
+
+
+# ---- --test / -Test: pytest in the checkout, after the check ---------------------
+
+
+def _stubs(root: Path) -> Path:
+    """Stand-ins for `python -m evi` (the doctor check) and `python -m pytest`,
+    to put on PYTHONPATH: each appends {who, cwd, argv} to $STUB_LOG and exits
+    with $STUB_DOCTOR_RC / $STUB_PYTEST_RC (default 0)."""
+    stubs = root / "stubs"
+    for pkg, rc in (("evi", "STUB_DOCTOR_RC"), ("pytest", "STUB_PYTEST_RC")):
+        (stubs / pkg).mkdir(parents=True)
+        (stubs / pkg / "__init__.py").write_text("", encoding="utf-8")
+        (stubs / pkg / "__main__.py").write_text(
+            "import json, os, sys\n"
+            "call = {'who': %r, 'cwd': os.getcwd(), 'argv': sys.argv[1:]}\n"
+            "with open(os.environ['STUB_LOG'], 'a', encoding='utf-8') as f:\n"
+            "    print(json.dumps(call), file=f)\n"
+            "sys.exit(int(os.environ.get(%r, '0')))\n" % (pkg, rc),
+            encoding="utf-8",
+        )
+    return stubs
+
+
+def _calls(log: Path) -> list[dict]:
+    if not log.exists():
+        return []
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    log.unlink()
+    return calls
+
+
+def _same_dir(a: str | Path, b: str | Path) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _git_status(repo: Path) -> str:
+    return subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                          capture_output=True, text=True, check=True).stdout
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("shell", ["sh", "ps1"])
+def test_test_dry_run_prints_pytest_in_the_worktree_after_the_check(shell, tmp_path):
+    repo = _repo(tmp_path, commit=True)
+    venv = tmp_path / "venvs" / "new"
+    pytest_args = ("tests/test_a.py", "-k", "foo", "-n", "2")
+    if shell == "sh":
+        base = ("--repo", _sh_path(repo), "--venv", _sh_path(venv), "--worktree", "fix/x")
+        r = _sh(*base, "--test", *pytest_args)
+        plain = _sh(*base)
+    else:
+        base = ("-Repo", str(repo), "-Venv", str(venv), "-Worktree", "fix/x")
+        r = _ps(*base, "-Test", *pytest_args)
+        plain = _ps(*base)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    lines = r.stdout.splitlines()
+    [doctor] = [i for i, ln in enumerate(lines) if "-m evi doctor --dev" in ln]
+    [test] = [i for i, ln in enumerate(lines) if "-m pytest" in ln]
+    assert doctor < test  # the check first
+    line = lines[test]
+    assert "fix__x" in line, line  # in the worktree
+    assert line.endswith("-m pytest -q -p no:cacheprovider tests/test_a.py -k foo -n 2)"), line
+    assert "dry run: nothing was changed" in out
+    assert not (repo / ".worktrees").exists()
+    assert plain.returncode == 0 and "-m pytest" not in plain.stdout  # only with --test
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("shell", ["sh", "ps1"])
+def test_test_runs_pytest_in_the_worktree_once_the_check_passes(shell, tmp_path, healthy_venv):
+    # Acceptance (loop-worktree-isolation): pytest runs inside a worktree
+    # through the bootstrap helper, and its exit code is the script's.
+    repo = _repo(tmp_path, commit=True)
+    log = tmp_path / "stub.log"
+    env = {**_env(), "PYTHONPATH": str(_stubs(tmp_path)), "STUB_LOG": str(log)}
+    tree = repo / ".worktrees" / "fix-1"
+
+    def boot(*extra: str, doctor: int = 0, tests: int = 0) -> subprocess.CompletedProcess:
+        e = {**env, "STUB_DOCTOR_RC": str(doctor), "STUB_PYTEST_RC": str(tests)}
+        if shell == "sh":
+            return _sh("--repo", _sh_path(repo), "--venv", _sh_path(healthy_venv), *extra,
+                       dry_run=False, env=e)
+        extra = tuple({"--worktree": "-Worktree", "--test": "-Test"}.get(a, a) for a in extra)
+        return _ps("-Repo", str(repo), "-Venv", str(healthy_venv), *extra, dry_run=False, env=e)
+
+    r = boot("--worktree", "fix-1", "--test", "tests/test_a.py", "-k", "a and b")
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    doctor, run = _calls(log)
+    assert doctor["who"] == "evi" and doctor["argv"][:2] == ["doctor", "--dev"]
+    assert "--strict" in doctor["argv"]
+    assert run["who"] == "pytest"
+    assert run["argv"] == ["-q", "-p", "no:cacheprovider", "tests/test_a.py", "-k", "a and b"]
+    assert _same_dir(run["cwd"], tree) and _same_dir(doctor["cwd"], tree), (run, doctor)
+    assert "ready:" in out and "tests passed in" in out
+    assert _git_status(repo) == ""  # the main checkout never lists the worktree
+
+    # A failing suite fails the bootstrap with pytest's own exit code.
+    r = boot("--worktree", "fix-1", "--test", "-x", tests=1)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, out
+    assert "reusing worktree" in out and "tests failed in" in out and "pytest exit 1" in out
+    assert [c["argv"] for c in _calls(log) if c["who"] == "pytest"] == [
+        ["-q", "-p", "no:cacheprovider", "-x"]]
+
+    # A failed check runs no tests and keeps its exit code.
+    r = boot("--test", doctor=3)
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, out
+    assert "tests were not run" in out
+    assert [c["who"] for c in _calls(log)] == ["evi"]
+
+    # Without --worktree the tests run in the checkout itself.
+    r = boot("--test")
+    assert r.returncode == 0, r.stdout + r.stderr
+    _, run = _calls(log)
+    assert _same_dir(run["cwd"], repo) and run["argv"] == ["-q", "-p", "no:cacheprovider"]
+
+
+@pytest.mark.timeout(240)
+def test_powershell_refuses_arguments_no_option_takes_without_test(tmp_path):
+    # pytest's arguments are whatever no option takes, so without -Test such
+    # an argument is a typo: refused, never run or ignored.
+    venv = tmp_path / "venvs" / "new"
+    r = _ps("-Venv", str(venv), "tests/test_a.py")
+    out = r.stdout + r.stderr
+    assert r.returncode == 2, out
+    assert "unknown argument(s): tests/test_a.py" in out
+    assert "dry run: nothing was changed" not in out
 
 
 def _path_without_python() -> str | None:

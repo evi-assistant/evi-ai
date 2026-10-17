@@ -34,6 +34,14 @@ Workflows live at ``~/.evi/workflows/<name>.toml``:
     id = "synth"
     prompt = "Synthesize a balanced take.\\nUpsides: {pros}\\nDownsides: {cons}"
 
+A step with ``isolate = "worktree"`` (or every step, with ``evi workflow run
+--worktree``) runs in a git worktree of its own, branch
+``fix-<workflow>-<step>`` under ``<repo>/.worktrees/``, so parallel steps
+that edit files never edit the same checkout, or yours. Nothing is merged
+back; the step's output ends with a line saying where its work is. Only
+``evi workflow run`` honours it: another runner (the web UI's dispatch) is
+refused such a workflow (``run_workflow(isolates=...)``).
+
 The engine is decoupled from the LLM: ``run_workflow`` takes a ``run_step``
 callable, so it's fully testable without a model. Use ``{{`` / ``}}`` for
 literal braces in a prompt.
@@ -56,6 +64,10 @@ class WorkflowError(Exception):
     """A workflow file is missing or malformed."""
 
 
+# What a step's `isolate` may say ("" runs it in the workflow's folder).
+ISOLATE_MODES = ("worktree",)
+
+
 @dataclass
 class WStep:
     id: str
@@ -63,6 +75,7 @@ class WStep:
     parallel: bool = False
     mode: str = ""          # optional tool preset: chat | cowork | code
     label: str = ""
+    isolate: str = ""       # "worktree": run in a git worktree of its own
 
 
 @dataclass
@@ -101,6 +114,13 @@ def load_workflow_file(path: Path) -> Workflow:
         if sid in seen:
             raise WorkflowError(f"{path.name}: duplicate step id {sid!r}")
         seen.add(sid)
+        isolate = str(s.get("isolate", "") or "").strip().lower()
+        if isolate and isolate not in ISOLATE_MODES:
+            # Refused, not ignored: the step would run unisolated.
+            raise WorkflowError(
+                f"{path.name}: step {sid!r}: isolate must be "
+                f"{' or '.join(repr(m) for m in ISOLATE_MODES)} (got {isolate!r})"
+            )
         steps.append(
             WStep(
                 id=sid,
@@ -108,6 +128,7 @@ def load_workflow_file(path: Path) -> Workflow:
                 parallel=bool(s.get("parallel", False)),
                 mode=str(s.get("mode", "")).strip(),
                 label=str(s.get("label", "")).strip(),
+                isolate=isolate,
             )
         )
 
@@ -218,6 +239,7 @@ def run_workflow(
     run_step: Callable[[str, WStep], Any],
     variables: dict[str, str] | None = None,
     max_workers: int = 4,
+    isolates: bool = False,
 ) -> dict[str, str]:
     """Execute `wf`, returning {step_id: output}.
 
@@ -228,7 +250,18 @@ def run_workflow(
     `parallel = true` steps executes concurrently and each sees only outputs
     produced BEFORE that block (so a following sequential step is the natural
     fan-in point).
+
+    A workflow with a step that says ``isolate`` runs only when the caller's
+    `run_step` honours it (`isolates=True`, as ``evi workflow run`` does);
+    any other runner gets a WorkflowError before a step runs, rather than
+    run that step unisolated in its own folder.
     """
+    held = [s.id for s in wf.steps if s.isolate]
+    if held and not isolates:
+        raise WorkflowError(
+            f"{wf.name}: step(s) {', '.join(held)} ask for isolate = \"worktree\", which "
+            "this runner can't honour; run the workflow with `evi workflow run`"
+        )
 
     def run(prompt: str, step: WStep) -> str:
         out = run_step(prompt, step)

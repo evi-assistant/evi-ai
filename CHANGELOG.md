@@ -453,6 +453,12 @@ All notable user-visible changes to eVi. Format loosely follows
   docs/features/permissions-and-sandbox.md.
 
 ### Changed
+- **Worktrees made from inside another worktree go under the main checkout.**
+  `evi worktree create` started inside a linked worktree put the new one in
+  that worktree's own `.worktrees/`, so worktrees nested, and removing the
+  outer one deleted the inner one and its uncommitted work. `evi worktree
+  create`, `remove` and `prune` now always use the main checkout's
+  `.worktrees/`.
 - **The `evi-run` GitHub Action approves no tools unless you say so.** It
   passed `--yes` on every run, so a prompt built from a PR diff or issue body
   could get the model to read, write or run code on the runner. `auto_approve`
@@ -745,6 +751,44 @@ All notable user-visible changes to eVi. Format loosely follows
   batch` takes `--max-turns`, and each of its lines is the item's `id` and
   `prompt` plus its run report. See "The run report" in
   docs/features/structured-and-batch.md.
+- **Runs, team tasks, workflow steps and subagents can work in a git worktree
+  of their own.** An agent editing the checkout eVi runs from could break eVi
+  in the middle of its task, and teammates or parallel steps edited the same
+  files. `evi run --worktree <branch|auto>` now runs in
+  `<repo>/.worktrees/<branch>` (`auto`: a fresh `fix-1`, `fix-2`, …;
+  `--base REF` picks where a new branch starts), so the checkout you work in
+  is never touched. The worktree is the run's folder (its `EVI.md`, and its
+  `.evi.toml` when the repository is trusted, which its worktrees share),
+  and the run report's new `worktree` field lists the branch, the commits,
+  what is left uncommitted and the diffstat. `evi team run --worktree` gives
+  each task a `fix-<task id>` worktree, a workflow step's
+  `isolate = "worktree"` (every step with `evi workflow run --worktree`) gives
+  the step one, and an `agents.toml` profile's `isolate = "worktree"` is
+  honoured by `delegate`. A branch checked out elsewhere, or one that differs
+  from an existing branch only in case, is refused; worktrees always go under
+  the main checkout, never nested; a running isolated run keeps its worktree
+  locked; and nothing is ever merged back. Team tasks, workflow steps and
+  subagents share eVi's process, so they run without `monitor`, the git tools
+  and MCP tools (which act in eVi's own folder) and refuse delegate CLI-agent
+  backends; anything that can't be isolated fails instead of running in your
+  checkout. The web app's Dispatch refuses a workflow with an isolated step
+  (`400`) for now. `evi worktree chat` takes `--mode`. See "Isolated runs" in
+  docs/features/agents.md and "The run report" in
+  docs/features/structured-and-batch.md.
+- **`evi worktree prune` clears away the worktrees you are done with.**
+  Worktrees piled up under `.worktrees/` once their branches were merged.
+  `evi worktree prune [--into BRANCH] [--dry-run]` removes those that are
+  unlocked, on a branch, clean (untracked files count, whatever
+  `status.showUntrackedFiles` says), hold no other worktree and are merged
+  into `--into` (default: `HEAD` where you run it), and lists every other one
+  with the reason it stayed. It never passes `--force`, deletes no branch and
+  merges nothing.
+- **`scripts/dev-bootstrap --test` runs the tests where it set things up.**
+  The bootstrap checked a worktree but left running its tests to you.
+  `--test [ARGS]` (`-Test` in PowerShell) runs the venv's
+  `python -m pytest -q -p no:cacheprovider ARGS` in the checkout, or in the
+  worktree with `--worktree`, once `doctor --dev --strict` passes, and exits
+  with pytest's code; a failed check runs no tests. See docs/self-build.md.
 - **The `evi-run` GitHub Action says why a run stopped.** A workflow could
   read only the action's stdout. The action now takes a `max_turns` input
   and `format: stream-json`, and has `exit_code`, `stop_reason` and
@@ -890,6 +934,11 @@ All notable user-visible changes to eVi. Format loosely follows
   figure that doesn't exist and always assumed 8 GB, so a bigger CPU-only
   machine was offered a smaller model than it can run. With a GPU it still
   goes by VRAM, now that of the card with the most.
+- **`evi worktree remove` never deletes a locked worktree.** On a git older
+  than 2.17, which can't remove a worktree itself, eVi deleted the folder
+  even when the worktree was locked (`git worktree lock`). It now refuses,
+  and it deletes a folder itself only when git answers that it has no
+  `worktree remove`.
 - **`evi worktree create` keeps its worktrees out of `git add`.** They live in
   `<repo>/.worktrees/`, so `git add -A` in the main checkout staged each one
   as an embedded repository. eVi now adds `/.worktrees/` to the repository's

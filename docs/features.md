@@ -319,13 +319,38 @@ auto-approved. Guide: [sdk.md](sdk.md); runnable scripts:
 
 **Sync** — `evi sync push|pull` git-syncs portable `~/.evi` state. **Backup** —
 `evi backup`. **Profiles** — `evi profile` per-machine config overlays.
-**Worktrees** — `evi worktree` for parallel work. eVi's git calls ignore
+**Worktrees** — `evi worktree` for parallel work, in
+`<repo>/.worktrees/<branch>` (kept out of `git status` through
+`.git/info/exclude`). eVi's git calls ignore
 what a repository's own config would run, so `evi worktree create` runs no
 hooks (the repo's or your global post-checkout), no repo-local filter drivers,
 and no Git LFS download — run `git lfs pull` in the new worktree if it uses
 LFS. A repository whose `core.worktree` points outside it is refused. See
 [Permissions & sandbox → Repositories you didn't
 write](features/permissions-and-sandbox.md#repositories-you-didnt-write).
+A worktree shares its repository's folder trust, and `EVI.md`, `.evi.toml`
+and the anatomy come from the worktree alone. `evi worktree chat <branch>
+[--mode chat|cowork|code]` opens a chat inside a branch's worktree.
+**Isolated runs** keep an agent off the checkout you work in:
+`evi run --worktree <branch|auto> [--base REF]` runs in a worktree and its
+report says what it left there ([the run
+report](features/structured-and-batch.md#the-run-report)); `evi team run
+--worktree`, a workflow step's `isolate = "worktree"` (`evi workflow run
+--worktree` for every step) and an `agents.toml` profile's
+`isolate = "worktree"` (honoured by `delegate`) give each task a `fix-…`
+branch and worktree of its own. A live isolated run keeps its worktree
+locked, nothing is merged back, and runs isolated on a thread of their own
+refuse delegate CLI-agent backends and go without `monitor`, the git tools
+and MCP tools — see [Agents → Isolated
+runs](features/agents.md#isolated-runs-git-worktrees). **`evi worktree prune
+[--into BRANCH] [--dry-run]`** removes the worktrees under `.worktrees/` whose
+work is safe elsewhere: unlocked, on a branch, clean (no uncommitted or
+untracked files, whatever `status.showUntrackedFiles` says), holding no other
+worktree, and merged into `--into` (default: `HEAD` of the folder you run it
+in, so run it from the main checkout). It keeps every other one and says
+why, removes without `--force` so git checks once more, and leaves branches
+alone (delete a merged one with `git branch -d`); `--dry-run` (`-n`) only
+lists what it would remove.
 **Doctor** — `evi doctor` (Web: Help → Diagnostics); `evi doctor --dev`
 checks a development checkout instead (venv, git `safe.directory`, test and
 lint tools, `pytest --collect-only`, line endings) and prints fix commands

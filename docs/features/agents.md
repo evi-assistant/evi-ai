@@ -16,6 +16,10 @@ break work into focused pieces:
 - **Workflows** — author a multi-step, optionally-parallel pipeline in TOML
   where each step is its own headless agent and later steps interpolate earlier
   steps' output.
+- **Worktree isolation** — give a subagent profile, each team task or a
+  workflow step a git worktree and branch of its own, so agents that edit
+  files never edit the same checkout, or yours. See
+  [Isolated runs](#isolated-runs-git-worktrees).
 - **Federation** — delegate a self-contained task to a *trusted peer eVi* (e.g.
   your GPU box) over plain HTTP, so a small local model can offload heavy work to
   a bigger remote one without any shared cloud.
@@ -110,7 +114,15 @@ never breaks core subagents):
 name = "security"
 system_prompt = "You are a security reviewer…"
 tools = ["fs"]            # tool categories (or tool names) the subagent may use
+isolate = "worktree"      # optional: work in a git worktree of its own
 ```
+
+`isolate = "worktree"` makes every `delegate` of that profile work in a fresh
+git worktree (see [Isolated runs](#isolated-runs-git-worktrees)). `"worktree"`
+is the only value: a profile with any other `isolate` is skipped with a
+warning naming it, rather than run unisolated in the checkout it was meant to
+stay out of, and `evi agents new` writes such a profile back as it was. Add
+`isolate` by editing the file; `evi agents new` has no option for it.
 
 ### Agent teams
 
@@ -139,6 +151,18 @@ unattended: auto-approved calls run (both categories are, by default) and
 anything else follows `[auto] unattended_policy`, denied by default.
 `evi team run` prints that policy, and refuses a delegate CLI-agent backend
 before any teammate starts unless `[llm] allow_cli_agent_unattended = true`.
+
+**Teammates in worktrees (`evi team run --worktree`).** Teammates running in
+parallel all edit one checkout, yours. With `--worktree` each task works in a
+git worktree of its own instead, branch `fix-<task id>` (`fix-t2`, then
+`fix-t2-2` if that is taken) under `<repo>/.worktrees/` of the repository you
+run it in, forked from `[worktree] base_ref` (else `HEAD`). `evi team list`
+shows each task's worktree, and its result ends with a `[worktree]` line
+saying where the work is and what it amounts to. Nothing is merged back. A
+task whose worktree can't be made fails rather than run unisolated, and
+`--worktree` can't be combined with `--peers` (a peer works on its own
+machine). The rules every isolated run follows are in
+[Isolated runs](#isolated-runs-git-worktrees).
 
 **Distributed teammates (`evi team run --peers`).** Local teammates all share one
 backend, so they serialise on a single GPU. With `--peers` (alias `--distribute`)
@@ -173,6 +197,66 @@ run one differ: `evi workflow run` auto-approves every tool call of every
 step, while a run from the web app (Dispatch, `POST
 /api/dispatch/workflow/{name}`) does not: auto-approved categories run and
 anything that would ask follows `[auto] unattended_policy`, denied by default.
+
+A step with `isolate = "worktree"` (every step, with `evi workflow run
+--worktree`) works in a git worktree of its own, branch
+`fix-<workflow>-<step>` under `<repo>/.worktrees/` of the repository you run
+the workflow in, forked from `[worktree] base_ref` (else `HEAD`), so parallel
+steps that edit files never edit the same checkout. The step's `EVI.md` and
+project anatomy are the worktree's, and its output ends with a `[worktree]`
+line saying where the work is; later steps that interpolate `{step}` see that
+line too. Nothing is merged back, and a step whose worktree can't be made
+fails (its output starts with `ERROR:`) rather than run unisolated. `isolate`
+takes only `"worktree"`: any other value is an error when the file loads. For
+now only `evi workflow run` can isolate a step, so the web app's Dispatch
+refuses a workflow that has an isolated step (HTTP 400) before any step runs.
+See [Isolated runs](#isolated-runs-git-worktrees).
+
+### Isolated runs (git worktrees)
+
+A run held to a worktree works in `<repo>/.worktrees/<branch>/`, where
+`<repo>` is the repository's main checkout (also when the run starts inside
+another worktree, so worktrees never nest). eVi adds `/.worktrees/` to the
+repository's `.git/info/exclude`, so `git status` in your checkout never
+lists them. Isolation comes in two kinds:
+
+- **The whole process:** [`evi run --worktree <branch|auto>`](structured-and-batch.md#cli-single-headless-run)
+  moves eVi itself into the worktree, so its `.evi.toml` (when the
+  repository is trusted), `EVI.md`, MCP servers and every tool follow, and
+  the run report's `worktree` field says what it left there.
+- **One thread:** a subagent profile with `isolate = "worktree"`, a task of
+  `evi team run --worktree` and a workflow step with `isolate = "worktree"`
+  run beside other work in the same process. Only the agent's folder moves,
+  so eVi holds them to it:
+  - the tools that work in eVi's own folder rather than the session's are
+    left out: `monitor`, the git tools and every MCP tool (an MCP server runs
+    where it was started, or wherever its own config points it). They would
+    reach the very checkout the run is kept out of;
+  - a delegate CLI-agent backend (`codex`, `gemini`, `amp`, `qwen`,
+    `copilot`) is refused, since its own tools run in eVi's folder: use
+    `evi run --worktree` or a local or API backend. `evi team run --worktree`,
+    and `evi workflow run` for a workflow with an isolated step, refuse it
+    before anything starts; a profile's `delegate` answers
+    `ERROR: subagent failed: worktree isolation: …`;
+  - settings still come from the folder eVi was started in: its `.evi.toml`
+    applies, not the worktree's. A workflow step gets the worktree's
+    `EVI.md`; subagents and team tasks get no project context, as always.
+
+Every isolated run:
+
+- **holds its worktree locked** (`git worktree lock`, reason `eVi isolated
+  run (pid N)`) until it ends, so `evi worktree prune` leaves it alone and no
+  second run can share it. A run killed outright leaves the lock behind; see
+  [Troubleshooting](../troubleshooting.md#a-worktree-cant-be-locked-for-this-run);
+- **fails closed:** outside git, with a refused backend or a worktree that
+  can't be made, it fails rather than run in your checkout;
+- **merges nothing:** each branch waits for your review. Subagent worktrees
+  are named `fix-<task>` (the task cut to 32 lower-case letters, digits and
+  dashes) and fork from `HEAD`; team tasks and workflow steps fork from
+  `[worktree] base_ref` when it is set.
+
+`evi worktree prune` removes the worktrees whose branches you have merged
+(see [Machine ops](../features.md#machine-ops)).
 
 ### Federation
 
@@ -255,7 +339,9 @@ which writes a starter template. A workflow file supports:
 - `name`, `description` — metadata.
 - `[vars]` — default variables (override at run time with `--var k=v`).
 - `[[steps]]` — each needs a non-empty `prompt`; optional `id` (defaults to
-  `step<N>`, must be unique), `parallel = true`, `mode`, and `label`.
+  `step<N>`, must be unique), `parallel = true`, `mode`, `label`, and
+  `isolate = "worktree"` (run the step in a git worktree of its own; only
+  `evi workflow run` honours it).
 
 ### Federation (config: `[federation]`; peers: `~/.evi/peers.json`)
 
@@ -324,13 +410,13 @@ back" → the agent calls `delegate_explore`. For broad investigations it can ca
 evi workflow new <name>            # write a starter ~/.evi/workflows/<name>.toml
 evi workflow list                  # list saved workflows (step + parallel counts)
 evi workflow show <name>           # show steps, vars, and prompts
-evi workflow run <name> [--var k=v ...] [--json]
+evi workflow run <name> [--var k=v ...] [--json] [--worktree]
 ```
 
 `evi workflow run` executes each step as its own headless agent (tools
 auto-approved). `--var k=v` overrides a workflow var (repeatable). `--json`
 prints `{step_id: output}` as JSON instead of the live, step-by-step console
-output.
+output. `--worktree` runs every step as if it said `isolate = "worktree"`.
 
 ### CLI — federation / peers
 
@@ -415,7 +501,9 @@ the workflows you can launch. You can run a workflow headless server-side via
 step runs as its own unattended agent (auto-approved categories run, anything
 else follows `[auto] unattended_policy`) and the response is `{ "ok": true,
 "outputs": {step_id: output}, "policy": "deny" }`. A delegate CLI-agent backend
-gets `409` unless `[llm] allow_cli_agent_unattended = true`.
+gets `409` unless `[llm] allow_cli_agent_unattended = true`. A workflow with a
+step that says `isolate = "worktree"` gets `400` and runs no step: the server
+can't isolate steps yet, so run that one with `evi workflow run`.
 
 **Live agent-watch.** While the Dispatch panel is open it subscribes to
 `GET /api/dispatch/stream` (Server-Sent Events) and re-renders the session list
@@ -571,6 +659,12 @@ Inside a chat (with `subagent` tools enabled), the model invokes it as
   unsupervised unless you trust the prompts. Malformed workflow files are
   skipped by `list`, and template errors (e.g. an unknown `{ref}` or unescaped
   brace) raise a clear `WorkflowError`.
+- **Isolation is per worktree, not a sandbox.** A worktree keeps edits and
+  commits off your checkout's branch; it doesn't stop a tool from reading or
+  writing an absolute path elsewhere. Permission checks apply as usual.
+  Thread-isolated runs go without `monitor`, the git tools and MCP tools, and
+  still read settings from the folder eVi was started in
+  ([Isolated runs](#isolated-runs-git-worktrees)).
 - **Federation is opt-in on both ends.** The caller needs `[tools] federation =
   true` and a `peers.json` entry; the responder needs `[federation] serve =
   true`. Serving is **deny-by-default** for tools — a federated task can only use

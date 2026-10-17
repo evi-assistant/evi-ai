@@ -13,8 +13,9 @@ tool call (its name, arguments and output redacted, the latter two then cut
 short, its status and how long it took), the calls the permission checks
 denied, the error (redacted), the token usage
 summed over the run, how long it took, the files it changed (when asked to
-track them) and the policy it ran under (`evi.llm.agent.policy_label`:
-"deny", "allow", "allow-all" or "interactive").
+track them), the policy it ran under (`evi.llm.agent.policy_label`:
+"deny", "allow", "allow-all" or "interactive") and, for a run isolated in a
+git worktree (`evi run --worktree`), what it left there (`worktree`).
 
 ``stop_reason`` is one of `evi.events.STOP_REASONS`, and `exit_code` turns it
 into `evi run`'s exit code:
@@ -152,6 +153,10 @@ class HeadlessResult:
     checks: list[dict] = field(default_factory=list)
     # What was redacted from the tool calls and the error, by kind.
     redactions: dict[str, int] = field(default_factory=dict)
+    # The isolated run's git worktree (evi.worktree.worktree_report): path,
+    # branch, base and head, commits, dirty state, diffstat; None when the
+    # run was not isolated.
+    worktree: dict | None = None
     # Deprecated, for SDK callers from before the report: the tool outputs
     # as [{name, output}], taken as `tool_calls` when none are given. Read
     # (or set) them as `.tools`, below the class.
@@ -196,6 +201,7 @@ class HeadlessResult:
             "checks": [dict(c) for c in self.checks],
             "policy": self.policy,
             "redactions": dict(self.redactions),
+            "worktree": dict(self.worktree) if self.worktree is not None else None,
         }
 
 

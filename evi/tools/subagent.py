@@ -38,6 +38,9 @@ def delegate(profile: str, task: str) -> str:
         system_prompt=str(p["system_prompt"]),
         task=task,
         tool_categories=p.get("tool_categories", ()),  # type: ignore[arg-type]
+        # A profile's `isolate = "worktree"`: never dropped, or it would run
+        # unisolated in the checkout it was meant to stay out of.
+        isolate=str(p.get("isolate") or "") or None,
     )
 
 
