@@ -3217,8 +3217,18 @@ class Agent:
 
     def _folder_trusted(self, root: Path) -> bool:
         """Whether `root` is a trusted folder (evi.trust); False when that
-        can't be told."""
+        can't be told. Under a named policy for that same root, the policy's
+        own `trusted` decides: it was looked up for the root when the policy
+        was made (`evi.policy.folder_trusted`), or set by a caller that made
+        the folder itself (the eval harness's fixture workspaces), and the
+        policy runs no command line in a folder it doesn't trust anyway."""
+        import os
+
+        policy = getattr(self, "policy", None)
         try:
+            if policy is not None and os.path.normcase(os.path.realpath(root)) == (
+                    os.path.normcase(os.path.realpath(policy.root))):
+                return bool(policy.trusted)
             from evi import trust
 
             return bool(trust.status(Path(root)).trusted)

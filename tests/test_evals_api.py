@@ -30,7 +30,7 @@ def client(monkeypatch, home, tmp_path):
 
 
 def test_list_empty(client):
-    assert client.get("/api/evals").json() == {"suites": []}
+    assert client.get("/api/evals").json() == {"suites": [], "reports": []}
 
 
 def test_list_suites(client, home):
@@ -65,3 +65,56 @@ def test_run_returns_report(client, home, monkeypatch):
     monkeypatch.setattr("evi.evals.run_eval", lambda *a, **k: canned)
     r = client.post("/api/evals/run", json={"name": "s"})
     assert r.status_code == 200 and r.json() == canned
+
+
+def test_list_shows_the_latest_report_per_suite_and_model(client, home):
+    """GET /api/evals carries the newest report of each (suite, model): what
+    the Evals panel's per-model pass rates show. A file that is no report is
+    left out."""
+    import json
+
+    folder = home / "evals" / "reports" / "qualification"
+    folder.mkdir(parents=True)
+
+    def report(model: str, stamp: str, rate: float) -> dict:
+        ok = rate == 1.0
+        return {"schema_version": 1, "kind": "eval-report", "suite": "qualification",
+                "model": model, "backend": "fake", "n": 1, "finished_at": stamp,
+                "total": 1, "ran": 1, "passed": int(ok), "skipped": 0, "failed": int(not ok),
+                "pass_rate": rate,
+                "cases": [{"name": "c", "runs": 1, "passes": int(ok), "pass_rate": rate,
+                           "passed": ok, "skipped": False, "expected_fail": False}]}
+
+    for name, doc in (
+        ("20261001T000000Z-model-a.json", report("model-a", "2026-10-01T00:00:00Z", 0.0)),
+        ("20261002T000000Z-model-a.json", report("model-a", "2026-10-02T00:00:00Z", 1.0)),
+        ("20261001T000000Z-model-b.json", report("model-b", "2026-10-01T00:00:00Z", 0.0)),
+    ):
+        (folder / name).write_text(json.dumps(doc), encoding="utf-8")
+    (folder / "20261003T000000Z-junk.json").write_text("{not json", encoding="utf-8")
+    reports = client.get("/api/evals").json()["reports"]
+    assert [(r["suite"], r["model"], r["pass_rate"]) for r in reports] == [
+        ("qualification", "model-a", 1.0), ("qualification", "model-b", 0.0)]
+    assert reports[0]["cases"][0]["name"] == "c"
+    assert reports[0]["file"] == "20261002T000000Z-model-a.json"
+
+
+def test_a_fake_run_never_replaces_a_models_real_result(client, home):
+    """`--backend fake --model M` (and `models recommend --verify --backend
+    fake`) label a scripted run with a real model's id: the latest report is
+    kept per backend too, so the real result stays visible beside it."""
+    import json
+
+    folder = home / "evals" / "reports" / "self"
+    folder.mkdir(parents=True)
+    for name, backend, rate, stamp in (
+        ("20261001T000000Z-qwen.json", "ollama", 0.0, "2026-10-01T00:00:00Z"),
+        ("20261002T000000Z-qwen.json", "fake", 1.0, "2026-10-02T00:00:00Z"),
+    ):
+        (folder / name).write_text(json.dumps({
+            "kind": "eval-report", "suite": "self", "model": "qwen2.5:7b", "backend": backend,
+            "finished_at": stamp, "total": 1, "ran": 1, "passed": int(rate), "pass_rate": rate,
+            "cases": []}), encoding="utf-8")
+    reports = client.get("/api/evals").json()["reports"]
+    assert [(r["model"], r["backend"], r["pass_rate"]) for r in reports] == [
+        ("qwen2.5:7b", "fake", 1.0), ("qwen2.5:7b", "ollama", 0.0)]

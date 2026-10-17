@@ -88,7 +88,8 @@ or, below the top folder, a wildcard matching it. So
 ``.github/workflows/ci.yml``, but ``**``, ``.github/**`` or ``*.md`` grant no
 protected file, and a file at the top (``EVI.md``) is granted only by its
 exact name. Never granted, named or not (`HARD_PROTECTED` and the rest of
-the protected list): ``.evi/tasks/**``, anything under ``.git``, eVi's home
+the protected list): ``.evi/tasks/**``, the eval gate's reference
+``evals/self/baseline.json`` (`evi.evals`), anything under ``.git``, eVi's home
 (``~/.evi/**``, ``EVI_HOME``), the director's key folder, the secret and
 start-up files (`evi.permissions.SECRET_PROTECTED_PATHS`) and every other
 ``[auto] protected_paths`` entry the user configured.
@@ -126,15 +127,20 @@ from evi import permissions, shellsplit
 
 IMPLEMENTER = "implementer"
 
-# The repo-relative write-protected files a task may be granted by naming
-# them in files_in_scope; the others (.git internals, eVi's home) never.
-GRANTABLE: tuple[str, ...] = tuple(
-    p for p in permissions.WRITE_PROTECTED_PATHS if not p.startswith(("~", ".git/"))
-)
 # Never writable under the policy, named in files_in_scope or not (on top of
-# every protected pattern outside GRANTABLE).
+# every protected pattern outside GRANTABLE). evals/self/baseline.json is the
+# eval gate's reference (evi.evals): an agent that could rewrite it could
+# move the gate it is measured against.
 HARD_PROTECTED: tuple[str, ...] = (
     ".evi/tasks", ".evi/tasks/**", ".git", ".git/**", "~/.evi", "~/.evi/**",
+    "evals/self/baseline.json",
+)
+# The repo-relative write-protected files a task may be granted by naming
+# them in files_in_scope; the others (.git internals, eVi's home, the eval
+# baseline) never.
+GRANTABLE: tuple[str, ...] = tuple(
+    p for p in permissions.WRITE_PROTECTED_PATHS
+    if not p.startswith(("~", ".git/")) and p not in HARD_PROTECTED
 )
 
 # Tools the policy knows, with the category each must have: a tool of another

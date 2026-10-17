@@ -3905,26 +3905,55 @@ def create_app() -> FastAPI:
             checks.append(f"equals {case.equals!r}")
         if case.judge:
             checks.append("judge: " + case.judge)
+        if case.expect_tools:
+            checks.append("calls " + ", ".join(
+                t if isinstance(t, str) else " or ".join(t) for t in case.expect_tools))
+        if case.forbid_tools:
+            checks.append("never calls " + ", ".join(case.forbid_tools))
+        if case.tool_order:
+            checks.append("order " + " → ".join(case.tool_order))
+        for m in case.tool_args:
+            checks.append(f"{'no ' if m.absent else ''}{m.tool} {m.arg} {m.describe()}")
+        if case.stop_reason:
+            checks.append(f"stops with {case.stop_reason}")
+        for argv in case.command_succeeds:
+            checks.append("succeeds: " + " ".join(argv))
+        for fm in case.file_contains:
+            checks.append(f"{fm.path} has " + (repr(fm.contains) if fm.contains is not None
+                                               else f"/{fm.regex}/"))
+        if case.diff_touches_only is not None:
+            checks.append("changes only " + (", ".join(case.diff_touches_only) or "nothing"))
+        if case.runs > 1 or case.pass_rate < 1:
+            checks.append(f"{case.runs} run{'s' if case.runs != 1 else ''}, "
+                          f"passes at {round(case.pass_rate * 100)}%")
+        if case.expected_fail:
+            checks.append("expected to fail")
         return {"name": case.name, "prompt": case.prompt, "checks": checks,
                 "mode": case.mode}
 
     @app.get("/api/evals")
     def evals_list() -> dict[str, Any]:
-        """List eval suites with their cases (read-only; no model calls)."""
+        """List eval suites with their cases, and the latest report of each
+        (suite, model) under <eVi home>/evals/reports (read-only; no model
+        calls)."""
         from evi import evals
 
-        return {"suites": [
-            {"name": s.name, "description": s.description,
-             "cases": [_case_summary(c) for c in s.cases]}
-            for s in evals.list_suites()
-        ]}
+        return {
+            "suites": [
+                {"name": s.name, "description": s.description,
+                 "cases": [_case_summary(c) for c in s.cases]}
+                for s in evals.list_suites()
+            ],
+            "reports": evals.latest_reports(),
+        }
 
     @app.post("/api/evals/run")
     def evals_run(req: dict[str, Any]) -> dict[str, Any]:
         """Run an eval suite server-side and return the report. This calls the
         model once per case (plus once per judged case), so it blocks until the
         whole suite finishes — fine for the small local suites evals are meant
-        to be."""
+        to be. The text-only engine (`evals.run_eval`): a case asserting what
+        the run did fails here and needs `evi eval run`."""
         from evi import evals
 
         if not isinstance(req, dict):

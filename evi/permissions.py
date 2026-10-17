@@ -133,10 +133,12 @@ SECRET_PROTECTED_PATHS: tuple[str, ...] = (
 # and added to every saved list unless named in `protected_paths_remove`.
 # Keep them OUT of the stock `protected_paths` default: `evi.commands` treats
 # that list as "never inline", which would break `@AGENTS.md` in a template.
+# evals/self/baseline.json is the eval gate's reference (evi.evals): only
+# the director's `evi eval baseline record` writes it, never an agent.
 WRITE_PROTECTED_PATHS: tuple[str, ...] = (
     ".evi.toml", "EVI.md", "AGENTS.md", ".evi/**", "~/.evi/**",
     ".git/hooks/**", ".git/config", ".git/modules/**/hooks/**", ".git/modules/**/config",
-    ".github/workflows/**", ".vscode/tasks.json",
+    ".github/workflows/**", ".vscode/tasks.json", "evals/self/baseline.json",
 )
 DEFAULT_PROTECTED_PATHS: tuple[str, ...] = SECRET_PROTECTED_PATHS + WRITE_PROTECTED_PATHS
 # The director's attestation key folder (`evi.attest`), plus the same folder

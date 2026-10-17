@@ -242,9 +242,10 @@ def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
     where status is "ok (P/T)" when all pass, else "fail (P/T)" — so drift shows
     up in `evi schedule list`.
 
-    Cases run with every tool approved, as `evi eval run` does
-    (evals.make_runners): the suite is the user's own and measures what the
-    agent can do. The log header says so."""
+    Cases run on the text-only engine (evals.make_runners) with every tool
+    approved; the log header says so. Unlike `evi eval run`, which holds each
+    case to the implementer policy in a throwaway workspace, it fails a case
+    with behavioral assertions (evals.run_eval says why)."""
     from evi import evals
     from evi.headless import run_headless
     from evi.sdk.builder import build_agent
@@ -279,7 +280,7 @@ def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
         f"# scheduled eval: {task.name}",
         f"# suite: {suite.name}  ({p}/{t} passed)",
         f"# fired_at: {datetime.now().isoformat(timespec='seconds')}",
-        "# policy: allow-all (eval suite cases, as `evi eval run`)",
+        "# policy: allow-all (eval suite cases, text-only engine)",
         "",
     ]
     for c in report["cases"]:

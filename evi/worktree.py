@@ -856,6 +856,78 @@ def release(wt: IsolatedWorktree) -> None:
         pass
 
 
+# ---- throwaway detached worktrees (eval runs, evi.evals) --------------------
+
+
+def add_detached(path: Path, *, start: Path | None = None, commit: str = "HEAD") -> Path:
+    """Check `commit` (default HEAD) out at `path`, a new folder anywhere
+    (a temporary one, not under `.worktrees/`), as a DETACHED worktree of the
+    repository at `start`: no branch is made, nothing is locked, and the
+    checkout at `start` is not touched. For a throwaway run (an eval case with
+    ``workspace = "repo"``); take it down with `remove_detached`."""
+    try:
+        commit = gitsafe.validate_ref(commit, what="commit")
+    except gitsafe.UnsafeRefError as exc:
+        raise WorktreeError(str(exc)) from exc
+    root = repo_root(start)
+    dest = Path(path)
+    if os.path.lexists(dest):
+        raise WorktreeError(f"worktree path already exists: {dest}")
+    _git("worktree", "add", "--detach", *gitsafe.end_of_options(), str(dest), commit, cwd=root)
+    return dest
+
+
+def _record_points_at(admin: Path, path: Path) -> bool:
+    """Whether the worktree record `admin` (`<git dir>/worktrees/<name>`) is
+    the one of the worktree at `path`: its gitdir file names `path`/.git."""
+    if admin.parent.name != "worktrees" or not admin.is_dir() or _is_link(admin):
+        return False
+    back = _git_path((admin / "gitdir").read_text(encoding="utf-8").strip())
+    return back.parent == path or _same_dir(back.parent, path)
+
+
+def _record_of(root: Path, path: Path) -> Path | None:
+    """The record (admin dir) of the worktree registered at `path`, found
+    in the repository's `worktrees/` folder; None for none."""
+    common = _git_path(_git("rev-parse", "--git-common-dir", cwd=root).strip())
+    folder = (common if common.is_absolute() else root / common) / "worktrees"
+    for admin in sorted(folder.iterdir()) if folder.is_dir() else ():
+        try:
+            if _record_points_at(admin, path):
+                return admin
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def remove_detached(path: Path, *, start: Path | None = None) -> None:
+    """Take down a worktree `add_detached` made at `path`: `git worktree
+    remove --force` (its folder and git's record of it). When git can't (the
+    folder is gone or half gone, a file in it is held open), only this
+    worktree's own record is dropped, so nothing stays registered; the
+    caller deletes what is left of the folder. Never raises."""
+    path = Path(path)
+    admin = _admin_dir(path)
+    try:
+        root = repo_root(start)
+    except WorktreeError:
+        root = None
+    if root is not None:
+        try:
+            _git("worktree", "remove", "--force", str(path), cwd=root)
+            return
+        except WorktreeError:
+            pass
+    try:
+        if admin is None and root is not None:
+            admin = _record_of(root, path)
+        # Never another worktree's record: only one that points back here.
+        if admin is not None and _record_points_at(admin, path):
+            shutil.rmtree(admin, ignore_errors=True)
+    except (OSError, ValueError, WorktreeError):
+        pass
+
+
 # Tools whose work runs in eVi's process folder, not the session's: monitor
 # (kind="command" runs its command there, kind="file" reads a relative path
 # there), the git tools when given no path, and MCP tools (a stdio server is

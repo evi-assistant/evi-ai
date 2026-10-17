@@ -3366,7 +3366,7 @@ resetBtn.addEventListener('click', async () => {
     { id:'guardrails', title:'Guardrails', blurb:'Content filter — regex, LLM-judge, and classifier rules.', custom:'guardrails' },
     { id:'plugins', title:'Plugins', blurb:'Installed plugins + the marketplace — search, install, remove.', custom:'plugins' },
     { id:'stats', title:'Usage', blurb:'Local usage analytics computed from your transcripts.', custom:'stats' },
-    { id:'evals', title:'Evals', blurb:'Prompt regression suites — browse cases and run them.', custom:'evals' },
+    { id:'evals', title:'Evals', blurb:'Regression suites — the latest pass rates per model (from evi eval run), and your suites to browse and run.', custom:'evals' },
     { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
     { id:'channels', title:'Channels', blurb:'Message eVi from your phone via Telegram. Off until you turn it on.', custom:'channels' },
     { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
@@ -4387,6 +4387,81 @@ resetBtn.addEventListener('click', async () => {
     load(0);
   }
 
+  // The latest eval report of each (suite, model, backend), from GET
+  // /api/evals: one table per suite, a column per model and backend (the
+  // backend under the model's name, so a fake run never reads as the model's
+  // real result), the suite's pass rate on top and each case's below. Built
+  // with textContent only (report text is never markup).
+  function renderEvalResults(holder, reports) {
+    holder.textContent = '';
+    if (!reports || !reports.length) return;
+    const pct = (r) => (r == null ? 'skipped' : Math.round(r * 100) + '%');
+    const bySuite = new Map();
+    for (const rep of reports) {
+      if (!bySuite.has(rep.suite)) bySuite.set(rep.suite, []);
+      bySuite.get(rep.suite).push(rep);
+    }
+    const title = document.createElement('div');
+    title.className = 'eval-results-title';
+    title.textContent = 'Latest results by model';
+    holder.appendChild(title);
+    for (const [suite, reps] of bySuite) {
+      const card = document.createElement('div');
+      card.className = 'eval-results';
+      card.setAttribute('data-suite', suite);
+      const head = document.createElement('div');
+      head.className = 'eval-results-head';
+      head.textContent = suite;
+      card.appendChild(head);
+      const table = document.createElement('table');
+      const cell = (row, tag, text, attrs) => {
+        const c = document.createElement(tag);
+        c.textContent = text;
+        for (const [k, v] of Object.entries(attrs || {})) c.setAttribute(k, v);
+        row.appendChild(c);
+        return c;
+      };
+      const col = (rep) => ({ 'data-model': rep.model, 'data-backend': rep.backend || '' });
+      const hr = document.createElement('tr');
+      cell(hr, 'th', '');
+      for (const rep of reps) {
+        const th = cell(hr, 'th', '', col(rep));
+        const name = document.createElement('span');
+        name.className = 'eval-results-model';
+        name.textContent = rep.model;
+        const via = document.createElement('span');
+        via.className = 'eval-results-backend';
+        via.textContent = rep.backend || '';
+        th.append(name, via);
+        th.title = (rep.backend || '') + ' · ' + (rep.finished_at || '');
+      }
+      table.appendChild(hr);
+      const total = document.createElement('tr');
+      total.className = 'eval-results-total';
+      cell(total, 'td', 'suite');
+      for (const rep of reps) {
+        cell(total, 'td', pct(rep.pass_rate) + ' (' + rep.passed + '/' + rep.ran + ')',
+          { ...col(rep), 'data-rate': String(rep.pass_rate) });
+      }
+      table.appendChild(total);
+      const names = [];
+      for (const rep of reps) for (const c of rep.cases || []) if (!names.includes(c.name)) names.push(c.name);
+      for (const name of names) {
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-case', name);
+        cell(tr, 'td', name);
+        for (const rep of reps) {
+          const c = (rep.cases || []).find(x => x.name === name);
+          const td = cell(tr, 'td', c ? pct(c.skipped ? null : c.pass_rate) : '—', col(rep));
+          if (c && !c.skipped) td.className = c.passed ? 'ok' : (c.expected_fail ? 'xfail' : 'bad');
+        }
+        table.appendChild(tr);
+      }
+      card.appendChild(table);
+      holder.appendChild(card);
+    }
+  }
+
   function renderEvals() {
     const box = document.createElement('div');
     box.id = 'evals-box';
@@ -4394,14 +4469,23 @@ resetBtn.addEventListener('click', async () => {
     contentEl.appendChild(box);
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c =>
       ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+    const results = document.createElement('div');
+    results.id = 'eval-results-box';
+    const refreshResults = () => fetch('/api/evals').then(r => r.json())
+      .then(d => renderEvalResults(results, d.reports)).catch(() => {});
     fetch('/api/evals').then(r => r.json()).then(d => {
       const suites = d.suites || [];
+      box.innerHTML = '';
+      box.appendChild(results);
+      renderEvalResults(results, d.reports);
       if (!suites.length) {
-        box.innerHTML = '<p class="sec-blurb">No eval suites yet. Create one with ' +
-          '<code>evi eval new &lt;name&gt;</code> (suites live in <code>~/.evi/evals/</code>).</p>';
+        const p = document.createElement('p');
+        p.className = 'sec-blurb';
+        p.innerHTML = 'No eval suites yet. Create one with ' +
+          '<code>evi eval new &lt;name&gt;</code> (suites live in <code>~/.evi/evals/</code>).';
+        box.appendChild(p);
         return;
       }
-      box.innerHTML = '';
       for (const s of suites) {
         const card = document.createElement('div');
         card.className = 'eval-suite';
@@ -4461,13 +4545,16 @@ resetBtn.addEventListener('click', async () => {
             const c = byName[el.getAttribute('data-case')];
             if (!c) return;
             const mark = el.querySelector('.eval-mark');
-            mark.textContent = c.passed ? '✓' : '✗';
-            mark.style.color = c.passed ? '#4caf50' : '#e05252';
-            if (!c.passed && c.failures) el.querySelector('.eval-fail').textContent = c.failures.join('; ');
+            mark.textContent = c.skipped ? '–' : (c.passed ? '✓' : '✗');
+            mark.style.color = c.skipped ? 'var(--dim)' : (c.passed ? '#4caf50' : '#e05252');
+            if (c.skipped) el.querySelector('.eval-fail').textContent = c.skip_reason || 'skipped';
+            else if (!c.passed && c.failures) el.querySelector('.eval-fail').textContent = c.failures.join('; ');
           });
           const pct = Math.round((rep.pass_rate || 0) * 100);
-          statusEl.textContent = rep.passed + '/' + rep.total + ' passed (' + pct + '%)';
+          statusEl.textContent = rep.passed + '/' + rep.total + ' passed (' + pct + '%)' +
+            (rep.skipped ? ', ' + rep.skipped + ' skipped' : '');
           statusEl.style.color = rep.passed === rep.total ? '#4caf50' : '#e0a800';
+          refreshResults();
         } catch (e) {
           statusEl.textContent = 'Error: ' + e; statusEl.style.color = '#e05252';
         } finally { t.disabled = false; }

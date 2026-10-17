@@ -3859,22 +3859,167 @@ def link_cmd(
     console.print(deeplinks.build_link("session", sid))
 
 
-eval_app = typer.Typer(help="Evals — regression-test prompts/skills/models against assertions.")
+eval_app = typer.Typer(
+    help="Evals — behavioral regression gates for prompts, skills and models (evi/evals.py)."
+)
 app.add_typer(eval_app, name="eval")
+eval_baseline_app = typer.Typer(
+    help="The eval baseline (evals/self/baseline.json): the reference model's pass rates, "
+         "the gate for prompt, repair and catalog changes. Director tooling."
+)
+eval_app.add_typer(eval_baseline_app, name="baseline")
+
+
+def _eval_fail(message: str, code: int = 2) -> NoReturn:
+    """An `evi eval` command that can't go ahead: the message on stderr,
+    exit `code` (2: a usage error, nothing ran)."""
+    print(f"error: {message}", file=sys.stderr)
+    raise typer.Exit(code)
+
+
+def _eval_start(repo: str) -> Path | None:
+    return Path(repo).expanduser() if repo.strip() else None
+
+
+def _eval_suite(name: str, repo: str):
+    """The suite `name` names (`self`, `self/<file>`, or one of yours); exit 2
+    when there is none, it doesn't load, or its repository is untrusted."""
+    from evi import evals
+
+    try:
+        return evals.resolve_suite(name, start=_eval_start(repo))
+    except evals.SuiteSkipped as exc:
+        _eval_fail(f"skipped: {exc}")
+    except evals.EvalError as exc:
+        _eval_fail(str(exc))
+
+
+def _eval_backend(backend: str, model: str):
+    """(make_agent, judge, backend, model, entry) for --backend / --model:
+    'fake' replays each case's script, a saved backend's name runs on it,
+    nothing runs on [llm]. Exit 2 for a backend that isn't saved."""
+    from evi import evals
+
+    name = backend.strip()
+    if name.lower() == evals.FAKE_BACKEND:
+        label = model.strip() or "fake"
+        return evals.fake_agent_factory(model=label), None, evals.FAKE_BACKEND, label, None
+    entry = None
+    if name:
+        from evi.backends.registry import get_entry
+
+        entry = get_entry(name)
+        if entry is None:
+            _eval_fail(f"no saved backend named {name!r} (see `evi backend list`; "
+                       "--backend fake replays the cases' scripts)")
+    cfg = Config.load()
+    return (evals.model_agent_factory(backend=entry, model=model.strip()),
+            evals.model_judge(backend=entry, model=model.strip()),
+            entry.name if entry is not None else str(cfg.llm.backend),
+            model.strip() or str(cfg.llm.model), entry)
+
+
+def _eval_mark(row: dict) -> tuple[str, str]:
+    if row.get("skipped"):
+        return "SKIP", "dim"
+    if row.get("passed"):
+        return ("XPASS", "yellow") if row.get("expected_fail") else ("PASS", "green")
+    return ("XFAIL", "yellow") if row.get("expected_fail") else ("FAIL", "red")
+
+
+def _eval_print_row(row: dict) -> None:
+    from rich.markup import escape
+
+    mark, color = _eval_mark(row)
+    if row.get("skipped"):
+        detail = f"skipped: {row.get('skip_reason')}"
+    else:
+        detail = (f"{row['passes']}/{row['runs']} ({round(row['pass_rate'] * 100)}%, "
+                  f"needs {round(row['threshold'] * 100)}%)")
+    console.print(f"  [{color}]{mark:5}[/{color}] [bold]{escape(row['name'])}[/bold] "
+                  f"[dim]{escape(detail)}[/dim]", soft_wrap=True)
+    for f in row.get("failures") or []:
+        console.print(f"        [dim]{escape(f)}[/dim]", soft_wrap=True)
+
+
+def _eval_summary(report: dict) -> None:
+    from rich.markup import escape
+
+    from evi import evals
+
+    color = "green" if evals.report_ok(report) else "red"
+    bits = [f"{report['passed']}/{report['ran']} passed ({round(report['pass_rate'] * 100)}%)"]
+    if report["expected_failures"]:
+        bits.append(f"{report['expected_failures']} expected to fail")
+    if report["skipped"]:
+        bits.append(f"{report['skipped']} skipped")
+    console.print(f"\n[{color}]{escape(', '.join(bits))}[/{color}] — [bold]"
+                  f"{escape(report['suite'])}[/bold] on {escape(report['model'])} "
+                  f"[dim]({escape(report['backend'])})[/dim]", soft_wrap=True)
+    if not report["ran"]:
+        console.print("[yellow]no case ran[/yellow]")
+
+
+def _eval_execute(suite, *, backend: str, model: str, runs: int, mode: str, repo: str,
+                  show_rows: bool, hardware: dict | None = None):
+    """Run `suite` on --backend / --model (`evals.run_suite`) and return the
+    report. This process hosts agents from here on (EVI_AGENT=1)."""
+    from evi import evals
+
+    make_agent, judge, backend_label, model_label, _entry = _eval_backend(backend, model)
+    ctx = evals.EvalContext(
+        make_agent=make_agent, backend=backend_label, model=model_label, judge=judge,
+        repo=suite.repo or evals.find_repo(_eval_start(repo)), default_mode=mode.strip(),
+    )
+    _proc.mark_agent_process()
+    try:
+        return evals.run_suite(suite, ctx, runs=runs or None, hardware=hardware,
+                               on_case=_eval_print_row if show_rows else None)
+    except evals.EvalError as exc:
+        _eval_fail(str(exc))
 
 
 @eval_app.command("list")
-def eval_list() -> None:
-    """List eval suites (~/.evi/evals/)."""
+def eval_list(
+    repo: str = typer.Option("", "--repo", help="The repository whose evals/self suites to "
+                                                "list (default: the one you are in)."),
+) -> None:
+    """List eval suites: yours (~/.evi/evals/) and the repository's evals/self
+    (only when it is trusted)."""
+    from rich.markup import escape
+
     from evi import evals
 
-    items = evals.list_suites()
-    if not items:
-        console.print("[dim]no suites.[/dim] create one with [cyan]evi eval new <name>[/cyan]")
-        return
+    problems: list = []
+    items = evals.list_suites(problems=problems)
     for s in items:
+        if evals.shadowed(s):
+            console.print(f"  [yellow]{escape(s.path.name)}[/yellow] [dim]shadowed: `evi eval "
+                          "run self` runs the repository's evals/self; rename this file to "
+                          "run it[/dim]", soft_wrap=True)
+            continue
         desc = f" — {s.description}" if s.description else ""
-        console.print(f"  [bold]{s.name}[/bold] [dim]({len(s.cases)} cases)[/dim]{desc}")
+        console.print(f"  [bold]{escape(s.name)}[/bold] [dim]({len(s.cases)} cases)[/dim]"
+                      f"{escape(desc)}", soft_wrap=True)
+    for path, why in problems:
+        console.print(f"  [red]{escape(path.name)}[/red] [dim]does not load: {escape(why)}[/dim]",
+                      soft_wrap=True)
+    top = evals.find_repo(_eval_start(repo))
+    if top is not None and evals.self_dir(top).is_dir():
+        why = evals.self_untrusted(top)
+        if why:
+            console.print(f"  [yellow]self[/yellow] [dim]skipped: {escape(why)}[/dim]",
+                          soft_wrap=True)
+        else:
+            try:
+                s = evals.load_self_suite(evals.SELF, top)
+                console.print(f"  [bold]self[/bold] [dim]({len(s.cases)} cases, "
+                              f"{escape(str(evals.self_dir(top)))})[/dim]", soft_wrap=True)
+            except evals.EvalError as exc:
+                console.print(f"  [red]self[/red] [dim]does not load: {escape(str(exc))}[/dim]",
+                              soft_wrap=True)
+    elif not items and not problems:
+        console.print("[dim]no suites.[/dim] create one with [cyan]evi eval new <name>[/cyan]")
 
 
 @eval_app.command("new")
@@ -3895,40 +4040,237 @@ def eval_new(
 
 @eval_app.command("run")
 def eval_run(
-    name: str,
+    name: str = typer.Argument(..., help="A suite of yours, `self` (the repository's "
+                                         "evals/self) or `self/<file>`."),
     mode: str = typer.Option("", "--mode", "-m", help="Default tool preset for cases."),
-    json_out: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
+    format: str = typer.Option("text", "--format", "-f", help="Output: text | json."),
+    json_out: bool = typer.Option(False, "--json", help="Same as --format json."),
+    backend: str = typer.Option(
+        "", "--backend",
+        help="'fake' replays each case's fake script (CI: checks the harness and the "
+             "suite, no model); a saved backend (`evi backend list`); default: [llm].",
+    ),
+    model: str = typer.Option("", "--model", help="Model id for this run."),
+    runs: int = typer.Option(0, "--runs", min=0,
+                             help="Runs per case (default: each case's own `runs`)."),
+    baseline: str = typer.Option(
+        "", "--baseline",
+        help="A baseline file (evals/self/baseline.json): fail a case whose pass rate is "
+             "below the baseline's minus --tolerance, and a baseline case that didn't run.",
+    ),
+    tolerance: float = typer.Option(0.1, "--tolerance", min=0.0, max=1.0,
+                                    help="How far below the baseline a pass rate may fall."),
+    tag: list[str] = typer.Option([], "--tag", help="Only cases with this tag (repeatable)."),
+    skip_tag: list[str] = typer.Option([], "--skip-tag",
+                                       help="Leave out cases with this tag (repeatable)."),
+    repo: str = typer.Option("", "--repo", help="The repository `self` means (default: the "
+                                                "one you are in)."),
 ) -> None:
-    """Run an eval suite and report the pass-rate. Exit code is non-zero if any
-    case fails (so it gates CI)."""
+    """Run an eval suite: each case in a throwaway workspace under the
+    implementer policy, `runs` times, against its pass_rate.
+
+    Writes the report to <eVi home>/evals/reports/<suite>/<UTC time>-<model>.json
+    (and .html). Exit 0 when every case that ran passed (an expected_fail case
+    never fails it; a skipped one is reported), 1 otherwise, 2 for a usage
+    error (an unknown suite, backend or format, an untrusted repository's
+    `self`, a --backend fake run against a real model's baseline).
+
+    With --baseline, a case below the baseline's pass rate minus --tolerance
+    fails (an expected_fail one too), and so does a baseline case that didn't
+    run (skipped, or gone from the suite) unless --tag / --skip-tag left it
+    out."""
+    import json as _json
+
+    from rich.markup import escape
+
     from evi import evals
 
+    fmt = "json" if json_out else format.strip().lower()
+    if fmt not in ("text", "json"):
+        _eval_fail(f"unknown --format {format!r} (text | json)")
+    whole = _eval_suite(name, repo)
+    suite = evals.filter_cases(whole, tag, skip_tag)
+    if not suite.cases:
+        _eval_fail("no case left to run after --tag / --skip-tag")
+    # Left out on purpose: the baseline doesn't hold the run to them.
+    excluded = {c.name for c in whole.cases} - {c.name for c in suite.cases}
+    base = None
+    if baseline.strip():
+        try:
+            base = evals.load_baseline(Path(baseline).expanduser())
+        except evals.EvalError as exc:
+            _eval_fail(str(exc))
+        if (backend.strip().lower() == evals.FAKE_BACKEND
+                and str(base.get("backend")) != evals.FAKE_BACKEND):
+            _eval_fail(f"--baseline holds {base.get('model')}'s pass rates (backend "
+                       f"{base.get('backend')}); a --backend fake run replays scripts and "
+                       "can't be held to them")
+    report = _eval_execute(suite, backend=backend, model=model, runs=runs, mode=mode,
+                           repo=repo, show_rows=fmt == "text")
+    if base is not None:
+        evals.apply_baseline(report, base, tolerance, path=str(Path(baseline).expanduser()),
+                             excluded=excluded)
+        held = report["baseline"]
+        if fmt == "text":
+            for row in report["cases"]:
+                if (row.get("baseline") or {}).get("regressed"):
+                    console.print(f"  [red]below baseline[/red] [bold]{escape(row['name'])}"
+                                  f"[/bold] [dim]{escape(row['failures'][-1])}[/dim]",
+                                  soft_wrap=True)
+            if held["missing"]:
+                console.print("  [red]below baseline[/red] not in this run (deleted or "
+                              f"renamed?): {escape(', '.join(held['missing']))}",
+                              soft_wrap=True)
+            if held["excluded"]:
+                console.print("  [dim]not held to the baseline (left out by --tag / "
+                              f"--skip-tag): {escape(', '.join(held['excluded']))}[/dim]",
+                              soft_wrap=True)
+        if held["mismatch"]:
+            print(f"warning: this run differs from the baseline: {held['mismatch']}",
+                  file=sys.stderr)
     try:
-        suite = evals.load_suite(name)
+        path, _page = evals.write_report(report)
     except evals.EvalError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2)
-
-    run_one, judge_fn = evals.make_runners(_build_agent, default_mode=mode)
-    report = evals.run_eval(suite, run_one, judge_fn=judge_fn)
-    if json_out:
-        import json as _json
-
+        _eval_fail(str(exc), 1)
+    if fmt == "json":
         print(_json.dumps(report, ensure_ascii=False, indent=2))
+        print(f"report: {path}", file=sys.stderr)
     else:
-        for c in report["cases"]:
-            mark = "[green]PASS[/green]" if c["passed"] else "[red]FAIL[/red]"
-            console.print(f"  {mark} [bold]{c['name']}[/bold]")
-            for f in c["failures"]:
-                console.print(f"       [dim]{f}[/dim]")
-        pct = round(report["pass_rate"] * 100)
-        color = "green" if report["passed"] == report["total"] else "yellow"
-        console.print(
-            f"\n[{color}]{report['passed']}/{report['total']} passed "
-            f"({pct}%)[/{color}] — [bold]{report['name']}[/bold]"
-        )
-    if report["passed"] < report["total"]:
+        _eval_summary(report)
+        console.print(f"[dim]report: {escape(str(path))}[/dim]", highlight=False,
+                      soft_wrap=True)
+    if not evals.report_ok(report):
         raise typer.Exit(1)
+
+
+@eval_app.command("compare")
+def eval_compare(
+    a: Path = typer.Argument(..., help="The earlier report (or a baseline)."),
+    b: Path = typer.Argument(..., help="The later report."),
+    tolerance: float = typer.Option(0.0, "--tolerance", min=0.0, max=1.0,
+                                    help="How far a pass rate may fall before it counts."),
+    format: str = typer.Option("text", "--format", "-f", help="Output: text | json."),
+) -> None:
+    """Per-case pass-rate deltas from report A to report B. Exit 1 if any case
+    regressed (its pass rate fell, or B didn't run a case A ran), 2 for a
+    file that is no report."""
+    import json as _json
+
+    from rich.markup import escape
+
+    from evi import evals
+
+    fmt = format.strip().lower()
+    if fmt not in ("text", "json"):
+        _eval_fail(f"unknown --format {format!r} (text | json)")
+    try:
+        da, db = evals.read_json(a), evals.read_json(b)
+    except evals.EvalError as exc:
+        _eval_fail(str(exc))
+    for path, doc in ((a, da), (b, db)):
+        if doc.get("kind") != evals.REPORT_KIND and not isinstance(doc.get("cases"), dict):
+            _eval_fail(f"{path} is neither an eval report nor a baseline")
+    result = evals.compare(da, db, tolerance)
+    if fmt == "json":
+        print(_json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        def pct(x) -> str:
+            return "—" if x is None else f"{round(x * 100)}%"
+
+        colors = {"regressed": "red", "missing": "red", "improved": "green"}
+        console.print(f"[dim]{escape(str(da.get('model')))} → {escape(str(db.get('model')))}"
+                      f" · {escape(str(db.get('suite')))}[/dim]", soft_wrap=True)
+        for row in result["rows"]:
+            color = colors.get(row["status"], "dim")
+            delta = "" if row["delta"] is None else f" ({row['delta'] * 100:+.0f} pts)"
+            console.print(f"  [{color}]{row['status']:9}[/{color}] [bold]{escape(row['name'])}"
+                          f"[/bold] {pct(row['a'])} → {pct(row['b'])}{delta}", soft_wrap=True)
+        n = len(result["regressed"])
+        color = "red" if n else "green"
+        console.print(f"\n[{color}]{n} regressed[/{color}]")
+    if result["regressed"]:
+        raise typer.Exit(1)
+
+
+@eval_baseline_app.command("record")
+def eval_baseline_record(
+    suite_name: str = typer.Option("self", "--suite", help="The suite to record (`self`)."),
+    runs: int = typer.Option(5, "--runs", min=1, help="Runs per case (N)."),
+    backend: str = typer.Option("", "--backend", help="A saved backend, 'fake', or [llm]."),
+    model: str = typer.Option("", "--model", help="The reference model's id."),
+    quantization: str = typer.Option(
+        "", "--quantization",
+        help="The model's quantization (default: what the backend reports, else 'unknown').",
+    ),
+    gpu: str = typer.Option("", "--gpu", help="Override the detected GPU."),
+    vram_gb: float = typer.Option(0.0, "--vram-gb", min=0.0, help="Override the detected VRAM."),
+    cpu: str = typer.Option("", "--cpu", help="Override the detected CPU."),
+    ram_gb: float = typer.Option(0.0, "--ram-gb", min=0.0, help="Override the detected RAM."),
+    os_name: str = typer.Option("", "--os", help="Override the detected OS."),
+    out: str = typer.Option("", "--out", help="Where to write it (default: the repository's "
+                                              "evals/self/baseline.json)."),
+    repo: str = typer.Option("", "--repo", help="The repository `self` means."),
+) -> None:
+    """Run the suite N times per case on the reference model and record the
+    pass rates as the baseline (model, quantization, hardware, N, per case).
+
+    Director tooling: refused (exit 2, nothing written) where an eVi agent
+    may have started this process (evi.attest.agent_parent), as `evi task
+    verify` is. No agent may write the file either (it is never-grantable
+    under the implementer policy and write-protected everywhere)."""
+    from rich.markup import escape
+
+    from evi import attest, evals
+
+    why = attest.agent_parent()
+    if why:
+        _eval_fail(f"refusing to record an eval baseline: {why}. Only the director, from "
+                   "their own shell, may.")
+    suite = _eval_suite(suite_name, repo)
+    if out.strip():
+        target = Path(out).expanduser()
+    elif suite.source == evals.SELF and suite.repo is not None:
+        target = evals.self_dir(suite.repo) / evals.BASELINE_NAME
+    else:
+        _eval_fail("--out is needed for a suite outside evals/self")
+    hardware = evals.hardware_summary(gpu=gpu, vram_gb=vram_gb or None, cpu=cpu,
+                                      ram_gb=ram_gb or None, os=os_name)
+    report = _eval_execute(suite, backend=backend, model=model, runs=runs, mode="", repo=repo,
+                           show_rows=True, hardware=hardware)
+    if not report["ran"]:
+        _eval_fail("no case ran, so there is nothing to record", 1)
+    quant = quantization.strip() or _eval_quantization(backend, report["model"])
+    try:
+        path, _page = evals.write_report(report)
+        evals.write_baseline(target, evals.build_baseline(report, quantization=quant,
+                                                          hardware=hardware))
+    except evals.EvalError as exc:
+        _eval_fail(str(exc), 1)
+    _eval_summary(report)
+    console.print(f"[green]baseline recorded[/green] {escape(str(target))} [dim](N={runs}, "
+                  f"quantization {escape(quant)}; report {escape(str(path))})[/dim]",
+                  highlight=False, soft_wrap=True)
+
+
+def _eval_quantization(backend: str, model: str) -> str:
+    """The quantization the backend reports for `model`, else "unknown"."""
+    from evi import evals
+
+    if backend.strip().lower() == evals.FAKE_BACKEND:
+        return "n/a (fake backend)"
+    try:
+        if backend.strip():
+            from evi.backends.registry import get_entry
+
+            settings = get_entry(backend.strip())
+        else:
+            settings = Config.load().llm
+        for m in get_backend(settings).list_models() if settings is not None else []:
+            if m.id == model and m.quantization:
+                return str(m.quantization)
+    except Exception:  # noqa: BLE001 — best effort
+        pass
+    return "unknown"
 
 
 backend_app = typer.Typer(help="Model backends — register providers (local + online) to pick from.")
@@ -7673,14 +8015,117 @@ def models_pull(
 
 
 @models_app.command("recommend")
-def models_recommend() -> None:
-    """Detect this machine's hardware and recommend a model."""
+def models_recommend(
+    verify: bool = typer.Option(
+        False, "--verify",
+        help="Run the qualification suite against each recommended model you can run "
+             "(installed / served by the backend) and rank them by pass rate. Never "
+             "downloads a model.",
+    ),
+    suite_name: str = typer.Option(
+        "self", "--suite",
+        help="With --verify: the suite. The default, `self`, is the qualification suite in "
+             "eVi's source repository (evals/self): it isn't installed with eVi, so run "
+             "from a checkout of eVi (or point --repo at one), or name a suite of yours.",
+    ),
+    runs: int = typer.Option(1, "--runs", min=1, help="With --verify: runs per case."),
+    backend: str = typer.Option(
+        "", "--backend",
+        help="With --verify: a saved backend (`evi backend list`), or 'fake' (each case's "
+             "script, no model: for CI); default: [llm].",
+    ),
+    repo: str = typer.Option("", "--repo", help="With --verify: the repository `self` means."),
+) -> None:
+    """Detect this machine's hardware and recommend a model.
+
+    With --verify, run the eval suite (default `self`: the qualification
+    suite in a checkout of eVi's source repository, evals/self; not part of
+    an installed eVi) against every recommended model the backend serves,
+    write a report per model (<eVi home>/evals/reports/) and print them
+    ranked by pass rate. Exit 1 when none of them can run here, 2 when the
+    suite can't be found."""
     from evi.hardware import detect
     from evi.recommend import recommend
 
     hw = detect()
     rec = recommend(hw)
+    _models_recommend_show(hw, rec)
+    if verify:
+        _models_verify(rec, suite_name=suite_name, runs=runs, backend=backend, repo=repo)
 
+
+def _models_served(backend: str) -> list[str]:
+    """The model ids the backend (a saved one, else [llm]) serves now; []
+    when it can't say. Exit 2 for a backend that isn't saved."""
+    settings = Config.load().llm
+    if backend.strip():
+        from evi.backends.registry import get_entry
+
+        settings = get_entry(backend.strip())
+        if settings is None:
+            _eval_fail(f"no saved backend named {backend.strip()!r} (see `evi backend list`)")
+    try:
+        return [str(m.id) for m in get_backend(settings).list_models()]
+    except Exception:  # noqa: BLE001 — an unreachable backend serves nothing
+        return []
+
+
+def _models_verify(rec, *, suite_name: str, runs: int, backend: str, repo: str) -> None:
+    """`evi models recommend --verify`: the suite on each recommended model
+    that can run here, ranked."""
+    from rich.markup import escape
+
+    from evi import evals
+
+    if evals.is_self_name(suite_name):
+        top = evals.find_repo(_eval_start(repo))
+        if top is None or not evals.self_dir(top).is_dir():
+            where = f"{top} has no evals/self" if top is not None else "this is no git repository"
+            _eval_fail(f"{where}. The qualification suite (`self`) lives in eVi's source "
+                       "repository, not in an installed eVi: run this from a checkout of eVi, "
+                       "point --repo at one, or pass --suite <one of your suites>")
+    suite = _eval_suite(suite_name, repo)
+    ids: list[str] = []
+    for m in (rec.chat, rec.coder, rec.fast):
+        if m is not None and m.id not in ids:
+            ids.append(m.id)
+    if backend.strip().lower() == evals.FAKE_BACKEND:
+        runnable = list(ids)
+    else:
+        served = {s.lower() for s in _models_served(backend)}
+        runnable = [i for i in ids if i.lower() in served or f"{i.lower()}:latest" in served]
+    if not runnable:
+        names = ", ".join(ids) or "none (remote-only)"
+        _eval_fail(f"none of the recommended models ({names}) is served by the backend, so "
+                   "there is nothing to verify; pull one first (`evi models pull <id>`)", 1)
+    results = []
+    for model_id in runnable:
+        console.print(f"\n[bold]verifying {escape(model_id)}[/bold] [dim]({escape(suite.name)}, "
+                      f"{runs} run{'s' if runs != 1 else ''} per case)[/dim]", soft_wrap=True)
+        report = _eval_execute(suite, backend=backend, model=model_id, runs=runs, mode="",
+                               repo=repo, show_rows=True)
+        try:
+            path, _page = evals.write_report(report)
+        except evals.EvalError as exc:
+            _eval_fail(str(exc), 1)
+        results.append((report, path))
+
+    def score(report: dict) -> float:
+        rates = [r["pass_rate"] for r in report["cases"]
+                 if not r.get("skipped") and not r.get("expected_fail")]
+        return sum(rates) / len(rates) if rates else 0.0
+
+    results.sort(key=lambda rp: (-score(rp[0]), -rp[0]["passed"]))
+    console.print("\n[bold]Ranked by mean pass rate[/bold]")
+    for rank, (report, path) in enumerate(results, 1):
+        console.print(f"  {rank}. [green]{escape(report['model'])}[/green]  "
+                      f"{round(score(report) * 100)}%  [dim]{report['passed']}/{report['ran']} "
+                      f"cases passed · {escape(str(path))}[/dim]", soft_wrap=True)
+
+
+def _models_recommend_show(hw, rec) -> None:
+    """The hardware panel and the catalog's recommendation (what `evi models
+    recommend` prints before any --verify)."""
     console.print(Panel.fit(
         Text.assemble(
             ("Hardware\n", "bold cyan"),

@@ -836,3 +836,16 @@ def test_the_policy_is_not_a_tool(root):
     can reach Agent.policy."""
     assert not any("policy" in name for name in REGISTRY)
     assert isinstance(REGISTRY["write_file"], Tool)
+
+
+def test_the_verify_gate_takes_the_policys_trust_for_its_root(home, root, tmp_path, fake_llm):
+    # The policy's trust decides for its own root (looked up when it was
+    # made, or vouched for by a caller that made the folder); any other
+    # folder still asks evi.trust.
+    agent = _agent(fake_llm([]), root, ["write_file"], trusted=False)
+    assert not agent._folder_trusted(root)  # trusted per evi.trust, not per the policy
+    made = tmp_path / "made-by-the-harness"
+    made.mkdir()
+    agent = _agent(fake_llm([]), made, ["write_file"], trusted=True)
+    assert agent._folder_trusted(made)
+    assert not agent._folder_trusted(tmp_path / "task" / ".." / "elsewhere")
