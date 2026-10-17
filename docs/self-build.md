@@ -148,7 +148,8 @@ A change, driven by eVi:
    own work verified ([section 6](#6-shipping-director-only)).
 
 Tips: `evi workflow` splits a large change into plan, implement and test stages.
-An eval suite (`evi eval`) is a regression gate for behaviour you care about.
+An eval suite (`evi eval`) is a regression gate for behaviour you care about;
+eVi's own is `evals/self` ([section 4](#4-test-and-lint)).
 `evi route` sends coding turns to a strong local coder model
 ([examples/routes.json](../examples/routes.json)).
 
@@ -260,6 +261,25 @@ working, run the subset that covers your change; run the full unit suite before
 the hand-off. The live test count is the last line of
 `python -m pytest --collect-only -q`. [TESTING.md](../TESTING.md) describes the
 layers.
+
+**The eval gate.** The unit tests can't see a change in how the model
+behaves. A change to eVi's prompts, its tool-call repair or the agent loop
+(the Phase 2 work) is held to the qualification suite in `evals/self` and the
+reference model's recorded pass rates: `evi eval run self --baseline
+evals/self/baseline.json --backend <saved backend> --model <reference model>
+--runs 5`, on the model and backend the baseline names, must exit 0. It fails
+a case whose pass rate fell more than `--tolerance` (default 0.1) below the
+baseline's, and a baseline case that didn't run (skipped, deleted or
+renamed); a case added after the baseline was recorded is held only to its
+own `pass_rate` until the baseline is recorded again. `evi eval run self
+--backend fake` checks the harness and the suite with no model, and the unit
+suite runs it too. The `self` suite loads only in a trusted checkout (`evi
+trust`). The director records the baseline from their own shell with `evi
+eval baseline record --suite self --runs 5 --backend <saved backend> --model
+<reference model> --quantization <quantization>`. The implementer can do
+neither: that command refuses in any process an eVi agent started, and
+`evals/self/baseline.json` is never granted under the implementer policy. See
+[Evals](features/evals.md#the-baseline-gate).
 
 ## 5. Build the desktop app
 

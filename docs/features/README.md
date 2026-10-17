@@ -22,7 +22,7 @@ tokens, the desktop app's LAN token, containers) see
 - [Plugins & Marketplace](plugins.md) — bundled commands/skills/hooks/MCP/agents + `plugin search/install`
 - [Skills](skills.md) — markdown instruction packets the model loads on demand (`invoke_skill`)
 - [Slash commands](slash-commands.md) — built-in `/cmd` controls + user/plugin command templates
-- [Evals & LLM-as-judge](evals.md) — `evi eval` suites, judge rubrics, scheduled evals
+- [Evals](evals.md) — `evi eval` suites that check the answer and what the run did (tools, files, commands) in a throwaway workspace under the implementer policy; pass rates over N runs, reports, `evi eval compare`, the fake backend, the `evals/self` qualification suite and its baseline gate (`evi eval baseline record`), `evi models recommend --verify`, judge rubrics, scheduled evals
 - [Voice](voice.md) — TTS engines (system/coqui/f5/piper), STT, AutoSpeaker/Listener
 - [Sessions, Resume, Handoff, Import, Checkpoints](sessions.md) — including `evi sessions import` from Claude Code and Codex
 - [Hooks](hooks.md) — tool + lifecycle events, command or HTTP

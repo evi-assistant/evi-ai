@@ -317,7 +317,7 @@ call.
 | `its argument … is outside the run's folder`, `… is not allowed (it writes a file of its choosing, …)` | An argument reaches outside the run's folder, or the option writes a file of its choosing, reaches the network or sets config that runs a program. | Keep paths inside the folder and drop the option. |
 | `… sets an environment variable before the command`, `… holds a shell expansion` | `X=1 pytest`, `$VAR`, a command substitution or subshell. | Write the command out plainly. |
 | `… is a protected file the task's files_in_scope doesn't name` | `EVI.md`, `AGENTS.md`, `.evi.toml`, `.evi/…`, `.github/workflows/…` or `.vscode/tasks.json`. | Name the file with `--scope`, exactly (`--scope .github/workflows/ci.yml`, or `--scope '.github/workflows/*.yml'`); `**` and other broad globs grant nothing. |
-| `… is protected and no task may write it` | `.evi/tasks/**`, `.git`, eVi's home, a secret file or another `[auto] protected_paths` entry. | No `--scope` grants it; do that part yourself. |
+| `… is protected and no task may write it` | `.evi/tasks/**`, the eval baseline `evals/self/baseline.json`, `.git`, eVi's home, a secret file or another `[auto] protected_paths` entry. | No `--scope` grants it; do that part yourself. The baseline is recorded only with `evi eval baseline record`, from your own shell ([Evals](features/evals.md#recording-the-baseline-evi-eval-baseline-record)). |
 | `… is not a trusted folder, so the implementer policy runs no commands there …` | No command runs in an untrusted folder: tests, git and even `python -m ruff` can run its code. | If you trust the repository's code, `evi trust` it from your own terminal (its worktrees share the trust) and run again. |
 | `… is not a tool the implementer policy allows …` | Network, MCP, `run_python`, memory, skills and subagents are outside the policy. | By design; use a normal run for that work. |
 | `the destructive-command guard: …` | The guard is always on under the policy; its opt-outs don't apply. | Do that step yourself. |
@@ -341,7 +341,9 @@ repository's trust. A repository's own `[checks] commands` (in its
 
 The call would write a protected path: an instruction, config, hook, task or CI
 file (`EVI.md`, `AGENTS.md`, `.evi.toml`, `.evi/**`, `~/.evi/**`,
-`.git/hooks/**`, `.github/workflows/**`, …) or a secret file. That asks in
+`.git/hooks/**`, `.github/workflows/**`, …), the eval baseline
+(`evals/self/baseline.json`, which `evi eval baseline record` writes) or a
+secret file. That asks in
 every mode, `yolo` and `/auto on` included, and is denied when nothing can
 answer (the scheduler, `evi run -y` in CI or a script with no terminal). If an
 unattended run really should write one, add its exact entry to
@@ -576,6 +578,90 @@ command ran where an agent may have started it. The full list is in [Task
 queue](features/tasks.md#how-a-tasks-status-reads). A verdict can't be
 refreshed in place: `evi task reopen` sends the task back to `open`, and it
 reaches `needs_review` again only through another `evi task start`.
+
+## `evi eval run` exits 1 or 2
+
+**Exit 2: nothing ran**, and no report was written. The `error:` line says
+why:
+
+- `no eval suite named '…' (looked in …)`: the suite isn't in
+  `~/.evi/evals/`; `evi eval list` shows what is.
+- `… case N (…): unknown key '…' (a typo would silently pass)`, `two cases
+  are named …`, `bad … regex`: suites are parsed strictly; fix the file
+  ([every case key](features/evals.md#every-case-key)).
+- `skipped: … is not a trusted folder, so its evals/self suites are skipped
+  …`: the repository's `self` suite runs commands the repository provides.
+  If you trust its code, `evi trust` it from your own terminal.
+- `not inside a git repository, so there is no evals/self suite`, `no eval
+  suites in …`: run it from the repository, or pass `--repo DIR`.
+- `no saved backend named …`: see `evi backend list`, or use `--backend
+  fake`.
+- `no case left to run after --tag / --skip-tag`: the filters left out
+  every case.
+- `… is not an eval baseline: …`: the `--baseline` file doesn't match the
+  baseline schema; record it with `evi eval baseline record`.
+- `--baseline holds …'s pass rates (backend …); a --backend fake run
+  replays scripts and can't be held to them`: drop `--baseline`, or run on
+  the real backend.
+- `the … backend is a CLI agent that runs its own tools, outside the
+  implementer policy an eval runs under`, or `… won't use it for an
+  unattended eval run. Point [models] … at a local or API backend`: an eval
+  runs only on a local or API backend. Pass `--backend` with one, or clear
+  that `[models]` setting.
+
+**Exit 1: a case failed, or the baseline didn't hold.** Each failing row
+lists its runs' reasons:
+
+- `the workspace could not be made: git … failed in the workspace: …`: a
+  fixture workspace is a git repository, so git must be installed and work.
+- `the run stopped with error: …`: the backend failed (unreachable, a model
+  it doesn't serve). `stopped with 'max_turns', expected 'done'`: the model
+  ran out of turns; raise the case's `max_turns` if it needs more.
+- `expected a call to … (… called, but the run doesn't offer it)`: an eval
+  run gets only the case `mode`'s tools that the implementer policy allows
+  (no git tools, `run_python`, memory, subagents or MCP tools); see [What the
+  agent may do](features/evals.md#what-the-agent-may-do).
+- ``command_succeeds `…` is refused by the implementer policy: …``: the
+  command isn't on the policy's allowlist and never ran. Use an allowlisted
+  form (`python -m pytest …`, `ruff check …`).
+- ``command_succeeds `…`: exit 1`` with the output's last lines: the command
+  failed after the run. `No module named pytest` means eVi's own interpreter
+  lacks pytest: a bare `python` in `command_succeeds` is the one running eVi.
+- `changed …, outside …`: the run changed a file `diff_touches_only` doesn't
+  allow.
+- `the fake script ran out after N turn(s)` or `the fake script calls …,
+  which this run doesn't offer`: under `--backend fake` the case and its
+  `fake` script disagree; fix the script.
+- `pass rate 0.60 is below the baseline 0.80 minus 0.10`, `skipped (…), but
+  the baseline holds it at …`, or `below baseline not in this run (deleted
+  or renamed?)`: `--baseline` holds every case it lists, an `expected_fail`
+  one too; a case you leave out with `--tag` / `--skip-tag` is the only one
+  excused. See [The baseline gate](features/evals.md#the-baseline-gate).
+
+**A suite that passed before fails now.** `evi eval run` used to run cases in
+the folder you started it in with every tool approved; each run now gets an
+empty temporary git repository under the implementer policy. A case that
+reads your project needs `workspace = "repo"` (a trusted repository, at
+`HEAD`), or its files in `files` / `fixture`. See [Upgrading an existing
+suite](features/evals.md#upgrading-an-existing-suite).
+
+**A case shows `SKIP`.** It wasn't run, and doesn't fail the run (unless a
+baseline holds it): `no fake script` or `a judge rubric needs a model` under
+`--backend fake`; `workspace = "repo" needs a git repository` outside one;
+`… is not a trusted folder, so no worktree of it is made` for a `workspace =
+"repo"` case in an untrusted repository.
+
+**The web panel's Run button, or a scheduled eval, says `… which only evi
+eval run checks: not run here`.** Those still use the text-only engine, which
+checks only the answer. Run the suite with `evi eval run`.
+
+**`evi eval baseline record` says `refusing to record an eval baseline: …`.**
+It is director tooling: run it from your own shell, not from inside `evi chat`
+or a command eVi started. **`evi models recommend --verify` exits 2** with
+`… lives in eVi's source repository, not in an installed eVi`: run it in a
+trusted checkout of eVi, point `--repo` at one, or pass `--suite` with one of
+your own suites; it exits 1 when the backend serves none of the recommended
+models (`evi models pull <id>` one first).
 
 ## `evi worktree prune` keeps a worktree
 

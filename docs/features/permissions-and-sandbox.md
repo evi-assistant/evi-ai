@@ -254,8 +254,11 @@ The patterns in force are:
 - **The built-in write-protected paths**, always added on top of your list:
   `.evi.toml`, `EVI.md`, `AGENTS.md`, `.evi/**`, `~/.evi/**` (and your
   `EVI_HOME` folder when it is set), `.git/hooks/**`, `.git/config`,
-  `.git/modules/**/hooks/**`, `.git/modules/**/config`, `.github/workflows/**`
-  and `.vscode/tasks.json`. Reading them is normal and never asks.
+  `.git/modules/**/hooks/**`, `.git/modules/**/config`, `.github/workflows/**`,
+  `.vscode/tasks.json` and `evals/self/baseline.json` (the eval gate's
+  reference pass rates, which only the director's `evi eval baseline record`
+  writes; see [Evals](evals.md#the-baseline-gate)). Reading them is normal and
+  never asks.
 - **The director's key folder**, `~/.evi/director` (and `<EVI_HOME>/director`
   when `EVI_HOME` is set), is in every list, reads included, and
   `protected_paths_remove` can't take it out. A call that reaches it isn't
@@ -448,9 +451,14 @@ scheduler records the refusal as the task's status, `evi run`, `evi batch`,
 `409`, and an A2A task fails. Set `[llm] allow_cli_agent_unattended = true` to
 accept the risk; the Telegram channel refuses them even then.
 
-Still allow-all, as before: eval cases (`evi eval run`, the web eval runner
-and scheduled eval suites, whose log says `# policy: allow-all`), so scores
-measure what the agent can do, and `evi workflow run`, which approves every
+`evi eval run` holds each eval case to the [implementer
+policy](#implementer-policy) in a throwaway workspace (see
+[Evals](evals.md#what-the-agent-may-do)). Still allow-all, as before: the web
+eval runner (`POST /api/evals/run`, the Evals panel's **Run** button) and
+scheduled eval suites, whose log says `# policy: allow-all`, which run in the
+server's or scheduler's folder and now only run the cases that check nothing
+but the answer (a case that needs a workspace or asserts what the run did
+fails there without running); and `evi workflow run`, which approves every
 tool of every step. `evi workflow run` is still an unattended entry point,
 though: it refuses a delegate CLI-agent backend as above, and its steps'
 commands get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables ([What a command's
@@ -586,7 +594,9 @@ below the top folder, a wildcard that matches it.
 
 A file at the top of the folder is granted only by its exact name:
 `--scope EVI.md` grants `EVI.md`, `--scope '*.md'` doesn't. Matching ignores
-case on Windows. **Never granted**, named or not: `.evi/tasks/**`, anything
+case on Windows. **Never granted**, named or not: `.evi/tasks/**`, the eval
+gate's baseline `evals/self/baseline.json` (a run that could rewrite it could
+move the gate it is measured against), anything
 under `.git`, eVi's home (`~/.evi`, `EVI_HOME`), the director's key folder,
 the secret and shell start-up files, and every other `[auto] protected_paths`
 entry in force. `[auto] protected_paths_remove` doesn't open the files above
@@ -601,7 +611,11 @@ entry that is empty, absolute (`/x`, `C:\x`, `~/x`) or climbs out with `..`.
 default) runs the project's lint and targeted tests whenever the model would
 end a turn that changed files, and sends failures back to it; see [Verify
 before done](../configuration.md#verify-before-done--checks-in-configtoml).
-Each check must pass the policy too.
+Each check must pass the policy too. The gate takes the policy's own answer
+on whether its root is trusted. `evi eval run` holds every eval case to this
+policy, built as trusted for the throwaway workspace the harness made itself
+from a suite it loaded from a trusted place, so allowlisted commands and the
+gate run there too ([Evals](evals.md#what-the-agent-may-do)).
 
 **Residual risk: a guardrail, not a sandbox.** An allowlisted test or build
 command runs repository code (`conftest.py`, a test, `build.rs`, an npm

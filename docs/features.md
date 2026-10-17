@@ -338,8 +338,19 @@ recall-only by default (`memory_mode`).
 
 **Structured outputs** — JSON-Schema-constrained replies: REPL `/schema <file>`,
 `evi run --schema`, Web `/api/chat output_schema`. **Evals** — `evi eval
-new|run` runs prompt→assertion suites (contains/regex/equals + **LLM-judge**
-rubric) with a pass-rate; exits non-zero to gate CI.
+run` runs suites whose cases check the answer (contains/regex/equals +
+**LLM-judge** rubric) and what the run did: the tools it called and with what,
+its stop reason, the files it changed, and commands such as the tests that
+must pass afterwards. Each run gets a throwaway workspace (a fixture git
+repository, or a detached worktree of a trusted repo) under the implementer
+policy; `runs` / `pass_rate` measure a case over N runs; `--backend fake`
+replays scripted turns with no model. Reports land in `~/.evi/evals/reports/`
+(JSON + HTML) and `evi eval compare` diffs two. The repository's
+qualification suite (`evals/self`) and its recorded baseline
+(`evi eval baseline record`, director only; `evi eval run self --baseline`)
+gate prompt, repair and loop changes, and `evi models recommend --verify`
+ranks the recommended models on it. Exits non-zero to gate CI. Settings →
+Evals shows the latest pass rates per model. [Guide](features/evals.md).
 
 ## Voice & vision
 

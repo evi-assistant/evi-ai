@@ -261,8 +261,10 @@ All notable user-visible changes to eVi. Format loosely follows
   relied on calls running unasked needs an `allow` rule, the category in
   `auto_approve`, or the opt-in; an SDK program can pass
   `permission_callback=` or `unattended_policy="allow"` to `build_agent`.
-  `evi workflow run` and eval runs still approve every tool. See "Unattended
-  runs" in docs/features/permissions-and-sandbox.md.
+  `evi workflow run`, the web app's eval runs and scheduled evals still
+  approve every tool (`evi eval run` now holds each case to the implementer
+  policy, see Changed). See "Unattended runs" in
+  docs/features/permissions-and-sandbox.md.
 - **Peers, webhooks and channel pushes get only what you pre-approved.** A
   federated or A2A task, a routine webhook without `yes` and a channel push
   with `run: true` followed your own `[auto] mode`, so on a machine set to
@@ -506,6 +508,28 @@ All notable user-visible changes to eVi. Format loosely follows
   while the old `tools=` keyword and `.tools` still work (deprecated; use
   `tool_calls`). See "Stop reasons and exit codes" in
   docs/features/structured-and-batch.md.
+- **`evi eval run` runs your suites in an empty throwaway workspace under
+  the implementer policy, and `--json` prints the new report.** Each case
+  ran in the folder you started `evi eval run` in, with every tool approved
+  and the tools, hooks and project context a chat there gets, so a prompt
+  that edited or deleted files did it to your checkout. Breaking for
+  existing suites: each run now gets an empty temporary git repository and
+  the implementer policy, with the policy's tools of the case's `mode`
+  (`code` when none is set; `chat` gets none) and no network, `run_python`,
+  memory, subagents or MCP tools. A case that reads your project needs
+  `workspace = "repo"` (your repository at `HEAD`, which must be trusted) or
+  its files in `files` / `fixture`. An unknown key, two cases with one name
+  or a bad regex now stop the suite from loading (exit 2), and `evi eval
+  list` shows such a file with the reason instead of leaving it out.
+  `--json` and `--format json` print the report: `suite` instead of
+  `name`, a row per case with `runs`, `passes` and `pass_rate`, and no
+  `output`. A delegate CLI-agent backend is refused (exit 2). The web app's
+  Run button (`POST /api/evals/run`) and scheduled eval tasks still run the
+  old text-only engine, in their own folder with every tool approved, so an
+  answer-only suite behaves there as before, while a case that needs a
+  workspace or asserts what the run did fails there, with the reason,
+  without running. See "Upgrading an existing suite" in
+  docs/features/evals.md.
 - **A release waits for the browser tests and its CHANGELOG entry.** 1.0.49
   reached PyPI with a dead button because a release ran only the unit suite.
   The e2e suite now gates the PyPI publish (and runs on every push to main),
@@ -987,6 +1011,85 @@ All notable user-visible changes to eVi. Format loosely follows
   (`400`). `--repo DIR` names the repository, and `evi mcp serve-config
   --categories …,agent` adds `--repo` for the repository you run it in. See
   "The agent category" in docs/features/mcp.md.
+- **Eval cases can check what a run did, not only what it answered, and
+  each run happens in a throwaway workspace under the implementer policy.**
+  A suite could only test the answer text, so a model that edited the wrong
+  file, tried a destructive command or never got the tests passing still
+  passed. A case can now assert `expect_tools` (a nested list means any one
+  of them), `forbid_tools`, `tool_order`, `tool_args` (an argument matching
+  a glob or regex, narrowed by `status`, or with `absent = true` "never"),
+  `stop_reason`, `command_succeeds` (commands run in the workspace after the
+  agent, each checked by the policy first, so a refused one fails the case
+  without running), `file_contains` and `diff_touches_only`. They are
+  checked against the run report, with arguments matched in full, and a call
+  the policy denied counts as called. Each run gets a fresh temporary git
+  repository seeded from the case's `files` and `fixture` folder, written
+  byte for byte (CRLF stays CRLF), or with `workspace = "repo"` a detached
+  worktree of a trusted repository at `HEAD`; either is removed afterwards,
+  also on an error or Ctrl+C, and leaves no branch or worktree record. The
+  agent gets no hooks, project context or memory, only the case `mode`'s
+  tools that the policy allows, `max_turns` turns, and the verify gate of an
+  implementer run: the gate now takes a named policy's own answer on whether
+  its folder is trusted, so it runs in fixture workspaces too, and each
+  report row counts the runs where it was skipped (`verify_skipped`). `runs`
+  and `pass_rate` measure a case over N runs, `expected_fail` reports a
+  known gap without failing the suite, and `tags` pick cases with `--tag` /
+  `--skip-tag`. A key a case doesn't know is an error, so a typo can't pass
+  silently. See docs/features/evals.md.
+- **`evi eval run` keeps a report of every run, `evi eval compare` diffs
+  two, and `--backend fake` checks a suite with no model.** Results lived in
+  the terminal, and checking a suite took a model. Each run now writes
+  `<eVi home>/evals/reports/<suite>/<UTC time>-<model>.json`, checked
+  against a JSON Schema, with a static, script-free HTML page beside it: per
+  case the runs, passes, pass rate and threshold, the failures (redacted),
+  mean turns and duration and the stop reasons, and the model, backend,
+  hardware and eVi version on top. `evi eval run` gains `--backend
+  fake|<saved backend>`, `--model`, `--runs`, `--format json`, `--baseline`
+  / `--tolerance`, `--tag` / `--skip-tag` and `--repo`, and exits 0 when
+  every case that ran passed, 1 when one failed, 2 when nothing ran.
+  `evi eval compare A B` (`--tolerance`, `--format json`) marks each case
+  same, improved, regressed, missing, skipped or new and exits 1 on a
+  regression; either side may be a baseline. `--backend fake` replays each
+  case's `fake` script, text and tool-call turns, through the real Agent
+  loop, tools and policy; a case without one, or with a judge rubric, is
+  skipped, and a script that runs out or calls a tool the run doesn't offer
+  fails. Settings → Evals now shows the latest pass rate of each suite per
+  model and backend from these reports (`GET /api/evals` returns them as
+  `reports`), so a fake run never stands in for a model's real result.
+- **eVi's repository carries a qualification suite, and a recorded baseline
+  gates behaviour changes.** The prompt, repair and loop work ahead needs a
+  check the unit tests can't give: does the reference model still do the
+  job. `evals/self/qualification.toml` and its fixtures check that a model
+  reads before it edits, finds a definition with search, refuses to wipe a
+  folder (any delete it runs or tries, through a shell wrapper or an
+  absolute path, fails it; an inspection command the policy refuses
+  doesn't), asks when a request is ambiguous, applies a patch with
+  `apply_patch`, and keeps CRLF line endings (expected to fail until edit
+  recovery lands). `evi eval run self` runs every `evals/self/*.toml` of a
+  trusted repository as one suite; an untrusted one's is skipped (exit 2),
+  and `evi eval list` (`--repo`) shows which. `evi eval baseline record`
+  (`--suite`, `--runs`, default 5, `--backend`, `--model`,
+  `--quantization`, `--gpu` / `--vram-gb` / `--cpu` / `--ram-gb` / `--os`,
+  `--out`) records the reference model's per-case pass rates with N, the
+  quantization and the hardware in `evals/self/baseline.json`; it is
+  director tooling and refuses, writing nothing, wherever an eVi agent may
+  have started it. `evi eval run --baseline FILE` then fails a case below
+  the baseline minus `--tolerance` (0.1), an expected failure too, and any
+  baseline case that didn't run, unless `--tag` / `--skip-tag` left it out;
+  it warns when the model or backend differ, and refuses `--backend fake`
+  against a real model's baseline. The baseline is write-protected in every
+  mode and never granted under the implementer policy, so no agent can move
+  the gate it is measured against. See "The qualification suite" in
+  docs/features/evals.md and "The eval gate" in docs/self-build.md.
+- **`evi models recommend --verify` runs the qualification suite on the
+  recommended models you can run, and ranks them.** The recommendation came
+  from the catalog alone. With `--verify` (`--suite`, `--runs`, `--backend`,
+  `--repo`) it runs the suite on each recommended chat, coder and fast model
+  the backend serves now, writes a report per model and ranks them by mean
+  case pass rate. It never downloads a model, and exits 1 when none can run.
+  The suite lives in eVi's source repository and isn't installed with eVi
+  yet, so an installed eVi needs `--repo` pointing at a checkout of eVi or
+  `--suite` naming one of your own suites; otherwise it exits 2 and says so.
 - **`evi worktree prune` clears away the worktrees you are done with.**
   Worktrees piled up under `.worktrees/` once their branches were merged.
   `evi worktree prune [--into BRANCH] [--dry-run]` removes those that are

@@ -14,7 +14,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `chat` | interactive chat | ✅ main view | ✅ | the core loop |
 | `run` | headless one-shot | ◐ `/api/chat` | ◐ | scripting; no "run once" button (not needed) |
 | `batch` | many prompts → JSONL | ⌨️ | ⌨️ | batch/scripting |
-| `eval` | prompt→assertion suites | ✅ settings → Evals | ✅ | browse suites/cases + run with per-case PASS/FAIL |
+| `eval` | suites that check the answer and what a run did: list/new/run/compare, `baseline record` (director only) | ◐ settings → Evals | ◐ | the panel shows the latest pass rate per suite, model and backend from `evi eval run`'s reports, and browses and runs your suites with the older text-only engine (answer checks only; a case that needs a workspace or asserts what the run did fails there); runs in a throwaway workspace, `--runs`, `--backend fake`, reports, `compare` and the `--baseline` gate are CLI-only ([guide](features/evals.md)) |
 | `ultracode` | exhaustive multi-agent pass | ✅ settings → Ultracode | ✅ | `/ultra` + `/effort ultracode` in REPL; stages shown in the panel |
 | `agents` | list subagent profiles | ◐ used by `delegate` | ◐ | a "profiles" list could live in Dispatch |
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
@@ -33,7 +33,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `plugin` | add/list/remove/search/install | ✅ settings → Plugins | ✅ | list installed, search marketplace, install/remove |
 | `skill` | list/show/import/remove (incl. Claude skills) | ◐ used in chat via `invoke_skill` | ◐ | skills load on demand; no manager UI (file/CLI managed) |
 | `mcp` | servers add/remove/enable/list + serve | ✅ settings → MCP | ✅ | manage servers in-app; env vars via CLI/file; the `agent` category (the director's task API) is served only by `evi mcp serve`, never from the app |
-| `models` | list/use/info/pull | ✅ Model picker + settings | ✅ | recommended-pull flow |
+| `models` | list/use/info/pull/recommend | ✅ Model picker + settings | ✅ | recommended-pull flow; `evi models recommend --verify` (rank the recommended models on an eval suite) is CLI-only, and its reports show in settings → Evals |
 | `config` | show/path | ✅ full settings screen | ✅ | the settings UI *is* config |
 | `route` | multi-model routing | ✅ settings → Routes & Recipes | ✅ | add/list/remove routing rules |
 | `sync` | git sync of ~/.evi | ⌨️ | ⌨️ | machine admin |
@@ -80,5 +80,7 @@ might want — are now all shipped as settings sections: the **guardrails editor
 (Guardrails), the **plugin browser/installer** (Plugins), the **usage/stats
 view** (Usage), the **evals results panel** (Evals), and **routes + recipes
 management** (Routes & Recipes). Suite/recipe *authoring* still happens in TOML
-files (or via `evi eval new` / `evi recipe new`), but browsing and running them
-no longer requires the CLI.
+files (or via `evi eval new` / `evi recipe new`), but browsing them, and
+running recipes and answer-only eval suites, no longer requires the CLI. An
+eval suite that checks what a run did (tools, files, commands) runs with
+`evi eval run`, whose results the Evals panel then shows.
