@@ -4394,6 +4394,13 @@ def create_app() -> FastAPI:
         from evi.mcp import publish
 
         cats = categories.strip() or ",".join(publish.DEFAULT_CATEGORIES)
+        if publish.AGENT_CATEGORY in (c.strip() for c in cats.split(",")):
+            # The director-facing task tools need the repository (--repo) and
+            # their own server; POST /api/mcp/serve refuses them too.
+            raise HTTPException(
+                400, f"the {publish.AGENT_CATEGORY!r} category isn't offered here: run "
+                     f"`evi mcp serve-config --categories {publish.AGENT_CATEGORY}` in "
+                     "the repository instead")
         snippet = {"mcpServers": {"evi": {
             "command": _sys.executable,
             "args": ["-m", "evi", "mcp", "serve", "--categories", cats],

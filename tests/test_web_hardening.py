@@ -1426,3 +1426,16 @@ def test_generated_container_token_opens_the_published_port(
     monkeypatch.setattr(config_mod, "CONFIG_PATH", home / "config.toml")
     monkeypatch.chdir(tmp_path)
     assert _cli("web-config", "token", "show").stdout == token + "\n"
+
+
+def test_mcp_serve_config_does_not_offer_the_agent_category(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The director-facing task tools need their repository (--repo) and a
+    # server of their own; the web snippet would hand out a refused command.
+    pytest.importorskip("mcp")
+    client = TestClient(_make_app(monkeypatch, tmp_path), base_url=LOCAL)
+    r = client.get("/api/mcp/serve/config", params={"categories": "memory,agent"})
+    assert r.status_code == 400 and "evi mcp serve-config" in r.text
+    r = client.get("/api/mcp/serve/config", params={"categories": "memory,git"})
+    assert r.status_code == 200 and "agent" not in r.json()["categories"]

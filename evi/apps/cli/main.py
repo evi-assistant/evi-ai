@@ -9325,11 +9325,25 @@ def mcp_serve(
         "", "--token",
         help="Require this bearer token (with --http). Strongly recommended for non-localhost.",
     ),
+    repo: str = typer.Option(
+        "", "--repo",
+        help="With the agent category: the repository whose task queue it serves "
+             "(default: the one this runs in).",
+    ),
 ) -> None:
     """Run eVi AS an MCP server, exposing eVi's tools + memory resources +
     command prompts to Claude Desktop / Cursor / Cline / Continue. Default
     transport is stdio (spawned by the client); use --http for a remote,
-    optionally token-gated, streamable-HTTP server. See `mcp serve-config`."""
+    optionally token-gated, streamable-HTTP server. See `mcp serve-config`.
+
+    The agent category (never a default: `--categories ...,agent`) is the
+    director's handoff API over the repository's task queue: task_create,
+    task_list, task_show, task_start, run_status, run_steer, run_cancel and
+    run_result. Runs go one at a time, each as `evi task start` runs it. Over
+    --http it needs --token, on loopback too. Beside it only memory, calendar
+    and web may be served: a run works in the task's worktree, where the
+    other categories' tools would act (serve them from a second `evi mcp
+    serve`). No tool marks a task verified."""
     try:
         from evi.mcp.publish import serve
     except ImportError:
@@ -9339,6 +9353,29 @@ def mcp_serve(
     _proc.mark_agent_process()
     cats = tuple(c.strip() for c in categories.split(",") if c.strip())
     allow = tuple(t.strip() for t in tools.split(",") if t.strip()) or None
+    factory = None
+    if "agent" in cats:
+        from evi import tasks as _tasks
+
+        if http and not token:
+            # Whoever reaches the port could start and steer task runs.
+            print("error: refusing to serve the agent category over HTTP without --token "
+                  "(any program that can reach it could start and steer task runs); pass "
+                  "--token", file=sys.stderr)
+            raise typer.Exit(2)
+        from evi.mcp.publish import agent_companion_refusal
+
+        refusal = agent_companion_refusal(cats)
+        if refusal:
+            print(f"error: {refusal}", file=sys.stderr)
+            raise typer.Exit(2)
+        try:
+            repo = str(_tasks.repo_root(repo.strip() or None))
+        except _tasks.TaskError as exc:
+            print(f"error: the agent category serves a repository's task queue: {exc}",
+                  file=sys.stderr)
+            raise typer.Exit(2)
+        factory = _mcp_task_agents
     if http and not token:
         from rich.markup import escape
 
@@ -9358,7 +9395,47 @@ def mcp_serve(
             "these tools. Pass --token to require one.[/yellow]",
             soft_wrap=True,
         )
-    serve(cats, allow, http=http, host=host, port=port, token=token)
+    if factory is None:
+        serve(cats, allow, http=http, host=host, port=port, token=token)
+        return
+    try:
+        # A task run's notes (MCP warnings, the agent build) go to stderr:
+        # over stdio, stdout is the protocol.
+        with _console_on_stderr():
+            serve(cats, allow, http=http, host=host, port=port, token=token,
+                  agent_factory=factory, repo=repo)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(2)
+
+
+def _mcp_task_agents(backend: str, model: str):
+    """The agent category's agent factory (evi/mcp/agent_tools.py): each
+    task run's agent, built as `evi task start` builds it (the worker makes
+    the task's worktree the process's folder first). TaskError for an unknown
+    saved backend, at once; a delegate CLI-agent backend is refused when the
+    agent is built, as it is for `evi task start`."""
+    from evi import tasks as _tasks
+    from evi.llm.cli_agent import CliAgentUnattended
+
+    entry = None
+    if backend:
+        from evi.backends.registry import get_entry
+
+        entry = get_entry(backend)
+        if entry is None:
+            raise _tasks.TaskError(f"no saved backend named {backend!r} (see `evi backend list`)")
+
+    def make_agent(wt):
+        settings = Config.load()
+        if entry is not None:
+            try:
+                _check_run_backend(entry, settings)
+            except CliAgentUnattended as exc:
+                raise _tasks.TaskError(str(exc)) from exc
+        return _build_agent(model=model or None, backend=entry, register=False)
+
+    return make_agent
 
 
 @mcp_app.command("serve-config")
@@ -9369,19 +9446,39 @@ def mcp_serve_config(
     ),
 ) -> None:
     """Print an MCP client config snippet (Claude Desktop / Cursor) that runs
-    `evi mcp serve`. Paste it into the client's mcpServers config."""
+    `evi mcp serve`. Paste it into the client's mcpServers config.
+
+    With the agent category, the snippet names the repository here (--repo):
+    a client may start the server in any folder."""
     import json
     import sys
 
+    args = ["-m", "evi", "mcp", "serve", "--categories", categories]
+    cats = tuple(c.strip() for c in categories.split(",") if c.strip())
+    if "agent" in cats:
+        from evi import tasks as _tasks
+        from evi.mcp.publish import agent_companion_refusal
+
+        refusal = agent_companion_refusal(cats)
+        if refusal:  # the server would refuse to start
+            print(f"error: {refusal}", file=sys.stderr)
+            raise typer.Exit(2)
+        try:
+            args += ["--repo", str(_tasks.repo_root())]
+        except _tasks.TaskError as exc:
+            print(f"error: the agent category serves a repository's task queue: {exc}",
+                  file=sys.stderr)
+            raise typer.Exit(2)
     snippet = {
         "mcpServers": {
             "evi": {
                 "command": sys.executable,
-                "args": ["-m", "evi", "mcp", "serve", "--categories", categories],
+                "args": args,
             }
         }
     }
-    console.print(json.dumps(snippet, indent=2))
+    # Never wrapped or read as markup: it is pasted as JSON.
+    console.print(json.dumps(snippet, indent=2), soft_wrap=True, highlight=False, markup=False)
 
 
 schedule_app = typer.Typer(help="Manage scheduled prompts.")

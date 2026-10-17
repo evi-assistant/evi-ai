@@ -12,23 +12,41 @@ What's exposed (all from eVi's own single sources of truth):
   allow-list. shell/computer/code-write are NOT in the default set.
 - **Resources** — your long-term memory entries as `evi://memory/<name>`.
 - **Prompts** — your saved slash-command templates (`~/.evi/commands/*.md`).
+- **The director's handoff API** — the opt-in ``agent`` category
+  (`evi.mcp.agent_tools`: task_create/list/show/start, run_status/steer/
+  cancel/result over the repository's task queue). Never in REGISTRY and
+  never a default: served only when ``agent`` is named in the categories
+  and the caller hands in its `AgentRuns` (``evi mcp serve`` does), and over
+  HTTP only with a token, on loopback too. Beside it go only the categories
+  whose tools never work in the process's folder (`AGENT_COMPANIONS`): a
+  task run makes that folder its worktree.
 
 Transports: **stdio** (default; what a desktop MCP client spawns) and
 **streamable HTTP** (`--http`, with a bearer `--token` for remote/untrusted
-clients; required for a non-loopback `--host`, and without one only loopback
-Host/Origin headers are answered).
+clients; required for a non-loopback `--host` or the agent category, and
+without one only loopback Host/Origin headers are answered).
 
 Run it with `evi mcp serve` (see also `evi mcp serve-config`).
 """
 
 from __future__ import annotations
 
+from evi.mcp.agent_tools import CATEGORY as AGENT_CATEGORY
 from evi.tools.base import REGISTRY, Tool
 
 # Curated default surface — high-value, relatively-safe tools to hand an
 # external agent. `evi mcp serve --categories ...` / `--tools ...` widen or
 # narrow it. We deliberately do NOT expose shell/computer/code-write by default.
 DEFAULT_CATEGORIES: tuple[str, ...] = ("memory", "index", "calendar", "git")
+
+# The categories served beside ``agent``. While a task run goes on, the
+# server process's folder is that task's worktree (`evi.mcp.agent_tools`), so
+# a tool that resolves a path, runs a command or calls git in the process's
+# folder would act on the run's work as if it were the repository. These
+# never do: the fix ledger (record_fix, search_fixes) finds its project
+# through `evi.workdir`, which `build_server` pins to the served repository.
+# The other categories go in a second `evi mcp serve`.
+AGENT_COMPANIONS: tuple[str, ...] = ("memory", "calendar", "web")
 
 MEMORY_URI_PREFIX = "evi://memory/"
 
@@ -196,22 +214,82 @@ def _field_name(model, new: str, old: str) -> str:
     return new if new in getattr(model, "model_fields", {}) else old
 
 
+def agent_companion_refusal(categories: tuple[str, ...]) -> str | None:
+    """Why `categories` can't be served together (the agent category beside
+    one not in `AGENT_COMPANIONS`), or None."""
+    if AGENT_CATEGORY not in categories:
+        return None
+    others = [c for c in dict.fromkeys(categories)
+              if c not in (AGENT_CATEGORY, *AGENT_COMPANIONS)]
+    if not others:
+        return None
+    return (f"refusing to serve the agent category beside {', '.join(others)}: while a task "
+            "runs, this server works in its worktree, so those tools would act on the run's "
+            "work, not the repository. Serve them from a second `evi mcp serve`; only "
+            f"{', '.join(AGENT_COMPANIONS)} may go beside agent.")
+
+
+def _agent_surface(categories: tuple[str, ...], allow: tuple[str, ...] | None,
+                   agent_runs) -> list[dict]:
+    """The agent category's tool specs (`evi.mcp.agent_tools`) when it is
+    selected, within `allow`; ValueError when it is selected without the
+    `AgentRuns` that serves it (a caller that didn't mean to serve it, such
+    as the web UI's MCP panel, gets no director API by naming it) or beside
+    a category that isn't one of `AGENT_COMPANIONS`."""
+    if AGENT_CATEGORY not in categories:
+        return []
+    if agent_runs is None:
+        raise ValueError(
+            "the agent category is served only by `evi mcp serve --categories ...,agent` "
+            "(it needs the server's task runs)"
+        )
+    refusal = agent_companion_refusal(categories)
+    if refusal:
+        raise ValueError(refusal)
+    from evi.mcp import agent_tools
+
+    allowset = set(allow) if allow else None
+    return [s for s in agent_tools.tool_specs() if allowset is None or s["name"] in allowset]
+
+
 def build_server(
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
     allow: tuple[str, ...] | None = None,
+    *,
+    agent_runs=None,
 ):
     """Construct (but don't run) the MCP `Server` exposing the selected tools,
-    plus memory resources and command prompts."""
+    plus memory resources and command prompts. With ``agent`` among the
+    categories, `agent_runs` (an `evi.mcp.agent_tools.AgentRuns`) serves the
+    director's handoff API (ValueError without it, or beside a category not
+    in `AGENT_COMPANIONS`), and the other tools work in its repository."""
     import anyio
     import mcp.types as types
     from mcp.server import Server
 
-    from evi import __version__
+    from evi import __version__, workdir
+    from evi.mcp import agent_tools
 
-    tools = selected_tools(categories, allow)
+    agent_specs = _agent_surface(categories, allow, agent_runs)
+    agent_names = {s["name"] for s in agent_specs}
+    tools = [t for t in selected_tools(categories, allow) if t.name not in agent_names]
     by_name = {t.name: t for t in tools}
-    specs = mcp_tool_specs(tools)
+    specs = sorted(mcp_tool_specs(tools) + agent_specs, key=lambda s: s["name"])
     server: Server = Server("evi", version=__version__)
+    # A task run makes the process's folder its worktree: the other tools
+    # find their project through evi.workdir, pinned to the served repository.
+    pinned = str(agent_runs.root) if AGENT_CATEGORY in categories else ""
+
+    def _dispatch(name: str, arguments: dict | None) -> str:
+        if name in agent_names:
+            return agent_tools.dispatch(agent_runs, name, arguments)
+        if not pinned:
+            return dispatch(by_name, name, arguments)
+        token = workdir.set_cwd(pinned)
+        try:
+            return dispatch(by_name, name, arguments)
+        finally:
+            workdir.reset(token)
 
     # --- version-independent handler bodies ------------------------------
     # mcp 2.x renamed the pydantic fields `inputSchema` -> `input_schema` and
@@ -231,7 +309,7 @@ def build_server(
         # A failure the model should read and react to (unknown tool, the
         # destructive-command guard, a tool's own ERROR) is a tool result with
         # the error flag set, never a protocol error, on both SDK lines.
-        text = await anyio.to_thread.run_sync(lambda: dispatch(by_name, name, arguments))
+        text = await anyio.to_thread.run_sync(lambda: _dispatch(name, arguments))
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=text)],
             **{error_field: is_error_text(text)},
@@ -391,18 +469,32 @@ def is_loopback_bind(host: str) -> bool:
     return _loopback_ip(host) is not None
 
 
+def _agent_token_refusal(categories: tuple[str, ...], token: str) -> str | None:
+    """Why the agent category can't be served over HTTP without a token, or
+    None: whoever can reach the port could start and steer runs, so it needs
+    a token even on loopback (any program on this machine could call it)."""
+    if AGENT_CATEGORY in categories and not token:
+        return ("refusing to serve the agent category over HTTP without a token: any program "
+                "that can reach it could start and steer task runs. Pass --token.")
+    return None
+
+
 def build_http_app(
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
     allow: tuple[str, ...] | None = None,
     token: str = "",
     bind_host: str = "",
+    *,
+    agent_runs=None,
 ):
     """Build a Starlette ASGI app serving the MCP server over streamable HTTP
     at `/mcp`. If `token` is set, requests must carry `Authorization: Bearer
     <token>` — the recommended gate for any non-localhost exposure. Without a
     token the app only answers to loopback Host/Origin headers (see
     `loopback_security_settings`), which a tokenless server is bound to;
-    `bind_host` is the address it is served on, when that isn't 127.0.0.1."""
+    `bind_host` is the address it is served on, when that isn't 127.0.0.1.
+    The agent category (`agent_runs`, see `build_server`) needs a token:
+    ValueError without one. Its runs are closed when the app shuts down."""
     import secrets as _secrets
     from contextlib import asynccontextmanager
 
@@ -413,7 +505,10 @@ def build_http_app(
     from starlette.responses import JSONResponse
     from starlette.routing import Mount
 
-    server = build_server(categories, allow)
+    server = build_server(categories, allow, agent_runs=agent_runs)
+    refusal = _agent_token_refusal(categories, token)
+    if refusal:
+        raise ValueError(refusal)
     # Tokenless, the Host/Origin check is all that keeps a DNS-rebinding page
     # away from these tools (the web server guards itself the same way). With a
     # token, the token is the control, and a LAN or proxy hostname must work.
@@ -427,8 +522,15 @@ def build_http_app(
 
     @asynccontextmanager
     async def lifespan(_app):
-        async with manager.run():
-            yield
+        try:
+            async with manager.run():
+                yield
+        finally:
+            if agent_runs is not None and AGENT_CATEGORY in categories:
+                import anyio
+
+                # The running task run is cancelled and records its outcome.
+                await anyio.to_thread.run_sync(agent_runs.close)
 
     middleware = []
     if token:
@@ -453,12 +555,38 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     token: str = "",
+    agent_factory=None,
+    repo: str = "",
 ) -> None:
     """Run the eVi MCP server. Default transport is **stdio** (what a desktop
     MCP client spawns). With `http=True`, serve streamable HTTP on host:port
     (optionally bearer-token gated). Raises ValueError for a non-loopback
     `host` without a `token`: anyone who can reach the port could call the
-    exposed tools."""
+    exposed tools.
+
+    With ``agent`` among the categories, the director's handoff API
+    (`evi.mcp.agent_tools`) serves the task queue of the repository `repo`
+    (default: the one this process runs in), building each run's agent with
+    `agent_factory` (an `evi.mcp.agent_tools.AgentFactory`). ValueError
+    without a factory, outside a git repository, over HTTP without a token,
+    or beside a category not in `AGENT_COMPANIONS`. Its runs are
+    closed (the running one cancelled) when the server stops."""
+    runs = None
+    if AGENT_CATEGORY in categories:
+        refusal = (_agent_token_refusal(categories, token) if http else None) or (
+            agent_companion_refusal(categories))
+        if refusal:
+            raise ValueError(refusal)
+        if agent_factory is None:
+            raise ValueError("the agent category needs an agent factory to build its runs")
+        from evi import tasks
+        from evi.mcp.agent_tools import AgentRuns
+
+        try:
+            root = tasks.repo_root(repo or None)
+        except tasks.TaskError as exc:
+            raise ValueError(f"the agent category serves a repository's task queue: {exc}") from exc
+        runs = AgentRuns(root, agent_factory)
     if http:
         if not token and not is_loopback_bind(host):
             raise ValueError(
@@ -468,17 +596,25 @@ def serve(
             )
         import uvicorn
 
-        uvicorn.run(build_http_app(categories, allow, token, bind_host=host), host=host,
-                    port=port, log_level="warning")
+        try:
+            uvicorn.run(build_http_app(categories, allow, token, bind_host=host, agent_runs=runs),
+                        host=host, port=port, log_level="warning")
+        finally:
+            if runs is not None:
+                runs.close()
         return
 
     import anyio
     from mcp.server.stdio import stdio_server
 
-    server = build_server(categories, allow)
+    server = build_server(categories, allow, agent_runs=runs)
 
     async def _run() -> None:
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
 
-    anyio.run(_run)
+    try:
+        anyio.run(_run)
+    finally:
+        if runs is not None:
+            runs.close()
