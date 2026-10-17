@@ -38,6 +38,16 @@ the line, see `evi.shellsplit`; a hit is exempt only when every segment it
 touches matches one; a glob whose command word holds a wildcard is rejected,
 see `rejected_allow_globs`), and ``destructive_disable_rules`` (builtin rule
 ids to silence).
+
+Director rules (`director_hit`, `director_code_hit` for ``run_python``): a
+line that, as code, names the director's attestation key, sets or clears
+``EVI_DIRECTOR`` / ``EVI_AGENT``, imports or patches `evi.attest`, or runs
+director tooling (``evi task verify|reject``, ``evi attest ...``), itself or
+through a program it hands the command to, is the director's, never an
+agent's (`evi.attest`); a mention that is only data (a search pattern, a
+commit message, an ``echo``) is not. `destructive_hit` reports such a hit
+first, and no ``destructive_allow`` glob or ``destructive_disable_rules``
+entry clears it; `evi.permissions.decide` denies the call in every mode.
 """
 
 from __future__ import annotations
@@ -45,8 +55,10 @@ from __future__ import annotations
 import fnmatch
 import re
 from dataclasses import dataclass
+from typing import Sequence
 
 from evi import shellsplit
+from evi.attest import DIRECTOR_DIRNAME, KEY_FILENAME, KEYRING_SERVICE
 
 
 @dataclass(frozen=True)
@@ -343,6 +355,491 @@ _MATCH_ORDER: list[DestructiveRule] = sorted(
     DEFAULT_RULES, key=lambda r: 0 if r.severity == "block" else 1
 )
 
+# --- director-only ground (evi.attest) ----------------------------------------
+#
+# Marking a task verified or rejected is the director's, never eVi's
+# (docs/roadmap.md, Phase 1). These rules are not destructive-command rules:
+# they are kept out of DEFAULT_RULES / RULE_IDS (so naming one in
+# `destructive_disable_rules` disables nothing, and configlint says so), and
+# `destructive_hit` reports them first whatever the config says. Like the rest
+# of this module they raise the bar rather than wall it off: code an agent
+# writes and then runs can still do what evi.attest does (see its Limits).
+#
+# A rule trips on code: a command segment's words, what a program is handed to
+# run (`schtasks /tr "..."`, `ssh host ...`, a git `!` alias), a redirect
+# target, a heredoc or pipe feeding an interpreter, or a line the splitter
+# can't follow. A mention that is only data is left alone: a search pattern
+# (`grep "director.key"`), a commit message, an `echo`'s words, a heredoc body
+# nothing runs (`_code_and_data`).
+
+_DIRECTOR_VARS = r'''EVI_(?:DIRECTOR|AGENT)\b'''
+_DIRECTOR_RAW: list[tuple[str, str]] = [
+    ("director-env",
+     # Assigning EVI_DIRECTOR / EVI_AGENT (any form `_env_assign` knows), or
+     # clearing one: `unset`, `env -u`, PowerShell `Remove-Item env:...`.
+     _env_assign(_DIRECTOR_VARS)
+     + r'''|\bunset\s+(?:-[a-z]+\s+)*(?:[A-Za-z_]\w*\s+){0,8}["']?''' + _DIRECTOR_VARS
+     + r'''|\benv\b[^;|&\n]{0,200}?\s(?:-u\s*|--unset[=\s]\s*)["']?''' + _DIRECTOR_VARS
+     + r'''|\b(?:Remove-Item|Clear-Item|ri|rm|del|erase|cli)\s+(?:-\w+\s+){0,4}["']?env:[\\/]?'''
+     + _DIRECTOR_VARS),
+    ("director-credential",
+     # The keyring entry, the key file, or its folder under eVi's home.
+     r'''(?<![\w-])''' + re.escape(KEYRING_SERVICE) + r'''(?![\w-])'''
+     + r'''|(?:\.evi|EVI_HOME\}?%?)[/\\]+''' + re.escape(DIRECTOR_DIRNAME) + r'''(?![\w.-])'''
+     + r'''|(?<![\w-])''' + re.escape(KEY_FILENAME) + r'''\b'''),
+    ("director-internals",
+     # evi.attest itself, or the internals that decide who may sign and read
+     # the key, in code a line runs (`python -c "..."`, code fed to python):
+     # what patching it to sign from an agent's process takes.
+     r'''\bevi\.attest\b|\bfrom\s+evi\s+import\b[^;\n]{0,200}?\battest\b'''
+     r'''|\b(?:_process_chain|_agent_parent|agent_parent|agent_context|_key_or_reason'''
+     r'''|_load_key|_file_get|_keyring_get)\b'''),
+    ("director-tooling",
+     # Matched per command segment (`is_director_argv`) and over the code
+     # words a program is handed (`_spread`); as plain text only for a line
+     # the splitter can't follow (`bash -c "..."`, `cmd /c ...`).
+     r'''(?<![\w.-])evi(?:\.exe)?["']?(?:\s+-[\w-]+(?:=\S*)?(?:\s+[^\s;|&"'-][^\s;|&"']*)?){0,6}'''
+     r'''\s+(?:task(?:\s+-[\w-]+){0,6}\s+(?:verify|reject)|attest)(?![\w-])'''),
+]
+_DIRECTOR_REASONS = {
+    "director-env": "EVI_DIRECTOR / EVI_AGENT are not an agent's to set or clear: only the "
+                    "director's own shell runs director tooling",
+    "director-credential": "the director's attestation key (the evi-director keyring entry, "
+                           "<eVi home>/director/) is out of an agent's reach",
+    "director-internals": "evi.attest decides who may sign and holds the director key: an "
+                          "agent's code doesn't import or patch it",
+    "director-tooling": "`evi task verify|reject` and `evi attest` are director tooling: eVi "
+                        "never marks a task verified or rejected itself",
+}
+DIRECTOR_RULES: list[DestructiveRule] = [
+    DestructiveRule(rid, "block", _DIRECTOR_REASONS[rid], re.compile(pat, re.IGNORECASE))
+    for rid, pat in _DIRECTOR_RAW
+]
+DIRECTOR_RULE_IDS: frozenset[str] = frozenset(r.id for r in DIRECTOR_RULES)
+_DIRECTOR_BY_ID = {r.id: r for r in DIRECTOR_RULES}
+_DIRECTOR_TEXT_RULES = [r for r in DIRECTOR_RULES if r.id != "director-tooling"]
+_DIRECTOR_TOOLING = _DIRECTOR_BY_ID["director-tooling"]
+
+# Running eVi: its console script (or `evi-script.py`), `python -m evi`, and
+# the launchers that run one of those (`uv run evi`, `pipx run evi` ...).
+_EVI_PROGRAMS = frozenset({"evi", "evi-script.py"})
+_EVI_MODULES = frozenset({"evi", "evi.__main__", "evi.apps.cli", "evi.apps.cli.main"})
+_PYTHONS = re.compile(r"(?:pythonw?|pypy|pyw?)(?:\d+(?:\.\d+)*)?\Z")
+_PY_VALUE_OPTIONS = frozenset({"-W", "-X", "-Q"})
+_LAUNCHERS = frozenset({
+    "uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "pipenv", "conda",
+    "mamba", "micromamba",
+})
+# eVi's global options that take a value (`evi --profile work task verify`).
+_EVI_VALUE_OPTIONS = frozenset({"--profile", "-p"})
+# Director tooling: these subcommands of these groups, and these commands.
+_DIRECTOR_GROUPS = {"task": frozenset({"verify", "reject"})}
+_DIRECTOR_COMMANDS = frozenset({"attest"})
+_QUOTING = re.compile(r'''["'`^\\]''')
+# A word whose value isn't known until the shell runs it: an expansion, or
+# xargs' `{}` placeholder.
+_DYNAMIC = re.compile(r"[$%`]|\{\}")
+# Interpreters that read their program from stdin when given no script.
+_INTERPRETERS = re.compile(
+    r"(?:pythonw?|pypy|pyw?|node|nodejs|deno|bun|ruby|perl|php|lua|rscript|julia|osascript)"
+    r"(?:\d+(?:\.\d+)*)?\Z"
+)
+# cmd and PowerShell refuse a line holding a bare `<<` outright (cmd: "<< was
+# unexpected", and it runs nothing past the first newline anyway; PowerShell
+# reserves `<` and parses the whole line before running any of it), so they
+# never run a bash heredoc's body.
+_REFUSED_BY_SHELL = "redirect '<' without a target"
+
+# Where a mention is data (`_code_and_data`): what these print...
+_PRINTERS = frozenset({
+    "echo", "printf", "write-output", "write-host", "write", "write-information",
+})
+# ...the pattern these search for...
+_SEARCHERS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "findstr", "select-string", "sls",
+})
+_PATTERN_OPTIONS = frozenset({"-e", "--regexp", "-pattern"})
+# (each one's short options that take no value: only past these is the first
+# plain word known to be the pattern, not an option's value)
+_SEARCH_FLAG_LETTERS = {
+    "grep": "abcEFGHhIiLlnoPqRrsUuVvwxZz",
+    "egrep": "abcEFGHhIiLlnoPqRrsUuVvwxZz",
+    "fgrep": "abcEFGHhIiLlnoPqRrsUuVvwxZz",
+    "rg": "abcFHhIiLlNnoPpqSsUuvwxz.",
+    "ag": "acfHhiLlnoQRrSsUuvwz",
+    "ack": "cfHhIiLlnoQRrsvwx",
+}
+_SEARCH_LONG_FLAGS = frozenset({
+    "--recursive", "--line-number", "--ignore-case", "--files-with-matches",
+    "--files-without-match", "--count", "--word-regexp", "--line-regexp", "--invert-match",
+    "--fixed-strings", "--extended-regexp", "--perl-regexp", "--basic-regexp", "--no-messages",
+    "--with-filename", "--no-filename", "--only-matching", "--quiet", "--silent", "--null",
+    "--hidden", "--no-ignore", "--smart-case", "--case-sensitive", "--no-heading", "--heading",
+    "--color", "--colour", "--no-line-number", "--vimgrep", "--json", "--follow", "--multiline",
+    "--literal",
+})
+_SLS_SWITCHES = frozenset({
+    "-simplematch", "-casesensitive", "-list", "-quiet", "-notmatch", "-allmatches", "-raw",
+    "-noemphasis",
+})
+# ...and a git commit / tag message or a log search.
+_GIT_VALUE_OPTIONS = frozenset({
+    "-c", "-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env",
+    "--exec-path",
+})
+_GIT_MESSAGE_COMMANDS = frozenset({
+    "commit", "tag", "notes", "stash", "merge", "revert", "cherry-pick",
+})
+_GIT_LOG_COMMANDS = frozenset({"log", "show", "shortlog", "rev-list", "reflog", "whatchanged"})
+_GIT_MESSAGE_CLUSTER = re.compile(r"-[A-Za-z]*m\Z")  # -m, -am, -sm: the next word
+_SQUASH = re.compile(r'''[\s"'`]''')
+_SPREAD = re.compile(r'''[,"'\[\](){}]''')
+
+
+def evi_args(words: Sequence[str]) -> list[str] | None:
+    """The arguments eVi gets when a command runs it, or None when it runs
+    something else. `words` is a command segment's words or a process's
+    command line: ``evi ...`` (any path, ``.exe``), ``python -m evi ...``,
+    ``python path/to/evi ...``, ``uv run evi ...`` and other launchers, past
+    wrappers such as ``sudo``, ``env``, ``start`` (`evi.shellsplit`)."""
+    words = list(words)
+    return _evi_args_at(words, shellsplit._command_index(words))
+
+
+def _evi_args_at(words: list[str], i: int | None) -> list[str] | None:
+    """`evi_args` for the command starting at word `i`."""
+    for _ in range(8):  # launcher -> python -> script at most, a few times over
+        if i is None or i >= len(words):
+            return None
+        base = shellsplit._base(words[i])
+        if base in _EVI_PROGRAMS:
+            return words[i + 1:]
+        if _PYTHONS.match(base):
+            j, nxt = i + 1, None
+            while j < len(words):
+                w = words[j]
+                if w == "-m":
+                    mod = words[j + 1] if j + 1 < len(words) else ""
+                    return words[j + 2:] if mod in _EVI_MODULES else None
+                if w.startswith("-m") and not w.startswith("--"):
+                    return words[j + 1:] if w[2:] in _EVI_MODULES else None
+                if w == "-" or w.startswith("-c"):
+                    return None  # code on stdin / inline: not a command line
+                if w.startswith("-"):
+                    j += 2 if w in _PY_VALUE_OPTIONS else 1
+                    continue
+                nxt = j  # the script python runs
+                break
+            i = nxt
+            continue
+        if base in _LAUNCHERS:
+            i = next((k for k in range(i + 1, len(words))
+                      if shellsplit._base(words[k]) in _EVI_PROGRAMS
+                      or _PYTHONS.match(shellsplit._base(words[k]))), None)
+            continue
+        return None
+    return None
+
+
+def _director_args(args: Sequence[str]) -> bool:
+    k = 0
+    while k < len(args) and args[k].startswith("-"):
+        k += 2 if args[k] in _EVI_VALUE_OPTIONS else 1
+    if k >= len(args):
+        return False
+    sub = args[k].lower()
+    if sub in _DIRECTOR_COMMANDS:
+        return True
+    if sub not in _DIRECTOR_GROUPS:
+        return False
+    k += 1
+    while k < len(args) and args[k].startswith("-"):
+        k += 1
+    return k < len(args) and args[k].lower() in _DIRECTOR_GROUPS[sub]
+
+
+def is_director_argv(words: Sequence[str]) -> bool:
+    """True if this command (a segment's words, or a process's command line)
+    runs eVi's director tooling: ``evi task verify|reject`` or ``evi attest``,
+    however eVi is launched (`evi_args`). Every word of the leading run of
+    assignments, wrappers and their options (and an option's value: ``sudo
+    -u me``, ``env -u FOO``, ``timeout -s KILL 5``) is tried as the program,
+    as the splitter can't tell an option's value from the command."""
+    words = list(words)
+    after_option = False
+    for k, word in enumerate(words):
+        args = _evi_args_at(words, k)
+        if args is not None and _director_args(args):
+            return True
+        if (
+            not word
+            or shellsplit._ASSIGNMENT.match(word)
+            or shellsplit._base(word) in shellsplit._WRAPPERS
+            or shellsplit._WRAPPER_ARG.match(word)
+        ):
+            after_option = False
+        elif word.startswith("-"):
+            after_option = True
+        elif after_option:
+            after_option = False
+        else:
+            return False
+    return False
+
+
+def _runs_unknown_evi_command(words: Sequence[str]) -> bool:
+    """True if this command runs eVi with a subcommand that can't be read
+    until it runs: an expansion where it goes (``evi $CMD T1``, ``evi task
+    %V% T1``), or xargs appending it (``... | xargs evi task``)."""
+    words = list(words)
+    ci = shellsplit._command_index(words)
+    args = _evi_args_at(words, ci)
+    if ci is None or args is None:
+        return False
+    appended = any(shellsplit._base(w) == "xargs" for w in words[:ci])
+    k = 0
+    while k < len(args) and args[k].startswith("-"):
+        k += 2 if args[k] in _EVI_VALUE_OPTIONS else 1
+    if k >= len(args):
+        return appended
+    if _DYNAMIC.search(args[k]):
+        return True
+    group = _DIRECTOR_GROUPS.get(args[k].lower())
+    if group is None:
+        return False
+    k += 1
+    while k < len(args) and args[k].startswith("-"):
+        k += 1
+    return appended if k >= len(args) else bool(_DYNAMIC.search(args[k]))
+
+
+def _reads_code_from_stdin(words: Sequence[str]) -> bool:
+    """True if this command runs an interpreter that reads its program from
+    stdin (no script: ``python``, ``python -``, ``node``), so what a heredoc
+    or a pipe feeds it is code, not data."""
+    ci = shellsplit._command_index(words)
+    if ci is None or not _INTERPRETERS.match(shellsplit._base(words[ci])):
+        return False
+    k = ci + 1
+    while k < len(words):
+        w = words[k]
+        if w == "-":
+            return True
+        if not w.startswith("-"):
+            return False  # a script file (or inline code, which is a code word)
+        k += 2 if w in _PY_VALUE_OPTIONS else 1
+    return True
+
+
+def _search_pattern(words: Sequence[str], i: int, prog: str) -> set[int]:
+    """The indexes of the words that are the search tool `prog`'s (at
+    ``words[i]``) pattern: an ``-e`` / ``--regexp`` / ``-Pattern`` value, or
+    the first plain word when only options known to take no value come
+    before it (findstr: its first plain word and ``/c:`` strings)."""
+    out: set[int] = set()
+    positional = True  # still only past options that take no value
+    k = i + 1
+    while k < len(words):
+        w = words[k]
+        lw = w.lower()
+        if prog == "findstr":
+            if w.startswith("/"):
+                if lw.startswith("/c:"):
+                    out.add(k)
+                k += 1
+                continue
+            out.add(k)
+            break
+        if lw in _PATTERN_OPTIONS:
+            if k + 1 < len(words):
+                out.add(k + 1)
+            positional = False  # the plain words after it are paths
+            k += 2
+            continue
+        if lw.startswith("--regexp="):
+            out.add(k)
+            positional = False
+            k += 1
+            continue
+        if w == "--":
+            if positional and k + 1 < len(words):
+                out.add(k + 1)
+            break
+        if w.startswith("-") and len(w) > 1:
+            if w.startswith("--"):
+                known = "=" in w or lw in _SEARCH_LONG_FLAGS
+            elif prog in ("select-string", "sls"):
+                known = lw in _SLS_SWITCHES
+            else:
+                known = all(c in _SEARCH_FLAG_LETTERS.get(prog, "") for c in w[1:])
+            positional = positional and known
+            k += 1
+            continue
+        if positional:
+            out.add(k)
+        break
+    return out
+
+
+def _git_data(words: Sequence[str], i: int) -> set[int]:
+    """The indexes of a git command's (at ``words[i]``) data words: a commit
+    / tag / stash message (``-m``, ``--message``), a log search (``--grep``,
+    ``-S``, ``-G``) or a ``git grep`` pattern. Config values (``-c k=v``)
+    and everything else are code."""
+    k = i + 1
+    while k < len(words) and words[k].startswith("-"):
+        k += 2 if words[k] in _GIT_VALUE_OPTIONS else 1
+    if k >= len(words):
+        return set()
+    sub = words[k].lower()
+    if sub == "grep":
+        return _search_pattern(words, k, "grep")
+    out: set[int] = set()
+    j = k + 1
+    while j < len(words):
+        w = words[j]
+        if w == "--":
+            break
+        if sub in _GIT_MESSAGE_COMMANDS:
+            if w == "--message" or _GIT_MESSAGE_CLUSTER.match(w):
+                out.add(j + 1)
+                j += 2
+                continue
+            if w.startswith("--message=") or (w.startswith("-m") and not w.startswith("--")):
+                out.add(j)
+        elif sub in _GIT_LOG_COMMANDS:
+            if w in ("--grep", "-S", "-G"):
+                out.add(j + 1)
+                j += 2
+                continue
+            if w.startswith(("--grep=", "-S", "-G")):
+                out.add(j)
+        j += 1
+    return {d for d in out if d < len(words)}
+
+
+def _code_and_data(words: Sequence[str]) -> tuple[list[str], list[str]]:
+    """A command's words split into code and data. Data is what is only
+    printed or searched for: an ``echo`` / ``printf`` / ``Write-Output``'s
+    plain words, a search tool's pattern (`_search_pattern`), a git message
+    or log search (`_git_data`). Everything else is code: the program, its
+    options, paths, and whatever another program is handed to run."""
+    ci = shellsplit._command_index(words)
+    if ci is None:
+        return list(words), []
+    prog = shellsplit._base(words[ci])
+    if prog in _PRINTERS:
+        data = {k for k in range(ci + 1, len(words)) if not words[k].startswith("-")}
+    elif prog in _SEARCHERS:
+        data = _search_pattern(words, ci, prog)
+    elif prog == "git":
+        data = _git_data(words, ci)
+    else:
+        data = set()
+    return ([w for k, w in enumerate(words) if k not in data],
+            [words[k] for k in sorted(data)])
+
+
+def _spread(text: str) -> str:
+    """`text` for the tooling pattern, with quotes and list punctuation
+    (PowerShell ``'task','verify'``, Python ``["evi", "task"]``) as spaces."""
+    return _SPREAD.sub(" ", text)
+
+
+class _DirectorView:
+    """A command line as one shell splits it, read for the director rules."""
+
+    def __init__(self, cmd: str, sp: shellsplit.Split) -> None:
+        self.sp = sp
+        # (words, code text, code words squashed, data words squashed, source span)
+        self.segments: list[tuple[list[str], str, str, str, str]] = []
+        stdin_code = False
+        for seg in sp.commands:
+            words = list(seg.words)
+            code, data = _code_and_data(words)
+            self.segments.append((
+                words, _spread(" ".join(code)),
+                "\0".join(_SQUASH.sub("", w).lower() for w in code),
+                "\0".join(_SQUASH.sub("", w).lower() for w in data),
+                cmd[seg.start:seg.end],
+            ))
+            stdin_code = stdin_code or _reads_code_from_stdin(words)
+        # Text the splitter couldn't follow is matched as is (cmd runs only up
+        # to the first newline); so is a line feeding an interpreter its code.
+        self.texts: list[str] = []
+        if not sp.ok and not (sp.dialect in ("cmd", "pwsh") and sp.error == _REFUSED_BY_SHELL):
+            self.texts.append(cmd.split("\n", 1)[0] if sp.dialect == "cmd" else cmd)
+        if stdin_code:
+            self.texts.append(cmd)
+
+    def trips(self, rule: DestructiveRule) -> bool:
+        if any(rule.pattern.search(t) for t in self.texts):
+            return True
+        if rule is _DIRECTOR_TOOLING:
+            return any(
+                is_director_argv(words) or _runs_unknown_evi_command(words)
+                or rule.pattern.search(code_text)
+                for words, code_text, _c, _d, _s in self.segments
+            )
+        if any(rule.pattern.search(r.text) for r in self.sp.redirects):
+            return True
+        for _w, _t, code, data, span in self.segments:
+            seen: set[str] = set()
+            for m in rule.pattern.finditer(span):
+                found = _SQUASH.sub("", m.group()).lower()
+                if found in seen:
+                    continue
+                seen.add(found)
+                # only data when it lies inside a data word and in no code word
+                if found and (found not in data or found in code):
+                    return True
+        return False
+
+
+def director_hit(command: str, *, dialect: str | None = None) -> DestructiveRule | None:
+    """The director rule `command` trips, or None: as code (`_code_and_data`)
+    it names the director's attestation key, sets or clears ``EVI_DIRECTOR``
+    / ``EVI_AGENT``, imports or patches `evi.attest`, or runs director
+    tooling, in any command segment or what a program is handed to run, as
+    `dialect` splits it (default: every dialect, so a line is refused if any
+    shell would run it so; a line the splitter can't follow is matched as
+    text). A mention that is only data (a search pattern, a commit message,
+    an ``echo``, a heredoc body nothing runs) is not. No allow glob or
+    disabled rule id applies."""
+    if not command or not command.strip():
+        return None
+    cmd = command.strip()
+    if "evi" not in _QUOTING.sub("", cmd).lower() and not any(
+        r.pattern.search(cmd) for r in _DIRECTOR_TEXT_RULES
+    ):
+        return None  # every way of running eVi names it
+    views = [_DirectorView(cmd, shellsplit.split(cmd, d))
+             for d in ((dialect,) if dialect else shellsplit.DIALECTS)]
+    for rule in DIRECTOR_RULES:
+        if any(v.trips(rule) for v in views):
+            return rule
+    return None
+
+
+_CODE_ENV = re.compile(_DIRECTOR_VARS)
+
+
+def director_code_hit(code: str) -> DestructiveRule | None:
+    """The director rule the Python source `code` (``run_python``) trips, or
+    None: it names ``EVI_DIRECTOR`` / ``EVI_AGENT`` at all (reading, popping,
+    setting), names the key, imports or patches `evi.attest`, or spells
+    director tooling (as a ``["evi", "task", "verify"]`` list too). Code has
+    no data positions: every mention counts."""
+    if not code or not code.strip():
+        return None
+    if _CODE_ENV.search(code):
+        return _DIRECTOR_BY_ID["director-env"]
+    for rule in DIRECTOR_RULES:
+        if rule.pattern.search(_spread(code) if rule is _DIRECTOR_TOOLING else code):
+            return rule
+    return None
+
+
 # A leading, self-contained `echo`/`printf`/`Write-Output`/`Write-Host` that only
 # PRINTS text (no pipe, redirect, command-substitution, or chaining) can't run a
 # command, so its (possibly dangerous-looking) argument must not trip the guard.
@@ -430,11 +927,15 @@ def destructive_hit(
     (default: this platform's shell) splits it: a hit is exempt only when every
     segment it touches matches a glob, and never when the line is unparsable.
     A glob whose command word holds a wildcard is ignored (`rejected_allow_globs`).
-    `disable_rules` is an iterable of rule ids to skip entirely.
+    `disable_rules` is an iterable of rule ids to skip entirely. A director
+    rule (`director_hit`) is reported first, and neither applies to it.
     """
     if not command or not command.strip():
         return None
     cmd = command.strip()
+    director = director_hit(cmd, dialect=dialect)
+    if director is not None:
+        return director
     disabled = {str(d) for d in (disable_rules or ())}
     hit = _first_hit(cmd, disabled)
     if hit is None:

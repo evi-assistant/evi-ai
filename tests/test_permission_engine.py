@@ -33,9 +33,11 @@ from evi.config import AutoSettings, Config
 from evi.llm.agent import Agent, ToolResult
 from evi.permissions import (
     DEFAULT_PROTECTED_PATHS,
+    DIRECTOR_PROTECTED_PATHS,
     SECRET_PROTECTED_PATHS,
     WRITE_PROTECTED_PATHS,
     decide,
+    director_ground,
     effective_protected_paths,
     protected_read,
     protected_write,
@@ -701,12 +703,45 @@ def test_absolute_patterns_hold_for_device_and_loopback_share_spellings(
     for path in spellings:
         assert decide("yolo", [], [], "write_file", "fs", _w(path),
                       protected_paths=pp, workdir=proj) == "ask", path
-    # what a path opens can't be told: fail closed
+    # what a device path naming no drive opens can't be told: it may be the
+    # director's key folder (a volume GUID path reaches C:\ too), which no
+    # tool may touch in any mode, so it is denied, reads too, and says why
+    # (loop-director-attestation)
     for path in (r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x.txt",
-                 r"\\?\GLOBALROOT\Device\HarddiskVolume1\x.txt",
-                 r"\\some-host.invalid\C$\x.txt"):
+                 r"\\?\GLOBALROOT\Device\HarddiskVolume1\x.txt"):
         assert decide("yolo", [], [], "write_file", "fs", _w(path),
-                      protected_paths=pp, workdir=proj) == "ask", path
+                      protected_paths=pp, workdir=proj) == "deny", path
+        assert decide("yolo", [], [], "read_file", "fs", json.dumps({"path": path}),
+                      protected_paths=pp, workdir=proj) == "deny", path
+        why = director_ground("read_file", "fs", json.dumps({"path": path}), workdir=proj)
+        assert why and "device path whose target can't be told" in why, path
+    # another host's X$ share may be this machine under another name: a write
+    # still asks, as before, and a read is a read; only a path that would be
+    # in the director's key folder on this machine is denied
+    other = r"\\some-host.invalid\C$\x.txt"
+    assert decide("yolo", [], [], "write_file", "fs", _w(other),
+                  protected_paths=pp, workdir=proj) == "ask"
+    assert decide("yolo", [], [], "read_file", "fs", json.dumps({"path": other}),
+                  protected_paths=pp, workdir=proj) == "allow"
+    assert decide("ask", ["fs"], [], "read_file", "fs", json.dumps({"path": other}),
+                  protected_paths=pp, workdir=proj) == "ask"
+    assert director_ground("read_file", "fs", json.dumps({"path": other}), workdir=proj) is None
+    for folder in (home / ".evi" / "director", evi_home / "director"):
+        share = f"\\\\some-host.invalid\\{str(folder)[0]}$\\{str(folder)[3:]}\\director.key"
+        for spelling in (share, "\\\\?\\UNC\\" + share[2:]):
+            for tool, args in (("read_file", json.dumps({"path": spelling})),
+                               ("write_file", _w(spelling))):
+                assert decide("yolo", ["fs"], ["allow fs"], tool, "fs", args,
+                              protected_paths=pp, workdir=proj) == "deny", spelling
+            why = director_ground("read_file", "fs", json.dumps({"path": spelling}),
+                                  workdir=proj)
+            assert why and "the director's attestation key folder" in why
+    # a shell write to a share asks; to an opaque device path it is denied
+    assert decide("yolo", [], [], "run_command", "shell", _cmd(f"echo x > {other}"),
+                  protected_paths=pp, workdir=proj, dialect="cmd") == "ask"
+    volume = r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x.txt"
+    assert decide("yolo", [], [], "run_command", "shell", _cmd(f"echo x > {volume}"),
+                  protected_paths=pp, workdir=proj, dialect="cmd") == "deny"
 
 
 def test_evi_home_with_glob_characters_is_protected(tmp_path, proj, home, monkeypatch):
@@ -1200,3 +1235,116 @@ def test_ordinary_copies_into_folders_still_run_in_yolo(line, dialect, proj, hom
     pp = effective_protected_paths()
     assert decide("yolo", [], [], "run_command", "shell", _cmd(line),
                   protected_paths=pp, workdir=proj, dialect=dialect) == "allow"
+
+
+# --- 7. the director's ground (loop-director-attestation) --------------------
+# The attestation key folder and director tooling are out of an agent's reach:
+# denied in every mode, whatever rule, trusted dir or approval (evi/attest.py).
+
+_KEY = "~/.evi/director/director.key"
+_DIRECTOR_CALLS = [
+    ("read_file", "fs", {"path": _KEY}),
+    ("write_file", "fs", {"path": _KEY, "content": "x"}),
+    ("list_dir", "fs", {"path": "~/.evi/director"}),
+    ("search_files", "fs", {"pattern": ".", "path": "~/.evi", "glob": "director/*"}),
+    ("python_symbols", "code", {"path": _KEY}),
+    ("fs.read_text_file", "mcp", {"filePath": _KEY}),
+    ("run_command", "shell", {"command": "dir", "cwd": "~/.evi/director"}),
+    ("run_command", "shell", {"command": "evi task verify T1 --yes"}),
+    ("run_command", "shell", {"command": "EVI_DIRECTOR=1 evi task show T1"}),
+    ("run_command", "shell", {"command": "cat ~/.evi/director/director.key"}),
+    ("run_command", "shell", {"command": "cd ~/.evi && cp k director/"}),
+    ("monitor", "code", {"kind": "command", "target": "evi task reject T1"}),
+    # director tooling handed to a program that runs it outside eVi's process tree
+    ("run_command", "shell", {"command": 'schtasks /create /tn v /tr "evi task verify T1 --yes" '
+                                         "/sc once /st 23:59 /f && schtasks /run /tn v"}),
+    ("run_command", "shell", {"command": 'wmic process call create "evi task verify T1 --yes"'}),
+    ("run_command", "shell", {"command": "systemd-run --user evi task verify T1 --yes"}),
+    ("run_command", "shell", {"command": "ssh localhost evi task verify T1 --yes"}),
+    ("run_command", "shell", {"command": "find . -exec evi task verify T1 --yes \\;"}),
+    ("run_command", "shell", {"command": "git -c alias.v='!evi task verify T1 --yes' v"}),
+    # patching evi.attest from code the agent runs
+    ("run_command", "shell", {"command": 'python -c "import os; os.environ.pop(\'EVI_AGENT\'); '
+                                         'from evi import attest as a; '
+                                         'a._process_chain = lambda: []"'}),
+    ("run_python", "code", {"code": "import os\nos.environ.pop('EVI_AGENT', None)"}),
+    ("run_python", "code", {"code": "from evi import attest as a\na._process_chain = list"}),
+    ("run_python", "code", {"code": "import subprocess\n"
+                                    "subprocess.run(['evi', 'task', 'verify', 'T1'])"}),
+]
+
+
+@pytest.mark.parametrize("mode", ["ask", "accept_edits", "yolo", "plan"])
+@pytest.mark.parametrize("tool,cat,args", _DIRECTOR_CALLS)
+def test_the_director_ground_is_denied_in_every_mode(mode, tool, cat, args, proj, home):
+    rules = [f"allow {tool} *", "allow fs", "allow shell *", "allow run_command evi*"]
+    assert decide(mode, ["fs", "shell", "code", "code_read", "mcp"], rules, tool, cat,
+                  json.dumps(args), trusted_dirs=[str(home)],
+                  protected_paths=effective_protected_paths(), workdir=proj,
+                  dialect="bash") == "deny"
+    assert director_ground(tool, cat, json.dumps(args), workdir=proj, dialect="bash")
+
+
+@pytest.mark.parametrize("tool,cat,args", [
+    ("read_file", "fs", {"path": "~/.evi/config.toml"}),
+    ("list_dir", "fs", {"path": "~/.evi"}),
+    ("search_files", "fs", {"pattern": "x", "path": "~/.evi"}),
+    ("read_file", "fs", {"path": ".evi/tasks/T1.toml"}),
+    ("read_file", "fs", {"path": "docs/director.md"}),
+    ("run_command", "shell", {"command": "evi task show T1"}),
+    ("run_command", "shell", {"command": 'git commit -m "evi task verify docs"'}),
+    # naming the key or the tooling only as data: a search, a commit message
+    ("run_command", "shell", {"command": 'grep -rn "director.key" evi/'}),
+    ("run_command", "shell", {"command": "rg evi-director docs/"}),
+    ("run_command", "shell", {"command": 'git commit -m "feat: attest; director.key fallback"'}),
+    ("run_command", "shell", {"command": "git commit -F - <<'EOF'\nfeat: add evi attest command"
+                                         "\nEOF"}),
+    ("run_python", "code", {"code": "print('hello')"}),
+])
+def test_the_director_ground_leaves_ordinary_calls_alone(tool, cat, args, proj, home):
+    assert director_ground(tool, cat, json.dumps(args), workdir=proj, dialect="bash") is None
+    assert decide("yolo", [], [], tool, cat, json.dumps(args),
+                  protected_paths=effective_protected_paths(), workdir=proj,
+                  dialect="bash") == "allow"
+
+
+def test_a_write_after_an_unknown_cd_still_just_asks(proj, home):
+    # not the director's: the protected-path check asks, as before
+    line = _cmd("cd $X && echo x > out.txt")
+    assert director_ground("run_command", "shell", line, workdir=proj, dialect="bash") is None
+    assert decide("yolo", [], [], "run_command", "shell", line,
+                  protected_paths=effective_protected_paths(), workdir=proj,
+                  dialect="bash") == "ask"
+
+
+def test_the_director_folder_is_always_protected(tmp_path, home, proj, monkeypatch):
+    # protected_paths_remove can't drop it, and reading it is protected too
+    pp = effective_protected_paths([], [*DIRECTOR_PROTECTED_PATHS, "~/.evi/**"])
+    assert set(DIRECTOR_PROTECTED_PATHS) <= set(pp)
+    assert protected_read("fs", json.dumps({"path": _KEY}), pp, workdir=proj) == _KEY
+    # ...under a moved eVi home as well
+    evi_home = tmp_path / "evihome"
+    (evi_home / "director").mkdir(parents=True)
+    monkeypatch.setenv("EVI_HOME", str(evi_home))
+    key = str(evi_home / "director" / "director.key")
+    pp = effective_protected_paths()
+    assert decide("yolo", ["fs"], ["allow fs"], "read_file", "fs", json.dumps({"path": key}),
+                  protected_paths=pp, workdir=proj) == "deny"
+    assert protected_read("fs", json.dumps({"path": key}), pp, workdir=proj) == key
+    # through the agent: denied, no prompt, attended or not, /auto on or not
+    asked: list[str] = []
+    ui = _agent(AutoSettings(mode="yolo"), cb=lambda n, a, c: asked.append(n) or True, cwd=proj)
+    ui.enable_auto_all()
+    for tool, args in ((READ, json.dumps({"path": key})), (WRITE, _w(key)),
+                       (RUN, _cmd("evi task verify T1 --yes"))):
+        assert ui._permission_decision(tool, args) == "deny"
+        assert _agent(AutoSettings(mode="yolo"), cwd=proj)._permission_decision(tool, args) == "deny"
+    assert asked == []
+
+
+def test_a_linked_folder_into_the_director_folder_is_caught(proj, home):
+    (home / ".evi" / "director").mkdir(parents=True)
+    _link_dir(proj / "d", home / ".evi" / "director")
+    assert decide("yolo", ["fs"], ["allow fs"], "read_file", "fs",
+                  json.dumps({"path": "d/director.key"}),
+                  protected_paths=effective_protected_paths(), workdir=proj) == "deny"

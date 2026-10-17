@@ -2,7 +2,15 @@
 
 Layered on top of eVi's existing per-category auto-approve:
 
-0. **Hard-deny** (`auto.hard_deny`), then **protected paths**
+0. **Hard-deny** (`auto.hard_deny`), then the **director's ground**
+   (`director_ground`): a call with a path argument in the director's
+   attestation-key folder (``<eVi home>/director``; read or write, any tool;
+   or a device path that may open it), or a shell line or ``run_python``
+   code naming that key, setting or clearing ``EVI_DIRECTOR`` /
+   ``EVI_AGENT``, patching `evi.attest` or running director tooling (``evi
+   task verify|reject``, ``evi attest``; `evi.shell_guard.director_hit`), is
+   denied in every mode, whatever rule matches: eVi never marks its own work
+   verified (`evi.attest`). Then **protected paths**
    (`auto.protected_paths`): a call that would write a protected file (eVi's
    instruction / config / hook / task files, CI, git hooks, shell start-up and
    secret files; see `DEFAULT_PROTECTED_PATHS`) asks, in every mode, ``yolo``
@@ -77,6 +85,7 @@ from urllib.parse import urlparse
 
 from evi import shellsplit
 from evi import workdir as _workdir
+from evi.attest import DIRECTOR_DIRNAME
 from evi.tools.base import CODE_READ_TOOLS, READ_ONLY_TOOLS, glob_values, path_values
 
 # A call's own category (`classify_call`, `Tool.category_for`) when it only
@@ -130,6 +139,13 @@ WRITE_PROTECTED_PATHS: tuple[str, ...] = (
     ".github/workflows/**", ".vscode/tasks.json",
 )
 DEFAULT_PROTECTED_PATHS: tuple[str, ...] = SECRET_PROTECTED_PATHS + WRITE_PROTECTED_PATHS
+# The director's attestation key folder (`evi.attest`), plus the same folder
+# under ``EVI_HOME`` (`director_paths`). No tool reads or writes it in any mode
+# (`director_ground`), and every protected list carries it: unlike the
+# entries above, `protected_paths_remove` can't drop it.
+DIRECTOR_PROTECTED_PATHS: tuple[str, ...] = (
+    f"~/.evi/{DIRECTOR_DIRNAME}", f"~/.evi/{DIRECTOR_DIRNAME}/**",
+)
 _ABS_PATTERN = re.compile(r"^(?:/|[a-z]:/)")
 VALID_MODES = ("ask", "accept_edits", "plan", "yolo")
 # Tools that run an argument through a shell, and the argument holding the
@@ -675,6 +691,17 @@ def _evi_home_pattern() -> str:
     return _glob.escape(str(path).rstrip("/\\")) + "/**"
 
 
+def director_paths() -> list[str]:
+    """The director's key folder patterns: `DIRECTOR_PROTECTED_PATHS`, and
+    the same folder under ``EVI_HOME`` when that moves eVi's home."""
+    out = list(DIRECTOR_PROTECTED_PATHS)
+    home = _evi_home_pattern()
+    if home:
+        base = home[: -len("/**")] + "/" + _glob.escape(DIRECTOR_DIRNAME)
+        out += [base, base + "/**"]
+    return out
+
+
 def effective_protected_paths(
     configured: Iterable[str] | None = None, removed: Iterable[str] = ()
 ) -> list[str]:
@@ -684,7 +711,9 @@ def effective_protected_paths(
     listed in `removed` (``[auto] protected_paths_remove``). A stock secret
     pattern a saved list leaves out stays out: deleting it from
     `protected_paths` has always been how a user opts out of one. With
-    ``EVI_HOME`` set, eVi's home is protected along with ``~/.evi/**``."""
+    ``EVI_HOME`` set, eVi's home is protected along with ``~/.evi/**``. The
+    director's key folder (`director_paths`) is always in, `removed` or not,
+    and against reads too (`protected_read`)."""
     drop = {str(r).strip() for r in removed or () if str(r).strip()}
     mine = SECRET_PROTECTED_PATHS if configured is None else configured
     out: list[str] = []
@@ -695,6 +724,7 @@ def effective_protected_paths(
     home = _evi_home_pattern()
     if home and "~/.evi/**" not in drop and home not in out:
         out.append(home)
+    out += [p for p in director_paths() if p not in out]
     return out
 
 
@@ -973,6 +1003,29 @@ def protected_write(
     Any category counts, not only fs/code. A path whose target can't be told
     (an opaque device path) counts as protected.
     """
+    found = _write_targets(
+        tool_name, tool_category, tool_args, protected_paths, workdir=workdir,
+        path_args=path_args, read_only=read_only, dialect=dialect, split=split,
+    )
+    return found if isinstance(found, str) else _first_protected(found, protected_paths)
+
+
+def _write_targets(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    protected_paths: Iterable[str],
+    *,
+    workdir: str | Path | None = None,
+    path_args: list[str] | None = None,
+    read_only: bool | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+    unknown_cd: bool = True,
+) -> list[tuple[str, Path, str]] | str:
+    """The `(value, base, shown)` paths `protected_write` matches, or, for a
+    relative write after a ``cd`` that can't be followed, why it counts as
+    protected (with `unknown_cd` False such a write is left out instead)."""
     base = _base_dir(workdir)
     targets: list[tuple[str, Path, str]] = []
     if read_only is None:
@@ -998,13 +1051,13 @@ def protected_write(
         bases = _dir_changes(sp, rbase) if writes and sp.changes_dir else [rbase]
         for w, shown in writes:
             if bases is None and not _is_absolute(w):
-                if any(str(p).strip() for p in protected_paths or ()):
+                if unknown_cd and any(str(p).strip() for p in protected_paths or ()):
                     # It lands after a `cd` we can't follow, so it may be a
                     # protected file; say so, as the path isn't known to be one.
                     return f"{shown} (after a cd eVi can't follow, so where it lands is unknown)"
                 continue
             targets += [(w, b, shown) for b in (bases or [rbase])]
-    return _first_protected(targets, protected_paths)
+    return targets
 
 
 def protected_read(
@@ -1028,6 +1081,96 @@ def protected_read(
     pats = [p for p in (protected_paths or ()) if str(p).strip() not in skip]
     base = _base_dir(workdir)
     return _first_protected([(v, base, v) for v in path_args if v], pats)
+
+
+def _admin_share_as_local(value: str) -> str | None:
+    """Windows: another host's administrative share (``\\\\host\\X$\\rest``,
+    also as ``\\\\?\\UNC\\host\\X$\\rest``) read as this machine's
+    ``X:\\rest``, since the host may be this machine under another name (which
+    `_local_spelling` can't tell without opening it); None for anything else."""
+    if os.name != "nt":
+        return None
+    s = value.replace("/", "\\")
+    if s.startswith(_DEVICE_PREFIXES) and s[4:8].lower() == "unc\\":
+        s = "\\\\" + s[8:]
+    m = _ADMIN_SHARE.match(s)
+    return None if m is None else f"{m.group(2)}:" + (m.group(3) or "\\")
+
+
+def _director_target(targets: list[tuple[str, Path, str]]) -> str | None:
+    """Why one of these `(value, base, shown)` path targets may be in the
+    director's key folder (`director_paths`), or None. A device path naming
+    no drive can't be told apart from one, so it counts; another host's
+    ``X$`` share is matched as this machine's ``X:`` (`_admin_share_as_local`)."""
+    pats = [f for p in director_paths() for f in _pattern_forms(p)]
+    for value, base, shown in targets:
+        forms = _path_forms(value, base)
+        if forms is None:
+            local = _admin_share_as_local(value)
+            forms = _path_forms(local, base) if local is not None else None
+            if forms is None:
+                return (f"{shown}: a device path whose target can't be told, which may "
+                        "open the director's attestation key folder")
+        if any(_matches(f, p) for f in forms for p in pats):
+            return f"{shown}: the director's attestation key folder"
+    return None
+
+
+def director_ground(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    *,
+    workdir: str | Path | None = None,
+    path_args: list[str] | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+) -> str | None:
+    """Why this call reaches what only the director may touch, or None.
+
+    That is a path argument in the director's key folder (`director_paths`),
+    whether the tool reads or writes it and whatever its category (a glob
+    argument is joined to the folder it searches, so ``search_files`` aimed at
+    it counts too); a shell line writing there (its redirects and writing
+    commands, as `protected_write` reads them); or a shell line, or
+    ``run_python`` code, that names the key, sets or clears ``EVI_DIRECTOR`` /
+    ``EVI_AGENT``, imports or patches `evi.attest`, or runs director tooling
+    (`evi.shell_guard.director_hit`, `evi.shell_guard.director_code_hit`).
+    A device path naming no drive (``\\\\?\\Volume{...}``, ``GLOBALROOT``)
+    counts, as it may open the folder; another host's ``X$`` share counts
+    when, read as this machine's ``X:``, it is in the folder. `decide`
+    denies such a call in every mode; see `evi.attest`."""
+    data = _arg_dict(tool_args) or {}
+    if path_args is None:
+        path_args = path_values(data, tool_category)
+    base = _base_dir(workdir)
+    targets = [(v, base, v) for v in path_args if v]
+    for g in glob_values(tool_name, data):
+        for v in [p for p in path_args if p] or ["."]:
+            joined = v.rstrip("/\\") + "/" + g
+            targets.append((joined, base, joined))
+    hit = _director_target(targets)
+    if hit is not None:
+        return hit
+    from evi.shell_guard import director_code_hit, director_hit
+
+    if tool_name in CODE_EXEC_TOOLS and isinstance(data.get("code"), str):
+        rule = director_code_hit(data["code"])
+        if rule is not None:
+            return rule.reason
+    command = shell_command_of(tool_name, tool_category, tool_args)
+    if command is None:
+        return None
+    rule = director_hit(command, dialect=dialect)
+    if rule is not None:
+        return rule.reason
+    # A write after a `cd` eVi can't follow is left to the protected-path
+    # check (it asks): denying it here would refuse ordinary lines.
+    written = _write_targets(
+        tool_name, tool_category, tool_args, director_paths(), workdir=workdir, path_args=[],
+        read_only=True, dialect=dialect, split=split, unknown_cd=False,
+    )
+    return None if isinstance(written, str) else _director_target(written)
 
 
 def decide(
@@ -1096,6 +1239,15 @@ def decide(
             _rule_action(norm, k, [seg.text]) == "deny" for seg in sp.commands for k in keys
         ):
             return "deny"
+
+    # 0b. The director's ground: the attestation key and director tooling are
+    #     out of an agent's reach in every mode (yolo and `/auto on` too),
+    #     whatever allow rule matches or approval might be given.
+    if director_ground(
+        tool_name, tool_category, tool_args, workdir=workdir, path_args=path_args,
+        dialect=dialect, split=sp,
+    ) is not None:
+        return "deny"
 
     def rule_action() -> str | None:
         if command is not None:

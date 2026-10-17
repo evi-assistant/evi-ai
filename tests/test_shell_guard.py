@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from evi.shell_guard import DEFAULT_RULES, RULE_IDS, destructive_hit, rejected_allow_globs
+from evi.shell_guard import (
+    DEFAULT_RULES,
+    DIRECTOR_RULE_IDS,
+    RULE_IDS,
+    destructive_hit,
+    director_code_hit,
+    director_hit,
+    evi_args,
+    is_director_argv,
+    rejected_allow_globs,
+)
 from evi.shellsplit import DIALECTS
 
 # Commands that MUST be flagged, with the rule id we expect to catch them.
@@ -368,3 +378,217 @@ def test_disable_rules():
 def test_empty_command():
     assert destructive_hit("") is None
     assert destructive_hit("   ") is None
+
+
+# --- director-only ground (loop-director-attestation) --------------------------
+# The attestation key, EVI_DIRECTOR / EVI_AGENT and `evi task verify|reject` /
+# `evi attest` are the director's, never an agent's (evi/attest.py).
+
+DIRECTOR_HITS = [
+    ("EVI_DIRECTOR=1 evi task verify T1", "director-env"),
+    ("export EVI_DIRECTOR=1", "director-env"),
+    ("$env:EVI_DIRECTOR = '1'; evi task show T1", "director-env"),
+    ("set EVI_AGENT= && evi task show T1", "director-env"),
+    ("unset EVI_AGENT; evi task show T1", "director-env"),
+    ("env -u EVI_AGENT python x.py", "director-env"),
+    ("Remove-Item env:EVI_AGENT", "director-env"),
+    ("[Environment]::SetEnvironmentVariable('EVI_AGENT', $null)", "director-env"),
+    ("evi task verify T1 --yes", "director-tooling"),
+    ("evi task reject T1", "director-tooling"),
+    ("evi --profile work task verify T1", "director-tooling"),
+    ("evi task --json verify T1", "director-tooling"),
+    ("evi attest init", "director-tooling"),
+    ("python -m evi task verify T1", "director-tooling"),
+    ("py -3.13 -m evi task reject T1", "director-tooling"),
+    ("uv run evi task verify T1", "director-tooling"),
+    ("python3 /home/u/.venv/bin/evi task verify T1", "director-tooling"),
+    (r"C:\venv\Scripts\evi.exe task verify T1", "director-tooling"),
+    (r'& "C:\venv\Scripts\evi.exe" task verify T1', "director-tooling"),
+    ('start "" evi task verify T1', "director-tooling"),
+    ("sudo -u me evi task verify T1", "director-tooling"),
+    ("env -u FOO evi task verify T1", "director-tooling"),
+    ("git status && evi task verify T1", "director-tooling"),
+    ("echo $(evi task verify T1)", "director-tooling"),
+    ("echo hi\nevi task verify T1", "director-tooling"),  # an echo gets no pass here
+    ('bash -c "evi task verify T1"', "director-tooling"),
+    ('powershell -Command "evi task verify T1"', "director-tooling"),
+    ("cmd /c evi task verify T1", "director-tooling"),
+    ('e"v"i task verify T1', "director-tooling"),
+    ("nohup evi task verify T1 &", "director-tooling"),
+    ("cat ~/.evi/director/director.key", "director-credential"),
+    (r"type %USERPROFILE%\.evi\director\director.key", "director-credential"),
+    ("ls $EVI_HOME/director", "director-credential"),
+    ("python -c \"import keyring; print(keyring.get_password('evi-director', 'k'))\"",
+     "director-credential"),
+    ("security find-generic-password -s evi-director -w", "director-credential"),
+    # a search tool handed the key file as an option value or a path, not a pattern
+    ('rg -uu -g director.key "" ~', "director-credential"),
+    ('grep -a "" ~/.evi/director/director.key', "director-credential"),
+    # code fed to an interpreter is code, not data
+    ("python - <<'EOF'\nimport keyring; print(keyring.get_password('evi-director', 'k'))\nEOF",
+     "director-credential"),
+    # in-process use of evi.attest: patching who may sign
+    ('python -c "from evi import attest as a; a._process_chain = list"', "director-internals"),
+    ("python - <<EOF\nfrom evi import attest\nEOF", "director-internals"),
+    ('echo "import evi.attest" | python', "director-internals"),
+    # director tooling handed to another program to run
+    ("find . -name x -exec evi task verify T1 --yes \\;", "director-tooling"),
+    ("watch -n 60 evi task verify T1 --yes", "director-tooling"),
+    ("parallel evi task verify ::: T1", "director-tooling"),
+    ("Start-Process evi -ArgumentList 'task','verify','T1','--yes'", "director-tooling"),
+    ("git -c alias.v='!evi task verify T1 --yes' v", "director-tooling"),
+    ("git config alias.v '!evi task reject T1'", "director-tooling"),
+    ('schtasks /create /tn v /tr "evi task verify T1 --yes" /sc once /st 23:59 /f '
+     "&& schtasks /run /tn v", "director-tooling"),
+    ('wmic process call create "evi task verify T1 --yes"', "director-tooling"),
+    ("Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+     '-Arguments @{CommandLine="evi task verify T1 --yes"}', "director-tooling"),
+    ("systemd-run --user evi task verify T1 --yes", "director-tooling"),
+    ("ssh localhost evi task verify T1 --yes", "director-tooling"),
+    ("echo evi task verify T1 --yes | sh", "director-tooling"),
+    ("bash <<EOF\nevi task verify T1 --yes\nEOF", "director-tooling"),
+    # a subcommand that can't be read until the line runs
+    ("echo verify T1 | xargs evi task", "director-tooling"),
+    ("evi $SUB T1 --yes", "director-tooling"),
+    ("evi task $(cat verb) T1", "director-tooling"),
+]
+
+DIRECTOR_BENIGN = [
+    "evi task show T1",
+    "evi task list",
+    "evi tasks verify",
+    "evi task verify-docs",
+    "evi review --multi --exit-code",
+    'grep -rn "evi task verify" docs',
+    'git commit -m "docs: how evi task verify signs"',
+    "git log --grep 'task verify'",
+    "echo evi task verify",
+    "python -m evi chat",
+    "python -m pytest -k verify",
+    "ls ~/.evi",
+    "cat .evi/tasks/T1.toml",
+    "echo $EVI_AGENT",
+    "ls .evi/directory",
+    "git diff -- evi/attest.py",
+    # a mention that is only data: a search pattern, a commit message, an
+    # echo, a heredoc body nothing runs (cmd and PowerShell refuse `<<`)
+    "git commit -F - <<'EOF'\nfeat: add evi attest command\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nfeat: evi attest init\nEOF\n)\"",
+    "cat <<'EOF' > notes.md\nrun evi task verify T1 to sign\nEOF",
+    'grep -rn "director.key" evi/',
+    "rg evi-director docs/",
+    'git commit -m "feat: attest; director.key fallback"',
+    'git commit -am "protect .evi/director"',
+    'git log --grep "evi-director"',
+    'grep -rn "_process_chain" evi/ tests/',
+    "grep -rn '.evi/director' docs",
+    'findstr /s /c:"director.key" *.py',
+    "Select-String -Pattern 'evi-director' -Path docs/*.md",
+    "echo the key lives in ~/.evi/director",
+    "ruff check evi/attest.py tests/test_attest.py",
+    "python -m pytest tests/test_attest.py -k process_chain",
+    "echo hi | python script.py",
+]
+
+
+@pytest.mark.parametrize("cmd,rule_id", DIRECTOR_HITS)
+def test_director_lines_flagged(cmd, rule_id):
+    hit = destructive_hit(cmd)
+    assert hit is not None and hit.id == rule_id, (cmd, hit and hit.id)
+    assert hit.severity == "block" and director_hit(cmd) == hit
+
+
+@pytest.mark.parametrize("cmd", DIRECTOR_BENIGN)
+def test_director_benign_not_flagged(cmd):
+    hit = destructive_hit(cmd)
+    assert director_hit(cmd) is None and hit is None, (cmd, hit and hit.id)
+
+
+def test_director_rules_cannot_be_disabled_or_exempted():
+    every = sorted(RULE_IDS | DIRECTOR_RULE_IDS)
+    allow = ["evi task verify*", "cat ~/.evi*", "export EVI_DIRECTOR=1"]
+    for cmd in ("evi task verify T1", "export EVI_DIRECTOR=1",
+                "cat ~/.evi/director/director.key"):
+        hit = destructive_hit(cmd, disable_rules=every, allow=allow)
+        assert hit is not None and hit.id in DIRECTOR_RULE_IDS, cmd
+    # not destructive-guard rule ids: naming one in destructive_disable_rules
+    # is linted as disabling nothing
+    assert not DIRECTOR_RULE_IDS & RULE_IDS
+    from evi.configlint import lint_auto
+
+    [issue] = lint_auto({"destructive_disable_rules": ["director-tooling"]})
+    assert "disables nothing" in issue.message
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_director_tooling_in_every_dialect(dialect):
+    assert director_hit("evi task verify T1", dialect=dialect).id == "director-tooling"
+    assert director_hit("git status; evi task reject T1", dialect=dialect) is not None
+    assert director_hit('git commit -m "evi task verify"', dialect=dialect) is None
+
+
+def test_director_tooling_is_read_from_a_command_line():
+    # what evi.attest reads a process's command line with
+    assert is_director_argv([r"C:\py\python.exe", r"C:\py\Scripts\evi.exe", "task", "verify"])
+    assert is_director_argv(["/usr/bin/python3", "-m", "evi", "attest", "init"])
+    assert is_director_argv(["evi", "-d", "task", "reject", "T1"])
+    assert not is_director_argv([r"C:\py\python.exe", r"C:\py\Scripts\evi.exe", "chat"])
+    assert not is_director_argv(["python", "-m", "pytest", "tests/test_attest.py"])
+    assert not is_director_argv(["python", "-c", "import evi"])
+    assert evi_args(["uv", "run", "--with", "x", "evi", "task", "show"]) == ["task", "show"]
+    assert evi_args(["sudo", "evi", "chat"]) == ["chat"]
+    assert evi_args(["git", "status"]) is None and evi_args([]) is None
+    # a wrapper's option values don't hide the command it runs
+    assert is_director_argv(["sudo", "-u", "me", "evi", "task", "verify", "T1"])
+    assert is_director_argv(["env", "-u", "FOO", "evi", "task", "verify", "T1"])
+    assert is_director_argv(["timeout", "-s", "KILL", "5", "evi", "attest", "init"])
+    assert is_director_argv(["sudo", "-E", "evi", "task", "verify", "T1"])
+    assert not is_director_argv(["echo", "evi", "task", "verify"])
+    assert not is_director_argv(["grep", "-e", "evi", "task", "verify"])
+
+
+def test_director_rules_stay_fast():
+    import time
+
+    for probe in ("evi " + "-x " * 5000 + "y", "evi " * 5000, 'evi "' + "x " * 10000,
+                  "EVI_AGENT" * 3000, "unset " + "A " * 5000, "env " + "-u " * 5000,
+                  "python -m " * 3000, "echo " + "director.key " * 5000,
+                  "git commit -m '" + "evi-director " * 5000 + "'",
+                  "grep " + "-e director.key " * 3000 + "x"):
+        start = time.perf_counter()
+        destructive_hit(probe)
+        assert time.perf_counter() - start < 1.0, f"too slow on {probe[:12]!r}..."
+
+
+@pytest.mark.parametrize("code,rule_id", [
+    ("import os; os.environ.pop('EVI_AGENT', None)", "director-env"),
+    ("import os; print(os.environ.get('EVI_DIRECTOR'))", "director-env"),
+    ("open(os.path.expanduser('~/.evi/director/director.key'), 'rb').read()",
+     "director-credential"),
+    ("import keyring; keyring.get_password('evi-director', 'attestation-key')",
+     "director-credential"),
+    ("from evi import attest as a\na._process_chain = lambda: []", "director-internals"),
+    ("import evi.attest", "director-internals"),
+    ("import subprocess; subprocess.run(['evi', 'task', 'verify', 'T1', '--yes'])",
+     "director-tooling"),
+    ("os.system('evi attest init --yes')", "director-tooling"),
+])
+def test_director_code_is_refused(code, rule_id):
+    # run_python code: no data positions, every mention counts
+    hit = director_code_hit(code)
+    assert hit is not None and hit.id == rule_id, (code, hit and hit.id)
+
+
+@pytest.mark.parametrize("code", [
+    "print('hello')", "import evi.config", "from evi import review", "x = 'evi tasks'", "",
+])
+def test_ordinary_code_is_not_director_code(code):
+    assert director_code_hit(code) is None
+
+
+def test_cmd_runs_only_the_first_line():
+    # cmd /c stops at the first newline, so a line it can't split is matched
+    # as text only up to there; bash and PowerShell still see the rest
+    line = 'echo "unterminated\nevi task verify T1'
+    assert director_hit(line, dialect="cmd") is None
+    assert director_hit(line) is not None
