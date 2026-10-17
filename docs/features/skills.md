@@ -216,10 +216,13 @@ What carries over and what doesn't:
   and when the model invokes the skill their **absolute paths are appended** to
   the loaded text — so the model can `read_file` / run them on its own (it needs
   the relevant tools enabled).
-- ⚠️ **`allowed-tools` / `disallowed-tools` are not enforced yet.** Don't rely
-  on them to restrict a skill: eVi gates tools through its own
-  permissions/modes. Applying them in the agent loop is being completed in
-  Phase 0 (see the [roadmap](../roadmap.md)).
+- ✅ **`allowed-tools` / `disallowed-tools`** scope the rest of the turn the
+  skill is used in: a call to any other tool is refused at dispatch, including
+  the other calls in the same batch as `invoke_skill`. The tool list the model
+  sees stays the same, a second scoped skill can only narrow the scope, and a
+  subagent spawned meanwhile inherits it. Claude Code names (`Read`,
+  `Bash(git:*)` …) are mapped to eVi's. It works on top of eVi's own
+  permissions and modes, never widening them (`evi/skillscope.py`).
 - ⚠️ **Frontmatter is single-line `key: value`** (not full YAML). A multi-line
   folded/literal `description:` would be truncated — keep it on one line.
 - `--rewrite-paths` rewrites standalone relative references in `SKILL.md` (e.g.

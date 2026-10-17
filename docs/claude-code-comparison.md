@@ -59,7 +59,7 @@ planned (philosophy mismatch / separate big track).
 | Hooks (incl. HTTP hooks) | `hooks.toml` (command/`url`; tool + lifecycle events: user_prompt_submit/before_compact/stop/**session_start**/**session_end**; **conditional `arg_match`**) | ✅ |
 | Status line | `[statusline]` (Ph 72) | ✅ |
 | Keybindings | `keybindings.toml` + `evi keybindings` (Ph 82) | ✅ |
-| Skills tool-scoping (allowed/disallowed-tools) | SKILL.md `allowed-tools`/`disallowed-tools` are read; don't rely on them to restrict a skill yet | ⚠️ being completed in Phase 0 ([roadmap.md](roadmap.md)) |
+| Skills tool-scoping (allowed/disallowed-tools) | SKILL.md `allowed-tools`/`disallowed-tools` scope the rest of the turn the skill is used in: other tools are refused at dispatch, subagents inherit it (`evi/skillscope.py`) | ✅ |
 | Custom slash commands | `~/.evi/commands` frontmatter/$ARGS/@file/namespacing (Ph 62) | ✅ |
 | Nested skills (subfolders) | recursive `SKILL.md` scan | ✅ |
 | `/add-dir` (extra working dirs) | `/add-dir` → session trusted_dirs | ✅ |
@@ -238,7 +238,6 @@ gitleaks, Docker→GHCR, sigstore signing), plus `evi://` deep links, the plugin
 marketplace index, and the public **Agent SDK** (`evi.sdk`; see [sdk.md](sdk.md)).
 
 ⚠️ **Deferred (need an architectural addition or are low-value), not philosophy gaps:**
-- **Skill tool-scoping** (`allowed-tools`/`disallowed-tools` in skill frontmatter) — the frontmatter is read, and applying it in the agent loop is being completed in Phase 0 ([roadmap.md](roadmap.md)).
 - **Nested subagent spawning** (subagents that spawn subagents) — deliberately gated as a runaway-cost guard.
 - **Custom REPL themes** — terminal colour themes (output styles already cover response persona).
 

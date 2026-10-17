@@ -9,9 +9,10 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-14):** 1 item shipped in 1.0.53 and 13 more are
-done for the next release (Phase 0 batches 1 and 2); the rest are
-planned. Each item ships with its own tests and docs, and each release lists
+**Status (2026-10-17):** 1 item shipped in 1.0.53 and 34 more are
+done for the next release: all of Phase 0 and Phase 1's loop
+infrastructure. Phase 1's two shakedown batches and the eval baseline wait
+on the reference local model; the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -47,35 +48,35 @@ what it contains in the CHANGELOG.
 
 Close every verified critical and high security issue, starting with a hotfix, and gate every release on the browser e2e suite. Fix the correctness bugs that would silently defeat later work (session state in the agent loop, a tool context, the managed runtime's context size, history validity) and clear the high-severity loose ends: the EVI.md implementer contract, the MCP SDK 2.1+ migration, docs, e2e backfill and repo hygiene. Ships as 1.0.53 (the hotfix) and then 1.0.54 onward, or as 1.1.0 given the changed defaults.
 
-Progress: 14 of 25 items shipped or done.
+Progress: 25 of 25 items shipped or done.
 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
 | `fix-security-hotfix` | 1.0.53 security hotfix: upload paths, cross-site requests, untrusted project config, TTS, plugin/skill removal, opening links | S | director | — | Shipped in 1.0.53 |
 | `loose-ci-release-gates` | Release gating first: e2e on main, release needs e2e, actionlint, workflow-injection checks, docs freshness | M | director | — | Done (Phase 0 batch 1, unreleased) |
 | `loose-evi-md-implementer-contract` | Rewrite EVI.md as the implementer contract, fix self-build.md, add a dev bootstrap | S | director | — | Done (Phase 0 batch 1, unreleased) |
-| `fix-web-request-hardening` | Web request hardening: host and LAN rules, one turn per session, multi-user scoping, a desktop access token | M | director | `fix-security-hotfix`, `loose-ci-release-gates` | Planned |
-| `fix-ui-render-and-desktop-ipc` | Sanitize rendered model output and narrow the desktop IPC | M | director | `fix-web-request-hardening` | Planned |
+| `fix-web-request-hardening` | Web request hardening: host and LAN rules, one turn per session, multi-user scoping, a desktop access token | M | director | `fix-security-hotfix`, `loose-ci-release-gates` | Done (Phase 0 batch 3, unreleased) |
+| `fix-ui-render-and-desktop-ipc` | Sanitize rendered model output and narrow the desktop IPC | M | director | `fix-web-request-hardening` | Done (Phase 0 batch 4, unreleased) |
 | `safety-project-trust-gate` | Folder trust gate and tighten-only project config | M | director | `fix-security-hotfix` | Done (Phase 0 batch 2, unreleased) |
 | `fix-shell-segment-split` | Shell segment splitting for allow rules and guard decisions | S | director | — | Done (Phase 0 batch 1, unreleased) |
 | `fix-permission-engine` | Make permission rules mean what the docs say, and protect instruction files | M | director | `fix-shell-segment-split` | Done (Phase 0 batch 2, unreleased) |
-| `fix-loop-state-propagation` | Session state (working folder, skill scope, hooks) applies inside the agent loop | M | director | `loose-ci-release-gates` | Planned |
-| `fix-tool-context-binding` | ToolContext and agent-bound tools (the foundation later items assume), including per-user memory | M | director | `fix-loop-state-propagation` | Planned |
-| `safety-unattended-default-deny` | Unattended agents fail closed and route through build_agent | M | director | `fix-web-request-hardening` | Planned |
-| `safety-code-exec-parity` | Code execution gets its own approval (asks unless sandboxed) | S | director | `fix-permission-engine`, `safety-unattended-default-deny` | Planned |
-| `safety-channel-ceiling` | Telegram gets its own policy, DM-only by default, and recall-only memory | S | director | `safety-unattended-default-deny` | Planned |
+| `fix-loop-state-propagation` | Session state (working folder, skill scope, hooks) applies inside the agent loop | M | director | `loose-ci-release-gates` | Done (Phase 0 batch 3, unreleased) |
+| `fix-tool-context-binding` | ToolContext and agent-bound tools (the foundation later items assume), including per-user memory | M | director | `fix-loop-state-propagation` | Done (Phase 0 batch 4, unreleased) |
+| `safety-unattended-default-deny` | Unattended agents fail closed and route through build_agent | M | director | `fix-web-request-hardening` | Done (Phase 0 batch 5, unreleased) |
+| `safety-code-exec-parity` | Code execution gets its own approval (asks unless sandboxed) | S | director | `fix-permission-engine`, `safety-unattended-default-deny` | Done (Phase 0 batch 6, unreleased) |
+| `safety-channel-ceiling` | Telegram gets its own policy, DM-only by default, and recall-only memory | S | director | `safety-unattended-default-deny` | Done (Phase 0 batch 5, unreleased) |
 | `safety-git-hardening` | Hardened internal git invocations and ref validation | S | director | — | Done (Phase 0 batch 1, unreleased) |
 | `fix-command-file-inline` | @file inlining only from command templates, and no 500 on bad quoting | S | director | — | Done (Phase 0 batch 1, unreleased) |
 | `safety-ssrf-netguard` | web_fetch redirect and private-address guard | M | director | — | Done (Phase 0 batch 1, unreleased) |
 | `fix-cli-agent-drivers` | CLI-agent drivers: transcript over stdin, no gemini yolo, timeouts and tree kill, current install and auth hints | M | director | — | Done (Phase 0 batch 2, unreleased) |
 | `fix-runtime-download-integrity` | Integrity-pinned runtime downloads, filtered extraction and escaped notifications | S | director | — | Done (Phase 0 batch 1, unreleased) |
 | `fix-managed-runtime-ctx` | Size the managed llama.cpp context to the machine and tell the agent | S | evi-frontier | `loose-evi-md-implementer-contract`, `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
-| `fix-history-validity` | Keep conversation history valid for strict backends | M | director | `fix-loop-state-propagation` | Planned |
-| `fix-transcript-fidelity` | Persist web edits, truncation, branches and CLI forks; merge sessions across midnight | M | evi-frontier | `fix-history-validity`, `loose-evi-md-implementer-contract` | Planned |
+| `fix-history-validity` | Keep conversation history valid for strict backends | M | director | `fix-loop-state-propagation` | Done (Phase 0 batch 6, unreleased) |
+| `fix-transcript-fidelity` | Persist web edits, truncation, branches and CLI forks; merge sessions across midnight | M | evi-frontier | `fix-history-validity`, `loose-evi-md-implementer-contract` | Done (Phase 0 batch 7, unreleased) |
 | `extensibility-interop-mcp-sdk2-migration` | MCP on current SDKs: working HTTP transport, hardened serve, cancellation, CI matrix | M | director | `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
 | `loose-repo-hygiene` | Repo hygiene: cargo major bumps, stale branches and remotes, advisories | S | director | `loose-ci-release-gates` | Done (Phase 0 batch 2, unreleased) |
-| `loose-e2e-backfill` | Playwright backfill for the 1.0.37-1.0.52 UI | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Planned |
-| `loose-docs-catch-up` | Docs catch-up for 1.0.37-1.0.52, generated HANDOFF facts, and this roadmap as docs/roadmap.md | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Planned |
+| `loose-e2e-backfill` | Playwright backfill for the 1.0.37-1.0.52 UI | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Done (Phase 0 batch 3, unreleased) |
+| `loose-docs-catch-up` | Docs catch-up for 1.0.37-1.0.52, generated HANDOFF facts, and this roadmap as docs/roadmap.md | M | evi-frontier | `loose-ci-release-gates`, `loose-evi-md-implementer-contract` | Done (Phase 0 batch 3, unreleased) |
 
 ## Phase 1 — The eVi-fixes-eVi loop
 
@@ -83,18 +84,20 @@ Make delegation routine and safe. The director files a task with acceptance crit
 
 **Why now:** Phases 2-5 contain about 40 delegable items, but delegation needs run reports, worktree isolation, cancel, a scoped policy that lets unattended runs execute tests without yolo, verify gates, an attestation eVi cannot forge, and a task queue. Secret redaction comes first because reports and evidence carry tool arguments and transcripts. The two shakedown batches prove the loop on 16 small verified bugs before any feature depends on it.
 
+Progress: 10 of 12 items shipped or done.
+
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
-| `safety-secret-redaction` | evi/redact.py: secret redaction for reports, evidence, transcripts and displays | S | director | `fix-transcript-fidelity` | Planned |
-| `loop-run-report` | `evi run` run report, stream-json events and resume flags on one versioned event schema | M | evi-frontier | `fix-loop-state-propagation`, `fix-history-validity`, `safety-project-trust-gate`, `safety-secret-redaction` | Planned |
-| `loop-agent-cancel` | Agent cancel primitive, process-tree-safe command execution and REPL Ctrl+C | M | director | `fix-history-validity`, `fix-tool-context-binding`, `fix-cli-agent-drivers` | Planned |
-| `loop-worktree-isolation` | Worktree-isolated runs that inherit repo trust and load exactly one project context | M | evi-frontier | `fix-loop-state-propagation`, `loop-run-report`, `safety-project-trust-gate` | Planned |
-| `loop-implementer-policy` | Named 'implementer' policy: worktree-confined writes, a test-command allowlist, no network | M | director | `safety-unattended-default-deny`, `fix-permission-engine`, `fix-shell-segment-split`, `loop-worktree-isolation` | Planned |
-| `loop-director-attestation` | Director-only verification: a keyring credential, HMAC-signed transitions, Verified-by only from director tooling | M | director | `fix-permission-engine` | Planned |
-| `loop-task-queue` | Repo-tracked task queue with acceptance criteria and a director handoff API | L | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-agent-cancel`, `extensibility-interop-mcp-sdk2-migration`, `loop-implementer-policy`, `loop-director-attestation` | Planned |
-| `loop-verify-gate` | Verify-before-done: blocking stop hooks and detected project checks | M | director | `fix-loop-state-propagation`, `loop-run-report`, `safety-unattended-default-deny`, `safety-project-trust-gate`, `loop-implementer-policy` | Planned |
-| `loop-evidence-provenance` | Evidence bundles and provenance trailers | M | evi-frontier | `loop-run-report`, `loop-verify-gate`, `loop-task-queue`, `safety-secret-redaction`, `loop-director-attestation` | Planned |
-| `loop-eval-gates` | Behavioral evals as regression gates, with a recorded reference model and baseline | M | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-implementer-policy` | Planned |
+| `safety-secret-redaction` | evi/redact.py: secret redaction for reports, evidence, transcripts and displays | S | director | `fix-transcript-fidelity` | Done (Phase 1 batch 1, unreleased) |
+| `loop-run-report` | `evi run` run report, stream-json events and resume flags on one versioned event schema | M | evi-frontier | `fix-loop-state-propagation`, `fix-history-validity`, `safety-project-trust-gate`, `safety-secret-redaction` | Done (Phase 1 batch 2, unreleased) |
+| `loop-agent-cancel` | Agent cancel primitive, process-tree-safe command execution and REPL Ctrl+C | M | director | `fix-history-validity`, `fix-tool-context-binding`, `fix-cli-agent-drivers` | Done (Phase 1 batch 1, unreleased) |
+| `loop-worktree-isolation` | Worktree-isolated runs that inherit repo trust and load exactly one project context | M | evi-frontier | `fix-loop-state-propagation`, `loop-run-report`, `safety-project-trust-gate` | Done (Phase 1 batch 3, unreleased) |
+| `loop-implementer-policy` | Named 'implementer' policy: worktree-confined writes, a test-command allowlist, no network | M | director | `safety-unattended-default-deny`, `fix-permission-engine`, `fix-shell-segment-split`, `loop-worktree-isolation` | Done (Phase 1 batch 4, unreleased) |
+| `loop-director-attestation` | Director-only verification: a keyring credential, HMAC-signed transitions, Verified-by only from director tooling | M | director | `fix-permission-engine` | Done (Phase 1 batch 1, unreleased) |
+| `loop-task-queue` | Repo-tracked task queue with acceptance criteria and a director handoff API | L | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-agent-cancel`, `extensibility-interop-mcp-sdk2-migration`, `loop-implementer-policy`, `loop-director-attestation` | Done (Phase 1 batch 5, unreleased) |
+| `loop-verify-gate` | Verify-before-done: blocking stop hooks and detected project checks | M | director | `fix-loop-state-propagation`, `loop-run-report`, `safety-unattended-default-deny`, `safety-project-trust-gate`, `loop-implementer-policy` | Done (Phase 1 batch 4, unreleased) |
+| `loop-evidence-provenance` | Evidence bundles and provenance trailers | M | evi-frontier | `loop-run-report`, `loop-verify-gate`, `loop-task-queue`, `safety-secret-redaction`, `loop-director-attestation` | Done (Phase 1 batch 5, unreleased) |
+| `loop-eval-gates` | Behavioral evals as regression gates, with a recorded reference model and baseline | M | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-implementer-policy` | Done (Phase 1 batch 6, unreleased); the reference-model baseline is still to be recorded |
 | `loop-shakedown-batch-1` | Loop shakedown batch 1: 8 pure-module fixes through evi-local | M | evi-local | `loop-task-queue`, `loop-evidence-provenance`, `loop-implementer-policy`, `loose-evi-md-implementer-contract` | Planned |
 | `loop-shakedown-batch-2` | Loop shakedown batch 2: 8 multi-function fixes through evi-local | M | evi-local | `loop-shakedown-batch-1` | Planned |
 
