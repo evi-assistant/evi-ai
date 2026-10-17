@@ -1,0 +1,20 @@
+id = "SK1-7"
+title = "vision: downscale and strip EXIF from attached images (Pillow optional, [vision] max_px)"
+status = "open"
+why = "_data_url_for (evi/vision.py:75-82) base64-encodes the raw file bytes. There is no size cap: a 12 MP phone photo is 4-8 MB, or 5-11 MB of base64 in one request, and too big for many local VLM contexts. EXIF (GPS, camera serial) is sent as is, and the orientation tag is ignored. There is no [vision] section in evi/config.py (Config fields at config.py:656-680). Pillow is optional and only in the `computer` extra (pyproject.toml:97-100)."
+hints = "vision.py:75-101. Add `def _downscale(data: bytes, max_px: int) -> bytes | None` (None = send the original). Inside: try `from PIL import Image, ImageOps` except ImportError: return None. Then in try/except Exception -> None: img = Image.open(BytesIO(data)); fmt = img.format (read it BEFORE exif_transpose, which drops it); if fmt not in ('JPEG', 'PNG', 'WEBP'): return None; img = ImageOps.exif_transpose(img); size = _fit_size(*img.size, max_px); if size != img.size: img = img.resize(size, Image.Resampling.LANCZOS); img.info.pop('exif', None); if fmt == 'JPEG' and img.mode not in ('RGB', 'L'): img = img.convert('RGB'); save to a BytesIO with format=fmt (quality=90 for JPEG/WEBP), never passing exif=. _data_url_for keeps its mime logic and uses the downscaled bytes when they are not None. config.py: put VisionSettings after RuntimeSettings (config.py:645-653) and the field after `evidence:` (config.py:680). Nothing else in config.py changes; Config._from_dict picks up new sections automatically. Do not touch evi/llm/agent.py, llm/specialty.py or tools/vision_tool.py: they call build_image_content(text, paths) and get the config default. In the tests, build images with Image.new('RGB', (3000, 2000)); for EXIF use exif = Image.Exif(); exif[0x010F] = 'TestCam'; img.save(p, 'JPEG', exif=exif.tobytes())."
+acceptance = ["evi/config.py has a new `@dataclass class VisionSettings` with `max_px: int = 1568` (docstring: the longest image side sent to a vision model; 0 = never downscale) and `vision: VisionSettings = field(default_factory=VisionSettings)` in Config. Config().vision.max_px == 1568.", "evi/vision.py has a pure helper _fit_size(width, height, max_px) -> tuple[int, int]. It returns the size unchanged when max_px <= 0 or both sides are <= max_px. Otherwise it scales so the longer side == max_px, keeping the aspect ratio, with each side >= 1: (3000, 2000, 1568) -> (1568, 1045); (100, 50, 1568) -> (100, 50); (1000, 1, 100) -> (100, 1); (2000, 3000, 0) -> (2000, 3000).", "_data_url_for(path, max_px=None): when Pillow imports and identifies the file as JPEG, PNG or WEBP, the file is opened, ImageOps.exif_transpose is applied, the image is resized to _fit_size(...) and re-encoded in the same format WITHOUT EXIF. The mime stays that format's. With max_px None, Config.load().vision.max_px is used (any exception -> 1568).", "Without Pillow (simulated with monkeypatch.setitem(sys.modules, 'PIL', None)), when Pillow cannot open the file, or for any other format (GIF, BMP, unknown), the bytes are sent exactly as before. The existing tests/test_vision.py passes unchanged, including its fake-PNG-bytes tests.", "build_image_content(text, image_paths, *, max_px=None) passes max_px through to _data_url_for.", "Pillow tests (behind pytest.importorskip('PIL')): a 3000x2000 JPEG saved with EXIF (tag 0x010F Make) comes back 1568x1045 and len(Image.open(BytesIO(decoded)).getexif()) == 0; a 200x100 PNG keeps its size; max_px=0 keeps a 3000x2000 JPEG's size but still strips the EXIF."]
+files_in_scope = ["evi/vision.py", "evi/config.py", "tests/test_vision_downscale.py"]
+required_checks = ["python -m pytest -q -rs tests/test_vision_downscale.py tests/test_vision.py tests/test_config_persist.py", "python -m ruff check evi/vision.py evi/config.py tests/test_vision_downscale.py"]
+implementer = "evi-local"
+created = "2026-10-17T18:17:43Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

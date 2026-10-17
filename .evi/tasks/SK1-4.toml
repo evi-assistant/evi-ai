@@ -1,0 +1,20 @@
+id = "SK1-4"
+title = "dream: the memory audit snapshots content hashes, not first lines"
+status = "open"
+why = "MemorySnapshot.take (evi/dream.py:70-76) stores only each entry's summary, its first non-empty line (memory.py:60-64, 92-106). diff_snapshots (dream.py:116-124) compares those, so a memory whose body or tags change while the first line stays the same is missing from the dream audit log. Probe on HEAD: 'same first line\\nbody one' -> '...body two' gave diff ([], [], [])."
+hints = "Change only dream.py:70-76 and add `import hashlib`. In take(), for e in store.list(), try data = (store.root / f'{e.name}.md').read_bytes(), and on OSError use data = e.summary.encode('utf-8'). Then entries[e.name] = hashlib.sha256(data).hexdigest(). Update the field comment to say what the value is. Do not touch diff_snapshots, run_dream or the report format. Tests: MemoryStore(root=tmp_path/'memory'). For the end-to-end case, copy the monkeypatches from tests/test_dream.py:69-124 (dream_mod.run_subagent, DREAM_LOG_DIR, ensure_dirs) and pass config=Config()."
+acceptance = ["MemorySnapshot.take(store) maps each memory name to the sha256 hex digest (64 chars) of that entry's whole file (store.root / f'{name}.md').", "Changing only a memory's body (same first line) shows up in diff_snapshots(before, after)[2] (changed).", "Changing only a memory's tags (store.write(name, same_content, tags=['x'])) shows up as changed.", "An unchanged store diffs to ([], [], []), and added and removed still work.", "run_dream end to end, with a stubbed run_subagent that rewrites only the body of an existing memory, lists that name in report.changed and under '## Changed' in the log.", "The existing tests in tests/test_dream.py pass unchanged (they build MemorySnapshot(entries={...}) with arbitrary strings)."]
+files_in_scope = ["evi/dream.py", "tests/test_dream_snapshot.py"]
+required_checks = ["python -m pytest -q tests/test_dream_snapshot.py tests/test_dream.py", "python -m ruff check evi/dream.py tests/test_dream_snapshot.py"]
+implementer = "evi-local"
+created = "2026-10-17T18:17:36Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

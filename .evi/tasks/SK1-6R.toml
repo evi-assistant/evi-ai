@@ -1,0 +1,20 @@
+id = "SK1-6R"
+title = "[REPLACEMENT for item 6] doctor: only a 2xx /models answer is 'backend reachable'; connect to localhost via 127.0.0.1"
+status = "open"
+why = "Replacement task, because item 6 is already fixed (see `replaces`). doctor._check_backend reports ANY status below 500 as ok (evi/doctor.py:137-138). A 404 page from an unrelated service on the port, or a base_url missing /v1, passes as 'backend reachable'. doctor.py:130 also connects to `localhost`, which on Windows tries ::1 first and can stall up to the 2.5 s timeout. evi.portprobe.normalize_localhost (portprobe.py:53-62) exists for exactly this problem."
+hints = "Change only doctor.py:107-145. Inside the existing try, `from evi.portprobe import normalize_localhost`, then url = normalize_localhost(base) + '/models'. Keep the call exactly `httpx.get(url, timeout=2.5, headers=headers)`, because the existing test fakes get(url, timeout=None, headers=None). Check in this order: 401/403 -> fail (as now); 200 <= code < 300 -> ok; 404 -> warn; else warn. Keep using `base` (not url) in every detail string. New tests/test_doctor_backend.py: copy _doctor_with_backend from tests/test_cli_agent_drivers.py:1095-1104 and the fake httpx.get with SimpleNamespace(status_code=...) from lines 1150-1165 (monkeypatch.setattr(httpx, 'get', fake)). For the error case, make the fake raise httpx.ConnectError('x')."
+acceptance = ["Only a 2xx answer from <base_url>/models gives 'backend reachable' ok (detail unchanged: '<base> (HTTP 200)').", "HTTP 404 gives warn. The detail names the configured base_url and says it does not answer /models like an OpenAI-compatible server, adding that base_url usually ends in /v1.", "Any other non-2xx status below 500 (e.g. 302, 400, 405) gives warn '<base> returned HTTP <code>'. 5xx stays warn. 401/403 stays fail with the API-key message, and the Authorization header is still sent.", "A localhost base_url is requested at 127.0.0.1 via evi.portprobe.normalize_localhost: base_url 'http://localhost:1234/v1' means httpx.get is called with 'http://127.0.0.1:1234/v1/models', while the Check detail still shows 'http://localhost:1234/v1'. Remote hosts are untouched.", "A connection error still gives fail '... unreachable (...)'.", "CLI-agent backends are unchanged. The existing tests in tests/test_cli_agent_drivers.py and tests/test_qol.py pass."]
+files_in_scope = ["evi/doctor.py", "tests/test_doctor_backend.py"]
+required_checks = ["python -m pytest -q tests/test_doctor_backend.py tests/test_cli_agent_drivers.py tests/test_qol.py", "python -m ruff check evi/doctor.py tests/test_doctor_backend.py"]
+implementer = "evi-local"
+created = "2026-10-17T18:17:41Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

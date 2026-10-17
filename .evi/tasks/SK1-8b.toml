@@ -1,0 +1,20 @@
+id = "SK1-8b"
+title = "fs + index: find_files, search_files, list_dir and the index honour .gitignore/.eviignore (wire in evi.ignore)"
+status = "open"
+why = "This is the second half of roadmap item 8, wiring SK1-8's ignore_filter into the tools. Today find_files (evi/tools/fs.py:339-355), search_files (367-411), list_dir (314-319) and ProjectIndex's walk (evi/index.py:118-131) know only fixed folder lists, so ignored build output, coverage output and generated files show up and get embedded."
+hints = "fs.py: `from evi.ignore import ignore_filter` at the top. find_files: after the is_dir check, skip = ignore_filter(base), and add `and not skip(m)` to the comprehension. search_files: in the is_dir branch only, skip = ignore_filter(base), and add `and not skip(m)` to the rglob filter. list_dir: skip = ignore_filter(p); keep = [e for e in entries if not skip(e)]; append the hidden-count line when len(keep) < len(entries). index.py _walk_text_files: skip = ignore_filter(root); dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith('.') and not skip(Path(dirpath) / d)], and `if skip(p): continue` for files. Tests imitate tests/test_tools.py:145-198 (REGISTRY['find_files'].call(json.dumps({...}))) and tests/test_index.py:81-104 for the project layout."
+acceptance = ["With tmp_path/'.git' as a folder and a .gitignore of '*.log\\nout/\\n', find_files('**/*', path=tmp) lists no *.log file and nothing under out/, and search_files finds matches only in files that are not ignored. The existing _IGNORE_DIRS still apply.", "A .eviignore entry hides a path .gitignore doesn't.", "search_files with path set to an ignored file still searches that file. find_files, search_files and list_dir with path set to an ignored folder still list or search its contents (an explicit request wins).", "list_dir hides the ignored entries of a non-ignored folder ('F debug.log' absent, 'F keep.py' present) and, when any were hidden, appends a last line '(N entries hidden by .gitignore/.eviignore)'.", "evi.index._walk_text_files(root) no longer yields ignored files and does not descend into ignored folders. Test this by calling list(index_mod._walk_text_files(project)) directly, with no numpy or embeddings.", "The existing tests in tests/test_tools.py, tests/test_index.py and tests/test_ignore.py pass."]
+files_in_scope = ["evi/tools/fs.py", "evi/index.py", "tests/test_ignore_wiring.py"]
+required_checks = ["python -m pytest -q tests/test_ignore_wiring.py tests/test_ignore.py tests/test_tools.py tests/test_index.py", "python -m ruff check evi/tools/fs.py evi/index.py tests/test_ignore_wiring.py"]
+implementer = "evi-local"
+created = "2026-10-17T18:17:47Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
