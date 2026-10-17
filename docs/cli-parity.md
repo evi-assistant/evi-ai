@@ -14,7 +14,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `chat` | interactive chat | ✅ main view | ✅ | the core loop |
 | `run` | headless one-shot | ◐ `/api/chat` | ◐ | scripting; no "run once" button (not needed) |
 | `batch` | many prompts → JSONL | ⌨️ | ⌨️ | batch/scripting |
-| `eval` | suites that check the answer and what a run did: list/new/run/compare, `baseline record` (director only) | ◐ settings → Evals | ◐ | the panel shows the latest pass rate per suite, model and backend from `evi eval run`'s reports, and browses and runs your suites with the older text-only engine (answer checks only; a case that needs a workspace or asserts what the run did fails there); runs in a throwaway workspace, `--runs`, `--backend fake`, reports, `compare` and the `--baseline` gate are CLI-only ([guide](features/evals.md)) |
+| `eval` | suites that check the answer and what a run did: list/new/run/compare, `baseline record` (director only) | ◐ settings → Evals | ◐ | the panel shows the latest pass rate per suite, model and backend from `evi eval run`'s reports, and browses and runs your suites on the same engine as `evi eval run` (throwaway workspaces, the implementer policy, a report per run) with the configured backend; `--runs`, `--backend fake`, `compare` and the `--baseline` gate are CLI-only ([guide](features/evals.md)) |
 | `ultracode` | exhaustive multi-agent pass | ✅ settings → Ultracode | ✅ | `/ultra` + `/effort ultracode` in REPL; stages shown in the panel |
 | `agents` | list subagent profiles | ◐ used by `delegate` | ◐ | a "profiles" list could live in Dispatch |
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |

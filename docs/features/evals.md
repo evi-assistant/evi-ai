@@ -30,8 +30,10 @@ rubric, graded by a model acting as **LLM-as-judge**.
 > folder you started it in, with every tool approved. Each run now gets an
 > empty temporary git repository and the implementer policy; a suite that
 > needs your repository adds `workspace = "repo"`. `--json` prints the new
-> report shape. The web app's **Run** button and scheduled evals still use the
-> old text-only engine. See [Upgrading an existing suite](#upgrading-an-existing-suite).
+> report shape. The web app's **Run** button and scheduled evals run the same
+> engine as `evi eval run` and keep a report too. With `--baseline`, a case
+> left out by `--tag` / `--skip-tag` now counts as missing unless you pass
+> `--partial`. See [Upgrading an existing suite](#upgrading-an-existing-suite).
 
 ## How a run works
 
@@ -68,6 +70,11 @@ rubric, graded by a model acting as **LLM-as-judge**.
 
 The report (one row per case) is printed and kept as JSON and HTML under
 `<eVi home>/evals/reports/`. See [Reports](#reports).
+
+The same engine runs a suite from the web app's [Evals
+panel](#web--desktop-the-evals-panel) and from a [scheduled
+eval](#scheduled-evals-drift-watch), so all three give the same verdict for
+the same suite and model.
 
 ## Writing a suite
 
@@ -327,7 +334,9 @@ unless a [baseline](#the-baseline-gate) holds it and it fell below that.
 
 `tags = ["crlf", "edit-recovery"]` labels a case. `evi eval run --tag T` runs
 only the cases with one of the given tags, `--skip-tag T` leaves out the
-cases with any of them (both repeatable).
+cases with any of them (both repeatable). A filter doesn't excuse a case from
+a `--baseline`: a baselined case it left out counts as missing unless the run
+is `--partial` ([The baseline gate](#the-baseline-gate)).
 
 ### The LLM-as-judge grader
 
@@ -406,6 +415,7 @@ reached are not reported.
 | `--tolerance X` | How far below the baseline a pass rate may fall (default 0.1). |
 | `--tag T` | Only cases with this tag (repeatable). |
 | `--skip-tag T` | Leave out cases with this tag (repeatable). |
+| `--partial` | With `--baseline`: hold only the cases that ran to it. The baseline cases `--tag` / `--skip-tag` left out are listed under `baseline.excluded`, with a warning on stderr, instead of failing the run. Without `--baseline` it is a usage error (exit 2). |
 | `--repo DIR` | The repository `self` means and a `workspace = "repo"` case uses (default: the one you are in). |
 
 Text output, on the starter suite with the fake backend:
@@ -431,19 +441,21 @@ Each row is `PASS`, `FAIL`, `XFAIL` / `XPASS` (an `expected_fail` case) or
 | Exit | `evi eval run` |
 |------|----------------|
 | 0 | Every case that ran passed. An `expected_fail` case and a skipped case don't fail the run; when every case was skipped it prints `no case ran` and still exits 0. |
-| 1 | A case failed, fell below the baseline, or a baseline case didn't run; or the report couldn't be written. |
-| 2 | Nothing ran: an unknown or malformed suite, `self` outside a git repository, without `evals/self`, or in an untrusted repository (`skipped: …`), an unknown `--backend` or `--format`, no case left after `--tag` / `--skip-tag`, a file that isn't a baseline, `--backend fake` against a real model's baseline, or a CLI-agent backend. |
+| 1 | A case failed, fell below the baseline, or a baseline case didn't run (a tag filter leaving it out included, unless `--partial`); or the report couldn't be written. |
+| 2 | Nothing ran: an unknown or malformed suite, `self` outside a git repository, without `evals/self`, or in an untrusted repository (`skipped: …`), an unknown `--backend` or `--format`, no case left after `--tag` / `--skip-tag`, `--partial` without `--baseline`, a file that isn't a baseline, `--backend fake` against a real model's baseline, or a CLI-agent backend. |
 
 `evi eval compare` exits 1 when a case regressed and 2 for a file that is
 neither a report nor a baseline. `evi eval baseline record` exits 2 where it
-refuses (an agent may have started it, `--out` missing for a suite outside
-`evals/self`) and 1 when no case ran. For the messages and what to do, see
+refuses (an agent may have started it, `--tag` / `--skip-tag`, `self/<file>`
+without `--out`, `--out` missing for a suite outside `evals/self`) and 1 when
+no case ran. For the messages and what to do, see
 [Troubleshooting](../troubleshooting.md#evi-eval-run-exits-1-or-2).
 
 ### Reports
 
-Every `evi eval run` (and `evi eval baseline record`, and each model of `evi
-models recommend --verify`) writes two files:
+Every `evi eval run` (and `evi eval baseline record`, each model of `evi
+models recommend --verify`, each run of the web panel's **Run** button and
+each scheduled eval) writes two files:
 
 ```text
 <eVi home>/evals/reports/<suite>/<UTC time>-<model>.json
@@ -452,7 +464,9 @@ models recommend --verify`) writes two files:
 
 for example `~/.evi/evals/reports/self/20261017T151337Z-qwen2.5-coder-7b.json`.
 Characters outside letters, digits, `.`, `_` and `-` in the suite or model
-become `-`, and a second report in the same second gets `-2`. The JSON is
+become `-`, and a second report in the same second gets `-2` (then `-3`, …;
+two runs that finish at once, such as the web panel's and a scheduled one,
+never take the same name). The JSON is
 checked against `evals.REPORT_SCHEMA` before it is written. The HTML page is
 static: every value escaped, no scripts (a `default-src 'none'`
 Content-Security-Policy), with the totals, the machine, the baseline it was
@@ -467,7 +481,7 @@ The report (`schema_version` 1, `kind` `"eval-report"`):
 | `n` | `--runs`, or `null` when each case used its own `runs`. |
 | `evi_version`, `started_at`, `finished_at`, `duration_s` | When, in UTC (`2026-10-17T15:13:52Z`), and with which eVi. |
 | `hardware` | `{gpu, vram_gb, cpu, ram_gb, os}`, detected best effort (NVIDIA GPUs only). |
-| `baseline` | `null`, or how the run was held to a baseline: `path`, `tolerance`, the baseline's `model` and `backend`, and the cases that `regressed`, went `missing` or were `excluded`, plus `mismatch` (how the run's model or backend differs, else `null`). |
+| `baseline` | `null`, or how the run was held to a baseline: `path`, `tolerance`, the baseline's `model` and `backend`, the cases that `regressed` or went `missing`, `partial` (whether the run was `--partial`), the cases a tag filter left out of a partial run (`excluded`; empty otherwise), and `mismatch` (how the run's model or backend differs, else `null`). |
 | `total`, `ran`, `passed`, `failed`, `expected_failures`, `skipped` | Case counts. |
 | `pass_rate` | `passed / ran` (0 when nothing ran). |
 | `cases` | One row per case, in suite order. |
@@ -535,12 +549,20 @@ fake → fake-b · self
 - a case whose pass rate is below the baseline's minus `--tolerance` (default
   0.1) fails, an `expected_fail` one too (the baseline already holds what it
   reached);
-- a baseline case that didn't run fails the run: skipped (its row says so),
-  or gone from the suite, deleted or renamed (`baseline.missing`). Dropping a
-  case, removing its fake script or marking it `expected_fail` can't get
-  past the gate;
-- a case you left out with `--tag` / `--skip-tag` is excused, listed as
-  `excluded` (`not held to the baseline (left out by --tag / --skip-tag)`);
+- a baseline case that didn't run fails the run: skipped (its row says so,
+  and it counts as `regressed`), or not in the run at all
+  (`baseline.missing`): deleted, renamed, or left out by `--tag` /
+  `--skip-tag`. A baseline holds the whole suite, so
+  dropping a case, tagging it away, removing its fake script or marking it
+  `expected_fail` can't get past the gate. The text output tells the two
+  apart: `below baseline not in this run (deleted or renamed?): …` and
+  `below baseline left out by --tag / --skip-tag: …` (in `--format json`
+  the second goes to stderr);
+- `--partial` runs a subset against the baseline on purpose: only then are
+  the cases a filter left out excused, listed under `baseline.excluded`
+  with `baseline.partial` true, and stderr warns `warning: --partial: not
+  held to the baseline (left out by --tag / --skip-tag): …`. A case that
+  ran is held to the baseline as usual;
 - a run on another model or backend than the baseline's prints `warning: this
   run differs from the baseline: …` on stderr and records it as `mismatch`;
   `--backend fake` against a baseline recorded on a real backend is a usage
@@ -570,8 +592,14 @@ checked against `evals.BASELINE_SCHEMA` before it is written.
 | `--backend`, `--model` | As for `evi eval run`. |
 | `--quantization Q` | The model's quantization; default: what the backend reports for the model, else `unknown` (`n/a (fake backend)` under `fake`). |
 | `--gpu`, `--vram-gb`, `--cpu`, `--ram-gb`, `--os` | Override the detected hardware. |
-| `--out FILE` | Where to write it; default `<repo>/evals/self/baseline.json`, and needed for a suite outside `evals/self`. |
+| `--out FILE` | Where to write it; default `<repo>/evals/self/baseline.json`, and needed for a suite outside `evals/self` or for `self/<file>`. |
 | `--repo DIR` | The repository `self` means. |
+
+A baseline is the whole suite: `--tag` / `--skip-tag` are refused (exit 2,
+nothing run or written; `evi eval run --baseline … --tag … --partial` holds a
+subset to a whole baseline), and so is `self/<file>`, one file of
+`evals/self`, without `--out`, since its cases would replace the whole
+suite's in `evals/self/baseline.json`.
 
 It is director tooling, and refuses (exit 2, nothing run or written) wherever
 an eVi agent may have started the process: `EVI_AGENT` set, inside an `evi
@@ -645,29 +673,45 @@ models against your own suite instead.
   run didn't have the case. It shows the newest report of each suite, model
   and backend, so a fake run labelled with a real model's id never replaces
   that model's real result. The table fills from `evi eval run`, `evi eval
-  baseline record` and `evi models recommend --verify`; report text is shown
-  as text, never markup.
+  baseline record`, `evi models recommend --verify`, the **Run** button and
+  scheduled evals; report text is shown as text, never markup.
 - **Your suites** in `~/.evi/evals/`, with their cases and what each checks.
   Each has a **Run** button that runs the suite server-side and marks each
-  case ✓, ✗ or – (skipped) in place.
+  case in place: ✓ passed, ✗ failed (amber for an `expected_fail` case), –
+  skipped, with the reason or the failing runs beside it. A spinner shows
+  while it runs, and the totals line names the model and backend
+  (`2/3 passed (67%), 1 skipped — qwen2.5-coder:7b (ollama)`).
 
-The **Run** button still uses the text-only engine (`evals.make_runners` +
-`run_eval`): each case runs in the server's own folder with every tool
-approved and only its answer is checked. A case that needs the harness (a
-behavioral assertion, `files`, `fixture` or `workspace = "repo"`) fails
-there, without being run, with `… which only evi eval run checks: not run
-here`. `runs`, `pass_rate`, `expected_fail`, `max_turns` and `fake` don't
-apply there: each case runs once and must pass. Its verdicts are not written
-as reports. Run such suites with `evi eval run`.
+The **Run** button runs the suite exactly as `evi eval run <suite>` does
+with no `--backend` or `--model`: each case in a throwaway workspace under
+the implementer policy, behavioral assertions, `files`, `fixture`, `runs`,
+`pass_rate`, `expected_fail` and the judge included, on the configured
+`[llm]` backend and model. A `workspace = "repo"` case gets a worktree of
+the git repository the server was started in, and only when that repository
+is trusted; otherwise it is skipped. The agents are bare, as in the CLI: no
+hooks, project context, guardrails, memory or skills. The report is kept
+like the CLI's, so the run shows up in the table above. The fake backend is
+never offered here: `[llm] backend = "fake"` is refused, and `--backend
+fake` stays `evi eval run`'s. A delegate CLI-agent backend is refused too.
+The run goes on in the server if you close the page; the panel shows the
+result when it answers. A user suite named `self.toml` is shadowed
+(`self` names a repository's `evals/self` suites), so its **Run** button is
+disabled with a note: rename the file to run it.
 
 The API: `GET /api/evals` returns `{suites, reports}`: `suites` are yours
-(`{name, description, cases: [{name, prompt, checks, mode}]}`), `reports`
-the newest report of each suite, model and backend, summarized (`suite`,
-`model`, `backend`, `n`, `finished_at`, `total`, `ran`, `passed`, `skipped`,
-`failed`, `pass_rate`, `file`, and `cases: [{name, runs, passes, pass_rate,
-passed, skipped, expected_fail}]`). `POST /api/evals/run` with `{name, mode}`
-runs one of your suites with the text-only engine and returns `{name, total,
-passed, pass_rate, cases: [{name, passed, failures, output}]}`.
+(`{name, file, shadowed, description, cases: [{name, prompt, checks,
+mode}]}`, where `file` is the file name without `.toml`, which is what a run
+takes and may differ from the suite's `name`), `reports` the newest report
+of each suite, model and backend, summarized (`suite`, `model`, `backend`,
+`n`, `finished_at`, `total`, `ran`, `passed`, `skipped`, `failed`,
+`pass_rate`, `file`, and `cases: [{name, runs, passes, pass_rate, passed,
+skipped, expected_fail}]`). `POST /api/evals/run` with `{name, mode?}`
+(`name` is a suite's `file`; `mode` the preset for cases that set none)
+runs it, keeps the report and returns it, in the [report
+shape](#reports). It answers `400` for a body with `backend`, for `self` or
+`self/<file>`, `404` for an unknown suite, `409` for a backend it won't run
+(the fake one, a CLI agent), and `500` when the suite ran but its report
+couldn't be kept. Like the other runs, it is owner-only in multi-user mode.
 
 ## Scheduled evals (drift watch)
 
@@ -675,16 +719,32 @@ passed, pass_rate, cases: [{name, passed, failures, output}]}`.
 evi schedule add --name "nightly-smoke" --cron "0 3 * * *" --eval smoke
 ```
 
-`--eval` takes the **suite name**, one of yours. When it fires, the scheduler
-runs it with the text-only engine, as the web panel's Run button does: every
-tool approved in the scheduler's folder, the judge wired in, and a case that
-needs the harness failing with the reason above. The log goes to
-`~/.evi/logs/scheduled/<task-id>_<timestamp>.log` (its header still says `#
-policy: allow-all`), and the task's `last_status` becomes `ok (P/T)` when all
-cases pass, else `fail (P/T)`, so drift shows in `evi schedule list`. The
-scheduler must be running (`evi scheduler`, or any `evi web` process) and
-needs `pip install 'evi-assistant[scheduler]'`. For a behavioral suite on a
-schedule, run `evi eval run` from your own cron or CI instead.
+`--eval` takes the **suite name**, one of yours (its file name). When it
+fires, the scheduler runs it as the web panel's **Run** button does: the
+same engine as `evi eval run`, each case in a throwaway workspace under the
+implementer policy, on the configured `[llm]` backend and model, with bare
+agents (no user hooks). A `workspace = "repo"` case uses the repository the
+scheduler process was started in, when it is trusted. Every run keeps a
+report under `<eVi home>/evals/reports/<suite>/`, so the Evals panel shows
+the latest one; old reports are not deleted.
+
+The log goes to `~/.evi/logs/scheduled/<task-id>_<timestamp>.log`. Its header
+names the suite and its counts, when it fired, the model and backend, `#
+policy: implementer (each case in a throwaway workspace)` and the report's
+path; then a line per case with its verdict (`PASS`, `FAIL`, `XFAIL`,
+`XPASS`, `SKIP` and the reason) and its failures. The task's `last_status`,
+which `evi schedule list` shows, is:
+
+- `ok (P/T)`: P of the suite's T cases passed, the report is green (an
+  expected failure doesn't count against it) and every case ran. Expected
+  failures are counted after it: `ok (5/6, 1 expected to fail)`.
+- `fail (P/T)` otherwise, with any expected failures and skipped cases
+  counted after P/T: `fail (1/4, 3 skipped)`. A run that skipped any case
+  fails, since nobody is watching to notice it checked less than the suite;
+  so does one in which nothing ran.
+
+The scheduler must be running (`evi scheduler`, or any `evi web` process) and
+needs `pip install 'evi-assistant[scheduler]'`.
 
 ## Upgrading an existing suite
 
@@ -710,12 +770,17 @@ What changed for a suite written before this version:
   `name`, a `cases` row per case with `runs`, `passes`, `pass_rate` and the
   rest, and no `output` (the answer text isn't kept). Every run also writes
   the report under `<eVi home>/evals/reports/`.
-- **The web app's Run button and scheduled evals haven't moved**: they run the
-  old text-only engine, so an answer-only suite gives the same kind of
-  verdict there as before. A case that needs a workspace or asserts what the
-  run did fails there with a reason, and `runs`, `pass_rate`,
-  `expected_fail`, `max_turns` and `fake` don't apply there (each case runs
-  once and must pass).
+- **The web app's Run button and scheduled evals moved too.** They used to
+  run each case once, with every tool approved in the server's or
+  scheduler's folder, checking only the answer. They now run the same engine
+  as `evi eval run` (everything above applies there), keep a report, and
+  their agents get no memory or skills either. A scheduled eval's status
+  counts the suite's cases, and a run that skipped one is `fail`
+  ([Scheduled evals](#scheduled-evals-drift-watch)).
+- **A tag filter no longer excuses a baselined case.** `--tag` /
+  `--skip-tag` with `--baseline` used to leave the filtered cases out of the
+  gate. They now count as missing (exit 1) unless you pass `--partial`, and
+  `evi eval baseline record` refuses tag filters.
 
 ## Examples
 
@@ -826,16 +891,18 @@ echo $?                                              # 0: nothing fell below the
 
 Run it on the backend and model the baseline was recorded on (another one
 prints a `mismatch` warning). `crlf-edit` is `expected_fail`, so it doesn't
-fail the run, but the baseline still holds it at the rate it recorded;
-leaving it out with `--skip-tag edit-recovery` would excuse it from the gate.
+fail the run, but the baseline still holds it at the rate it recorded.
+Leaving it out with `--skip-tag edit-recovery` doesn't get past that: the
+case then counts as missing and the run exits 1, unless you add `--partial`
+to say you mean to hold only a subset to the baseline.
 
 ## Notes / limits
 
-- **One engine per surface, for now.** `evi eval run`, `evi eval baseline
-  record` and `evi models recommend --verify` use the harness; the web
-  panel's Run button and scheduled evals use the text-only engine, which runs
-  answer-only cases with every tool approved in the server's or scheduler's
-  folder. Keep answer-only prompts that run there free of side effects.
+- **One engine everywhere.** `evi eval run`, `evi eval baseline record`,
+  `evi models recommend --verify`, the web panel's **Run** button and
+  scheduled evals all run `run_suite` and keep its report. The web and the
+  scheduler always use the configured `[llm]` backend and model; another
+  backend, the fake one included, takes `evi eval run --backend`.
 - **A guardrail, not a sandbox.** The implementer policy decides every call,
   but an allowlisted test command runs the workspace's code
   (`command_succeeds`, the verify gate). In a fixture that is the suite's own
@@ -849,14 +916,19 @@ leaving it out with `--skip-tag edit-recovery` would excuse it from the gate.
   backend in CI.
 - **No shared state.** Every run starts clean: a new workspace, no
   conversation history, no memory.
-- **Reports pile up** under `<eVi home>/evals/reports/`; the Evals panel reads
-  at most the newest 500 and skips a file over 8 MB. Delete old ones by hand.
+- **Reports pile up** under `<eVi home>/evals/reports/`, a scheduled eval's
+  with every run; the Evals panel reads at most the newest 500 of each suite
+  (so a suite that runs often can't push the others out) and skips a file
+  over 8 MB. Delete old ones by hand.
+- **A web run isn't cancelled** when you close the page: it holds one of the
+  server's worker threads until the suite ends.
 
 ### Relevant source
 
 - `evi/evals.py`: the suite and case schema, the workspaces, `run_suite`, the
   assertions, `REPORT_SCHEMA` and `BASELINE_SCHEMA`, reports, `compare` and
-  `apply_baseline`, and the text-only `run_eval` / `make_runners`.
+  `apply_baseline`, and `configured_context` (the web's and the scheduler's
+  run on the configured backend).
 - `evi/evals_fake.py`: `ScriptedClient`, the fake backend.
 - `evi/worktree.py`: `add_detached` / `remove_detached` for `workspace =
   "repo"`.

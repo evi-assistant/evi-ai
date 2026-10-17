@@ -6,8 +6,9 @@ The task queue is how eVi works on a repository, itself included, without
 marking its own homework. The **director** (you) files a task with acceptance
 criteria and the checks that prove them. `evi task start` runs eVi on it in a
 git worktree of its own under the [implementer
-policy](permissions-and-sandbox.md#implementer-policy). eVi runs the checks
-itself and stops at `implemented`. Only the director's signed `evi task
+policy](permissions-and-sandbox.md#implementer-policy), allowed to change only
+the files the task names. eVi runs the checks itself and stops at
+`implemented`. Only the director's signed `evi task
 verify` or `evi task reject` gives the task a verdict.
 
 - **A task is a file in the repository.** Each task is one
@@ -46,8 +47,9 @@ A task is a TOML table. `evi task new` writes the fields the director files;
 | `title` | What the task is, in one line. Required. |
 | `status` | `open`, `claimed`, `implemented`, `needs_review`, `verified` or `rejected` (see [States and leases](#states-and-leases)). |
 | `why` | The bug or the need. |
+| `hints` | How to approach it: your guidance for the implementer (where to look, what to reuse, what to avoid), shown after `why` in its prompt. A string; `""` for none. |
 | `acceptance` | The acceptance criteria, a list of strings. |
-| `files_in_scope` | Globs relative to the repository. The implementer is told to change only these, and a protected file in the worktree (`EVI.md`, a CI workflow) becomes writable only when an entry names it, as `--scope` does for `evi run --policy implementer`. An empty, absolute or `..` entry is refused. |
+| `files_in_scope` | Globs relative to the repository: the only files a start may write ([What a task may change](#what-a-task-may-change)). A protected file in the worktree (`EVI.md`, a CI workflow) becomes writable only when an entry names it explicitly, as `--scope` does for `evi run --policy implementer`. An empty, absolute or `..` entry is refused, and a task without any can't be started. |
 | `required_checks` | The commands that prove the task: each a command line, split the POSIX way (use `/` in paths), or an argv array. A plain string instead of a list is refused. |
 | `implementer` | Who should implement it, as a hint: `evi-local`, `evi-frontier` or `director`. Nothing enforces it. |
 | `created` | When the task was filed (UTC). |
@@ -58,7 +60,7 @@ A task is a TOML table. `evi task new` writes the fields the director files;
 | `evidence_summary` | The bundle's `hash` (what a verify signs), files changed, insertions, deletions, checks passed and failed, the junit totals when a pytest check ran, and why no check ran when none did. A new task has none: the first bundle adds it. |
 | `reviewer_notes` | `{at, verdict, note}` entries, from a reopen, a verify or a reject. |
 | `lease` | `{holder, expires_at}` while the task is claimed, empty otherwise. |
-| `last_result` | The latest start's `{stop_reason, exit_code, report, summary}`. The summary is the first line of the answer, with control characters removed. |
+| `last_result` | The latest start's `{stop_reason, exit_code, report, summary, out_of_scope, out_of_scope_more}`. The summary is the first line of the answer, with control characters removed. `out_of_scope` lists the files the branch changed outside `files_in_scope` (at most 200; `out_of_scope_more` counts the rest and is there only when there are more); it is left out when git couldn't tell. |
 | `attestation` | Only on a signed task: the director's signature ([Verify and reject](#verify-and-reject-director-only)). |
 
 A new task looks like this:
@@ -68,6 +70,7 @@ id = "T1"
 title = "Fix the parser's off-by-one"
 status = "open"
 why = "tokens at the end of a line are dropped"
+hints = "the loop is in tokenize(); keep its signature"
 acceptance = ["a trailing token is kept"]
 files_in_scope = ["evi/parser.py", "tests/test_parser.py"]
 required_checks = ["python -m pytest -q tests/test_parser.py"]
@@ -89,10 +92,59 @@ Unknown fields are kept, so you can add your own. Every value has to read
 back from TOML exactly as it was written (TOML has no null), because the
 attestation signs the values as parsed.
 
-`files_in_scope` is not a hard edit boundary. The policy holds the run to its
-worktree and to the protected-file rule above, but it doesn't stop an edit to
-another unprotected file in the worktree. Checking the scope is part of your
-review.
+### What a task may change
+
+A start is **confined** to the task's `files_in_scope`: the implementer
+policy denies a write to any other file in the worktree. That covers
+`write_file`, `edit_file`, every file an `apply_patch` call names, a file an
+output redirect in a command line writes (`> out.txt`; the null device is
+fine), and the files a command rewrites: `ruff format`, and `ruff check` with
+a fixing option such as `--fix`. Such a command must name its files, each in
+scope; given a folder (`ruff format .`), a wildcard or no file at all, it is
+denied with `name the files instead`. Reading, running the tests and linting
+are not confined: they work on any file. The full rules are in [Implementer
+policy → Confined runs](permissions-and-sandbox.md#confined-runs).
+
+The model sees each denial as the tool result, and it says what to do:
+
+```text
+'docs/notes.md' is not in the task's files_in_scope: change only those files, and list this one as a concern in your hand-off instead (files_in_scope: evi/parser.py, tests/test_parser.py)
+```
+
+The prompt says so up front too. A task with no `files_in_scope` could change
+nothing, so `evi task start` refuses it (exit 2) before it claims anything,
+and `evi task new` without `--scope` prints a note saying so.
+
+**How an entry matches a file** (the path relative to the repository, with
+`/` between folders; case doesn't matter on Windows):
+
+| Entry | Covers |
+|---|---|
+| `evi/parser.py` | that file |
+| `tests/fixtures` or `tests/fixtures/` | everything below that folder |
+| `pages/[id].tsx` | that file: an entry is first taken literally, so brackets in a name are just characters |
+| `evi/*.py` | every `.py` file under `evi/`, in subfolders too: `*` crosses folders |
+| `*.md` | every `.md` file in the repository |
+| `**/*.py`, `tests/**/test_*.py` | as in a `.gitignore`, a `**/` also matches no folder: `calc.py` at the top, `tests/test_x.py` |
+| `.` | every file in the repository |
+
+Past the literal match, an entry is a glob (`*`, `?`, `[abc]`) over the
+whole path, or over a folder the file is in. A broad entry still opens no
+protected file: only an
+entry that names one explicitly does ([Protected
+files](permissions-and-sandbox.md#implementer-policy)).
+
+**What the policy can't see is caught afterwards.** A command can still
+write a file on its own: a test that leaves an output file, a `fix = true`
+setting in the repository's ruff configuration. So after the run, eVi lists
+every file the branch changed, committed or not, that no entry covers
+(untracked files in a cache folder such as `__pycache__` or `.pytest_cache`
+left out). The list is `out_of_scope` in the run report's `task` section and
+in `last_result`, and `evi task show` prints it (`out of scope: …`, or
+`none`). It never changes the outcome. [`evi task
+verify`](#verify-and-reject-director-only) is the gate: it works the list out
+again on the branch it signs, and refuses while it isn't empty unless you say
+why with `--allow-out-of-scope REASON`.
 
 ### Where the files live
 
@@ -183,9 +235,10 @@ eVi's home (see [What `evi task start` does](#what-evi-task-start-does)).
 2. Refuses an untrusted repository. Run `evi trust` there from your own
    terminal first: the implementer policy runs no commands and no checks in
    an untrusted folder, so nothing could prove the task.
-3. Reads the task (its required checks must parse and its scope must stay in
-   the repository) and claims it with a lease of `--ttl` minutes. Someone
-   else's live lease refuses the start unless you pass `--force`.
+3. Reads the task (its required checks must parse, and it must have
+   `files_in_scope`, all inside the repository) and claims it with a lease of
+   `--ttl` minutes. Someone else's live lease refuses the start unless you
+   pass `--force`.
 4. Opens the task's worktree: branch `task/<id>` in
    `<repo>/.worktrees/task__<id>`, created the first time from `--base`
    (default `[worktree] base_ref`, else `HEAD`), reused on later attempts,
@@ -195,9 +248,10 @@ eVi's home (see [What `evi task start` does](#what-evi-task-start-does)).
    start. The worktree, branch and base go into the task.
 5. Builds the agent in the worktree, on `--backend` and `--model` or your
    configured backend. The worktree's `EVI.md` and `.evi.toml` apply (the
-   repository is trusted). The agent is held to the implementer policy, with
-   the task's `files_in_scope` and its required checks allowed as exact
-   commands, and nothing asks: every call is allowed or denied. The [verify
+   repository is trusted). The agent is held to the implementer policy,
+   confined to the task's `files_in_scope` ([What a task may
+   change](#what-a-task-may-change)), with its required checks allowed as
+   exact commands, and nothing asks: every call is allowed or denied. The [verify
    gate](../configuration.md#verify-before-done--checks-in-configtoml) is on,
    even with `[checks] verify = "off"`, and the required checks join
    `[checks] commands` for the run, so the model sees a failing check before
@@ -206,38 +260,47 @@ eVi's home (see [What `evi task start` does](#what-evi-task-start-does)).
    `[models] *_backend` or as `--backend`, whatever
    `[llm] allow_cli_agent_unattended` says: it runs its own tools, outside
    the policy.
-6. Runs the prompt it builds from the task: the title, why, acceptance
-   criteria, files in scope, required checks and the implementer contract in
-   `EVI.md`. The implementer is told never to commit, push or change the
-   task's status. The run takes at most `--max-turns` model round trips
-   (default 30).
+6. Runs the prompt it builds from the task: the title, why, your hints
+   (`How to approach it:`), acceptance criteria, files in scope, required
+   checks and the implementer contract in `EVI.md`. The implementer is told
+   that a write outside the files in scope is refused and belongs in its
+   hand-off as a concern, and never to commit, push or change the task's
+   status. The run takes at most `--max-turns` model round trips (default
+   30).
 7. If the run ended `done`, runs each required check itself in the worktree
    (with `[checks] timeout`). That run is the ground truth: the model saying
    the tests pass doesn't count.
-8. Writes the run report to
+8. Lists the files the branch changed outside `files_in_scope`
+   (`out_of_scope`, [above](#what-a-task-may-change)). A list git can't
+   produce is a note, and the outcome stands either way.
+9. Writes the run report to
    `<eVi home>/tasks/<repo key>/<id>/<attempt>/report.json`, where the repo
    key is a hash of the main checkout's path. It is `evi run`'s [run
    report](structured-and-batch.md#the-run-report) plus a `task` section:
-   the id, attempt, repository, branch, base, outcome, stop reason, exit code
-   and the required checks' results.
-9. Collects the attempt's [evidence bundle](evidence.md), whatever the run's
+   the id, attempt, repository, branch, base, outcome, stop reason, exit
+   code, the required checks' results, `files_in_scope`, `out_of_scope` (at
+   most 200 paths) and `out_of_scope_more` (how many more), both `null` when
+   git couldn't tell.
+10. Collects the attempt's [evidence bundle](evidence.md), whatever the run's
    stop reason, in `<eVi home>/evidence/<repo key>/<id>/<attempt>/`: the
    worktree's diff against the base, eVi's own run of the required checks
    again (a pytest one with its junit report; none when the run stopped
    before its checks, and a Ctrl+C stops them), a redacted excerpt of the
    run's transcript and `report.json`. A bundle that can't be collected is a
    note; the run is recorded all the same, without evidence.
-10. Records the attempt, backend, model, `last_result`, `evidence` and
-    `evidence_summary`, and leaves the task `implemented` or `open`. When
-    eVi's own run of a required check fails, the task's stop reason is
-    `checks_failed` (exit 5) even if the run itself ended `done`. The
-    worktree is unlocked.
+11. Records the attempt, backend, model, `last_result` (with
+    `out_of_scope`), `evidence` and `evidence_summary`, and leaves the task
+    `implemented` or `open`. When eVi's own run of a required check fails,
+    the task's stop reason is `checks_failed` (exit 5) even if the run itself
+    ended `done`. The worktree is unlocked.
 
-The hand-off, the model's answer, goes to stdout. The verify gate's check
-lines, the worktree summary, each required check, the outcome, any note, the
-report's path and the evidence bundle with its summary go to stderr.
-Nothing is merged or committed, and the checkout you work in is never
-touched.
+The hand-off, the model's answer, goes to stdout; a character the terminal
+can't show (a lone surrogate from a model's broken emoji) goes out escaped
+(`\ud83d`). The verify gate's check lines, the worktree summary, each
+required check, the outcome, any note, the report's path and the evidence
+bundle with its summary go to stderr. The files changed outside the scope
+are not printed: `evi task show` has them. Nothing is merged or committed,
+and the checkout you work in is never touched.
 
 A refusal before the run (exit 2) means nothing ran and the task is exactly
 as it was before. A failure while building the agent counts as the run's
@@ -247,7 +310,8 @@ says so; when the task is still claimed by you, `evi task release <id>` puts
 it back to `open`.
 
 The prompt doesn't include the reviewer notes. When you send a task back,
-put what has to change in its `why` or `acceptance`. An open task's file is
+put what has to change in its `why`, `hints` or `acceptance`, and widen its
+`files_in_scope` if the work needs another file. An open task's file is
 plain TOML with no signature, so you can edit it.
 
 ### Over MCP (`evi mcp serve`)
@@ -276,6 +340,9 @@ What differs:
   counted, and its bundle has the diff and the transcript but no checks run,
   with the reason in `checks_skipped`. A queued run that is cancelled never
   claims its task.
+- **A task without `files_in_scope`** is still queued by `task_start`, then
+  ends in the `error` state with the reason, never having claimed the task
+  (`evi task start` refuses it before anything).
 - **No verdict.** No tool submits, verifies, rejects or reopens a task. The
   server runs as an agent's process, where the director key isn't read, so
   `task_list` and `task_show` show a signed verdict as `unverified (no
@@ -316,20 +383,30 @@ ground](permissions-and-sandbox.md#the-directors-ground)).
    the main checkout, and that commit must be an ancestor of the branch head
    and not the head itself, where the diff would be empty and pass any
    review.
-5. The evidence, if the task names any, is a bundle eVi wrote ([which
+5. The branch changed no file outside `files_in_scope`. Verify works this
+   out again on the branch it is about to sign, against that base commit,
+   rather than trusting the `out_of_scope` list the run recorded: the task
+   file is tracked, so that list could have been edited, and you may have
+   dealt with it since. While files are outside, verify refuses (exit 2),
+   naming up to ten of them: undo them on the branch, widen the task's
+   `files_in_scope`, or pass `--allow-out-of-scope REASON` to sign anyway.
+   The reason, with the files, goes into the reviewer notes (verdict
+   `out_of_scope_allowed`) before signing, so it is signed too. A reason
+   given when nothing is outside is not recorded; a note on stderr says so.
+6. The evidence, if the task names any, is a bundle eVi wrote ([which
    folders a task may name](evidence.md#which-folders-a-task-may-name)),
    unchanged since it was collected: its hash matches the one
    `evidence_summary` recorded. After a change, `evi evidence collect <id>`
    collects it again.
-6. The review gate runs: `evi review --multi --exit-code` on the diff from
+7. The review gate runs: `evi review --multi --exit-code` on the diff from
    that base commit to the branch head, in the worktree. It needs a working
    backend. Blocking findings print the review on stderr and exit 1, unless
    `--reason` says why to sign anyway; that reason is recorded in the
    attestation and in the reviewer notes.
-7. You confirm on the terminal: the prompt names the head, the evidence, the
+8. You confirm on the terminal: the prompt names the head, the evidence, the
    rounds, the review result and any override. `--yes` skips it from your own
    shell. With no terminal and no `--yes`, verify refuses (exit 1).
-8. The director key signs (no key: exit 1, `evi attest init` makes one), and
+9. The director key signs (no key: exit 1, `evi attest init` makes one), and
    the signed task is written back only if the file hasn't changed since it
    was read (otherwise exit 2: run the command again).
 
@@ -393,8 +470,9 @@ From your own terminal, in the repository:
 ```bash
 evi attest init        # once per machine
 evi trust              # once per repository
-evi task new --title "Fix the parser's off-by-one" --acceptance "a trailing token is kept" --scope evi/parser.py --scope tests/test_parser.py --check "python -m pytest -q tests/test_parser.py"
+evi task new --title "Fix the parser's off-by-one" --acceptance "a trailing token is kept" --scope evi/parser.py --scope tests/test_parser.py --hint "the loop is in tokenize(); keep its signature" --check "python -m pytest -q tests/test_parser.py"
 evi task start T1 --backend local
+evi task show T1
 git -C .worktrees/task__T1 status
 git -C .worktrees/task__T1 add -A
 git -C .worktrees/task__T1 commit -m "fix(parser): keep a trailing token"
@@ -406,10 +484,13 @@ git merge --no-ff -F msg.txt task/T1
 
 `--backend local` names a saved backend (`evi backend list`); leave it out to
 use your configured one. Review the work in `.worktrees/task__T1` (and the
-hand-off, the report and the evidence bundle) before you commit it.
-`evi task submit` collects the bundle again from what you committed. If it
-isn't right, `evi task reopen T1 --reason "…"`, adjust the task's `why` or
-`acceptance`, and `evi task start T1` again: the next attempt carries on in
+hand-off, the report and the evidence bundle) before you commit it;
+`evi task show T1` says whether the run changed anything outside the task's
+`files_in_scope` (`out of scope:`), which verify won't sign without your
+reason. `evi task submit` collects the bundle again from what you committed.
+If it isn't right, `evi task reopen T1 --reason "…"`, adjust the task's
+`why`, `hints` or `acceptance`, and `evi task start T1` again: the next
+attempt carries on in
 the same branch and worktree. To turn it down for good,
 `evi task reject T1 --reason "…"`. Once verified, merge `task/T1` with the
 message `evi evidence commit-body` prints: it ends with the provenance
@@ -426,21 +507,25 @@ lease, a write that can't be made) prints `error: …` on stderr and exits 2.
 
 **`evi task new`** files a task, `open`, in `.evi/tasks/<id>.toml`.
 `--title TEXT` (required, unless `--from` gives one), `--why TEXT`,
-`--acceptance TEXT` (repeatable), `--scope GLOB` (repeatable,
-`files_in_scope`), `--check COMMAND` (repeatable, `required_checks`),
+`--hint TEXT` (repeatable, one line each, `hints`), `--acceptance TEXT`
+(repeatable), `--scope GLOB` (repeatable, `files_in_scope`: the only files a
+start may write; without one a note on stderr says `evi task start` will
+refuse the task), `--check COMMAND` (repeatable, `required_checks`),
 `--implementer evi-local|evi-frontier|director`, `--id ID` (default: the
-next `T<n>`) and `--from FILE`, a TOML file with the same fields, which the
-flags override (run bookkeeping and any attestation in it are dropped).
+next `T<n>`) and `--from FILE`, a TOML file with the same fields (`hints` as
+a string or a list of strings), which the flags override (run bookkeeping
+and any attestation in it are dropped).
 
 **`evi task list`** lists the tasks with their status as it reads. `--format
 text|json` (`-f`); JSON gives `id`, `title`, `status`, `label`,
 `implementer`, `branch` and `attempts` per task. A task file that can't be
 read is a warning on stderr.
 
-**`evi task show ID`** shows one task: its fields, the status as it reads,
-the lease, the last result and report, the evidence bundle and its summary,
-the reviewer notes, the attestation and the file. `--format json` gives
-`{task, label, path}`.
+**`evi task show ID`** shows one task: its fields (`hints` included), the
+status as it reads, the lease, the last result and report, what the last
+start changed outside `files_in_scope` (`out of scope: …`, or `none`), the
+evidence bundle and its summary, the reviewer notes, the attestation and the
+file. `--format json` gives `{task, label, path}`.
 
 **`evi task claim ID`** claims an open task, or one whose lease ran out.
 `--holder NAME` (default `<user>@<host>`), `--ttl MINUTES` (default 240),
@@ -469,7 +554,8 @@ starts), `--max-turns N` (default 30), `--ttl MINUTES` (default 240),
 **`evi task verify ID`** (director only) signs a needs_review task as
 verified ([Verify and reject](#verify-and-reject-director-only)).
 `--reason TEXT` (sign although the review gate reports blocking findings),
-`--rounds N` (default 1), `--yes`.
+`--allow-out-of-scope REASON` (sign although the branch changed files outside
+`files_in_scope`), `--rounds N` (default 1), `--yes`.
 
 **`evi task reject ID`** (director only) signs a needs_review task as
 rejected. `--reason TEXT` (required), `--rounds N`, `--yes`.
@@ -488,8 +574,8 @@ message and remove old bundles; see [Evidence bundles](evidence.md#commands).
 | Command | 0 | 1 | 2 | Other |
 |---|---|---|---|---|
 | `new`, `list`, `show`, `claim`, `release`, `submit`, `reopen` | done | | refused | |
-| `start` | implemented | the run's error, or its outcome not recorded | refused before anything ran | as `evi run`: 3 `max_turns`, 4 `guardrail`, 5 `checks_failed`, 6 `stop_hook_exhausted`, 130 `interrupted` |
-| `verify` | signed | no key, not confirmed, the review gate couldn't run or reported blocking findings | refused (an agent's process, the status, the worktree, the base, the evidence path or a bundle that changed since it was collected, a file that changed meanwhile) | |
+| `start` | implemented | the run's error, or its outcome not recorded | refused before anything ran (a task without `files_in_scope` included) | as `evi run`: 3 `max_turns`, 4 `guardrail`, 5 `checks_failed`, 6 `stop_hook_exhausted`, 130 `interrupted` |
+| `verify` | signed | no key, not confirmed, the review gate couldn't run or reported blocking findings | refused (an agent's process, the status, the worktree, the base, files changed outside `files_in_scope` without `--allow-out-of-scope`, the evidence path or a bundle that changed since it was collected, a file that changed meanwhile) | |
 | `reject` | signed | no key, not confirmed | refused (an agent's process, the status, no branch, no reason, the evidence path) | |
 | `attest init` | key created | a key exists (no `--rotate`), not confirmed | refused in an agent's process | |
 | `attest status` | key found | no key, or refused in an agent's process | | |
@@ -524,17 +610,24 @@ the refusals.
   key](../security.md#the-directors-attestation-key).
 - **A guardrail, not a sandbox.** The required checks run the repository's
   code in the worktree; see [Implementer
-  policy](permissions-and-sandbox.md#implementer-policy).
+  policy](permissions-and-sandbox.md#implementer-policy). The scope works the
+  same way: the policy stops the writes it can see in a call, and what a
+  command writes on its own reaches the branch and shows up in
+  `out_of_scope`, where verify stops it.
+- **`*` crosses folders in a scope entry.** `evi/*.py` covers every Python
+  file below `evi/`, not only those directly in it. Name files, or a folder,
+  when you mean less.
 
 ## Relevant source files
 
 - `evi/tasks.py`: the queue, the states and leases, `run_task`,
-  `evidence_path`.
+  `out_of_scope`, `build_prompt`, `evidence_path`.
 - `evi/attest.py`: the director key, signing, `status_label`, who may sign.
 - `evi/evidence.py`: evidence bundles ([Evidence bundles](evidence.md)).
 - `evi/mcp/agent_tools.py`: the queue over MCP.
 - `evi/apps/cli/main.py`: `evi task …`, `evi attest …` and `evi evidence …`.
 - `evi/worktree.py`: `open_isolated`, the worktree lock and a dead run's
   lock.
-- `evi/policy.py`: the implementer policy.
+- `evi/policy.py`: the implementer policy, `in_scope` (how an entry
+  matches a file).
 - `evi/proc.py`: `EVI_AGENT` (`mark_agent_process`, `agent_env`).

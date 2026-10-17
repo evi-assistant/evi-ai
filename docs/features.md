@@ -26,7 +26,7 @@ switcher; per-turn headless: `evi run -m code`.
 
 **Headless** — `evi run "prompt" [-m mode] [-y] [--format text|json|stream-json]
 [--schema f] [--max-turns N] [--cwd DIR] [--model ID] [--backend NAME]
-[--resume ID | --continue] [--policy implementer [--scope GLOB]]`. One-shot
+[--resume ID | --continue] [--policy implementer [--scope GLOB] [--confine]]`. One-shot
 for scripts/CI; with no prompt argument it reads the prompt from stdin.
 Example: `{ echo "Review this diff for bugs:"; git diff; } | evi run -f json`. `--format json` prints the **run report**
 (`schema_version` 1): session and transcript, backend, model, folder and its
@@ -47,7 +47,8 @@ which still prints the result). Nothing prompts: without `-y`, a call outside
 ends `done` when the model finishes, and the report lists those calls in
 `denied_tools`. `--policy implementer` (not with `-y`) lets a coding run edit
 files in its folder and run tests, linters and read-only git there, and
-nothing else; `--scope GLOB` names a protected file it may edit
+nothing else; `--scope GLOB` names a protected file it may edit, and
+`--confine` holds every edit to the `--scope` entries
 ([Implementer policy](features/permissions-and-sandbox.md#implementer-policy)).
 `--evidence DIR` writes an [evidence bundle](features/evidence.md) once the
 run is over.
@@ -153,6 +154,7 @@ sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 **Implementer policy** — `evi run --policy implementer` (and every
 `evi task start`) decides every call without asking: reads and edits inside
 the run's folder (protected files only when a `--scope` entry names them;
+a task run, or `--confine`, holds every edit to the task's files_in_scope;
 `.evi/tasks/**`, `.git` and eVi's home never), shell lines whose every command
 is on a short allowlist (pytest, ruff, `npm test`, `cargo check|test|clippy`,
 read-only git) with arguments that stay in the folder, and nothing else: no

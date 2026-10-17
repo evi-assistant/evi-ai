@@ -215,7 +215,11 @@ All notable user-visible changes to eVi. Format loosely follows
   that strips headers) blanks itself inside a frame. Every response carries
   `X-Content-Type-Options: nosniff`, and generated images (`/images/…`) and
   attachments (`/uploads/…`) get a sandbox policy, so an HTML or SVG file
-  opened directly runs nothing.
+  opened directly runs nothing. That includes the `500` for a route that
+  failed with an unexpected error, which the server sends from outside the
+  layer that adds these headers: it gets the same ones (the page's policy
+  and framing headers too), its body is still a plain `Internal Server
+  Error`, and the error is still logged.
 - **In multi-user mode, a users.json login can use only its own chats.** Any
   login could change the host's settings, hooks, plugins, channels, peers,
   managed runtime, MCP servers and backends, run its workflows, recipes and
@@ -268,9 +272,9 @@ All notable user-visible changes to eVi. Format loosely follows
   relied on calls running unasked needs an `allow` rule, the category in
   `auto_approve`, or the opt-in; an SDK program can pass
   `permission_callback=` or `unattended_policy="allow"` to `build_agent`.
-  `evi workflow run`, the web app's eval runs and scheduled evals still
-  approve every tool (`evi eval run` now holds each case to the implementer
-  policy, see Changed). See "Unattended runs" in
+  `evi workflow run` still approves every tool (eval runs, from `evi eval
+  run`, the web app and the scheduler alike, now hold each case to the
+  implementer policy, see Changed). See "Unattended runs" in
   docs/features/permissions-and-sandbox.md.
 - **Peers, webhooks and channel pushes get only what you pre-approved.** A
   federated or A2A task, a routine webhook without `yes` and a channel push
@@ -531,11 +535,32 @@ All notable user-visible changes to eVi. Format loosely follows
   `--json` and `--format json` print the report: `suite` instead of
   `name`, a row per case with `runs`, `passes` and `pass_rate`, and no
   `output`. A delegate CLI-agent backend is refused (exit 2). The web app's
-  Run button (`POST /api/evals/run`) and scheduled eval tasks still run the
-  old text-only engine, in their own folder with every tool approved, so an
-  answer-only suite behaves there as before, while a case that needs a
-  workspace or asserts what the run did fails there, with the reason,
-  without running. See "Upgrading an existing suite" in
+  Run button and scheduled evals changed the same way (next entry). See
+  "Upgrading an existing suite" in docs/features/evals.md.
+- **The Evals panel's Run button and scheduled evals give the same verdict
+  as `evi eval run`.** Both ran each case once in the server's or
+  scheduler's own folder with every tool approved and checked only the
+  answer, so a case that asserted what the run did couldn't pass there and
+  a prompt that edited files edited that folder. They now run the same
+  engine as `evi eval run`: each case in a throwaway workspace under the
+  implementer policy, `runs`, `pass_rate`, `expected_fail`, behavioral
+  assertions and the judge included, on your configured `[llm]` backend and
+  model, with no hooks, memory or skills. A `workspace = "repo"` case uses
+  the repository the server or scheduler was started in, when it is
+  trusted. Every run keeps its report, so it shows up under "Latest results
+  by model", which now reads the newest reports of each suite (a suite
+  scheduled often can't push the others out), and two runs that finish in
+  the same second keep both reports. The panel shows a spinner while a run
+  goes on, marks expected failures and skipped cases, and names the model
+  and backend. The web never runs the fake backend: `[llm] backend =
+  "fake"` gets `409`, as a CLI-agent backend does, and `POST
+  /api/evals/run` refuses a `backend` field and `self` (`400`). A
+  scheduled eval's log header now says `# policy: implementer (each case in
+  a throwaway workspace)` and names the model and the report, and its
+  status counts the suite's cases, with expected failures and skips after
+  them (`ok (5/6, 1 expected to fail)`, `fail (1/4, 3 skipped)`): a run that
+  skipped any case is `fail`, since nobody is there to notice it checked
+  less. See "Web / Desktop: the Evals panel" and "Scheduled evals" in
   docs/features/evals.md.
 - **A release waits for the browser tests and its CHANGELOG entry.** 1.0.49
   reached PyPI with a dead button because a release ran only the unit suite.
@@ -844,9 +869,10 @@ All notable user-visible changes to eVi. Format loosely follows
   lines whose every command is on a short allowlist (`pytest`, `ruff check`
   / `ruff format`, `python -m pytest` / `ruff`, `npm test`,
   `cargo check|test|clippy` and read-only git) with arguments that stay in
-  the folder, and nothing else: no network, MCP tools, `run_python`, memory
-  or subagents. `hard_deny`, `deny` rules and the director's ground still
-  deny first; `allow` rules, `yolo` and `unattended_policy` never widen it;
+  the folder (pytest and ruff take no `@file` argument, whose contents the
+  policy couldn't check), and nothing else: no network, MCP tools,
+  `run_python`, memory or subagents. `hard_deny`, `deny` rules and the
+  director's ground still deny first; `allow` rules, `yolo` and `unattended_policy` never widen it;
   the destructive-command guard is always on. A protected file is editable
   only when a `--scope GLOB` entry names it (`.github/workflows/ci.yml` or
   `.github/workflows/*.yml`, not `**`), and `.evi/tasks/**`, `.git`, eVi's
@@ -1018,6 +1044,32 @@ All notable user-visible changes to eVi. Format loosely follows
   (`400`). `--repo DIR` names the repository, and `evi mcp serve-config
   --categories …,agent` adds `--repo` for the repository you run it in. See
   "The agent category" in docs/features/mcp.md.
+- **A task run can change only the files the task names, and `evi task
+  verify` won't sign work outside them without your reason.** A task's
+  `files_in_scope` was advice in the prompt: the implementer could still
+  edit any other unprotected file in its worktree. `evi task start` now
+  holds the run to it. A `write_file`, `edit_file` or `apply_patch` to any
+  other file is denied, and so is an output redirect to one, and `ruff
+  format` or a fixing `ruff check` (`--fix`, `--add-noqa`, a `--config` …)
+  on one, on a folder, on a wildcard or on no file at all ("name the files
+  instead"); the reason tells the model to leave the file and report it as
+  a concern in its hand-off. Reading, the tests and the linters still work
+  on any file. An entry is a file, a folder, or a glob over the whole path:
+  `*` crosses folders, a `**/` also matches no folder, as in a `.gitignore`,
+  and `.` covers everything. A task without `files_in_scope` is refused at
+  start (exit 2), and `evi task new` warns when you file one. After the
+  run, eVi lists what the branch changed outside the scope anyway (a test's
+  output file, say) as `out_of_scope` in the task's `last_result` and the
+  run report's `task` section, and `evi task show` prints it. `evi task
+  verify` works the list out again on the branch it signs and refuses (exit
+  2) while it isn't empty, unless `--allow-out-of-scope REASON` records why
+  in the signed reviewer notes. `evi run --policy implementer --confine`
+  holds a plain run to its `--scope` entries the same way. Tasks also gain
+  `hints`, your guidance on how to approach the work, shown after the why in
+  the implementer's prompt: `evi task new --hint TEXT` (repeatable), a
+  `hints` field in a `--from` file, or `hints` on MCP's `task_create`. See
+  "What a task may change" in docs/features/tasks.md and "Confined runs" in
+  docs/features/permissions-and-sandbox.md.
 - **Eval cases can check what a run did, not only what it answered, and
   each run happens in a throwaway workspace under the implementer policy.**
   A suite could only test the answer text, so a model that edited the wrong
@@ -1080,12 +1132,15 @@ All notable user-visible changes to eVi. Format loosely follows
   `--out`) records the reference model's per-case pass rates with N, the
   quantization and the hardware in `evals/self/baseline.json`; it is
   director tooling and refuses, writing nothing, wherever an eVi agent may
-  have started it. `evi eval run --baseline FILE` then fails a case below
-  the baseline minus `--tolerance` (0.1), an expected failure too, and any
-  baseline case that didn't run, unless `--tag` / `--skip-tag` left it out;
-  it warns when the model or backend differ, and refuses `--backend fake`
-  against a real model's baseline. The baseline is write-protected in every
-  mode and never granted under the implementer policy, so no agent can move
+  have started it; a baseline is the whole suite, so it refuses `--tag` /
+  `--skip-tag`, and `self/<file>` without `--out`. `evi eval run --baseline
+  FILE` then fails a case below the baseline minus `--tolerance` (0.1), an
+  expected failure too, and any baseline case that didn't run, also one a
+  `--tag` / `--skip-tag` filter left out; `--partial` holds only the cases
+  that ran, listing the filtered ones under `baseline.excluded` with a
+  warning. It warns when the model or backend differ, and refuses `--backend
+  fake` against a real model's baseline. The baseline is write-protected in
+  every mode and never granted under the implementer policy, so no agent can move
   the gate it is measured against. See "The qualification suite" in
   docs/features/evals.md and "The eval gate" in docs/self-build.md.
 - **`evi models recommend --verify` runs the qualification suite on the
@@ -1356,6 +1411,26 @@ All notable user-visible changes to eVi. Format loosely follows
   already has but never overwriting one that went on differently. The copy
   reaches your sync remote unencrypted. See "Handing a session off to another
   device" in docs/features/sessions.md.
+- **A resumed CLI session has the `!cmd` output and `/ultra` exchanges it
+  had.** The `evi chat` REPL added a `!cmd`'s output, a `/ultra <task>`
+  exchange and an auto-ultracode turn to the history without writing them
+  to the transcript, so `evi sessions resume` lost them, and a `/compact`
+  made after one replayed its kept messages one off. They are now logged
+  (redacted, like every line), so the resumed history is the one you had.
+  See "Transcripts" in docs/features/sessions.md.
+- **`evi run` prints an answer with a broken emoji instead of failing after
+  the run.** A model answer holding a lone surrogate (half an emoji) made
+  the text format raise once the run was over, so the answer and the run's
+  exit code were lost. Whatever stdout can't encode now goes out escaped
+  (`\ud83d`), also on a stdout in Python's UTF-8 mode, where some of them
+  used to go out as invalid bytes, and the exit code is the run's.
+  `--format json` and `stream-json` were already safe.
+- **The Evals panel's Run button runs the suite it shows.** It sent the
+  suite's `name` from inside the file, but suites are found by file name, so
+  a suite whose `name` differed from its file got `404` or ran another
+  file. The button now sends the file name (`GET /api/evals` returns it as
+  `file`), and a `~/.evi/evals/self.toml`, which `self` shadows, gets a
+  disabled button with a note.
 
 ## [1.0.53] — 2026-10-09
 

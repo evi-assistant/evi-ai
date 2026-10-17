@@ -51,14 +51,14 @@ itself.
 
 | Tool | What it does |
 |---|---|
-| `task_create(title, why?, acceptance?, files_in_scope?, required_checks?, implementer?, id?)` | Files a task, `open`, in `.evi/tasks/<id>.toml`, as `evi task new` does, and returns it. |
+| `task_create(title, why?, hints?, acceptance?, files_in_scope?, required_checks?, implementer?, id?)` | Files a task, `open`, in `.evi/tasks/<id>.toml`, as `evi task new` does, and returns it. `hints` (a string) is your guidance on how to go about it, shown after `why` in the implementer's prompt. `files_in_scope` are the only files the run may write ([What a task may change](tasks.md#what-a-task-may-change)); a task without them is filed, but its run ends in `error` without starting. |
 | `task_list(status?)` | `{tasks, problems}`: each task's `id`, `title`, `status`, `label`, `implementer`, `branch` and `attempts`, and the task files that can't be read. |
 | `task_show(id)` | `{task, label, path}`: every field, the status as it reads, and the file. |
 | `task_start(id, backend?, model?, max_turns?, base?)` | Queues a run of the task and answers at once with `{run_id, task_id, state, position}` (`position`: how many runs are ahead of it). `max_turns` is 1 to 200 (default 30); `backend` names a saved backend; `base` is where a new task branch starts. |
 | `run_status(run_id)` | `state` (`queued`, `running`, `done`, `cancelled`, `error`), when it was queued, started and ended, `elapsed_s`, `turns_used` of `max_turns`, the steering notes sent, applied and unapplied, the last 10 events in one redacted line each, and once it ended its `stop_reason`, `exit_code`, `task_status`, `implemented`, any `error` and `note`. |
 | `run_steer(run_id, text)` | Sends the running agent a note, framed as a note from the director. It joins the turn at its next step, without interrupting the work in flight; a note sent before the run's agent exists waits for it. |
 | `run_cancel(run_id, reason?)` | A queued run is dropped and its task left as it was. A running one stops at its next step and ends `interrupted` ([below](#limits-cancelling-and-shutting-down)). |
-| `run_result(run_id)` | A finished run's v1 [run report](structured-and-batch.md#the-run-report) with its `task` section, its path, `stop_reason`, `exit_code`, `implemented`, and the task's status and label after it. An `ERROR` while the run is still going. |
+| `run_result(run_id)` | A finished run's v1 [run report](structured-and-batch.md#the-run-report) with its `task` section (whose `out_of_scope` lists the files the run changed outside `files_in_scope`), its path, `stop_reason`, `exit_code`, `implemented`, and the task's status and label after it. An `ERROR` while the run is still going. |
 
 Every result is JSON text; a refusal is an `ERROR: …` result with MCP's error
 flag. Each tool takes only the arguments listed: anything else is refused.
@@ -383,7 +383,8 @@ evi mcp serve-config --categories memory,agent
 ```
 
 Paste it into the client's config. The client can now call `task_create`
-with a title, acceptance criteria, `files_in_scope` and `required_checks`,
+with a title, acceptance criteria, `hints`, `files_in_scope` and
+`required_checks`,
 then `task_start` with the new id, poll `run_status` with the `run_id` it
 got, steer with `run_steer`, and read `run_result` once the run is `done`.
 The work waits uncommitted in `.worktrees/task__<id>`; review and commit it

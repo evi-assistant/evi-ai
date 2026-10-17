@@ -35,9 +35,8 @@ headless agent, so per-stage context stays small no matter how long the pipeline
 
 The fan-out reuses `workflows.fan_out` (the same concurrency primitive behind
 `evi workflow`'s parallel blocks). The core is **model-free** — `run_ultracode`
-takes an injected `run_one` callable, exactly like `evals.make_runners` — so the
-CLI, REPL, and web each supply their own agent factory and the pipeline is fully
-unit-testable.
+takes an injected `run_one` callable — so the CLI, REPL, and web each supply
+their own agent factory and the pipeline is fully unit-testable.
 
 > **Local-model note:** with a single local backend, inference serialises, so
 > breadth buys a **quality** win (diverse angles + adversarial cross-check) more

@@ -161,19 +161,27 @@ several fixes can go on side by side. Nothing is merged by the implementer; the
 director reviews each branch and merges it.
 
 **A task from the queue.** This is how the director delegates work. File the
-task with `evi task new --title "…" --acceptance "…" --scope <file> --check
-"<command>"` (it goes to `.evi/tasks/T<n>.toml`), then run it with
-`evi task start T<n>`. eVi claims the task, opens branch `task/T<n>` at
-`.worktrees/task__T<n>`, runs the implementer under the implementer policy
-with the task's scope and the verify gate on, and then runs the task's
-required checks itself. The task ends `implemented` (exit 0) or back to
+task with `evi task new --title "…" --acceptance "…" --scope <file> --hint
+"…" --check "<command>"` (it goes to `.evi/tasks/T<n>.toml`), then run it
+with `evi task start T<n>`. `--scope` (repeatable) names the only files the
+run may write, so give every file the work needs, its tests included; a task
+without one is refused at start. `--hint` (repeatable) tells the implementer
+how to go about it: where to look, what to reuse, what to avoid. eVi claims
+the task, opens branch `task/T<n>` at `.worktrees/task__T<n>`, runs the
+implementer under the implementer policy, confined to the task's scope (a
+write to any other file is denied, and the model reports it as a concern
+instead), with the verify gate on, and then runs the task's required checks
+itself. The task ends `implemented` (exit 0) or back to
 `open` with the attempt counted, the run report goes under `~/.evi/tasks/`
 and its evidence bundle (the diff, eVi's own run of the required checks, a
-redacted transcript excerpt) under `~/.evi/evidence/`. The implementer never
-commits: review its work in the worktree, commit it on `task/T<n>` there,
-`evi task submit T<n>` (which collects the bundle again from your commit),
-and sign it with `evi task verify T<n>`, which runs the multi-lens review
-gate first ([section 6](#6-shipping-director-only)). `evi task reopen T<n>`
+redacted transcript excerpt) under `~/.evi/evidence/`; `evi task show T<n>`
+lists anything the branch changed outside the scope anyway. The implementer
+never commits: review its work in the worktree, commit it on `task/T<n>`
+there, `evi task submit T<n>` (which collects the bundle again from your
+commit), and sign it with `evi task verify T<n>`, which refuses while the
+branch changes files outside the scope (unless `--allow-out-of-scope
+"<why>"`) and runs the multi-lens review gate first ([section
+6](#6-shipping-director-only)). `evi task reopen T<n>`
 sends it back for another attempt in the same worktree, and `evi task reject
 T<n> --reason "…"` turns it down. `evi task list` shows where every task
 stands. The repository must be trusted, and a delegate CLI-agent backend is
@@ -192,7 +200,8 @@ read and edit files in the worktree, run pytest, ruff and read-only git there,
 and nothing else (no network, no `run_python`, no subagents), and every other
 call is denied with a reason instead of asked. Protected files (`EVI.md`,
 `.github/workflows/…`) stay denied unless the task names them with
-`--scope <file>`; `.evi/tasks/**` never opens. Before the run may finish,
+`--scope <file>`; `.evi/tasks/**` never opens. Add `--confine` to hold every
+write to the `--scope` entries, as a task run is. Before the run may finish,
 eVi runs ruff on the `.py` files it changed and the matching
 `tests/test_<module>.py` files, and hands failures back to the model (at most
 `[checks] max_rounds` failing rounds, then the run exits 5,
@@ -269,9 +278,11 @@ reference model's recorded pass rates: `evi eval run self --baseline
 evals/self/baseline.json --backend <saved backend> --model <reference model>
 --runs 5`, on the model and backend the baseline names, must exit 0. It fails
 a case whose pass rate fell more than `--tolerance` (default 0.1) below the
-baseline's, and a baseline case that didn't run (skipped, deleted or
-renamed); a case added after the baseline was recorded is held only to its
-own `pass_rate` until the baseline is recorded again. `evi eval run self
+baseline's, and a baseline case that didn't run (skipped, deleted, renamed,
+or left out by `--tag` / `--skip-tag`: only `--partial` excuses those, and a
+partial run is no gate for a release); a case added after the baseline was
+recorded is held only to its own `pass_rate` until the baseline is recorded
+again. `evi eval run self
 --backend fake` checks the harness and the suite with no model, and the unit
 suite runs it too. The `self` suite loads only in a trusted checkout (`evi
 trust`). The director records the baseline from their own shell with `evi

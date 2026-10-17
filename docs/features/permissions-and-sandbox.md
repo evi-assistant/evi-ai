@@ -451,19 +451,17 @@ scheduler records the refusal as the task's status, `evi run`, `evi batch`,
 `409`, and an A2A task fails. Set `[llm] allow_cli_agent_unattended = true` to
 accept the risk; the Telegram channel refuses them even then.
 
-`evi eval run` holds each eval case to the [implementer
-policy](#implementer-policy) in a throwaway workspace (see
-[Evals](evals.md#what-the-agent-may-do)). Still allow-all, as before: the web
-eval runner (`POST /api/evals/run`, the Evals panel's **Run** button) and
-scheduled eval suites, whose log says `# policy: allow-all`, which run in the
-server's or scheduler's folder and now only run the cases that check nothing
-but the answer (a case that needs a workspace or asserts what the run did
-fails there without running); and `evi workflow run`, which approves every
-tool of every step. `evi workflow run` is still an unattended entry point,
-though: it refuses a delegate CLI-agent backend as above, and its steps'
-commands get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables ([What a command's
-environment holds](#what-a-commands-environment-holds)). The web app's
-workflow runs follow the policy.
+Eval suites hold each case to the [implementer policy](#implementer-policy)
+in a throwaway workspace, wherever they run: `evi eval run`, the web Evals
+panel's **Run** button (`POST /api/evals/run`) and scheduled eval suites,
+whose log says `# policy: implementer (each case in a throwaway workspace)`
+(see [Evals](evals.md#what-the-agent-may-do)). Still allow-all, as before:
+`evi workflow run`, which approves every tool of every step. It is still an
+unattended entry point, though: it refuses a delegate CLI-agent backend as
+above, and its steps' commands get no `*_KEY` / `*_TOKEN` / `*_SECRET`
+variables ([What a command's environment
+holds](#what-a-commands-environment-holds)). The web app's workflow runs
+follow the policy.
 
 ### Implementer policy
 
@@ -474,12 +472,13 @@ implementer` is the narrow middle: what an implementer needs to change code in
 one folder and prove it works, and nothing else.
 
 `evi task start` runs every task from the [task queue](tasks.md) under this
-policy, with the task's `files_in_scope` as its scope and the task's required
-checks allowed as exact commands.
+policy, [confined](#confined-runs) to the task's `files_in_scope`, with the
+task's required checks allowed as exact commands.
 
 ```bash
 evi run --policy implementer --worktree auto -m code --format json "Make tests/test_calc.py pass"
 evi run --policy implementer --scope .github/workflows/ci.yml --worktree fix-ci -m code "Add Python 3.13 to the CI matrix"
+evi run --policy implementer --confine --scope calc.py --scope tests/test_calc.py --worktree auto -m code "Fix add() in calc.py"
 ```
 
 **The run's folder** (the *root*) is the worktree with `--worktree`; without
@@ -513,7 +512,8 @@ model finishes.
   project code), `monitor` tailing a file, and the read-only git tools
   (`git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_info`).
 - **Writing** inside the root: `write_file`, `edit_file`, `apply_patch`,
-  except protected files (below).
+  except protected files (below); in a [confined run](#confined-runs), only
+  the files its scope covers.
 - **Shell lines** (`run_command`, `monitor` commands) on the shell allowlist
   (below), and `search_tools`.
 - **Everything else is denied**, unknown tools included: the network
@@ -557,7 +557,9 @@ must resolve inside the root, so `ruff format ../x.py` and `git diff ../x
 calc.py` are denied. Options that write a file of their choosing, send output
 over the network or set config that runs a program are refused outright:
 pytest's `--junitxml`, `--basetemp`, `--pastebin`, `-o` / `--override-ini` and
-its other report files; ruff's `--output-file` and `--cache-dir`; cargo's
+its other report files; ruff's `--output-file` and `--cache-dir`; for pytest
+and ruff, any `@file` argument (both read more arguments from that file,
+which the policy can't check: name the options and files directly); cargo's
 `--config` and `-Z`; any npm option before `--` other than `--silent` and
 `--if-present`; and git's `-c`, `--config-env`, `--exec-path`, `--output`,
 `--ext-diff`, `-O`, `--no-index` and `--contents` (or an abbreviation git would
@@ -600,12 +602,15 @@ move the gate it is measured against), anything
 under `.git`, eVi's home (`~/.evi`, `EVI_HOME`), the director's key folder,
 the secret and shell start-up files, and every other `[auto] protected_paths`
 entry in force. `[auto] protected_paths_remove` doesn't open the files above
-under the policy; only `--scope` does. `--scope` grants protected files and
-nothing else: it doesn't narrow what else the run may edit inside the root.
+under the policy; only `--scope` does. Without `--confine`, `--scope` grants
+protected files and nothing else: it doesn't narrow what else the run may
+edit inside the root. With `--confine`, and in every `evi task start` run, it
+does ([Confined runs](#confined-runs)).
 
 **Usage errors** (exit 2, nothing runs): an unknown policy (`--policy foo`),
-`--policy` together with `-y`, `--scope` without `--policy`, and a `--scope`
-entry that is empty, absolute (`/x`, `C:\x`, `~/x`) or climbs out with `..`.
+`--policy` together with `-y`, `--scope` or `--confine` without `--policy`,
+and a `--scope` entry that is empty, absolute (`/x`, `C:\x`, `~/x`) or climbs
+out with `..`.
 
 **The verify checks.** Under the policy, `[checks] verify = "auto"` (the
 default) runs the project's lint and targeted tests whenever the model would
@@ -630,6 +635,57 @@ take, and the worktree is the blast radius: run implementer jobs with
 `--worktree`, in a repository you trust, and review the branch before you
 merge it. In this version the policy is not handed down: the run can't start
 subagents.
+
+#### Confined runs
+
+By default the scope only opens protected files. A **confined** run is also
+held to it for every write: `evi task start` always runs that way, and
+`evi run --policy implementer --confine` does with its `--scope` entries.
+In a confined run, each of these must be a file a scope entry covers:
+
+- every path `write_file`, `edit_file` or `apply_patch` names;
+- the target of an output redirect in a command line (`pytest > log.txt`;
+  the null device is fine);
+- each file a command rewrites: `ruff format` (but `--check` or `--diff`),
+  and `ruff check` with any option not known to leave files alone, such as
+  `--fix`, `--unsafe-fixes`, `--fix-only`, `--add-noqa`, `--add-ignore` or a
+  `--config` (which may turn fixing on), also as `python -m ruff`. An option
+  eVi doesn't know counts as rewriting, so a new ruff option is held to the
+  scope until it is listed. With `--diff`, `--fix`, `--unsafe-fixes`,
+  `--fix-only` and `--config` print a diff and rewrite nothing.
+
+Such a command has to name its files: given a folder (`ruff format .`), a
+wildcard, or no file at all (ruff then rewrites the folder it runs in), it is
+denied with `name the files instead`. `cargo check|test|clippy --fix` is
+denied too: it rewrites files across the whole crate. The verify gate's check
+commands are held to the same rule, so a configured check that rewrites a
+folder (`ruff format .`) is refused in a confined run; a refused check
+doesn't fail a round. Reads, and every other command, are as in any
+implementer run: the tests and linters run on any file.
+
+A denial names the scope and says what to do, so the model can carry on:
+
+```text
+'docs/notes.md' is not in the task's files_in_scope: change only those files, and list this one as a concern in your hand-off instead (files_in_scope: calc.py, tests/test_calc.py)
+```
+
+An entry covers a file when it is the file's path or a folder it is in, taken
+literally (so `pages/[id].tsx` covers itself), or else as a glob over the
+whole path: `*` crosses folders (`evi/*.py` covers `evi/apps/x.py`), a `**/`
+also matches no folder, as in a `.gitignore` (`**/*.py` covers `calc.py`),
+and `.` covers every file. Case doesn't matter on Windows. A broad entry
+still opens no protected file: that takes an explicit entry, as above. A
+confined run with no scope can change nothing: `evi task start` refuses a
+task without `files_in_scope`, and `evi run --confine` without `--scope`
+prints a note saying so. More examples: [Task queue → What a task may
+change](tasks.md#what-a-task-may-change).
+
+What a command writes by itself is outside what the policy sees: a test's
+own output file, or a `fix = true` setting in the repository's ruff
+configuration. A task run catches that afterwards: it records the files the
+branch changed outside the scope (`out_of_scope`), and `evi task verify`
+won't sign over them without the director's reason. A plain
+`evi run --confine` has no such check: review its diff.
 
 ### What `web_fetch` will fetch
 
@@ -1169,7 +1225,8 @@ turn returns to your normal policy.
   `runs_unattended`), and the process-tree runner (`run`).
 - `C:\evi\evi\policy.py` — the implementer policy (`implementer_policy`,
   `Policy.check`, the shell allowlist `SHELL_RULES`, the grant rule
-  `scope_names`); `Agent._policy_verdict` in agent.py puts it in front of the
+  `scope_names`, and for a confined run `in_scope` and the rewriting-command
+  rule `_rewritten`); `Agent._policy_verdict` in agent.py puts it in front of the
   permission flow.
 - `C:\evi\evi\netguard.py` — `web_fetch`'s address, redirect and size checks.
 - `C:\evi\evi\gitsafe.py` — the hardened git calls.

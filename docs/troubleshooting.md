@@ -302,10 +302,10 @@ runs](features/permissions-and-sandbox.md#unattended-runs).
 
 ## "PERMISSION DENIED: … (the implementer policy allows …)"
 
-The run is under `evi run --policy implementer`, which allows a fixed set of
-calls and denies everything else without asking. `-y` can't be combined with
-it, and `[auto] unattended_policy`, `allow` rules and `auto_approve` don't
-widen it. The reason after `was not run:` says which rule refused the call;
+The run is under `evi run --policy implementer` (or is a task's run, `evi task
+start`), which allows a fixed set of calls and denies everything else without
+asking. `-y` can't be combined with it, and `[auto] unattended_policy`,
+`allow` rules and `auto_approve` don't widen it. The reason after `was not run:` says which rule refused the call;
 with `--format json` it is each denied call's `reason` in `tool_calls`, and
 the text format prints `denied: <tools> (the implementer policy refused them;
 …)` on stderr. The run still ends `done` if the model finishes without the
@@ -315,6 +315,10 @@ call.
 |---|---|---|
 | `… is not on the allowlist (…)`, `only npm test`, `git … is not a read-only git command` | That command (in a line of several, the reason quotes the one that failed) isn't on the shell allowlist. | Use an allowlisted form (`python -m pytest …`, `ruff check …`, `git diff`). A project check command of your own can go in `[checks] commands` in `config.toml`: in a trusted folder it is allowed exactly as written. Installing packages, the network or a deploy script are not part of an implementer run: do them yourself. |
 | `its argument … is outside the run's folder`, `… is not allowed (it writes a file of its choosing, …)` | An argument reaches outside the run's folder, or the option writes a file of its choosing, reaches the network or sets config that runs a program. | Keep paths inside the folder and drop the option. |
+| `pytest @… is not allowed: pytest reads more arguments from that file, which the policy can't check` (or `ruff @…`) | pytest and ruff read more arguments from an `@file`, which the policy can't see. | Name the options and files on the command line. |
+| `'…' is not in the task's files_in_scope: change only those files, and list this one as a concern in your hand-off instead (files_in_scope: …)` | A [confined run](features/permissions-and-sandbox.md#confined-runs) (every `evi task start`, or `evi run --confine`) may write only the files its scope covers, and this write, redirect or rewriting command names another. `the task names no files_in_scope, so it may change no file` means the scope is empty. | The model is told to leave the file and report it; that is the intended outcome. If the work needs the file, add it to the task's `files_in_scope` (or `--scope`) and run again. An entry is a path, a folder, or a glob where `*` crosses folders ([What a task may change](features/tasks.md#what-a-task-may-change)). |
+| `it rewrites every file in '.', a folder: name the files instead`, `… names none, so it would rewrite every file in the folder it runs in`, `it rewrites every file '…' matches` | In a confined run, `ruff format` and a fixing `ruff check` (`--fix`, `--add-noqa`, a `--config` …) must name the files they rewrite, each in scope. | Run it on the files in scope (`ruff format calc.py`), or use `ruff check` / `ruff format --check` to lint without rewriting. A configured check of this kind is refused too, and doesn't fail the round. |
+| `cargo --fix rewrites files across the whole crate, so the task's files_in_scope can't hold it` | `cargo check`, `cargo test` or `cargo clippy` with `--fix` can't be held to a list of files. | The model can make each fix with `edit_file`; a crate-wide `--fix` is one to run yourself and review. |
 | `… sets an environment variable before the command`, `… holds a shell expansion` | `X=1 pytest`, `$VAR`, a command substitution or subshell. | Write the command out plainly. |
 | `… is a protected file the task's files_in_scope doesn't name` | `EVI.md`, `AGENTS.md`, `.evi.toml`, `.evi/…`, `.github/workflows/…` or `.vscode/tasks.json`. | Name the file with `--scope`, exactly (`--scope .github/workflows/ci.yml`, or `--scope '.github/workflows/*.yml'`); `**` and other broad globs grant nothing. |
 | `… is protected and no task may write it` | `.evi/tasks/**`, the eval baseline `evals/self/baseline.json`, `.git`, eVi's home, a secret file or another `[auto] protected_paths` entry. | No `--scope` grants it; do that part yourself. The baseline is recorded only with `evi eval baseline record`, from your own shell ([Evals](features/evals.md#recording-the-baseline-evi-eval-baseline-record)). |
@@ -497,6 +501,11 @@ Nothing ran, and the task is exactly as it was. The `error:` line says why:
   backend, whatever `[llm] allow_cli_agent_unattended` says. Pass
   `--backend` with one, or clear that `[models]` setting.
 - `no saved backend named …`: see `evi backend list`.
+- `task T1 names no files_in_scope, and a start may change only the files
+  they cover`: a run confined to no file could change nothing. Add
+  `files_in_scope` to the task file (`files_in_scope = ["evi/parser.py"]`),
+  or file the task again with `--scope`. Over MCP, the same task is queued
+  and its run ends in `error` with this reason.
 - `required check … doesn't parse`, `files_in_scope: …` or `… can't be read
   as a task`: fix the task file.
 - `another eVi is changing the task queue`: another command held the queue's
@@ -543,6 +552,16 @@ Exit 2 means nothing was written and no review ran:
   it would not cover the branch's work`: the branch was rebased onto
   something else, or the field was edited. Set `base` to the commit the
   branch now starts from.
+- `task T1: task/T1 changed files outside its files_in_scope (…): undo them
+  on the branch, or pass --allow-out-of-scope REASON to sign anyway`: the
+  branch changes a file no `files_in_scope` entry covers, often one a
+  command wrote by itself (a test's output) or one you committed along with
+  the work. Verify checks the branch it signs, not the list `evi task show`
+  printed after the run. Remove the file from the branch and commit, add it
+  to the task's `files_in_scope` if it belongs to the task, or sign with
+  `--allow-out-of-scope "…"`: the reason and the files go into the reviewer
+  notes and are signed. See [What a task may
+  change](features/tasks.md#what-a-task-may-change).
 - `its evidence path … is not an evidence bundle eVi wrote for this
   repository …, so it is not read`: the task file names a folder that isn't
   one of eVi's bundles ([which folders a task may
@@ -598,6 +617,8 @@ why:
   fake`.
 - `no case left to run after --tag / --skip-tag`: the filters left out
   every case.
+- `--partial only applies with --baseline`: `--partial` says which baseline
+  cases a filtered run is excused from; without `--baseline` there are none.
 - `… is not an eval baseline: …`: the `--baseline` file doesn't match the
   baseline schema; record it with `evi eval baseline record`.
 - `--baseline holds …'s pass rates (backend …); a --backend fake run
@@ -635,8 +656,14 @@ lists its runs' reasons:
 - `pass rate 0.60 is below the baseline 0.80 minus 0.10`, `skipped (…), but
   the baseline holds it at …`, or `below baseline not in this run (deleted
   or renamed?)`: `--baseline` holds every case it lists, an `expected_fail`
-  one too; a case you leave out with `--tag` / `--skip-tag` is the only one
-  excused. See [The baseline gate](features/evals.md#the-baseline-gate).
+  one too. See [The baseline gate](features/evals.md#the-baseline-gate).
+- `below baseline left out by --tag / --skip-tag: …` (in `--format json`,
+  `baseline cases left out by --tag / --skip-tag count as missing: …` on
+  stderr): a baseline holds the whole suite, so a filter doesn't excuse a
+  case it lists. Run the whole suite, or add `--partial` to hold only the
+  cases that ran: the others are then listed under `baseline.excluded` and
+  stderr warns `warning: --partial: not held to the baseline …`. A partial
+  run proves less than a full one; gate a release on the full suite.
 
 **A suite that passed before fails now.** `evi eval run` used to run cases in
 the folder you started it in with every tool approved; each run now gets an
@@ -651,13 +678,34 @@ baseline holds it): `no fake script` or `a judge rubric needs a model` under
 `… is not a trusted folder, so no worktree of it is made` for a `workspace =
 "repo"` case in an untrusted repository.
 
-**The web panel's Run button, or a scheduled eval, says `… which only evi
-eval run checks: not run here`.** Those still use the text-only engine, which
-checks only the answer. Run the suite with `evi eval run`.
+**The web panel's Run button shows `Error: …`.** It runs the suite as `evi
+eval run` does, on the configured `[llm]` backend: `[llm] backend = 'fake'
+is not a backend` means the configured backend is the scripted one, which
+only `evi eval run --backend fake` runs; a CLI-agent backend is refused as
+for `evi eval run` (above); `the suite ran, but its report could not be kept
+in …` means the reports folder couldn't be written. A suite named
+`self.toml` can't run from the panel at all: rename the file.
+
+**A scheduled eval shows `fail (P/T, N skipped)`.** A scheduled run that
+skipped any case fails, even when every case that ran passed. A `workspace =
+"repo"` case is skipped when the scheduler's process isn't in a trusted git
+repository (`evi web` and `evi scheduler` use the folder they were started
+in): start it from the repository, `evi trust` that repository, or move the
+case to a suite you run with `evi eval run --repo`. The log under
+`~/.evi/logs/scheduled/` gives each `SKIP` reason.
 
 **`evi eval baseline record` says `refusing to record an eval baseline: …`.**
 It is director tooling: run it from your own shell, not from inside `evi chat`
-or a command eVi started. **`evi models recommend --verify` exits 2** with
+or a command eVi started.
+
+**`evi eval baseline record` says `a baseline is the whole suite, …`.** It
+records every case of the suite. With `--tag` / `--skip-tag` it refuses:
+record the whole suite, and hold a subset to it later with `evi eval run
+--baseline … --tag … --partial`. With `self/<file>` (one file of
+`evals/self`) it refuses to replace `evals/self/baseline.json`: record
+`self`, or pass `--out` to write that file's baseline elsewhere.
+
+**`evi models recommend --verify` exits 2** with
 `… lives in eVi's source repository, not in an installed eVi`: run it in a
 trusted checkout of eVi, point `--repo` at one, or pass `--suite` with one of
 your own suites; it exits 1 when the backend serves none of the recommended
