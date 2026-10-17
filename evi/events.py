@@ -45,7 +45,7 @@ SCHEMA_VERSION = 1
 # Why a headless run stopped (the run report's `stop_reason`).
 STOP_REASONS = (
     "done", "max_turns", "loop_detected", "step_budget", "interrupted", "error",
-    "permission_denied", "guardrail", "stop_hook_exhausted",
+    "permission_denied", "guardrail", "stop_hook_exhausted", "checks_failed",
 )
 
 # The envelope's own keys: a payload can't override them.
@@ -86,6 +86,12 @@ def event_payload(event: Any) -> dict[str, Any]:
             payload["citations"] = red.obj(payload["citations"])
     elif kind in ("Error", "Guardrail"):
         payload["message"] = Redactor()(payload.get("message"))
+    elif kind == "CheckResult":
+        red = Redactor()
+        payload["cmd"] = red(payload.get("cmd"))
+        payload["tail"] = red(payload.get("tail"))
+    elif kind in ("StopBlocked", "ChecksSkipped"):
+        payload["reason"] = Redactor()(payload.get("reason"))
     return payload
 
 
@@ -175,7 +181,16 @@ _REPORT_FIELDS: dict[str, Any] = {
     "duration_s": {"type": "number", "minimum": 0},
     # None: not tracked (a batch item, a folder too big to snapshot).
     "files_changed": _nullable({"type": "array", "items": {"$ref": "#/$defs/file_change"}}),
-    "checks": {"type": "array", "items": {"type": "object"}},
+    # The verify checks the run ran (evi/checks.py), in order.
+    "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    # Why no check ran although files changed (an untrusted folder); None
+    # when nothing was skipped.
+    "checks_skipped": _nullable(_STR),
+    # Each time a protocol="json" stop hook sent the model back to work.
+    "stop_blocks": {"type": "array", "items": {"$ref": "#/$defs/stop_block"}},
+    # How tool calls that would ask were settled: a named policy
+    # ("implementer", evi/policy.py), "deny", "allow", "allow-all" or
+    # "interactive" (evi.llm.agent.policy_label).
     "policy": _nullable(_STR),
     # What was redacted from the report, by kind: {"OPENAI_API_KEY": 1}.
     "redactions": {"type": "object", "additionalProperties": _INT},
@@ -193,6 +208,7 @@ SCHEMA: dict[str, Any] = {
     "oneOf": [{"$ref": f"#/$defs/{name}"} for name in (
         "TextDelta", "ThinkingDelta", "ToolCall", "ToolResult", "ToolProgress",
         "UsageStats", "LogProbs", "Guardrail", "RouteInfo", "Steering", "Done", "Error",
+        "CheckResult", "ChecksSkipped", "ChecksFailed", "StopBlocked", "FilesChanged",
         "PermissionRequest", "PermissionExpired", "SystemMessage", "RunStart", "RunResult",
     )],
     "$defs": {
@@ -232,6 +248,29 @@ SCHEMA: dict[str, Any] = {
         "Steering": _kind("Steering", {"text": _STR, "applied": _BOOL}),
         "Done": _kind("Done", {"reason": _STR}),
         "Error": _kind("Error", {"message": _STR}),
+        # Verify-before-done (evi/checks.py, protocol="json" stop hooks).
+        # One check run at a would-be end of the turn.
+        "CheckResult": _kind("CheckResult", {
+            "name": _STR, "cmd": _STR, "exit": _nullable(_INT),
+            "duration_ms": {"type": "integer", "minimum": 0}, "tail": _STR,
+            "round": {"type": "integer", "minimum": 1}, "source": _STR,
+        }),
+        # Files changed, but no check ran, and why (an untrusted folder).
+        "ChecksSkipped": _kind("ChecksSkipped", {"reason": _STR}),
+        # A failing round went back to the model as a note (it joined the
+        # history as a user message), and the turn goes on.
+        "ChecksFailed": _kind("ChecksFailed", {
+            "round": {"type": "integer", "minimum": 1},
+            "max_rounds": {"type": "integer", "minimum": 1}, "failed": _STRS,
+        }),
+        # A stop hook sent the model back to work: its reason joined the
+        # history as a note (a user message), and the turn goes on.
+        "StopBlocked": _kind("StopBlocked", {
+            "hook": _STR, "reason": _STR, "iteration": {"type": "integer", "minimum": 1},
+        }),
+        # The paths the turn's tools wrote, at its end: for a display only,
+        # never in the history.
+        "FilesChanged": _kind("FilesChanged", {"paths": _STRS}),
         # -- the web server's own --
         "PermissionRequest": _kind("PermissionRequest", {
             "decision_id": _STR, "tool_name": _STR, "args": _STR, "category": _STR,
@@ -278,8 +317,40 @@ SCHEMA: dict[str, Any] = {
                 # batch run in parallel and report together.
                 "duration_ms": _nullable({"type": "integer", "minimum": 0}),
                 "output": _nullable(_STR),
+                # A denied call's reason (redacted): the policy's, the guard's,
+                # a refused prompt's. Only on status "denied".
+                "reason": _STR,
             },
             "required": ["name", "args", "status", "duration_ms", "output"],
+        },
+        "check": {
+            "type": "object",
+            "properties": {
+                "name": _STR,
+                "cmd": _STR,
+                # None: it did not finish (timed out, cancelled, could not
+                # start, or the policy / the user refused it; see tail).
+                "exit": _nullable(_INT),
+                "duration_ms": {"type": "integer", "minimum": 0},
+                # The end of its output, redacted.
+                "tail": _STR,
+                # Which would-be end of the turn ran it: 1, 2, ...
+                "round": {"type": "integer", "minimum": 1},
+                # pyproject, ruff.toml, pytest, package.json, Cargo.toml,
+                # config ([checks] commands) or project (.evi.toml).
+                "source": _STR,
+            },
+            "required": ["name", "cmd", "exit", "duration_ms", "tail", "round", "source"],
+        },
+        "stop_block": {
+            "type": "object",
+            "properties": {
+                "hook": _STR,
+                "reason": _STR,
+                # The would-be end of the turn it blocked: 1, 2, ...
+                "iteration": {"type": "integer", "minimum": 1},
+            },
+            "required": ["hook", "reason", "iteration"],
         },
         "usage": {
             "type": "object",

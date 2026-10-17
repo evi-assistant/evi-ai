@@ -10,12 +10,17 @@ The result is the run report, versioned with the event contract
 definition of `evi.events.SCHEMA`): the session and its transcript, the
 backend, model and working folder, the turns used, why the run stopped, every
 tool call (its name, arguments and output redacted, the latter two then cut
-short, its status and how long it took), the calls the permission checks
-denied, the error (redacted), the token usage
+short, its status and how long it took, and a denied call's reason), the
+calls the permission checks denied, the error (redacted), the token usage
 summed over the run, how long it took, the files it changed (when asked to
-track them), the policy it ran under (`evi.llm.agent.policy_label`:
-"deny", "allow", "allow-all" or "interactive") and, for a run isolated in a
-git worktree (`evi run --worktree`), what it left there (`worktree`).
+track them), the verify checks it ran (``checks``: name, cmd, exit,
+duration_ms, tail, round, source; ``checks_skipped`` says why none ran in an
+untrusted folder) and the stop-hook blocks (``stop_blocks``: hook, reason,
+iteration; evi.llm.agent's verify gate), the policy it ran under
+(`evi.llm.agent.policy_label`: a named policy such as "implementer",
+`evi.policy`, else "deny", "allow", "allow-all" or "interactive") and, for a
+run isolated in a git worktree (`evi run --worktree`), what it left there
+(`worktree`).
 
 ``stop_reason`` is one of `evi.events.STOP_REASONS`, and `exit_code` turns it
 into `evi run`'s exit code:
@@ -31,7 +36,10 @@ into `evi run`'s exit code:
 - ``permission_denied`` (4) — the turn itself stopped on a denial (its Done
   reason says so); ``guardrail`` (4) — a guardrail or a user_prompt_submit
   hook refused it;
-- ``stop_hook_exhausted`` (6);
+- ``checks_failed`` (5) — the project checks still failed after ``[checks]
+  max_rounds`` failing rounds (evi/checks.py);
+- ``stop_hook_exhausted`` (6) — a ``protocol = "json"`` stop hook kept
+  blocking past ``[hooks] max_blocks``;
 - ``interrupted`` (130, 128 + SIGINT) — it was cancelled.
 
 The agent's own Done reason is kept as ``done_reason``.
@@ -63,8 +71,12 @@ from evi.events import SCHEMA_VERSION, STOP_REASONS
 from evi.llm.agent import (
     CANCELLED,
     INTERRUPTED_REASON,
+    CheckResult,
+    ChecksFailed,
+    ChecksSkipped,
     Done,
     Error,
+    StopBlocked,
     TextDelta,
     ThinkingDelta,
     ToolCall,
@@ -102,10 +114,16 @@ EXIT_CODES = {
     "loop_detected": 3,
     "permission_denied": 4,
     "guardrail": 4,
+    "checks_failed": 5,
     "stop_hook_exhausted": 6,
     "interrupted": 130,
 }
 USAGE_EXIT = 2
+# How much of a denied call's reason a report keeps.
+MAX_REASON = 500
+# How a denial's text starts (evi.llm.agent._DENIAL_PREFIXES): the rest is
+# its reason.
+_DENIAL_LEADS = ("PERMISSION DENIED: ", "BLOCKED by the destructive-command guard: ")
 
 
 def stop_reason_of(done_reason: str | None) -> str:
@@ -120,6 +138,8 @@ def exit_code(stop_reason: str | None) -> int:
 
 @dataclass
 class HeadlessResult:
+    # The model's text; when the verify gate sent it back (a stop-hook block,
+    # a failing check round), only what it wrote after the last of those.
     text: str = ""
     # One entry per tool call, in call order: {name, args, status,
     # duration_ms, output} (`evi.events.SCHEMA` $defs/tool_call).
@@ -149,8 +169,12 @@ class HeadlessResult:
     duration_s: float = 0.0
     # [{path, status, added, deleted}]; None when not tracked.
     files_changed: list[dict] | None = None
-    # Check results (tests, lint) a later step attaches; none yet.
+    # The verify checks the run ran (evi/checks.py: CheckRun.record), in order.
     checks: list[dict] = field(default_factory=list)
+    # Why no check ran although files changed (an untrusted folder), or None.
+    checks_skipped: str | None = None
+    # [{hook, reason, iteration}]: each time a json stop hook blocked the end.
+    stop_blocks: list[dict] = field(default_factory=list)
     # What was redacted from the tool calls and the error, by kind.
     redactions: dict[str, int] = field(default_factory=dict)
     # The isolated run's git worktree (evi.worktree.worktree_report): path,
@@ -199,6 +223,8 @@ class HeadlessResult:
                 [dict(f) for f in self.files_changed] if self.files_changed is not None else None
             ),
             "checks": [dict(c) for c in self.checks],
+            "checks_skipped": self.checks_skipped,
+            "stop_blocks": [dict(b) for b in self.stop_blocks],
             "policy": self.policy,
             "redactions": dict(self.redactions),
             "worktree": dict(self.worktree) if self.worktree is not None else None,
@@ -305,7 +331,8 @@ class _Rounds:
             if not self._open:
                 self.count += 1
                 self._open = True
-        elif isinstance(event, ToolResult):
+        elif isinstance(event, (ToolResult, StopBlocked, ChecksFailed)):
+            # The verify gate sent the model back: its next reply is a round.
             self._open = False
 
     def end(self, done_reason: str | None, failed: bool) -> None:
@@ -424,6 +451,26 @@ def run_headless(
                         _settle(res, waiting, event, red)
                     elif isinstance(event, UsageStats):
                         _add_usage(res, event)
+                    elif isinstance(event, CheckResult):
+                        res.checks.append({
+                            "name": event.name, "cmd": red(event.cmd), "exit": event.exit,
+                            "duration_ms": max(0, int(event.duration_ms or 0)),
+                            "tail": red(event.tail), "round": max(1, int(event.round or 1)),
+                            "source": event.source,
+                        })
+                    elif isinstance(event, ChecksSkipped):
+                        res.checks_skipped = red(event.reason)
+                    elif isinstance(event, StopBlocked):
+                        res.stop_blocks.append({
+                            "hook": red(event.hook), "reason": red(event.reason),
+                            "iteration": max(1, int(event.iteration or 1)),
+                        })
+                        # The verify gate refused that answer: the run's text
+                        # is the one the model gives next (one JSON object
+                        # for --schema, not two run together).
+                        parts.clear()
+                    elif isinstance(event, ChecksFailed):
+                        parts.clear()
                     elif isinstance(event, Error):
                         res.error = red(str(event.message))
                     elif isinstance(event, Done):
@@ -486,8 +533,22 @@ def _settle(res: HeadlessResult, waiting: list[tuple[dict, float]], event: ToolR
         res.tool_calls.append(record)
     record["status"] = _call_status(output)
     record["output"] = _shown(red(output))
-    if record["status"] == "denied" and name not in res.denied_tools:
-        res.denied_tools.append(name)
+    if record["status"] == "denied":
+        record["reason"] = _denial_reason(red(output))
+        if name not in res.denied_tools:
+            res.denied_tools.append(name)
+
+
+def _denial_reason(output: str) -> str:
+    """Why a call was denied: its (redacted) result's text after the denial
+    prefix, its first line, cut to MAX_REASON characters."""
+    text = output
+    for lead in _DENIAL_LEADS:
+        if text.startswith(lead):
+            text = text[len(lead):]
+            break
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    return first[:MAX_REASON]
 
 
 def _add_usage(res: HeadlessResult, event: UsageStats) -> None:

@@ -36,11 +36,12 @@ branding:
 # `stream-json` the run report's `stop_reason` and `session_id`
 # (evi_run_outputs.py, which passes only values eVi itself writes). The step
 # fails with `evi run`'s exit code (0 done, 1 error, 2 usage, 3 max_turns,
-# 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted)
-# after the outputs are written, so a later step can still read them: give
-# this one `continue-on-error: true` and check `outputs.stop_reason`. Read
-# them through `env:` too. Tool calls denied in a run the model finished
-# (every call, with the config above and no auto_approve) don't fail it:
+# 4 permission_denied or guardrail, 5 checks_failed, 6 stop_hook_exhausted,
+# 130 interrupted) after the outputs are written, so a later step can still
+# read them: give this one `continue-on-error: true` and check
+# `outputs.stop_reason`. Read them through `env:` too. Tool calls denied in
+# a run the model finished (every call, with the config above and no
+# auto_approve) don't fail it:
 # that run is done (0), and the json report lists them in `denied_tools`.
 #
 # Example:
@@ -119,7 +120,7 @@ outputs:
     description: "The stdout of `evi run` (the answer, the JSON report, or the NDJSON events). Untrusted model text."
     value: ${{ steps.run.outputs.result }}
   exit_code:
-    description: "`evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted."
+    description: "`evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 5 checks_failed, 6 stop_hook_exhausted, 130 interrupted."
     value: ${{ steps.run.outputs.exit_code }}
   stop_reason:
     description: "Why the run stopped, from the run report (format json or stream-json; empty for text)."

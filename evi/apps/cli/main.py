@@ -32,10 +32,12 @@ from evi.config import CONFIG_PATH, MCP_CONFIG_PATH, Config, ensure_dirs
 from evi.hooks import load_hooks
 from evi.llm.agent import (
     Agent,
+    ChecksFailed,
     Done,
     Error,
     Guardrail,
     LogProbs,
+    StopBlocked,
     TextDelta,
     ThinkingDelta,
     ToolCall,
@@ -1602,6 +1604,16 @@ def _run_repl(agent: Agent) -> None:
                         )
                     elif isinstance(event, Error):
                         console.print(f"\n[red]error:[/red] {event.message}")
+                    elif _verify_line(event) is not None:
+                        # The verify gate: a check run, a stop-hook block.
+                        from rich.markup import escape as _esc
+
+                        console.print()
+                        console.print(f"[yellow]{_esc(_verify_line(event))}[/yellow]")
+                        if isinstance(event, (StopBlocked, ChecksFailed)):
+                            # The model goes on: its next reply starts afresh.
+                            console.print("[bold magenta]evi ›[/bold magenta] ", end="")
+                            text_acc = []
                     elif isinstance(event, Done):
                         if speaker is not None:
                             speaker.flush()
@@ -1666,6 +1678,7 @@ def chat(
         if _safe_mode():
             tools = [t for t in tools if t.category not in ("memory", "skills", "mcp")]
         agent.tools = {t.name: t for t in tools}
+        agent.mode = mode  # [checks] verify = "always" runs the checks in Code mode
     if cwd.strip():
         from pathlib import Path as _Path
 
@@ -4777,6 +4790,18 @@ def run(
         help="With --worktree: the branch or commit a new branch starts from "
              "(default: [worktree] base_ref, else HEAD).",
     ),
+    policy: str = typer.Option(
+        "", "--policy",
+        help="Run under a named policy instead of the permission flow: 'implementer' "
+             "(edit files in the run's folder, run tests, linters and read-only git; "
+             "nothing else, no network). Not with --yes.",
+    ),
+    scope: list[str] = typer.Option(
+        [], "--scope",
+        help="With --policy: a files_in_scope glob, relative to the run's folder "
+             "(repeatable); only an entry naming a protected file (e.g. "
+             ".github/workflows/ci.yml) lets the run edit it.",
+    ),
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
@@ -4784,19 +4809,37 @@ def run(
     not simply finish). json → the run report, schema_version 1: session_id,
     transcript_path, backend, model, cwd, trust, turns_used, max_turns,
     stop_reason, done_reason, text, error, tool_calls (name, args, status,
-    duration_ms, output), denied_tools, usage (summed), duration_s,
-    files_changed (path, status, added, deleted lines), checks, policy,
-    redactions, worktree. stream-json → one JSON event per line as the run goes:
-    RunStart, the turn's events, and RunResult (the report) last; the same
-    versioned events as the web UI's stream (evi/events.py).
+    duration_ms, output, and a denied call's reason), denied_tools, usage
+    (summed), duration_s, files_changed (path, status, added, deleted lines),
+    checks, checks_skipped, stop_blocks, policy, redactions, worktree.
+    stream-json → one JSON event per line as the run goes: RunStart, the
+    turn's events, and RunResult (the report) last; the same versioned events
+    as the web UI's stream (evi/events.py).
 
     The exit code says why the run stopped (stop_reason): 0 done, 1 error,
     2 usage error, 3 max_turns, 4 permission_denied or guardrail (the run
-    was refused), 6 stop_hook_exhausted, 130 interrupted. A run the model
-    finished is done (0) even if some tool calls were denied on the way:
-    they are listed in denied_tools (and noted on stderr in text format).
-    A failure while the agent is built or during the turn still reports
-    (error, 1) rather than a traceback.
+    was refused), 5 checks_failed, 6 stop_hook_exhausted, 130 interrupted. A
+    run the model finished is done (0) even if some tool calls were denied
+    on the way: they are listed in denied_tools (and noted on stderr in text
+    format). A failure while the agent is built or during the turn still
+    reports (error, 1) rather than a traceback.
+
+    --policy implementer runs under the implementer policy (evi/policy.py)
+    instead of the permission flow: every call is allowed or denied with a
+    reason, never asked. Its folder is the worktree (--worktree), else the
+    git top of --cwd (or here), else that folder; it may read and edit files
+    there (protected ones only when a --scope entry names them), run tests,
+    linters and read-only git commands there (only in a trusted folder:
+    each can run its code; a note on stderr says when they can't), and
+    nothing else: no network, MCP, run_python, memory or
+    subagents. --policy with --yes, an unknown
+    policy, or a --scope entry that is absolute or climbs out with '..' is a
+    usage error (2). Without --worktree a note on stderr recommends it. Once
+    the turn changed files, the project checks (evi/checks.py: ruff, the
+    targeted tests, [checks] commands) run before it may end, in a trusted
+    folder: a failing round goes back to the model, up to [checks]
+    max_rounds, then checks_failed (5). Stop-block and check lines go to
+    stderr.
 
     Nothing prompts (so a scripted run never blocks): without --yes, tools
     outside your auto-approve list follow [auto] unattended_policy — denied
@@ -4839,10 +4882,16 @@ def run(
         _run_usage_error("--resume and --continue can't be used together")
     if base.strip() and not worktree.strip():
         _run_usage_error("--base needs --worktree")
+    policy_name, scope_entries = _run_policy_args(policy, scope, yes)
     stream = EventStream() if format == "stream-json" else None
 
     def emit(item) -> None:
         _print_line(stream.dumps(item))
+
+    def on_event(item) -> None:
+        _print_verify_line(item)  # stop blocks and checks: stderr, whatever the format
+        if stream is not None:
+            emit(item)
 
     with _console_on_stderr():  # stdout carries only the answer / the JSON
         try:
@@ -4910,6 +4959,12 @@ def run(
                 make_unattended(agent)
                 if folder is not None:
                     agent.cwd = str(folder)
+                if mode:
+                    agent.mode = mode
+                if policy_name:
+                    # Every call is allowed or denied by the policy from here.
+                    agent.policy = _run_policy(policy_name, scope_entries, settings,
+                                               isolated=iso is not None)
                 if session is not None:
                     agent.session_id = session[0]  # this run appends to it
                     _hydrate_agent(agent, session[1])
@@ -4919,7 +4974,7 @@ def run(
                 # so does an exception the turn raises.
                 res = _hl.run_headless(
                     agent, text, max_turns=max_turns, response_format=response_format,
-                    cancel_on_sigint=True, on_event=emit if stream is not None else None,
+                    cancel_on_sigint=True, on_event=on_event,
                     track_files=Path.cwd(), report_errors=True,
                 )
                 res.trust = _run_trust_state()
@@ -4952,6 +5007,88 @@ def run(
 
                 release(iso)
         _finish_run(res, format, stream)
+
+
+def _run_policy_args(policy: str, scope: list[str] | None, yes: bool) -> tuple[str, tuple]:
+    """`evi run --policy` / `--scope`, checked before anything runs: the
+    policy's name ("" for none) and the validated files_in_scope. An unknown
+    policy, --policy with --yes, --scope without --policy, or a scope entry
+    that is absolute or climbs out ('..') is a usage error (exit 2)."""
+    from evi import policy as _policy
+
+    name = (policy or "").strip().lower()
+    entries = [s for s in (scope or []) if s is not None]
+    if not name:
+        if entries:
+            _run_usage_error("--scope needs --policy")
+        return "", ()
+    if name not in _policy.POLICIES:
+        _run_usage_error(
+            f"unknown --policy {policy.strip()!r} (choose: {' | '.join(_policy.POLICIES)})"
+        )
+    if yes:
+        _run_usage_error("--policy and --yes can't be used together: the policy decides "
+                         "every tool call")
+    try:
+        return name, _policy.validate_scope(entries)
+    except _policy.PolicyError as exc:
+        _run_usage_error(f"--scope: {exc}")
+
+
+def _run_policy(name: str, scope: tuple, settings, *, isolated: bool):
+    """The named policy (evi.policy) for this run. Its folder is the process's
+    folder (the worktree with --worktree, else --cwd's or this one) or its
+    git top; the project's check commands (evi.checks.allowlist, in a
+    trusted folder) join its shell allowlist. In an untrusted folder it runs
+    no commands (each can run the folder's code), and a note on stderr says
+    so. Without --worktree, a note on stderr recommends one."""
+    from evi import checks as _checks
+    from evi import policy as _policy
+    from evi.project import git_toplevel
+
+    here = Path.cwd().resolve()
+    root = here if isolated else (git_toplevel(here) or here)
+    if not isolated:
+        print(f"note: --policy {name} without --worktree works in {root} itself; "
+              "--worktree auto keeps your checkout out of it", file=sys.stderr)
+    trusted = _policy.folder_trusted(root)
+    if not trusted:
+        print(f"note: {root} is not a trusted folder, so --policy {name} runs no commands "
+              "there (tests, linters and git can run the folder's own code); `evi trust` it "
+              "to allow them", file=sys.stderr)
+    return _policy.build(name, root, scope, _checks.allowlist(root, settings, trusted),
+                         trusted=trusted)
+
+
+def _print_verify_line(event) -> None:
+    """A stop block or a check run, as one line on stderr (`evi run`)."""
+    line = _verify_line(event)
+    if line:
+        print(line, file=sys.stderr)
+
+
+def _verify_line(event) -> str | None:
+    """The one-line text of a verify event (evi.llm.agent's verify gate), or
+    None for any other event. Plain text: the caller adds any markup."""
+    from evi.llm.agent import CheckResult, ChecksFailed, ChecksSkipped, StopBlocked
+
+    if isinstance(event, CheckResult):
+        status = "passed" if event.exit == 0 else (
+            f"exit {event.exit}" if event.exit is not None else "did not run to the end")
+        tail = (event.tail or "").strip().splitlines()
+        last = f": {tail[-1][:200]}" if event.exit != 0 and tail else ""
+        return (f"check {event.name} (round {event.round}) {status} in "
+                f"{event.duration_ms / 1000:.1f}s — {event.cmd[:200]}{last}")
+    if isinstance(event, ChecksFailed):
+        return (f"checks failed (round {event.round} of {event.max_rounds}): "
+                f"{', '.join(event.failed)}; sent back to the model")
+    if isinstance(event, ChecksSkipped):
+        return f"checks skipped: {event.reason}"
+    if isinstance(event, StopBlocked):
+        first = (event.reason or "").strip().splitlines()
+        return (f"stop hook {event.hook} blocked the end (iteration {event.iteration}): "
+                f"{first[0][:200] if first else '(no reason)'}")
+    return None
 
 
 def _run_open_worktree(spec: str, base: str):
@@ -5055,6 +5192,11 @@ def _run_stop_note(res) -> str | None:
     reason = res.stop_reason
     if reason == "done":
         if res.denied_tools:
+            from evi.policy import POLICIES
+
+            if res.policy in POLICIES:
+                return ("denied: " + ", ".join(res.denied_tools) + f" (the {res.policy} "
+                        "policy refused them; each reason is in --format json)")
             return ("denied: " + ", ".join(res.denied_tools) + " (tool calls the permission "
                     "checks refused; approve them with -y or [auto] auto_approve)")
         return None
@@ -5069,6 +5211,11 @@ def _run_stop_note(res) -> str | None:
         return "stopped: a tool call the permission checks refused ended the run"
     if reason == "guardrail":
         return "stopped: a guardrail or a user_prompt_submit hook refused the prompt"
+    if reason == "checks_failed":
+        return ("stopped: the project checks still failed after [checks] max_rounds "
+                "rounds (see checks in --format json)")
+    if reason == "stop_hook_exhausted":
+        return "stopped: a stop hook kept blocking the end past [hooks] max_blocks"
     return f"stopped: {reason}"
 
 

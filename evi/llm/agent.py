@@ -5,8 +5,26 @@ Events yielded by `Agent.chat`:
 - ToolCall(name, args)   — model requested a tool
 - ToolResult(name, out)  — tool finished, output appended to history
 - Done(reason)           — turn complete (stop, length, ...; "interrupted"
-                           after Agent.cancel)
+                           after Agent.cancel; "checks_failed" /
+                           "stop_hook_exhausted" from the verify gate)
 - Error(message)         — recoverable error to surface to the UI
+- CheckResult, ChecksSkipped, ChecksFailed, StopBlocked — the verify gate
+                           at a would-be end of the turn (`Agent._verify_gate`)
+- FilesChanged(paths)    — what the turn's tools wrote, just before Done (UI
+                           only, never in the history)
+
+Verify-before-done: when the model would end its turn, the agent first runs
+the project checks for the files the turn changed (evi/checks.py; under the
+implementer policy, or with [checks] verify = "always" in Code mode), then
+the `protocol = "json"` stop hooks (evi/hooks.py). A failing check round or
+a blocking hook goes back to the model as a framed note (evi.history
+note_message) and the loop goes on: at most [checks] max_rounds failing
+rounds (then Done("checks_failed")) and [hooks] max_blocks blocks (then
+Done("stop_hook_exhausted")) per user turn. Checks that fail skip the hooks
+for that round.
+
+`Agent.policy` (evi/policy.py, `evi run --policy implementer`) replaces the
+permission flow: each call is allowed or denied with a reason, never asked.
 """
 
 from __future__ import annotations
@@ -101,11 +119,16 @@ def is_permission_denial(text: str) -> bool:
 
 def policy_label(agent: Any) -> str:
     """How `agent` settles a tool call that would ask, for a run's header or
-    log: "allow-all" (`/auto on`, `-y`), "interactive" (a permission callback
-    decides), else its unattended policy ("deny" | "allow"). An [auto] mode
-    that lets calls through without asking is named too, since it applies
-    before the policy: "allow-all (mode=yolo)", "deny (mode=accept_edits: file
-    edits run)". A remote trigger (`remote_unattended`) ignores the mode."""
+    log: a named policy's name ("implementer", `Agent.policy`, which decides
+    every call), "allow-all" (`/auto on`, `-y`), "interactive" (a permission
+    callback decides), else its unattended policy ("deny" | "allow"). An
+    [auto] mode that lets calls through without asking is named too, since it
+    applies before the policy: "allow-all (mode=yolo)", "deny
+    (mode=accept_edits: file edits run)". A remote trigger
+    (`remote_unattended`) ignores the mode."""
+    named = getattr(agent, "policy", None)
+    if named is not None:
+        return str(getattr(named, "name", "") or "policy")
     if getattr(agent, "auto_all", False):
         return "allow-all"
     if (
@@ -197,6 +220,16 @@ def remote_unattended(
 
 def _generate_session_id() -> str:
     return secrets.token_hex(6)
+
+
+def _relative_to(path: Path, folder: str) -> str:
+    """`path` relative to `folder` with ``/`` (absolute on another drive)."""
+    import os
+
+    try:
+        return Path(os.path.relpath(path, folder)).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _find_json_blobs(text: str) -> list[str]:
@@ -582,6 +615,58 @@ class Error:
 
 
 @dataclass
+class CheckResult:
+    """One verify check run at a would-be end of the turn (evi/checks.py):
+    `exit` None when it didn't finish or was refused (`tail` says why). Its
+    output's tail is redacted."""
+
+    name: str
+    cmd: str
+    exit: int | None
+    duration_ms: int
+    tail: str
+    round: int
+    source: str
+
+
+@dataclass
+class ChecksSkipped:
+    """The turn changed files but no check ran, and why (an untrusted folder)."""
+
+    reason: str
+
+
+@dataclass
+class ChecksFailed:
+    """A failing check round went back to the model as a note (a user message
+    in the history now) and the turn goes on."""
+
+    round: int
+    max_rounds: int
+    failed: list[str]
+
+
+@dataclass
+class StopBlocked:
+    """A `protocol = "json"` stop hook sent the model back to work: its
+    (redacted) reason joined the history as a note (a user message), and the
+    turn goes on. `iteration` is the would-be end it blocked (1, 2, ...)."""
+
+    hook: str
+    reason: str
+    iteration: int
+
+
+@dataclass
+class FilesChanged:
+    """The paths the turn's write tools wrote (relative to the working folder
+    when inside it), sent just before Done: for a display only, never in the
+    history."""
+
+    paths: list[str]
+
+
+@dataclass
 class RouteInfo:
     """Which model/route this turn resolved to (multi-model routing). `route`
     is the route name, or "default"/"fast" when no route matched."""
@@ -607,6 +692,7 @@ class Steering:
 Event = (
     TextDelta | ThinkingDelta | ToolCall | ToolResult | ToolProgress | UsageStats
     | LogProbs | Guardrail | RouteInfo | Steering | Done | Error
+    | CheckResult | ChecksSkipped | ChecksFailed | StopBlocked | FilesChanged
 )
 
 # Seconds between ToolProgress heartbeats while tools are still running.
@@ -622,6 +708,39 @@ CANCEL_GRACE = 2.0
 CANCELLED = "(cancelled)"
 # Done.reason of a cancelled turn.
 INTERRUPTED_REASON = "interrupted"
+# Done.reason of a turn the verify gate ended: the checks still failed after
+# [checks] max_rounds failing rounds; a stop hook blocked past [hooks]
+# max_blocks.
+CHECKS_FAILED_REASON = "checks_failed"
+STOP_HOOK_EXHAUSTED_REASON = "stop_hook_exhausted"
+DEFAULT_MAX_BLOCKS = 3
+# What the verify gate returns to send the model back to work.
+_CONTINUE = "continue"
+# The most of a verify note (a check's output, a hook's reason) the history
+# gets, after redaction.
+_NOTE_MAX = 6000
+
+
+@dataclass
+class _TurnVerify:
+    """One turn's verify-gate state (`Agent._verify_gate`). `root` is the
+    folder the checks run in (the policy's, else the working folder's git
+    top); `written` the absolute paths the turn's write tools wrote, in
+    order; `tracker` a ChangeTracker when checks are on (it catches what a
+    command changed); `passed` the `evi.checks.fingerprint` of the changes
+    the last passing round checked (None before one)."""
+
+    root: Path
+    checks: bool = False
+    tracker: Any = None
+    written: list[str] = field(default_factory=list)
+    iteration: int = 0
+    blocks: int = 0
+    failed_rounds: int = 0
+    rounds_run: int = 0
+    skip_noted: bool = False
+    passed: Any = None
+
 
 _STREAM_END = object()  # what _pump_stream puts last
 _NOT_STARTED = object()  # what _start_call returns for a call it didn't start
@@ -748,6 +867,16 @@ class Agent:
         # A remote trigger drives this run (`remote_unattended`): [auto] mode
         # yolo / accept_edits is the desk user's and does not apply.
         self.remote_trigger: bool = False
+        # A named policy (evi.policy.Policy: `evi run --policy implementer`)
+        # decides every tool call, allow or deny, instead of the permission
+        # flow; None for the normal flow.
+        self.policy: Any = None
+        # The session's mode preset ("chat" | "cowork" | "code", evi.modes;
+        # "" when none was picked): [checks] verify = "always" runs the
+        # checks in Code mode.
+        self.mode: str = ""
+        # The running (or last) turn's verify-gate state (_run_inference_loop).
+        self._turn_verify: _TurnVerify | None = None
         self.transcripts = transcripts
         self.guardrails = guardrails
         # Which surface the user is on ("cli" | "web"; the desktop app is "web").
@@ -1458,7 +1587,14 @@ class Agent:
     def _denial_message(self, tool: Tool | None, name: str, args_json: str) -> str:
         """Tool-result text for a blocked call. When the destructive-command
         guard is the reason, tell the model *why* and to prefer a safer path
-        (mirrors Claude Code's denial feedback) instead of a bare 'denied'."""
+        (mirrors Claude Code's denial feedback) instead of a bare 'denied'.
+        Under a named policy, the policy's reason."""
+        if tool is not None and getattr(self, "policy", None) is not None:
+            verdict = self._policy_verdict(tool, args_json)
+            describe = getattr(self.policy, "describe", None)
+            scope = f" ({describe()})" if callable(describe) else ""
+            return (f"PERMISSION DENIED: {name} was not run: {verdict.reason or 'not allowed'}"
+                    f"{scope}.")
         if tool is not None:
             guard = self._destructive_decision(tool, args_json)
             if guard is not None:
@@ -1495,7 +1631,10 @@ class Agent:
         (mode + rules + auto-approve categories). `/auto on` acts as yolo for
         the session: hard_deny, protected paths and the destructive guard
         still apply. A deny from the policy (hard_deny, plan mode, a deny rule)
-        always wins, even over a guard prompt."""
+        always wins, even over a guard prompt. Under a named policy
+        (`policy`) it is that policy's allow or deny, never 'ask'."""
+        if getattr(self, "policy", None) is not None:
+            return "allow" if self._policy_verdict(tool, args_json).allowed else "deny"
         guard = self._destructive_decision(tool, args_json)
         decision = self._decide(tool, args_json, self._auto_mode())
         if decision == "deny":
@@ -1549,8 +1688,47 @@ class Agent:
             remote_trigger=bool(getattr(self, "remote_trigger", False)),
         )
 
+    def _policy_verdict(self, tool: Tool, args_json: str) -> Any:
+        """`policy`'s verdict on this call (evi.policy.Verdict): [auto]
+        hard_deny, deny rules and the director's ground deny first (an allow
+        rule never widens the policy), then the policy decides, then the
+        destructive guard, forced on, may still deny a shell line. Anything
+        that can't be checked is denied."""
+        from evi.policy import Verdict
+
+        try:
+            # The folder the tool resolves relative paths in (its working
+            # folder, else the process's): never the policy's root, which
+            # may be a parent of it.
+            folder = str(getattr(self, "cwd", "") or workdir.get_cwd())
+            if self._decide(tool, args_json, "ask") == "deny":
+                from evi.permissions import director_ground
+
+                why = director_ground(
+                    tool.name, getattr(tool, "category", ""), args_json,
+                    workdir=folder, path_args=self._tool_path_args(tool, args_json),
+                )
+                return Verdict(False, why or "an [auto] hard_deny or deny rule refuses it")
+            verdict = self.policy.check(
+                tool, args_json, workdir=folder, protected_paths=self._protected_patterns(),
+            )
+            if not verdict.allowed:
+                return verdict
+            cmd = self._guarded_command(tool, args_json)
+            if cmd is not None:
+                from evi.shell_guard import destructive_hit
+
+                hit = destructive_hit(cmd)
+                if hit is not None:
+                    return Verdict(False, f"the destructive-command guard: {hit.reason}")
+            return verdict
+        except Exception as exc:  # noqa: BLE001 — a check that can't run must not allow
+            return Verdict(False, f"the policy could not check this call ({type(exc).__name__})")
+
     def _ask_permission(self, tool: Tool, args_json: str) -> bool:
         """Return True iff the tool call is allowed to proceed."""
+        if getattr(self, "policy", None) is not None:
+            return bool(self._policy_verdict(tool, args_json).allowed)
         guard = self._destructive_decision(tool, args_json)
         if guard is None and (
             self._protected_hit(tool, args_json) is not None
@@ -2157,6 +2335,9 @@ class Agent:
         # KV-cache prompt reuse hint (llama.cpp honours it; others ignore).
         if self.config.llm.cache_prompt:
             extra_body["cache_prompt"] = True
+        # The verify gate's state for this turn: what it wrote, the checks
+        # and stop-hook blocks so far.
+        vstate = self._turn_verify = self._start_verify(plan_only)
 
         for turn_idx in range(max_turns):
             # A cancel that came in during the last tool round (or before the
@@ -2618,6 +2799,16 @@ class Agent:
                 return
 
             if not tool_buf:
+                if not plan_only and finish_reason not in ("length", "content_filter"):
+                    # A would-be end: the checks and blocking stop hooks may
+                    # send the model back to work (a framed note), or end the
+                    # turn with their own reason.
+                    outcome = yield from self._verify_gate(vstate)
+                    if outcome == _CONTINUE:
+                        continue
+                    if outcome is not None:
+                        yield from self._finish_turn(outcome)
+                        return
                 self._maybe_autocompact()
                 yield from self._finish_turn(finish_reason or "stop")
                 return
@@ -2740,6 +2931,8 @@ class Agent:
                     "tool", out_obj.text, tool_name=None if i in not_run else fname,
                     tool_call_id=call["id"],
                 )
+                if i not in not_run:
+                    self._record_write(vstate, m.get("tool"), m["args"], out_obj.text)
             if cancelled:
                 yield from self._finish_turn(INTERRUPTED_REASON)
                 return
@@ -2876,9 +3069,321 @@ class Agent:
         The hook fires BEFORE the Done event because every consumer (REPL,
         headless, web worker, subagent) breaks on Done and so closes the
         generator: anything after that yield never runs. Once per completed
-        inference loop, so a re-roll (continue_chat) fires it once too."""
+        inference loop, so a re-roll (continue_chat) fires it once too. The
+        paths the turn's write tools wrote go out first (FilesChanged), for a
+        UI footer."""
+        paths = self._written_for_display()
+        if paths:
+            yield FilesChanged(paths)
         self._fire_lifecycle("stop", reason)
         yield Done(reason)
+
+    # --- verify before done (evi/checks.py, json stop hooks) ----------------
+
+    def _verify_root(self) -> Path:
+        """The folder the checks run in: the policy's root, else the working
+        folder's git top (the folder itself outside git)."""
+        if getattr(self, "policy", None) is not None:
+            return Path(self.policy.root)
+        try:
+            base = Path(getattr(self, "cwd", "") or workdir.get_cwd()).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            base = Path(getattr(self, "cwd", "") or ".")
+        from evi.project import git_toplevel
+
+        try:
+            top = git_toplevel(base)
+        except OSError:
+            top = None
+        return Path(top).resolve() if top is not None else base
+
+    def _checks_on(self) -> bool:
+        """Whether the checks run at a would-be end ([checks] verify): "auto"
+        under a named policy, "always" in Code mode too, never with "off"."""
+        from evi import checks, modes
+
+        verify = checks.settings(self.config).verify
+        if verify == "off":
+            return False
+        if getattr(self, "policy", None) is not None:
+            return True
+        return verify == "always" and modes.verifies(getattr(self, "mode", ""))
+
+    def _start_verify(self, plan_only: bool) -> _TurnVerify:
+        """A turn's verify state. With the checks on, a ChangeTracker starts
+        now, so what a command (not a write tool) changed counts too."""
+        try:
+            root = self._verify_root()
+        except Exception:  # noqa: BLE001 — the gate then has no folder to check
+            root = Path(getattr(self, "cwd", "") or ".")
+        state = _TurnVerify(root=root)
+        try:
+            state.checks = not plan_only and self._checks_on()
+        except Exception:  # noqa: BLE001
+            state.checks = False
+        if state.checks:
+            from evi import config as _config
+            from evi.headless import ChangeTracker
+
+            state.tracker = ChangeTracker.start(root, exclude=(
+                _config.HOME, getattr(getattr(self, "transcripts", None), "root", None),
+            ))
+        return state
+
+    def _record_write(self, state: _TurnVerify, tool: Tool | None, args_json: str,
+                      output: str) -> None:
+        """Note the paths a write tool (evi.policy.WRITE_TOOLS) wrote, when it
+        did (its result is no error, denial or cancel)."""
+        from evi.policy import WRITE_TOOLS
+
+        if tool is None or getattr(tool, "name", None) not in WRITE_TOOLS:
+            return
+        if str(output or "").startswith(("ERROR", "PERMISSION DENIED", "BLOCKED",
+                                         CANCELLED, INTERRUPTED)):
+            return
+        try:
+            values = self._tool_path_args(tool, args_json) or []
+            base = Path(getattr(self, "cwd", "") or workdir.get_cwd()).expanduser()
+        except Exception:  # noqa: BLE001
+            return
+        for v in values:
+            try:
+                p = Path(v).expanduser()
+                p = (p if p.is_absolute() else base / p).resolve()
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if str(p) not in state.written:
+                state.written.append(str(p))
+
+    def _turn_changes(self, state: _TurnVerify) -> list[str]:
+        """What the turn changed under the verify root, relative to it with
+        ``/``: what its write tools wrote, plus what the ChangeTracker saw."""
+        out: list[str] = []
+        root = Path(state.root)
+        for raw in state.written:
+            p = Path(raw)
+            if p == root or not p.is_relative_to(root):
+                continue
+            rel = p.relative_to(root).as_posix()
+            if rel not in out:
+                out.append(rel)
+        if state.tracker is not None:
+            try:
+                rows = state.tracker.changes() or []
+            except Exception:  # noqa: BLE001
+                rows = []
+            skip = getattr(state.tracker, "SKIP_DIRS", frozenset())
+            for row in rows:
+                rel = str(row.get("path") or "")
+                if (rel and not rel.startswith("../") and rel not in out
+                        and not any(part in skip for part in rel.split("/"))):
+                    out.append(rel)
+        return out
+
+    def _written_for_display(self) -> list[str]:
+        """The turn's written paths for FilesChanged: relative to the working
+        folder when inside it, else absolute."""
+        state = getattr(self, "_turn_verify", None)
+        if state is None or not state.written:
+            return []
+        try:
+            base = Path(getattr(self, "cwd", "") or workdir.get_cwd()).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):
+            base = None
+        out = []
+        for raw in state.written:
+            p = Path(raw)
+            if base is not None and p != base and p.is_relative_to(base):
+                out.append(p.relative_to(base).as_posix())
+            else:
+                out.append(str(p))
+        return out
+
+    def _verify_gate(self, state: _TurnVerify) -> Generator[Event, None, str | None]:
+        """At a would-be end of the turn: the checks (when on), then, if they
+        pass, the json stop hooks. Returns _CONTINUE to send the model back
+        to work (a note is in the history), a Done reason to end the turn
+        with ("checks_failed", "stop_hook_exhausted", "interrupted"), or None
+        to end it normally."""
+        state.iteration += 1
+        changed = self._turn_changes(state)
+        if state.checks:
+            outcome = yield from self._run_checks(state, changed)
+            if outcome is not None:
+                return outcome
+        if self._cancelled():
+            return INTERRUPTED_REASON
+        return (yield from self._run_stop_hooks(state, changed))
+
+    def _folder_trusted(self, root: Path) -> bool:
+        """Whether `root` is a trusted folder (evi.trust); False when that
+        can't be told."""
+        try:
+            from evi import trust
+
+            return bool(trust.status(Path(root)).trusted)
+        except Exception:  # noqa: BLE001 — fail closed
+            return False
+
+    def _run_checks(
+        self, state: _TurnVerify, changed: list[str]
+    ) -> Generator[Event, None, str | None]:
+        """Run the checks for `changed` (evi.checks.detect) and say what
+        follows: None (they passed, or none ran), _CONTINUE (a failing round
+        went back to the model) or a Done reason. Nothing changed since a
+        passing round: they don't run again."""
+        from evi import checks
+
+        if not changed:
+            return None
+        cfg = checks.settings(self.config)
+        if not self._folder_trusted(state.root):
+            if not state.skip_noted:
+                state.skip_noted = True
+                yield ChecksSkipped(
+                    f"{state.root} is not a trusted folder (`evi trust`), so no check ran: "
+                    "a check runs the folder's own code"
+                )
+            return None
+        snapshot = checks.fingerprint(state.root, changed)
+        if state.passed is not None and snapshot == state.passed:
+            return None
+        found = checks.detect(state.root, self.config, True, changed)
+        if not found:
+            return None
+        round_no = state.rounds_run + 1
+        state.rounds_run = round_no
+        runs = []
+        for check in found:
+            if self._cancelled():
+                return INTERRUPTED_REASON
+            allowed, why = self._check_permitted(check, state.root)
+            if allowed:
+                run = checks.run_check(check, state.root, timeout=cfg.timeout,
+                                       tail_lines=cfg.tail_lines,
+                                       cancel_token=self.cancel_token, round=round_no)
+            else:
+                run = checks.refused(check, why, round_no)
+            runs.append(run)
+            yield CheckResult(name=check.name, cmd=check.cmd, exit=run.exit,
+                              duration_ms=run.duration_ms, tail=run.tail, round=round_no,
+                              source=check.source)
+            if run.cancelled or self._cancelled():
+                return INTERRUPTED_REASON
+        failed = [r for r in runs if not r.ok and r.note != "refused"]
+        if not failed:
+            state.passed = snapshot
+            return None
+        state.failed_rounds += 1
+        if state.failed_rounds >= cfg.max_rounds:
+            return CHECKS_FAILED_REASON
+        self._append_note(checks.failure_note(failed, state.failed_rounds, cfg.max_rounds),
+                          "checks", "evi")
+        yield ChecksFailed(round=state.failed_rounds, max_rounds=cfg.max_rounds,
+                           failed=[r.check.name for r in failed])
+        return _CONTINUE
+
+    def _check_permitted(self, check: Any, root: Path) -> tuple[bool, str]:
+        """Whether `check` may run: under a named policy, the policy says (and
+        a hard_deny / deny rule still refuses it); otherwise it is offered
+        through the normal permission flow as a run_command call."""
+        args = json.dumps({"command": check.cmd, "cwd": str(root)})
+        tool = self._run_command_tool()
+        if getattr(self, "policy", None) is not None:
+            try:
+                if self._decide(tool, args, "ask") == "deny":
+                    return False, "an [auto] hard_deny or deny rule refuses it"
+            except Exception:  # noqa: BLE001
+                return False, "the permission checks could not run"
+            verdict = self.policy.allows_argv(check.argv, run_in=Path(root),
+                                              protected_paths=self._protected_patterns())
+            return bool(verdict.allowed), verdict.reason
+        decision = self._permission_decision(tool, args)
+        if decision == "allow":
+            return True, ""
+        if decision == "deny":
+            return False, "the permission checks refused it"
+        if not self._has_permission_ui():
+            ok = self.effective_unattended_policy() == "allow"
+            return ok, "" if ok else "nobody could approve it ([auto] unattended_policy)"
+        ok = self._ask_permission(tool, args)
+        return ok, "" if ok else "not approved"
+
+    def _run_command_tool(self) -> Tool:
+        """The run_command tool a check is offered as (a stand-in when it
+        isn't registered)."""
+        tool = self.tools.get("run_command") or REGISTRY.get("run_command")
+        if tool is not None:
+            return tool
+        return Tool(name="run_command", description="Run a shell command.",
+                    parameters={"type": "object", "properties": {
+                        "command": {"type": "string"}, "cwd": {"type": "string"}}},
+                    func=lambda **_k: "", category="shell")
+
+    def _max_blocks(self) -> int:
+        value = getattr(getattr(self.config, "hooks", None), "max_blocks", DEFAULT_MAX_BLOCKS)
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_MAX_BLOCKS
+        return n if n >= 0 else DEFAULT_MAX_BLOCKS
+
+    def _run_stop_hooks(
+        self, state: _TurnVerify, changed: list[str]
+    ) -> Generator[Event, None, str | None]:
+        """Run the json stop hooks (evi.hooks.HookRegistry.run_stop). A block
+        sends the model back to work (_CONTINUE), at most `[hooks]
+        max_blocks` times per turn; the next one ends the turn
+        ("stop_hook_exhausted"). A hook that can't run is no block."""
+        hooks = self.hooks
+        if hooks is None:
+            return None
+        try:
+            if not hooks.json_stop_hooks():
+                return None
+            here = str(Path(getattr(self, "cwd", "") or workdir.get_cwd()).resolve())
+            payload = {
+                "event": "stop", "session_id": self.session_id, "cwd": here,
+                "stop_hook_active": state.blocks > 0, "iteration": state.iteration,
+                # Relative to `cwd`, the folder the hook runs in.
+                "files_changed": [_relative_to(Path(state.root) / p, here) for p in changed],
+            }
+            _decisions, block = hooks.run_stop(payload, cwd=getattr(self, "cwd", "") or "")
+        except Exception as exc:  # noqa: BLE001 — a hook error is no block
+            dlog("hooks.stop_error", {"type": type(exc).__name__, "msg": str(exc)})
+            return None
+        if block is None:
+            return None
+        if self._cancelled():
+            return INTERRUPTED_REASON
+        max_blocks = self._max_blocks()
+        if state.blocks >= max_blocks:
+            return STOP_HOOK_EXHAUSTED_REASON
+        state.blocks += 1
+        from evi.redact import Redactor
+
+        reason = Redactor()(block.reason)[:_NOTE_MAX]
+        self._append_note(
+            f"The stop hook {block.hook_name!r} did not let the turn end yet "
+            f"(block {state.blocks} of at most {max_blocks}). Its reason:\n{reason}",
+            block.hook_name, "hook",
+        )
+        yield StopBlocked(hook=block.hook_name, reason=reason, iteration=state.iteration)
+        return _CONTINUE
+
+    def _append_note(self, text: str, sender: str, kind: str) -> None:
+        """Add a verify note to the history (and the transcript): a framed
+        user message (evi.history.note_message), redacted and cut to
+        _NOTE_MAX characters."""
+        from evi.history import note_message
+        from evi.redact import Redactor
+
+        body = Redactor()(text)
+        if len(body) > _NOTE_MAX:
+            body = body[:_NOTE_MAX] + "\n… (cut)"
+        msg = note_message(body, sender, kind)
+        self.history.append(msg)
+        self._log_to_transcript("user", msg["content"])
 
     def _skill_scope(self) -> skillscope.Scope | None:
         """The skill scope this turn's calls run under: the one inherited from

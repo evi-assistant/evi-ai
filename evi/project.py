@@ -552,6 +552,10 @@ def filter_project_overlay(overlay: dict[str, Any]) -> tuple[dict[str, Any], lis
         kept: dict[str, Any] = {}
         for key, value in body.items():
             name = _key_label(section, key)
+            if (section, key) == ("checks", "commands"):
+                # Read by evi.checks.project_commands behind the trust gate,
+                # never merged into Config; not an ignored key either.
+                continue
             if section in _PROJECT_ALLOWED_KEYS:
                 allowed = key in _PROJECT_ALLOWED_KEYS[section]
                 ok = (

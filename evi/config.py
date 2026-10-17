@@ -587,6 +587,40 @@ class ChannelSettings:
 
 
 @dataclass
+class CheckSettings:
+    """Verify-before-done (evi/checks.py): the project checks a turn runs once
+    it has changed files, before it may end.
+
+    `verify`: "auto" (on for a run under the implementer policy, `evi run
+    --policy implementer`; off in an interactive session), "always" (also an
+    interactive Code-mode session, each check offered through the normal
+    permission flow first) or "off". A failing round is fed back to the model;
+    after `max_rounds` failing rounds the turn ends with stop_reason
+    "checks_failed". `timeout` is seconds per command, `tail_lines` how much
+    of a check's output is kept. `detect` = false runs only `commands`: your
+    own command lines (or argv arrays), run whenever files changed. A
+    project's .evi.toml [checks] commands count only in a trusted folder, and
+    no check runs at all in an untrusted one."""
+
+    verify: str = "auto"  # auto | always | off
+    max_rounds: int = 2
+    timeout: int = 300
+    tail_lines: int = 40
+    detect: bool = True
+    commands: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HookSettings:
+    """Hook behaviour (evi/hooks.py; the hooks themselves are in hooks.toml).
+    `max_blocks`: how many times, per user turn, `protocol = "json"` stop hooks
+    may send the model back to work; a block after that ends the turn with
+    stop_reason "stop_hook_exhausted"."""
+
+    max_blocks: int = 3
+
+
+@dataclass
 class RuntimeSettings:
     """Managed llama.cpp runtime. Normally eVi downloads + supervises its own
     `llama-server` under ~/.evi/runtime. Set `server_path` to point eVi at an
@@ -618,6 +652,8 @@ class Config:
     desktop: DesktopSettings = field(default_factory=DesktopSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
     channels: ChannelSettings = field(default_factory=ChannelSettings)
+    checks: CheckSettings = field(default_factory=CheckSettings)
+    hooks: HookSettings = field(default_factory=HookSettings)
 
     @classmethod
     def load(cls) -> "Config":

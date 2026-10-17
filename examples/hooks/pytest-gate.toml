@@ -1,0 +1,54 @@
+# eVi stop hook: a pytest gate — copy the entry into ~/.evi/hooks.toml.
+#
+# Verify before done: with `protocol = "json"` a [[stop]] hook runs each time
+# the model would end its turn (after the project checks of evi/checks.py, if
+# they ran and passed), and can send it back to work. eVi writes the event to
+# its stdin as JSON:
+#
+#   {"event": "stop", "session_id": "...", "cwd": "...",
+#    "stop_hook_active": false, "iteration": 1, "files_changed": ["calc.py"]}
+#
+# The hook blocks by printing {"decision": "block", "reason": "..."} (or by
+# exiting 2, with the reason on stderr); the reason reaches the model as a
+# note and the turn goes on. Exit 0 without that JSON lets the turn end. A
+# timeout or another exit is a hook error, never a block. [hooks] max_blocks
+# (config.toml, default 3) caps the blocks per user turn; one more ends the
+# turn with stop_reason "stop_hook_exhausted" (`evi run` exits 6).
+#
+# This one runs the tests the turn touched: each changed test file, and
+# tests/test_<module>.py for each changed <module>.py that has one (never the
+# whole suite). It needs pytest in the `python` on your PATH; point the
+# command at your project's interpreter otherwise.
+
+[[stop]]
+name = "pytest-gate"
+protocol = "json"
+timeout = 600
+command = ["python", "-c", """
+import json, os, subprocess, sys
+
+event = json.load(sys.stdin)
+cwd = event.get("cwd") or "."
+targets = []
+for path in event.get("files_changed") or []:
+    name = os.path.basename(path)
+    if not name.endswith(".py"):
+        continue
+    if name.startswith("test_") or name.endswith("_test.py"):
+        candidate = path
+    else:
+        candidate = "tests/test_" + name
+    if os.path.isfile(os.path.join(cwd, candidate)) and candidate not in targets:
+        targets.append(candidate)
+if not targets:
+    sys.exit(0)  # no test touched: nothing to gate
+proc = subprocess.run(
+    [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets],
+    cwd=cwd, capture_output=True, text=True,
+)
+if proc.returncode in (0, 5):  # 5: no tests collected
+    sys.exit(0)
+tail = "\\n".join((proc.stdout + proc.stderr).strip().splitlines()[-30:])
+print(json.dumps({"decision": "block",
+                  "reason": "pytest fails on " + " ".join(targets) + ":\\n" + tail}))
+"""]

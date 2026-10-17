@@ -8,8 +8,8 @@ Appends `exit_code`, `stop_reason` and `session_id` to $GITHUB_OUTPUT.
 `--format json` prints, or the last line of `--format stream-json` (its
 RunResult event). `--format text` prints no report, so they are empty there
 (the exit code still says why the run stopped: 0 done, 1 error, 2 usage,
-3 max_turns, 4 permission_denied or guardrail, 6 stop_hook_exhausted,
-130 interrupted).
+3 max_turns, 4 permission_denied or guardrail, 5 checks_failed,
+6 stop_hook_exhausted, 130 interrupted).
 
 Only values eVi itself writes pass: a stop_reason from its fixed list
 (STOP_REASONS, the same as evi.events.STOP_REASONS) and a session id of
@@ -26,7 +26,7 @@ import sys
 
 STOP_REASONS = (
     "done", "max_turns", "loop_detected", "step_budget", "interrupted", "error",
-    "permission_denied", "guardrail", "stop_hook_exhausted",
+    "permission_denied", "guardrail", "stop_hook_exhausted", "checks_failed",
 )
 _SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 

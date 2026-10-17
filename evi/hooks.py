@@ -73,7 +73,35 @@ on one: the action is blocked (fail closed).
 
 A before-hook (or user_prompt_submit / before_compact) with
 `veto_on_nonzero = true` that exits non-zero blocks the action; for a tool, its
-stderr becomes the tool result the LLM sees. After-hooks and `stop` never block.
+stderr becomes the tool result the LLM sees. After-hooks never block, and
+neither does a plain `stop` hook.
+
+Blocking stop hooks (verify-before-done): a `[[stop]]` hook with
+`protocol = "json"` runs each time the model would end its turn, before the
+turn ends (and after the project checks, evi/checks.py, passed), and may send
+it back to work:
+
+    [[stop]]
+    name = "pytest-gate"
+    protocol = "json"
+    command = ["python", "/path/to/gate.py"]
+
+Its stdin is one JSON object: {"event": "stop", "session_id", "cwd",
+"stop_hook_active" (true once a block has already sent the model back this
+turn), "iteration" (1 at the turn's first would-be end), "files_changed" (the
+paths the turn changed, relative to cwd)}; EVI_HOOK_ARGS_JSON holds the same.
+The hook runs in that cwd, the session's working folder. It blocks by
+printing {"decision": "block", "reason": "..."} or by exiting 2 (its stderr is
+the reason). Exit 0 with no such JSON lets the turn end. A timeout or any other
+exit is a hook error: logged, never a block. A url hook with the protocol is
+POSTed that object and blocks with the same JSON in its 2xx response. The
+reason reaches the model as a framed note and the loop goes on, at most
+`[hooks] max_blocks` (default 3) times per user turn; a block after that ends
+the turn with "stop_hook_exhausted" (evi.llm.agent). Only the `json` protocol
+blocks: a plain stop hook that happens to exit 2 stays a notification, and a
+`json` hook is not run again as one when the turn ends. A subagent runs no
+lifecycle hooks (`HookRegistry.tool_hooks`). eVi loads hooks only from your
+own hooks.toml and installed plugins, never from a repository.
 """
 
 from __future__ import annotations
@@ -120,6 +148,11 @@ LIFECYCLE_EVENTS = (
 ALL_EVENTS = TOOL_EVENTS + LIFECYCLE_EVENTS
 # Events whose hooks can block the action (with veto_on_nonzero).
 VETO_EVENTS = ("before_tool_call", "user_prompt_submit", "before_compact")
+# Hook `protocol` values: "" (the env-var protocol above) or "json" (a stop
+# hook that gets the event on stdin and may block the turn's end).
+PROTOCOLS = ("", "json")
+# A stop hook's exit code that blocks (with protocol "json"); its stderr is why.
+BLOCK_EXIT = 2
 
 
 _ENV_RESULT_LIMIT = 4 * 1024  # don't blow OS arg/env limits
@@ -162,6 +195,9 @@ class Hook:
     # matches its glob — e.g. arg_match = { path = "*.env" } so a write-guard
     # only triggers on dotenv files. Mirrors Claude Code's conditional hooks.
     arg_match: tuple[tuple[str, str], ...] = ()
+    # "json": a stop hook that gets the event as JSON on stdin and may block
+    # the turn's end (see the module doc). "" for every other hook.
+    protocol: str = ""
 
     def applies_to(self, tool_name: str) -> bool:
         return fnmatch.fnmatch(tool_name, self.match)
@@ -196,6 +232,56 @@ class HookResult:
     @property
     def vetoed(self) -> bool:
         return self.exit_code != 0
+
+
+@dataclass
+class StopDecision:
+    """What one `protocol = "json"` stop hook decided: "block" (with its
+    reason), "allow", or "error" (a timeout or an unexpected exit, with what
+    went wrong; never a block)."""
+
+    hook_name: str
+    decision: str  # "block" | "allow" | "error"
+    reason: str = ""
+
+    @property
+    def blocked(self) -> bool:
+        return self.decision == "block"
+
+
+def _last_json_object(text: str) -> dict | None:
+    """The JSON object a hook printed: its whole stdout, else the last line
+    that parses as one."""
+    stripped = (text or "").strip()
+    candidates = [stripped] + [line.strip() for line in reversed(stripped.splitlines())]
+    for candidate in candidates:
+        if not candidate.startswith("{"):
+            continue
+        try:
+            data = json.loads(candidate)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def stop_decision(res: HookResult) -> StopDecision:
+    """A json stop hook's result as its decision (see the module doc)."""
+    if res.timed_out:
+        return StopDecision(res.hook_name, "error", res.stderr.strip() or "timed out")
+    if res.exit_code == BLOCK_EXIT:
+        why = res.stderr.strip() or res.stdout.strip() or "(no reason given)"
+        return StopDecision(res.hook_name, "block", why)
+    if res.exit_code != 0:
+        why = res.stderr.strip()[:500] or f"exit {res.exit_code}"
+        return StopDecision(res.hook_name, "error", f"exit {res.exit_code}: {why}")
+    data = _last_json_object(res.stdout)
+    if data is not None and str(data.get("decision", "")).strip().lower() == "block":
+        reason = data.get("reason")
+        why = str(reason).strip() if reason not in (None, "") else ""
+        return StopDecision(res.hook_name, "block", why or "(no reason given)")
+    return StopDecision(res.hook_name, "allow")
 
 
 # --- loader ---------------------------------------------------------------
@@ -274,6 +360,12 @@ def _parse_entry(event: str, entry: dict) -> Hook:
     if am_raw and not isinstance(am_raw, dict):
         raise ValueError("hook.arg_match must be a table of arg = glob")
     arg_match = tuple((str(k), str(v)) for k, v in am_raw.items())
+    protocol = entry.get("protocol", "")
+    if not isinstance(protocol, str) or protocol.strip().lower() not in PROTOCOLS:
+        raise ValueError('hook.protocol must be "json" (or left out)')
+    protocol = protocol.strip().lower()
+    if protocol and event != "stop":
+        raise ValueError('protocol = "json" is only for [[stop]] hooks')
     return Hook(
         name=name,
         event=event,  # type: ignore[arg-type]
@@ -284,6 +376,7 @@ def _parse_entry(event: str, entry: dict) -> Hook:
         veto_on_nonzero=veto,
         args_via_file=via_file,
         arg_match=arg_match,
+        protocol=protocol,
     )
 
 
@@ -402,11 +495,38 @@ class HookRegistry:
         hook that exited non-zero with veto_on_nonzero (blocks the action)."""
         results: list[HookResult] = []
         for hook in self.for_event(event, ""):
+            if hook.protocol == "json":
+                continue  # a blocking stop hook: run_stop ran it before the end
             res = _run_hook(hook, event, payload, result_output=None, cwd=cwd)
             results.append(res)
             if hook.veto_on_nonzero and res.vetoed:
                 return results, res
         return results, None
+
+    def json_stop_hooks(self) -> list[Hook]:
+        """The `protocol = "json"` stop hooks: the ones that can block."""
+        return [h for h in self.for_event("stop", "") if h.protocol == "json"]
+
+    def run_stop(
+        self, payload: dict, *, cwd: str = ""
+    ) -> tuple[list[StopDecision], StopDecision | None]:
+        """Run the `protocol = "json"` stop hooks at a would-be end of the
+        turn, `payload` (the event object, see the module doc) on each one's
+        stdin. Returns (decisions, block): the first hook that blocked, after
+        which no further hook runs, else None. A hook error is logged and
+        counts as no block."""
+        decisions: list[StopDecision] = []
+        text = json.dumps(payload)  # ASCII: any hook's stdin decoding reads it
+        for hook in self.json_stop_hooks():
+            res = _run_hook(hook, "stop", text, result_output=None, cwd=cwd, stdin=text)
+            decision = stop_decision(res)
+            decisions.append(decision)
+            if decision.decision == "error":
+                logger.warning("stop hook %s failed (not a block): %s",
+                               hook.name, decision.reason[:200])
+            if decision.blocked:
+                return decisions, decision
+        return decisions, None
 
 
 # --- the registry an agent's tools run under -------------------------------
@@ -480,10 +600,13 @@ def _run_http_hook(
     args_json: str,
     result_output: str | None,
     cwd: str = "",
+    body: str | None = None,
 ) -> HookResult:
-    """POST the event as JSON to `hook.url`. A 2xx response is success (exit 0);
-    any other status becomes the exit code, so `veto_on_nonzero` still works
-    (a before-hook URL that returns 4xx/5xx blocks the call)."""
+    """POST the event as JSON to `hook.url` (`body`, when given, is the JSON
+    text to POST instead: a json stop hook's event). A 2xx response is
+    success (exit 0); any other status becomes the exit code, so
+    `veto_on_nonzero` still works (a before-hook URL that returns 4xx/5xx
+    blocks the call)."""
     import urllib.error
     import urllib.request
 
@@ -498,7 +621,7 @@ def _run_http_hook(
         payload["result"] = result_output[:_ENV_RESULT_LIMIT]
     req = urllib.request.Request(
         hook.url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=(body if body is not None else json.dumps(payload)).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json", "User-Agent": "evi-hook"},
     )
@@ -535,11 +658,14 @@ def _run_hook(
     args_json: str,
     result_output: str | None,
     cwd: str = "",
+    stdin: str | None = None,
 ) -> HookResult:
     """Run a hook: POST to its URL, or spawn its command with EVI_HOOK_* env,
-    in the session folder `cwd` ("" = the process cwd)."""
+    in the session folder `cwd` ("" = the process cwd). `stdin` (a json stop
+    hook's event) is the command's stdin, or the url hook's POST body;
+    otherwise stdin is the null device."""
     if hook.url:
-        return _run_http_hook(hook, tool_name, args_json, result_output, cwd)
+        return _run_http_hook(hook, tool_name, args_json, result_output, cwd, body=stdin)
 
     _retry_pending()
     env = dict(os.environ)
@@ -573,7 +699,7 @@ def _run_hook(
         elif cut and guard:
             return _too_big(hook, whole, file_failed=True)
     try:
-        return _spawn_hook(hook, env, cwd)
+        return _spawn_hook(hook, env, cwd, stdin=stdin)
     finally:
         _drop_args_file(args_file)
 
@@ -785,14 +911,21 @@ def _cleanup_args_files() -> None:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def _spawn_hook(hook: Hook, env: dict[str, str], cwd: str = "") -> HookResult:
+def _spawn_hook(
+    hook: Hook, env: dict[str, str], cwd: str = "", stdin: str | None = None
+) -> HookResult:
+    # The null device, not our stdin: a hook that reads stdin would otherwise
+    # block on the terminal (or the desktop sidecar's pipe) until its timeout.
+    # A json stop hook reads its event there instead.
+    # Its output is read as UTF-8 (the event it gets is ASCII JSON).
+    feed: dict = (
+        {"stdin": subprocess.DEVNULL} if stdin is None
+        else {"input": stdin, "encoding": "utf-8", "errors": "replace"}
+    )
     try:
         proc = subprocess.run(
             hook.command,
-            # The null device, not our stdin: a hook that reads stdin would
-            # otherwise block on the terminal (or the desktop sidecar's pipe)
-            # until its timeout.
-            stdin=subprocess.DEVNULL,
+            **feed,
             capture_output=True,
             text=True,
             env=env,

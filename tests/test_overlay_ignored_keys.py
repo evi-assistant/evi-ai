@@ -547,6 +547,17 @@ def test_rules_warning_says_whether_any_rule_applied() -> None:
     assert ignored == ["auto.rules"]
 
 
+def test_checks_commands_is_read_by_checks_not_merged_or_reported() -> None:
+    # evi.checks.project_commands reads [checks] commands behind the trust
+    # gate; the overlay neither merges it nor calls it ignored. The other
+    # [checks] keys (verify = "off" would loosen the gate) are ignored.
+    safe, ignored = filter_project_overlay(
+        {"checks": {"commands": ["make lint"], "verify": "off", "max_rounds": 9}}
+    )
+    assert safe == {}
+    assert ignored == ["checks.max_rounds", "checks.verify"]
+
+
 @pytest.mark.parametrize("ref", ["HEAD~1", "main^", "origin/release-1.2", "v1.0.53"])
 def test_base_ref_accepts_git_revspecs(env: _Env, ref: str) -> None:
     env.project(f'[worktree]\nbase_ref = "{ref}"\n')

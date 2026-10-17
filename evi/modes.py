@@ -47,6 +47,16 @@ MODES: dict[str, Mode] = {
 
 DEFAULT_MODE = "chat"
 
+# Modes whose sessions run the project checks before a turn ends when
+# [checks] verify = "always" (evi/checks.py; "auto" runs them only under the
+# implementer policy). The agent knows its mode as `Agent.mode`.
+VERIFY_MODES = frozenset({"code"})
+
+
+def verifies(name: str | None) -> bool:
+    """Whether a session in mode `name` runs the checks with verify = "always"."""
+    return (name or "") in VERIFY_MODES
+
 
 def resolve(name: str | None) -> Mode:
     """Return the named mode, falling back to the default for unknown names."""

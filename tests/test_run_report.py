@@ -50,13 +50,18 @@ from evi.config import Config
 from evi.headless import ChangeTracker, HeadlessResult, run_headless, to_json
 from evi.llm.agent import (
     Agent,
+    CheckResult,
+    ChecksFailed,
+    ChecksSkipped,
     Done,
     Error,
     Event,
+    FilesChanged,
     Guardrail,
     LogProbs,
     RouteInfo,
     Steering,
+    StopBlocked,
     TextDelta,
     ThinkingDelta,
     ToolCall,
@@ -181,6 +186,12 @@ def _sample(cls):
         Guardrail: Guardrail("input", True, ["r"], [], "blocked"),
         RouteInfo: RouteInfo("m", "default"), Steering: Steering("also this"),
         Done: Done("stop"), Error: Error("boom"),
+        CheckResult: CheckResult("pytest", "python -m pytest -q t.py", 1, 812, "1 failed", 1,
+                                 "pytest"),
+        ChecksSkipped: ChecksSkipped("not a trusted folder"),
+        ChecksFailed: ChecksFailed(1, 2, ["pytest"]),
+        StopBlocked: StopBlocked("pytest-gate", "tests fail", 1),
+        FilesChanged: FilesChanged(["calc.py"]),
     }[cls]
 
 
@@ -189,7 +200,7 @@ def test_every_agent_event_kind_and_field_is_in_the_schema() -> None:
     bump if it renames or drops one)."""
     stream = events.EventStream()
     kinds = typing.get_args(Event)
-    assert len(kinds) == 12
+    assert len(kinds) == 17
     for cls in kinds:
         definition = events.SCHEMA["$defs"][cls.__name__]
         props = definition["allOf"][1]["properties"]
@@ -197,7 +208,7 @@ def test_every_agent_event_kind_and_field_is_in_the_schema() -> None:
         frame = stream.frame(_sample(cls))
         _validate_event(frame)
         assert frame["kind"] == cls.__name__
-    assert [stream.frame(Done("x"))["seq"] for _ in range(2)] == [13, 14]
+    assert [stream.frame(Done("x"))["seq"] for _ in range(2)] == [18, 19]
 
 
 def test_a_frame_that_breaks_the_contract_does_not_validate() -> None:
@@ -258,6 +269,48 @@ def test_the_report_schema_describes_the_worktree_field() -> None:
         HeadlessResult(text="done", stop_reason="done", worktree=wt))))
 
 
+def test_the_report_carries_checks_stop_blocks_and_denial_reasons() -> None:
+    """loop-verify-gate / loop-implementer-policy: the verify checks, the
+    stop-hook blocks and why no check ran are in the report; a denied call
+    carries its reason (schema-additive: denied_tools stays the names)."""
+    res = run_headless(_Fake([
+        ToolCall("run_command", '{"command": "curl x"}'),
+        ToolResult("run_command", "PERMISSION DENIED: run_command was not run: 'curl x' is "
+                                  "not allowed (the implementer policy ...)."),
+        TextDelta("fixed"),
+        CheckResult("pytest", "python -m pytest -q t.py", 1, 812, "1 failed", 1, "pytest"),
+        ChecksFailed(1, 2, ["pytest"]),
+        TextDelta("fixed again"),
+        CheckResult("pytest", "python -m pytest -q t.py", 0, 640, "1 passed", 2, "pytest"),
+        StopBlocked("gate", "run the linter too", 2),
+        TextDelta("done"),
+        ChecksSkipped("not a trusted folder"),
+        Done("stop"),
+    ]), "go")
+    report = res.to_dict()
+    _validate_report(report)
+    assert [(c["round"], c["exit"]) for c in report["checks"]] == [(1, 1), (2, 0)]
+    assert report["stop_blocks"] == [{"hook": "gate", "reason": "run the linter too",
+                                      "iteration": 2}]
+    assert report["checks_skipped"] == "not a trusted folder"
+    assert report["denied_tools"] == ["run_command"]
+    [call] = report["tool_calls"]
+    assert call["reason"].startswith("run_command was not run: 'curl x' is not allowed")
+    assert res.turns_used == 4  # the gate sent the model back twice
+    good = HeadlessResult(text="done", stop_reason="done").to_dict()
+    for bad in (
+        {**good, "checks": [{"name": "pytest"}]},
+        {**good, "checks": [{**report["checks"][0], "round": 0}]},
+        {**good, "stop_blocks": [{"hook": "gate", "reason": "x"}]},
+        {**good, "checks_skipped": 3},
+        {k: v for k, v in good.items() if k != "stop_blocks"},
+        {**good, "stop_reason": "checks_passed"},
+    ):
+        with pytest.raises(jsonschema.ValidationError):
+            _validate_report(bad)
+    _validate_report({**good, "stop_reason": "checks_failed"})
+
+
 # ---- stop reasons and exit codes (run_headless) ----------------------------------
 
 
@@ -270,6 +323,7 @@ def test_the_report_schema_describes_the_worktree_field() -> None:
     ("permission_denied", "permission_denied", 4),
     ("guardrail_blocked", "guardrail", 4),
     ("hook_blocked", "guardrail", 4),
+    ("checks_failed", "checks_failed", 5),
     ("stop_hook_exhausted", "stop_hook_exhausted", 6),
     ("interrupted", "interrupted", 130),
 ])

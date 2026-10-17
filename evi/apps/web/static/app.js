@@ -2245,10 +2245,88 @@ async function handleEvent(ev, assistant, sid) {
       el.textContent = `confidence ${conf}% avg · ${ev.low_count} low-confidence token(s)`;
       assistant.appendChild(el);
     }
+  } else if (ev.kind === 'StopBlocked' || ev.kind === 'ChecksFailed') {
+    // The verify gate sent the model back to work: its note joined the
+    // history here as a user message. Drawn as a note (no message actions),
+    // it takes that history index like drawNote does, and the reply after it
+    // is a new assistant row.
+    assistant = null;
+    const b = addBubble('note');
+    b.classList.add('verify-note');
+    nextHistoryIndex += 1;
+    const head = document.createElement('div');
+    head.className = 'note-head';
+    const body = document.createElement('div');
+    body.className = 'note-body';
+    if (ev.kind === 'StopBlocked') {
+      head.textContent = `⛔ stop hook "${String(ev.hook || '')}" blocked the end of the turn `
+        + `(iteration ${Number(ev.iteration) || 1}) — eVi keeps going`;
+      body.textContent = String(ev.reason || '');
+    } else {
+      head.textContent = `✗ checks failed (round ${Number(ev.round) || 1} of `
+        + `${Number(ev.max_rounds) || 1}) — sent back to the model`;
+      body.textContent = (Array.isArray(ev.failed) ? ev.failed : []).map(String).join(', ');
+    }
+    b.appendChild(head);
+    b.appendChild(body);
+    workStatus.setPhase('working on it again…');
+  } else if (ev.kind === 'CheckResult') {
+    // One verify check: a UI-only line (its record is in the run report).
+    const ok = ev.exit === 0;
+    const b = addBubble('system', { history: false });
+    b.classList.add('check-line', ok ? 'ok' : 'fail');
+    const line = document.createElement('div');
+    const status = ok ? 'passed' : (ev.exit === null || ev.exit === undefined
+      ? 'did not run to the end' : `exit ${ev.exit}`);
+    line.textContent = `${ok ? '✓' : '✗'} check ${String(ev.name || '')} `
+      + `(round ${Number(ev.round) || 1}) ${status} · ${String(ev.cmd || '')}`;
+    b.appendChild(line);
+    if (!ok && ev.tail) {
+      const d = document.createElement('details');
+      const s = document.createElement('summary');
+      s.textContent = 'output';
+      const pre = document.createElement('pre');
+      pre.textContent = String(ev.tail);
+      d.appendChild(s);
+      d.appendChild(pre);
+      b.appendChild(d);
+    }
+    workStatus.setPhase('checking…');
+  } else if (ev.kind === 'ChecksSkipped') {
+    const b = addBubble('system', { history: false });
+    b.classList.add('check-line');
+    b.textContent = `checks skipped: ${String(ev.reason || '')}`;
+  } else if (ev.kind === 'FilesChanged') {
+    // UI-only footer under the turn's reply: what its tools wrote. Never sent
+    // to the model, not part of the history.
+    const paths = Array.isArray(ev.paths) ? ev.paths.map(String) : [];
+    if (paths.length) {
+      const foot = document.createElement('div');
+      foot.className = 'files-changed';
+      const title = document.createElement('div');
+      title.className = 'files-changed-title';
+      title.textContent = `Files changed (${paths.length})`;
+      const list = document.createElement('ul');
+      for (const p of paths) {
+        const li = document.createElement('li');
+        li.textContent = p;
+        list.appendChild(li);
+      }
+      foot.appendChild(title);
+      foot.appendChild(list);
+      if (assistant) assistant.appendChild(foot);
+      else addBubble('files-changed-box', { history: false }).appendChild(foot);
+    }
   } else if (ev.kind === 'Done') {
     if (ev.reason === 'interrupted') {
       // Stopped (POST /cancel): what streamed so far stays, the rest never ran.
       addBubble('system').textContent = 'Stopped — the turn was cancelled.';
+    } else if (ev.reason === 'checks_failed') {
+      addBubble('system').textContent =
+        'Stopped — the project checks still failed after the last round ([checks] max_rounds).';
+    } else if (ev.reason === 'stop_hook_exhausted') {
+      addBubble('system').textContent =
+        'Stopped — a stop hook kept blocking the end of the turn ([hooks] max_blocks).';
     }
     // The turn's final assistant bubble is now the newest — move the re-roll
     // affordance onto it (and off any earlier ones).

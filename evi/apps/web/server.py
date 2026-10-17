@@ -4522,6 +4522,8 @@ def create_app() -> FastAPI:
         mode = resolve(req.mode).name
         sess.mode = mode
         sess.agent.tools = {t.name: t for t in mode_tools(mode)}
+        # [checks] verify = "always" runs the project checks in Code mode.
+        sess.agent.mode = mode
         return {"ok": True, "mode": mode,
                 "tools": sorted(t.name for t in sess.agent.tools.values())}
 
