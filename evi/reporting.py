@@ -21,13 +21,7 @@ import os
 import re
 from typing import Any, Protocol
 
-# Patterns for obvious secrets that can end up in tracebacks/messages.
-_SECRET_RE = re.compile(
-    r"(sk-[A-Za-z0-9_\-]{8,}"          # OpenAI-style keys
-    r"|gh[pousr]_[A-Za-z0-9]{20,}"      # GitHub tokens
-    r"|xox[baprs]-[A-Za-z0-9\-]{10,}"   # Slack tokens
-    r"|Bearer\s+[A-Za-z0-9._\-]+)"      # bearer headers
-)
+from evi.redact import MARKER_RE, Redactor, marker
 
 # Keys whose VALUES are dropped wholesale wherever they appear in an event —
 # these routinely carry user content / secrets in Sentry payloads.
@@ -41,25 +35,54 @@ _DROP_KEYS = frozenset({
 
 _REDACTED = "<redacted>"
 
+# A crash report leaves the machine, and a false positive in one costs
+# nothing, so on top of evi.redact's tight shapes it keeps the looser ones
+# this scrubber always had: any sk- / gh?_ / xox?- token, any Bearer
+# credential. (A token right after a JSON or repr escape counts, as there.)
+_EDGE = r"(?:(?<![A-Za-z0-9_\-])|(?<=\\[nrtfbv]))"
+_LOOSE: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("api_key", re.compile(_EDGE + r"()sk-[A-Za-z0-9_\-]{8,}")),
+    ("github_token", re.compile(_EDGE + r"()gh[pousr]_[A-Za-z0-9]{20,}")),
+    ("slack_token", re.compile(_EDGE + r"()xox[abeprs]-[A-Za-z0-9\-]{10,}")),
+    ("bearer", re.compile(_EDGE + r"(Bearer\s+)[A-Za-z0-9._~+/\-]+=*")),
+)
 
-def _scrub_str(s: str, home: str, user: str) -> str:
+
+def _scrub_plain(s: str, home: str, user: str) -> str:
+    for kind, rx in _LOOSE:
+        s = rx.sub(lambda m, k=kind: m.group(1) + marker(k), s)
     if home:
         s = s.replace(home, "<HOME>")
     if user:
         s = re.sub(re.escape(user), "<USER>", s, flags=re.IGNORECASE)
-    return _SECRET_RE.sub(_REDACTED, s)
+    return s
 
 
-def _scrub_obj(o: Any, home: str, user: str) -> Any:
+def _scrub_str(s: str, home: str, user: str, red: Redactor | None = None) -> str:
+    # Secrets first (evi.redact: token shapes and this machine's known keys),
+    # while they are still whole: a username inside a token would otherwise
+    # be rewritten before the token could be recognised. The rest of the
+    # scrubbing runs between the markers, so they stay intact and countable.
+    s = (red or Redactor())(s)
+    out, pos = [], 0
+    for m in MARKER_RE.finditer(s):
+        out += [_scrub_plain(s[pos:m.start()], home, user), m.group(0)]
+        pos = m.end()
+    out.append(_scrub_plain(s[pos:], home, user))
+    return "".join(out)
+
+
+def _scrub_obj(o: Any, home: str, user: str, red: Redactor | None = None) -> Any:
+    red = red or Redactor()  # one known-value lookup for the whole event
     if isinstance(o, dict):
         return {
-            k: (_REDACTED if k in _DROP_KEYS else _scrub_obj(v, home, user))
+            k: (_REDACTED if k in _DROP_KEYS else _scrub_obj(v, home, user, red))
             for k, v in o.items()
         }
     if isinstance(o, (list, tuple)):
-        return [_scrub_obj(v, home, user) for v in o]
+        return [_scrub_obj(v, home, user, red) for v in o]
     if isinstance(o, str):
-        return _scrub_str(o, home, user)
+        return _scrub_str(o, home, user, red)
     return o
 
 
@@ -68,8 +91,10 @@ def scrub_event(event: dict, hint: Any = None, *, home: str | None = None,
     """Scrub a Sentry-shaped event dict in place-ish (returns the cleaned copy).
 
     Drops local variables, env, request/headers/cookies; rewrites the user's
-    home dir → ``<HOME>`` and username → ``<USER>``; redacts API-key / token
-    patterns; anonymises ``server_name`` and removes the ``user`` (IP/id) block.
+    home dir → ``<HOME>`` and username → ``<USER>``; redacts secrets as
+    ``[REDACTED:<kind>]`` (evi.redact: API-key / token patterns and the keys
+    this machine has); anonymises ``server_name`` and removes the ``user``
+    (IP/id) block.
     Usable as a sentry ``before_send`` and unit-testable without sentry-sdk.
     """
     home = home if home is not None else os.path.expanduser("~")

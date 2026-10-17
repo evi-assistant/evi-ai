@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import evi.scheduler as scheduler_mod
-from evi.llm.agent import Done, TextDelta, ToolCall, ToolResult
+from evi.llm.agent import Done, Error, TextDelta, ToolCall, ToolResult
 from evi.scheduled import ScheduledTask, TaskStore
 
 
@@ -194,6 +194,99 @@ def test_execute_records_error_on_failure(
     log_path = scheduler_mod._execute(task, store)
     assert "ERROR" in Path(log_path).read_text("utf-8")
     assert store.get(task.id).last_status.startswith("ERROR")
+
+
+# ---- secret redaction in the log ------------------------------------------
+
+# Shapeless, so only the known-value set (the env var) can catch it.
+SECRET = "Zq8vN2kLp4Xr7Tw1Ys5M-env"
+MARK = "[REDACTED:ACME_API_KEY]"
+
+
+@pytest.fixture
+def env_key(monkeypatch: pytest.MonkeyPatch):
+    import os
+
+    from evi import redact
+
+    for name in list(os.environ):
+        if redact._SECRET_NAME.search(name):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ACME_API_KEY", SECRET)
+    redact.refresh()
+    yield
+    redact.refresh()
+
+
+def _no_prefix(text: str) -> bool:
+    """No 8-character run of SECRET shows: not whole, not cut short."""
+    return not any(SECRET[i:i + 8] in text for i in range(len(SECRET) - 7))
+
+
+def test_a_scheduled_run_whose_tool_echoes_an_env_key_logs_it_redacted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stubbed_runtime: Path, env_key
+) -> None:
+    """A real Agent (scripted model, a tool that prints an env var) through
+    _execute: the key is in the call's arguments, a duplicate key's earlier
+    value, the tool's output and the reply, and the log holds none of it."""
+    import os
+
+    from evi.config import Config
+    from evi.llm.agent import Agent
+    from evi.tools.base import Tool
+    from tests._live_web import Scripted
+    from tests.conftest import llm_call, llm_text
+
+    echo = Tool(
+        name="echo_env", description="print an environment variable",
+        parameters={"type": "object", "properties": {"name": {"type": "string"},
+                                                     "note": {"type": "string"}}},
+        func=lambda name="", note="": f"{name}={os.environ.get(name, '')}",
+    )
+    agent = Agent(
+        client=Scripted([
+            llm_call(("echo_env", {"name": "ACME_API_KEY", "note": f"k={SECRET}"}),
+                     ("echo_env", '{"name": "ACME_API_KEY", "note": "' + SECRET + '", "note": "x"}')),
+            llm_text(f"The key is {SECRET}."),
+        ]),
+        config=Config(), tools=[echo], transcripts=None, unattended_policy="allow",
+    )
+    monkeypatch.setattr("evi.sdk.builder.build_agent", lambda *a, **k: agent)
+    store = TaskStore(root=tmp_path / "store")
+    task = store.add(name="daily", cron="0 9 * * *", prompt=f"check {SECRET}")
+
+    body = Path(scheduler_mod._execute(task, store)).read_text("utf-8")
+    assert _no_prefix(body), body
+    assert f"<- echo_env: ACME_API_KEY={MARK}" in body
+    assert f'-> echo_env {{"name": "ACME_API_KEY", "note": "k={MARK}"}}' in body
+    assert f"The key is {MARK}." in body and f"check {MARK}" in body
+    assert store.get(task.id).last_status == "ok"
+
+
+def test_the_scheduled_trace_redacts_before_it_cuts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stubbed_runtime: Path, env_key
+) -> None:
+    """Each trace line is cut to 200 characters; a key straddling the cut would
+    leave a prefix no redaction of the whole log could match."""
+
+    class _Straddling:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def chat(self, prompt: str, max_turns: int = 6):
+            yield ToolCall(name="t", arguments=json.dumps({"q": "a" * 182 + SECRET}))
+            yield ToolResult(name="t", output="y" * 190 + SECRET)
+            yield Error(message=f"backend said: bad key {SECRET}")
+
+    monkeypatch.setattr("evi.sdk.builder.build_agent", _Straddling)
+    store = TaskStore(root=tmp_path / "store")
+    task = store.add(name="x", cron="* * * * *", prompt="p")
+
+    body = Path(scheduler_mod._execute(task, store)).read_text("utf-8")
+    assert _no_prefix(body), body
+    assert "y" * 190 + "[REDACTED:" in body
+    status = store.get(task.id).last_status
+    assert status == f"error: backend said: bad key {MARK}"
 
 
 def test_scheduler_start_without_apscheduler_raises(

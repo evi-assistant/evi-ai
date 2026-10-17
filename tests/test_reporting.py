@@ -36,9 +36,56 @@ def test_scrub_redacts_secrets():
           "b": "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
           "c": "Authorization: Bearer abc.def-ghi"}
     out = reporting.scrub_event(ev, home="", user="")
-    assert "sk-ABCDEFGH12345678" not in out["a"] and "<redacted>" in out["a"]
-    assert "ghp_" not in out["b"]
-    assert "Bearer abc.def-ghi" not in out["c"]
+    # The shared evi.redact markers say what kind of secret was there.
+    assert out["a"] == "key [REDACTED:api_key] here"
+    assert out["b"] == "token [REDACTED:github_token]"
+    assert out["c"] == "Authorization: Bearer [REDACTED:bearer]"
+
+
+def test_scrub_redacts_this_machines_known_keys(monkeypatch):
+    # A key with no recognisable shape, known only because it is in the env.
+    from evi import redact
+
+    monkeypatch.setenv("ACME_API_KEY", "Zq8vN2kLp4Xr7Tw1Ys5M")
+    redact.refresh()
+    ev = {"exception": {"values": [{"value": "401 for key Zq8vN2kLp4Xr7Tw1Ys5M"}]}}
+    out = reporting.scrub_event(ev, home="", user="")
+    assert out["exception"]["values"][0]["value"] == "401 for key [REDACTED:ACME_API_KEY]"
+
+
+def test_scrub_redacts_a_token_before_rewriting_the_username():
+    # The username inside the token must not break it up before it is seen.
+    tok = "ghp_aliceABCDEFGHIJKLMNOPQRSTUVWXYZ0123"
+    out = reporting.scrub_event({"m": f"push with {tok} as alice"}, home="", user="alice")
+    assert out["m"] == "push with [REDACTED:github_token] as <USER>"
+
+
+@pytest.mark.parametrize("user", ["ted", "act", "api", "token", "red"])
+def test_scrub_leaves_markers_whole_whatever_the_username(user):
+    # "[REDACTED:github_token]" holds "ted", "act", "red" and "token": the
+    # username rewrite must not reach into it.
+    tok = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    out = reporting.scrub_event({"m": f"push {tok} as {user}"}, home="", user=user)
+    assert out["m"] == "push [REDACTED:github_token] as <USER>"
+
+
+@pytest.mark.parametrize("text,want", [
+    # The looser shapes the scrubber always caught (evi.redact's are tighter).
+    ("requests sent Bearer s3cr3tT0k", "requests sent Bearer [REDACTED:bearer]"),
+    ("token=Bearer abcdefghijklmnopqrstuvwxyz", "token=Bearer [REDACTED:bearer]"),
+    ("upstream said: Bearer eyJhbGciOi.abc.def", "upstream said: Bearer [REDACTED:bearer]"),
+    ("key sk-abcdefghijklmnop", "key [REDACTED:api_key]"),
+    ("cfg sk-live-abc12345", "cfg [REDACTED:api_key]"),
+    ("slack xoxb-abcdefghijkl", "slack [REDACTED:slack_token]"),
+    # A token after an escape in a repr() or JSON-encoded message.
+    (repr("config:\nsk-proj-Ab12Cd34Ef56Gh78Ij90Kl12Mn34"), "'config:\\n[REDACTED:api_key]'"),
+    ('{"body": "x\\nghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}',
+     '{"body": "x\\n[REDACTED:github_token]"}'),
+    (repr(["a\tghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"]), "['a\\t[REDACTED:github_token]']"),
+])
+def test_scrub_is_no_weaker_than_the_regex_it_replaced(text, want):
+    out = reporting.scrub_event({"exception": {"values": [{"value": text}]}}, home="", user="")
+    assert out["exception"]["values"][0]["value"] == want
 
 
 def test_scrub_drops_sensitive_keys():

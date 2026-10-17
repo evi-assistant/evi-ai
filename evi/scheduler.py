@@ -3,7 +3,9 @@
 Wraps APScheduler's `BackgroundScheduler`. On each fire we build a one-shot
 `Agent` (no shared history between runs) through `evi.sdk.build_agent` (so safe
 mode, hooks and guardrails apply), drain its event stream into a log file under
-`~/.evi/logs/scheduled/`, and record the run on the task.
+`~/.evi/logs/scheduled/`, and record the run on the task. The log and the
+recorded status are redacted (`evi.redact`) before they are written, and the
+trace redacts each call and result before cutting it short.
 
 Nobody is there to approve a tool call, so a scheduled run is unattended: the
 auto-approved categories run, and anything that would ask follows
@@ -39,6 +41,7 @@ from evi.llm.agent import (
     make_unattended,
 )
 from evi.llm.cli_agent import unattended
+from evi.redact import Redactor
 from evi.scheduled import ScheduledTask, TaskStore
 
 
@@ -154,11 +157,14 @@ def _execute(task: ScheduledTask, store: TaskStore) -> str:
                 text, status = _run_eval_once(task, config)
             else:
                 text, status = _run_agent_once(task, config)
-        log_path.write_text(text, encoding="utf-8")
-        store.record_run(task.id, status=status)
+        # Secrets never reach the log or the task's recorded status: the
+        # response, the prompt and an error can hold one as well as the trace.
+        red = Redactor()
+        log_path.write_text(red(text), encoding="utf-8")
+        store.record_run(task.id, status=red(status))
         return str(log_path)
     except Exception as exc:
-        msg = f"ERROR: {type(exc).__name__}: {exc}"
+        msg = Redactor()(f"ERROR: {type(exc).__name__}: {exc}")
         try:
             log_path.write_text(msg, encoding="utf-8")
         except OSError:
@@ -189,13 +195,16 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
     trace: list[str] = []
     denied: list[str] = []
     error: str | None = None
+    # The log is a written record: redact, then cut (a key cut in half no
+    # longer matches). _execute redacts the whole log again as it writes it.
+    red = Redactor()
     for event in agent.chat(task.prompt, max_turns=8):
         if isinstance(event, TextDelta):
             text_parts.append(event.text)
         elif isinstance(event, ToolCall):
-            trace.append(f"-> {event.name} {event.arguments[:200]}")
+            trace.append(f"-> {event.name} {red.args(event.arguments)[:200]}")
         elif isinstance(event, ToolResult):
-            preview = event.output[:200].replace("\n", " ")
+            preview = red(event.output)[:200].replace("\n", " ")
             trace.append(f"<- {event.name}: {preview}")
             if is_permission_denial(event.output) and event.name not in denied:
                 denied.append(event.name)
@@ -225,7 +234,7 @@ def _run_agent_once(task: ScheduledTask, config: Config) -> tuple[str, str]:
         status = f"denied: {', '.join(denied)} (policy {policy})"
     else:
         status = "ok"
-    return header + body + tail + "\n", status[:200]
+    return header + body + tail + "\n", red(status)[:200]
 
 
 def _run_eval_once(task: ScheduledTask, config: Config) -> tuple[str, str]:

@@ -16,11 +16,18 @@ records skip it like any system line. A line without ``type`` is a message.
 A session that runs past midnight has a file in each day's directory; the
 readers that rebuild a session (evi.sessions) read them all, in the order the
 lines were written, and retention (prune) keeps or drops a session whole.
+
+Secrets never reach the file: every line is redacted as it is written
+(evi.redact), so an API key a tool printed, or the model repeated, reads
+``[REDACTED:<kind>]`` in the transcript and in everything built from it
+(resume, exports, fine-tune data, the dream engine). The live history the
+model sees is left as it was.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -28,6 +35,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from evi.config import TRANSCRIPTS_DIR
+from evi.redact import Redactor
+
+logger = logging.getLogger(__name__)
 
 
 # Record types. MESSAGE is the default and is never written out, so message
@@ -64,6 +74,33 @@ EDIT = "edit"
 FORK = "fork_of"
 
 _FIELDS = ("session", "ts", "role", "content", "tool_name", "tool_calls", "tool_call_id", "type")
+# The fields that say which line this is rather than what was said. Redaction
+# leaves them alone; everything else on a line (content, tool-call arguments,
+# a meta record's summary, text or copied messages) is redacted.
+_ID_FIELDS = frozenset({"session", "ts", "role", "tool_name", "tool_call_id", "type"})
+# The same for each message a FORK record copies.
+_MESSAGE_ID_FIELDS = frozenset({"role", "name", "tool_call_id"})
+
+
+def _redacted(d: dict[str, Any], keep: frozenset[str], red: Redactor) -> dict[str, Any]:
+    """`d` with every field but `keep` redacted. Tool-call arguments are
+    redacted as the JSON they are (Redactor.tool_calls), so they stay JSON a
+    resumed session can send back, and a FORK's copied messages field by
+    field, so their ids still pair."""
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if k in keep:
+            out[k] = v
+        elif k == "tool_calls":
+            out[k] = red.tool_calls(v)
+        elif k == "messages" and d.get("type") == FORK and isinstance(v, list):
+            out[k] = [
+                _redacted(m, _MESSAGE_ID_FIELDS, red) if isinstance(m, dict) else red.obj(m)
+                for m in v
+            ]
+        else:
+            out[k] = red.obj(v)
+    return out
 
 
 def transcript_message(message: dict[str, Any]) -> dict[str, Any] | None:
@@ -163,8 +200,13 @@ class TranscriptStore:
         d = self.root / day
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{entry.session}.jsonl"
+        red = Redactor()
+        line = _redacted(entry.to_dict(), _ID_FIELDS, red)
+        if red.total:
+            logger.info("transcript %s: redacted %s", entry.session,
+                        ", ".join(f"{n} {kind}" for kind, n in sorted(red.counts.items())))
         with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry.to_dict()) + "\n")
+            f.write(json.dumps(line) + "\n")
 
     def write_message(
         self,
