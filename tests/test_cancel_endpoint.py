@@ -159,7 +159,7 @@ def test_cancel_when_no_turn_runs_says_so(monkeypatch, tmp_path) -> None:
     # ...and it cancelled nothing for later: the next turn runs.
     agent.client.turns.append(llm_text("still here"))
     events = sse_events(c.post("/api/chat", json={"session_id": "idle", "message": "x"}).text)
-    assert events[-1] == {"kind": "Done", "reason": "stop"}
+    assert (events[-1]["kind"], events[-1]["reason"]) == ("Done", "stop")
 
 
 def test_cancel_of_a_session_that_is_not_live_is_404(monkeypatch, tmp_path) -> None:
@@ -194,7 +194,8 @@ def test_a_turn_that_fails_to_start_reports_it_on_the_stream(monkeypatch, tmp_pa
     agent.chat = broken  # type: ignore[method-assign]
     c = TestClient(web_app(monkeypatch, tmp_path, agent))
     events = sse_events(c.post("/api/chat", json={"session_id": "b", "message": "x"}).text)
-    assert events == [{"kind": "Error", "message": "RuntimeError: no model"}]
+    assert [(e["kind"], e["message"], e["seq"]) for e in events] == [
+        ("Error", "RuntimeError: no model", 1)]
     snap = next(s for s in c.get("/api/dispatch").json()["sessions"] if s["id"] == "b")
     assert snap["busy"] is False
 

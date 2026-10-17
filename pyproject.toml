@@ -178,6 +178,8 @@ dev = [
     "ruff>=0.4,<0.17",
     # The CI workflow-guard and release-shape tests parse the workflow YAML.
     "pyyaml>=6.0",
+    # The run-report / event-stream tests validate against evi.events.SCHEMA.
+    "jsonschema>=4.0",
 ]
 
 [project.scripts]

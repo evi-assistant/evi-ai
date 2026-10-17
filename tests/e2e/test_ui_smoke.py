@@ -53,6 +53,40 @@ def test_chat_renders_reply(page: Page, evi_base_url: str):
     assert errors == [], f"console errors during chat: {errors}"
 
 
+def test_chat_stream_is_the_versioned_event_schema(page: Page, evi_base_url: str):
+    """loop-run-report: the frames the browser reads are the versioned events
+    `evi run --format stream-json` prints ({schema_version, kind, seq, ts},
+    evi/events.py): each validates against the one checked-in schema, seq
+    counts up from 1, and the UI still renders the reply."""
+    import json
+
+    import jsonschema  # not skipped when missing: CI has it (the mcp extra)
+    from evi.events import SCHEMA
+
+    errors = _console_errors(page)
+    page.goto(evi_base_url)
+    page.fill("#input", "hello schema")
+    page.click("#send")
+    expect(page.locator(".msg.assistant").last).to_contain_text("fake backend", timeout=20000)
+    # The UI reads its stream as it comes (the body is gone by then), so read
+    # one more turn's stream from the page, as the page's own fetch does.
+    body = page.evaluate("""async () => {
+        const r = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Evi-Client': 'web'},
+            body: JSON.stringify({session_id: crypto.randomUUID(), message: 'hello schema'}),
+        });
+        return await r.text();
+    }""")
+    frames = [json.loads(line[5:]) for line in body.splitlines()
+              if line.startswith("data:") and line[5:].strip()]
+    assert [f["seq"] for f in frames] == list(range(1, len(frames) + 1))
+    assert frames[-1]["kind"] == "Done"
+    for frame in frames:
+        jsonschema.Draft202012Validator(SCHEMA).validate(frame)
+    assert errors == [], f"console errors during chat: {errors}"
+
+
 def test_backend_configured_hides_banner(page: Page, evi_base_url: str):
     """With a reachable configured backend, the no-backend banner stays hidden
     (the 0.24.1 fix: gate on the configured backend, not 'any reachable')."""

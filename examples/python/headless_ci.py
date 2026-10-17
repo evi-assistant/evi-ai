@@ -21,7 +21,7 @@ def main(argv: list[str]) -> int:
     agent = build_agent(tool_categories=["fs", "code"])
     result = run_headless(agent, prompt, max_turns=8)
 
-    # {"text": ..., "tools": [...], "usage": {...}, "error": ..., "policy": "deny"}
+    # the v1 run report: {"schema_version": 1, "text": ..., "tool_calls": [...], "stop_reason": ..., "policy": "deny", ...}
     print(to_json(result))
     return 1 if result.error else 0
 

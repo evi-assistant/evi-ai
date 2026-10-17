@@ -43,10 +43,13 @@ def test_error_captured():
 
 
 def test_json_envelope():
-    res = HeadlessResult(text="hi", tools=[{"name": "t", "output": "o"}], usage={"total": 3})
+    call = {"name": "t", "args": "{}", "status": "ok", "duration_ms": 1, "output": "o"}
+    res = HeadlessResult(text="hi", tool_calls=[call], usage={"total": 3}, stop_reason="done")
     d = json.loads(to_json(res))
-    assert d == {"text": "hi", "tools": [{"name": "t", "output": "o"}],
-                 "usage": {"total": 3}, "error": None}
+    assert d["schema_version"] == 1
+    assert (d["text"], d["tool_calls"], d["usage"], d["error"], d["stop_reason"]) == (
+        "hi", [call], {"total": 3}, None, "done")
+    assert res.tools == [{"name": "t", "output": "o"}]  # the pre-report view, for SDK callers
 
 
 def test_tool_output_truncated():

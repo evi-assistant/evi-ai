@@ -32,6 +32,17 @@ branding:
 #   - the `result` output is model text: read it through `env:` and never paste
 #     it into a `run:` or `script:` as an expression.
 #
+# Outputs besides `result`: `exit_code`, and with `format: json` or
+# `stream-json` the run report's `stop_reason` and `session_id`
+# (evi_run_outputs.py, which passes only values eVi itself writes). The step
+# fails with `evi run`'s exit code (0 done, 1 error, 2 usage, 3 max_turns,
+# 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted)
+# after the outputs are written, so a later step can still read them: give
+# this one `continue-on-error: true` and check `outputs.stop_reason`. Read
+# them through `env:` too. Tool calls denied in a run the model finished
+# (every call, with the config above and no auto_approve) don't fail it:
+# that run is done (0), and the json report lists them in `denied_tools`.
+#
 # Example:
 #   - uses: <owner>/evi-ai/.github/actions/evi-run@main
 #     id: triage
@@ -46,7 +57,8 @@ branding:
 #       python-version: ${{ matrix.python }}   # optional; default 3.13
 #   - env:
 #       TRIAGE: ${{ steps.triage.outputs.result }}
-#     run: printf '%s\n' "$TRIAGE"
+#       STOP: ${{ steps.triage.outputs.stop_reason }}
+#     run: printf '%s (%s)\n' "$TRIAGE" "$STOP"
 
 inputs:
   prompt:
@@ -58,9 +70,13 @@ inputs:
     required: false
     default: ""
   format:
-    description: "Output format: text | json."
+    description: "Output format: text | json | stream-json (the run report, or its events as NDJSON)."
     required: false
     default: "text"
+  max_turns:
+    description: "Most model round trips the run may take (evi run --max-turns). Blank = eVi's default (12)."
+    required: false
+    default: ""
   mode:
     description: "Tool preset: chat | cowork | code (blank = default toolset)."
     required: false
@@ -100,8 +116,17 @@ inputs:
 
 outputs:
   result:
-    description: "The stdout of `evi run` (the answer, or the JSON object). Untrusted model text."
+    description: "The stdout of `evi run` (the answer, the JSON report, or the NDJSON events). Untrusted model text."
     value: ${{ steps.run.outputs.result }}
+  exit_code:
+    description: "`evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted."
+    value: ${{ steps.run.outputs.exit_code }}
+  stop_reason:
+    description: "Why the run stopped, from the run report (format json or stream-json; empty for text)."
+    value: ${{ steps.run.outputs.stop_reason }}
+  session_id:
+    description: "The run's session id, from the run report (format json or stream-json; empty for text)."
+    value: ${{ steps.run.outputs.session_id }}
 
 runs:
   using: composite
@@ -145,6 +170,7 @@ runs:
         EVI_PROMPT: ${{ inputs.prompt }}
         EVI_PROMPT_FILE: ${{ inputs.prompt_file }}
         EVI_FORMAT: ${{ inputs.format }}
+        EVI_MAX_TURNS: ${{ inputs.max_turns }}
         EVI_MODE: ${{ inputs.mode }}
         EVI_AUTO_APPROVE: ${{ inputs.auto_approve }}
         EVI_CI_HOME: ${{ steps.config.outputs.home }}
@@ -157,14 +183,18 @@ runs:
           *) echo "::error::auto_approve must be true or false"; exit 2 ;;
         esac
         if [ -n "$EVI_MODE" ]; then args+=(--mode "$EVI_MODE"); fi
+        if [ -n "$EVI_MAX_TURNS" ]; then args+=(--max-turns "$EVI_MAX_TURNS"); fi
+        # The exit code says why the run stopped; it fails the step at the
+        # end, once the outputs are written.
+        code=0
         if [ -n "$EVI_PROMPT" ] && [ -n "$EVI_PROMPT_FILE" ]; then
           echo "::error::set prompt or prompt_file, not both"; exit 2
         elif [ -n "$EVI_PROMPT_FILE" ]; then
           # No prompt argument: `evi run` reads it from stdin.
-          out="$(evi "${args[@]}" < "$EVI_PROMPT_FILE")"
+          out="$(evi "${args[@]}" < "$EVI_PROMPT_FILE")" || code=$?
         elif [ -n "$EVI_PROMPT" ]; then
           # `--` so a prompt starting with "-" is not read as an option.
-          out="$(evi "${args[@]}" -- "$EVI_PROMPT")"
+          out="$(evi "${args[@]}" -- "$EVI_PROMPT")" || code=$?
         else
           echo "::error::the prompt or prompt_file input is required"; exit 2
         fi
@@ -179,3 +209,6 @@ runs:
           printf '%s\n' "$out"
           echo "EVI_EOF_$token"
         } >> "$GITHUB_OUTPUT"
+        # exit_code, stop_reason, session_id: only values eVi writes pass.
+        printf '%s\n' "$out" | python "$GITHUB_ACTION_PATH/evi_run_outputs.py" "$EVI_FORMAT" "$code"
+        exit "$code"

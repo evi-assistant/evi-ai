@@ -45,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from evi import events as _events
 from evi import hooks as hooks_mod
 from evi import safemode
 from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
@@ -53,7 +54,7 @@ from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
 from evi.history import COMPACTION_ACK, is_note, note_message
 from evi.llm.agent import (
-    CANCEL_GRACE, CANCEL_POLL, Agent, Done, Error, Event, ToolCall, ToolResult,
+    CANCEL_GRACE, CANCEL_POLL, Agent, Done, Error, Event,
     make_unattended, remote_unattended,
 )
 from evi.llm.client import make_client
@@ -1765,33 +1766,33 @@ def _make_session_tools(bucket: "dict[str, WebSession]", self_id: str) -> list:
 
 
 # ---- event serialization -------------------------------------------------
+# One versioned contract for SSE and `evi run --format stream-json`
+# (evi/events.py): a turn's stream wraps each payload in the envelope
+# ({schema_version, kind, seq, ts}) as it sends it (_sse_frames).
 
 
 def _event_kind(event: Event) -> str:
-    return type(event).__name__
+    return _events.event_kind(event)
 
 
 def _event_payload(event: Event) -> dict[str, Any]:
-    """An agent Event as the JSON object an SSE stream sends. A tool call's
-    arguments and a tool's output (and its citations) are redacted
-    (`evi.redact`, one Redactor per event): this is a display, while the
-    agent's history keeps what the tool returned."""
-    payload: dict[str, Any] = {"kind": _event_kind(event)}
-    if is_dataclass(event):
-        payload.update(asdict(event))
-    if isinstance(event, ToolCall):
-        payload["arguments"] = Redactor().args(payload.get("arguments"))
-    elif isinstance(event, ToolResult):
-        red = Redactor()
-        payload["output"] = red(payload.get("output"))
-        if payload.get("citations"):
-            payload["citations"] = red.obj(payload["citations"])
-    return payload
+    """An agent Event as the JSON object an SSE stream sends, without the
+    envelope (evi.events.event_payload: a tool call's arguments and a tool's
+    output, and its citations, are redacted)."""
+    return _events.event_payload(event)
 
 
 def _serialize(event: Event) -> str:
     """Render an agent Event as a JSON line for SSE."""
-    return json.dumps(_event_payload(event))
+    return _events.serialize(event)
+
+
+async def _sse_frames(payloads: AsyncIterator[dict[str, Any]]) -> AsyncIterator[dict[str, str]]:
+    """A turn's payloads as SSE messages, each in the versioned envelope and
+    numbered in the order sent (evi.events.EventStream)."""
+    frames = _events.EventStream()
+    async for payload in payloads:
+        yield {"event": "message", "data": frames.dumps(payload)}
 
 
 # ---- slash commands (server-side) ---------------------------------------
@@ -4794,14 +4795,10 @@ def create_app() -> FastAPI:
         if len(_hist) <= 1 or _hist[-1].get("role") != "user":
             sess.end_turn()
 
-            async def _noop() -> AsyncIterator[dict[str, str]]:
-                yield {"event": "message", "data": json.dumps(
-                    {"kind": "Error", "message": "nothing to re-roll"}
-                )}
-                yield {"event": "message", "data": json.dumps(
-                    {"kind": "Done", "reason": "noop"}
-                )}
-            return EventSourceResponse(_noop())
+            async def _noop() -> AsyncIterator[dict[str, Any]]:
+                yield {"kind": "Error", "message": "nothing to re-roll"}
+                yield {"kind": "Done", "reason": "noop"}
+            return EventSourceResponse(_sse_frames(_noop()))
 
         # Same machinery as /api/chat but invoke continue_chat (no new user).
         loop = asyncio.get_running_loop()
@@ -4827,14 +4824,15 @@ def create_app() -> FastAPI:
             target=_stream_turn, args=(sess, lambda: events, enqueue), daemon=True,
         ).start()
 
-        async def stream() -> AsyncIterator[dict[str, str]]:
+        async def stream() -> AsyncIterator[dict[str, Any]]:
             while True:
                 payload = await queue.get()
                 if payload is None:
                     return
-                yield {"event": "message", "data": json.dumps(payload)}
+                yield payload
 
-        return EventSourceResponse(stream(), headers={"X-Evi-History-Length": str(rewound)})
+        return EventSourceResponse(_sse_frames(stream()),
+                                   headers={"X-Evi-History-Length": str(rewound)})
 
     @app.post("/api/session/{session_id}/steer")
     def session_steer(session_id: str, req: dict[str, Any]) -> dict[str, Any]:
@@ -4898,15 +4896,11 @@ def create_app() -> FastAPI:
                 with _holding_turn(sess, req.session_id):
                     outcome = _handle_slash(sess.agent, message, cmd_store)
             if outcome.handled:
-                async def _ack() -> AsyncIterator[dict[str, str]]:
-                    yield {"event": "message", "data": json.dumps(
-                        {"kind": "SystemMessage", "text": outcome.text,
-                         "clear_transcript": outcome.clear_transcript}
-                    )}
-                    yield {"event": "message", "data": json.dumps(
-                        {"kind": "Done", "reason": "slash"}
-                    )}
-                return EventSourceResponse(_ack())
+                async def _ack() -> AsyncIterator[dict[str, Any]]:
+                    yield {"kind": "SystemMessage", "text": outcome.text,
+                           "clear_transcript": outcome.clear_transcript}
+                    yield {"kind": "Done", "reason": "slash"}
+                return EventSourceResponse(_sse_frames(_ack()))
             if outcome.expand_to is not None:
                 message = outcome.expand_to
 
@@ -4967,14 +4961,14 @@ def create_app() -> FastAPI:
             target=_stream_turn, args=(sess, lambda: events, enqueue), daemon=True,
         ).start()
 
-        async def stream() -> AsyncIterator[dict[str, str]]:
+        async def stream() -> AsyncIterator[dict[str, Any]]:
             while True:
                 payload = await queue.get()
                 if payload is None:
                     return
-                yield {"event": "message", "data": json.dumps(payload)}
+                yield payload
 
-        return EventSourceResponse(stream())
+        return EventSourceResponse(_sse_frames(stream()))
 
     @app.post("/api/transcribe")
     async def transcribe(

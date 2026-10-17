@@ -1,4 +1,5 @@
-"""Tests for the evi-run composite action's config writer (evi_run_config.py).
+"""Tests for the evi-run composite action: its config writer
+(evi_run_config.py) and its run report outputs (evi_run_outputs.py).
 
 The action runs prompts that may carry untrusted text, so the config it writes
 must approve no tool category: eVi's default auto-approve list (fs, code,
@@ -12,7 +13,9 @@ test job).
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -162,3 +165,137 @@ def test_the_action_writes_its_config_with_the_helper():
     assert set(step["env"]) == {env for _, env in cfgw.ENV_KEYS}
     run = next(s for s in action["runs"]["steps"] if s.get("id") == "run")
     assert run["env"]["EVI_CI_HOME"] == "${{ steps.config.outputs.home }}"
+
+
+# ---- the run report outputs (evi_run_outputs.py) ----------------------------------
+
+
+def _load_outputs():
+    spec = importlib.util.spec_from_file_location("evi_run_outputs", HERE / "evi_run_outputs.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+outw = _load_outputs()
+
+REPORT = {"schema_version": 1, "session_id": "a1b2c3d4e5f6", "stop_reason": "max_turns",
+          "text": "partial", "tool_calls": []}
+
+
+def test_outputs_come_from_the_json_report():
+    assert outw.outputs("json", "3", json.dumps(REPORT)) == {
+        "exit_code": "3", "stop_reason": "max_turns", "session_id": "a1b2c3d4e5f6"}
+
+
+def test_outputs_come_from_the_stream_json_result_line():
+    stdout = "\n".join([
+        json.dumps({"kind": "RunStart", "seq": 1, "session_id": "nope"}),
+        json.dumps({"kind": "TextDelta", "seq": 2, "text": '{"stop_reason": "done"}'}),
+        json.dumps({"kind": "RunResult", "seq": 3, **REPORT}),
+    ])
+    assert outw.outputs("stream-json", "3", stdout)["stop_reason"] == "max_turns"
+    # A last line that is not eVi's RunResult (the run died mid-stream) says nothing.
+    cut = stdout.rsplit("\n", 1)[0]
+    assert outw.outputs("stream-json", "1", cut) == {
+        "exit_code": "1", "stop_reason": "", "session_id": ""}
+
+
+def test_text_format_has_only_the_exit_code():
+    assert outw.outputs("text", "0", json.dumps(REPORT)) == {
+        "exit_code": "0", "stop_reason": "", "session_id": ""}
+
+
+@pytest.mark.parametrize("report", [
+    {"stop_reason": "done\nresult=forged", "session_id": "x"},
+    {"stop_reason": "anything", "session_id": "x\nresult=forged"},
+    {"stop_reason": ["done"], "session_id": 7},
+])
+def test_values_evi_would_not_write_are_left_out(report):
+    out = outw.outputs("json", "0", json.dumps(report))
+    assert all("\n" not in v and "forged" not in v for v in out.values())
+    assert out["stop_reason"] in ("", "done") and out["session_id"] in ("", "x")
+
+
+def test_main_appends_the_outputs(tmp_path, monkeypatch):
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    proc = subprocess.run(
+        [sys.executable, str(HERE / "evi_run_outputs.py"), "json", "4"],
+        input=json.dumps({**REPORT, "stop_reason": "permission_denied"}).encode(),
+        env={**os.environ, "GITHUB_OUTPUT": str(output)}, capture_output=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "exit_code=4", "stop_reason=permission_denied", "session_id=a1b2c3d4e5f6"]
+
+
+def test_stop_reasons_match_evi():
+    events = pytest.importorskip("evi.events")
+    assert outw.STOP_REASONS == events.STOP_REASONS
+
+
+def _run_step(action: dict) -> dict:
+    return next(s for s in action["runs"]["steps"] if s.get("id") == "run")
+
+
+def test_the_action_exposes_the_report_and_fails_with_evis_exit_code():
+    yaml = pytest.importorskip("yaml")
+    action = yaml.safe_load((HERE / "action.yml").read_text(encoding="utf-8"))
+    for name in ("exit_code", "stop_reason", "session_id"):
+        assert action["outputs"][name]["value"] == f"${{{{ steps.run.outputs.{name} }}}}"
+    run = _run_step(action)
+    assert run["env"]["EVI_MAX_TURNS"] == "${{ inputs.max_turns }}"  # inputs via env:
+    script = run["run"]
+    assert script.count("|| code=$?") == 2
+    assert "evi_run_outputs.py" in script
+    assert script.rstrip().endswith('exit "$code"')
+    assert "${{" not in script  # nothing interpolated into the script
+
+
+def _bash() -> str:
+    bash = shutil.which("bash")
+    if bash is None or "system32" in bash.lower():  # not WSL's launcher
+        pytest.skip("no bash")
+    return bash
+
+
+def test_the_run_step_writes_the_outputs_then_exits_with_the_code(tmp_path):
+    """The step's script, as the runner runs it (bash -eo pipefail), with a
+    stand-in `evi` that reports max_turns and exits 3."""
+    yaml = pytest.importorskip("yaml")
+    bash = _bash()
+    action = yaml.safe_load((HERE / "action.yml").read_text(encoding="utf-8"))
+    script = tmp_path / "step.sh"
+    script.write_text(_run_step(action)["run"], encoding="utf-8", newline="\n")
+    fakebin = tmp_path / "bin"
+    fakebin.mkdir()
+    argv_log = tmp_path / "argv"
+    report = json.dumps({**REPORT, "text": "::error::forged"})
+    (fakebin / "evi").write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\n' \"$@\" > '{argv_log.as_posix()}'\n"
+        f"printf '%s\n' '{report}'\n"
+        "exit 3\n", encoding="utf-8", newline="\n")
+    (fakebin / "python").write_text(
+        f"#!/usr/bin/env bash\nexec '{Path(sys.executable).as_posix()}' \"$@\"\n",
+        encoding="utf-8", newline="\n")
+    for f in fakebin.iterdir():
+        f.chmod(0o755)
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    env = {
+        **os.environ,
+        "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""),  # (MSYS converts it)
+        "EVI_PROMPT": "go", "EVI_PROMPT_FILE": "", "EVI_FORMAT": "json", "EVI_MAX_TURNS": "2",
+        "EVI_MODE": "", "EVI_AUTO_APPROVE": "false", "EVI_CI_HOME": "",
+        "GITHUB_OUTPUT": str(output), "GITHUB_ACTION_PATH": str(HERE),
+    }
+    proc = subprocess.run([bash, "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+                          env=env, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert argv_log.read_text(encoding="utf-8").split() == [
+        "run", "--format", "json", "--max-turns", "2", "--", "go"]
+    written = output.read_text(encoding="utf-8")
+    assert "exit_code=3\nstop_reason=max_turns\nsession_id=a1b2c3d4e5f6\n" in written
+    assert written.startswith("result<<EVI_EOF_") and "::error::forged" in written

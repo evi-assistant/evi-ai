@@ -8,6 +8,10 @@ Reads an input file of prompts and runs each through its own headless agent
 - ``.json`` — a JSON array of such objects
 - anything else — one prompt per non-blank line (``#`` comments ignored)
 
+Each result line is the item's ``id`` and ``prompt`` plus its run report
+(`evi.headless.HeadlessResult.to_dict`); an item that raised gets ``error`` and
+``stop_reason: "error"``.
+
 The engine takes a ``run_one`` callable so it's testable without a model.
 """
 
@@ -72,8 +76,10 @@ def _safe(run_one: Callable[[dict], dict], item: dict) -> dict:
     try:
         return run_one(item)
     except Exception as exc:  # one bad item must not abort the batch
+        # stop_reason as a run report says it (evi.headless), so every result
+        # line can be read the same way.
         return {"id": item.get("id"), "prompt": item.get("prompt", ""),
-                "error": f"{type(exc).__name__}: {exc}"}
+                "error": f"{type(exc).__name__}: {exc}", "stop_reason": "error"}
 
 
 def run_batch(

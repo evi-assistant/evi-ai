@@ -64,6 +64,9 @@ jobs:
           model: ${{ secrets.LLM_MODEL }}
 
       - name: Post the review as a PR comment
+        # The review step fails with evi's exit code (e.g. 3 when it ran out of
+        # turns) after writing its outputs: post whatever review it produced.
+        if: always() && steps.review.outputs.result != ''
         uses: actions/github-script@v7
         env:
           REVIEW: ${{ steps.review.outputs.result }}

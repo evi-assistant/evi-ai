@@ -52,6 +52,9 @@ jobs:
       # Model output is untrusted: read it through env:, never as ${{ }} in the
       # script, and stop workflow-command parsing while printing it.
       - name: Show result
+        # The eVi step fails with evi's exit code (after writing its outputs),
+        # so show what it produced either way.
+        if: always()
         env:
           RESULT: ${{ steps.evi.outputs.result }}
         run: |

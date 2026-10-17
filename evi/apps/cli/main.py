@@ -15,8 +15,10 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 from rich.console import Console
@@ -4659,10 +4661,16 @@ def workflow_run(
         console.print("\n[green]workflow complete[/green]")
 
 
+# `evi run`'s output formats.
+_RUN_FORMATS = ("text", "json", "stream-json")
+
+
 @app.command()
 def run(
     prompt: str = typer.Argument(None, help="The prompt. If omitted, read from stdin."),
-    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+    format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text | json | stream-json."
+    ),
     mode: str = typer.Option("", "--mode", "-m", help="Tool preset: chat | cowork | code."),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Auto-approve all tool calls (unattended)."
@@ -4670,99 +4678,272 @@ def run(
     schema: str = typer.Option(
         "", "--schema", help="Constrain output to a JSON Schema (file or inline JSON)."
     ),
+    max_turns: int = typer.Option(
+        12, "--max-turns", min=1,
+        help="Most model round trips the run may take (then stop_reason max_turns, exit 3).",
+    ),
+    cwd: str = typer.Option(
+        "", "--cwd", "-C",
+        help="Working folder for the run. Its .evi.toml applies only if the folder is "
+             "trusted (`evi trust`). Default: the current directory.",
+    ),
+    model: str = typer.Option("", "--model", help="Model id for this run."),
+    backend: str = typer.Option(
+        "", "--backend", help="Run on this saved backend (`evi backend list`)."
+    ),
+    resume: str = typer.Option(
+        "", "--resume", "-r", help="Continue the session with this id (`evi sessions list`)."
+    ),
+    continue_session: bool = typer.Option(
+        False, "--continue", "-c", help="Continue the most recently active session."
+    ),
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
-    text → the final answer on stdout. json → {text, tools, usage, error,
-    policy, stop_reason}. Nothing prompts (so a scripted run never blocks):
-    without --yes, tools outside your auto-approve list follow [auto]
-    unattended_policy — denied by default. Protected paths (writes, and reads
-    of secrets such as .env that no allow rule covers) and the
-    destructive-command guard deny even with --yes. A delegate CLI-agent
-    backend is refused unless [llm] allow_cli_agent_unattended. Tool outputs
-    in the json are redacted. Reads the prompt from stdin if omitted:
+    text → the final answer on stdout (and a note on stderr when the run did
+    not simply finish). json → the run report, schema_version 1: session_id,
+    transcript_path, backend, model, cwd, trust, turns_used, max_turns,
+    stop_reason, done_reason, text, error, tool_calls (name, args, status,
+    duration_ms, output), denied_tools, usage (summed), duration_s,
+    files_changed (path, status, added, deleted lines), checks, policy,
+    redactions. stream-json → one JSON event per line as the run goes:
+    RunStart, the turn's events, and RunResult (the report) last; the same
+    versioned events as the web UI's stream (evi/events.py).
+
+    The exit code says why the run stopped (stop_reason): 0 done, 1 error,
+    2 usage error, 3 max_turns, 4 permission_denied or guardrail (the run
+    was refused), 6 stop_hook_exhausted, 130 interrupted. A run the model
+    finished is done (0) even if some tool calls were denied on the way:
+    they are listed in denied_tools (and noted on stderr in text format).
+    A failure while the agent is built or during the turn still reports
+    (error, 1) rather than a traceback.
+
+    Nothing prompts (so a scripted run never blocks): without --yes, tools
+    outside your auto-approve list follow [auto] unattended_policy — denied
+    by default. Protected paths (writes, and reads of secrets such as .env
+    that no allow rule covers) and the destructive-command guard deny even
+    with --yes. A delegate CLI-agent backend is refused unless [llm]
+    allow_cli_agent_unattended. Tool names, arguments and outputs, and
+    errors, in the report and the stream are redacted. Reads the prompt from
+    stdin if omitted:
     `echo "summarise README.md" | evi run -m code -y`.
 
-    Ctrl+C / SIGINT cancels the turn (its commands' process trees are killed)
-    and still reports a result: stop_reason "interrupted" and exit code 130,
-    whatever the format, with whatever text streamed before it."""
+    --resume ID / --continue add this run to a past session (its history is
+    loaded first). Ctrl+C / SIGINT cancels the turn (its commands' process
+    trees are killed) and still reports a result: stop_reason "interrupted"
+    and exit code 130, whatever the format, with whatever text streamed
+    before it."""
     import sys as _sys
 
     from evi import headless as _hl
+    from evi.events import EventStream
     from evi.llm.agent import make_unattended
     from evi.llm.cli_agent import CliAgentUnattended, unattended
 
-    try:
-        text = (prompt if prompt is not None else _sys.stdin.read()).strip()
-    except KeyboardInterrupt:
-        _report_interrupted_run(_hl.HeadlessResult(stop_reason="interrupted"), format)
-    if not text:
-        console.print("[red]no prompt given[/red]")
-        raise typer.Exit(2)
+    if format not in _RUN_FORMATS:
+        _run_usage_error(f"unknown --format {format!r} (choose: {' | '.join(_RUN_FORMATS)})")
+    if resume.strip() and continue_session:
+        _run_usage_error("--resume and --continue can't be used together")
+    stream = EventStream() if format == "stream-json" else None
 
-    response_format = None
-    if schema:
-        from evi.structured import SchemaError, as_response_format, load_schema
+    def emit(item) -> None:
+        _print_line(stream.dumps(item))
 
+    with _console_on_stderr():  # stdout carries only the answer / the JSON
         try:
-            response_format = as_response_format(load_schema(schema))
-        except SchemaError as exc:
+            text = (prompt if prompt is not None else _sys.stdin.read()).strip()
+        except KeyboardInterrupt:
+            _finish_run(_hl.HeadlessResult(stop_reason="interrupted"), format, stream)
+        if not text:
+            _run_usage_error("no prompt given")
+
+        response_format = None
+        if schema:
+            from evi.structured import SchemaError, as_response_format, load_schema
+
+            try:
+                response_format = as_response_format(load_schema(schema))
+            except SchemaError as exc:
+                _run_usage_error(str(exc))
+
+        folder = None
+        if cwd.strip():
+            folder = Path(cwd).expanduser()
+            if not folder.is_dir():
+                _run_usage_error(f"not a directory: {folder}")
+            folder = folder.resolve()
+        session = _run_session(resume.strip(), continue_session)
+        entry = None
+        if backend.strip():
+            from evi.backends.registry import get_entry
+
+            entry = get_entry(backend)
+            if entry is None:
+                _run_usage_error(
+                    f"no saved backend named {backend.strip()!r} (see `evi backend list`)"
+                )
+
+        previous_cwd = os.getcwd() if folder is not None else None
+        agent = res = None
+        try:
+            if folder is not None:
+                # The run's folder is the process's: Config.load reads its
+                # .evi.toml (applied only if the folder is trusted), EVI.md
+                # comes from it, and files_changed is tracked there.
+                os.chdir(folder)
+            settings = Config.load()
+            with unattended("evi run", settings):
+                if entry is not None:
+                    _check_run_backend(entry, settings)
+                agent = _build_agent(model=model.strip() or None, backend=entry)
+                if mode:
+                    from evi.modes import mode_tools
+
+                    agent.tools = {t.name: t for t in mode_tools(mode)}
+                if yes:
+                    agent.enable_auto_all()
+                # Non-interactive: drop the terminal prompts, so a call that
+                # would ask follows the unattended policy instead of blocking
+                # on a prompt no one can answer.
+                make_unattended(agent)
+                if folder is not None:
+                    agent.cwd = str(folder)
+                if session is not None:
+                    agent.session_id = session[0]  # this run appends to it
+                    _hydrate_agent(agent, session[1])
+                if stream is not None:
+                    emit(_hl.start_payload(agent, max_turns, resumed=session is not None))
+                # Ctrl+C cancels the turn and comes back as its result, and
+                # so does an exception the turn raises.
+                res = _hl.run_headless(
+                    agent, text, max_turns=max_turns, response_format=response_format,
+                    cancel_on_sigint=True, on_event=emit if stream is not None else None,
+                    track_files=Path.cwd(), report_errors=True,
+                )
+                res.trust = _run_trust_state()
+        except CliAgentUnattended as exc:
             print(f"error: {exc}", file=_sys.stderr)
-            raise typer.Exit(2)
+            if format == "text":
+                raise typer.Exit(_hl.exit_code("error"))
+            res = _hl.stopped_result(agent, "error", error=str(exc), max_turns=max_turns)
+        except KeyboardInterrupt:
+            # Outside the turn (building the agent, starting MCP servers).
+            if res is None:
+                res = _hl.stopped_result(agent, "interrupted", max_turns=max_turns)
+        except (typer.Exit, typer.Abort):
+            raise
+        except Exception as exc:  # noqa: BLE001 — a bad config, a failed build: still a report
+            if res is None:
+                res = _hl.stopped_result(agent, "error", error=f"{type(exc).__name__}: {exc}",
+                                         max_turns=max_turns)
+        finally:
+            if previous_cwd is not None:
+                os.chdir(previous_cwd)
+        _finish_run(res, format, stream)
 
+
+@contextmanager
+def _console_on_stderr():
+    """Send the CLI console's output (MCP warnings, notes) to stderr meanwhile."""
+    before = console.stderr
+    console.stderr = True
     try:
-        with unattended("evi run", Config.load()):
-            agent = _build_agent()
-            if mode:
-                from evi.modes import mode_tools
-
-                agent.tools = {t.name: t for t in mode_tools(mode)}
-            if yes:
-                agent.enable_auto_all()
-            # Non-interactive: drop the terminal prompts, so a call that would
-            # ask follows the unattended policy instead of blocking on a prompt
-            # no one can answer.
-            make_unattended(agent)
-            # Ctrl+C cancels the turn and comes back as its result.
-            res = _hl.run_headless(agent, text, response_format=response_format,
-                                   cancel_on_sigint=True)
-    except CliAgentUnattended as exc:
-        print(f"error: {exc}", file=_sys.stderr)
-        raise typer.Exit(1)
-    except KeyboardInterrupt:
-        # Before the turn started (building the agent, starting MCP servers).
-        res = _hl.HeadlessResult(stop_reason="interrupted")
-    if res.interrupted:
-        _report_interrupted_run(res, format)
-    if format == "json":
-        print(_hl.to_json(res))
-        return
-    if res.error:
-        print(f"error: {res.error}", file=_sys.stderr)
-        raise typer.Exit(1)
-    print(res.text)
+        yield
+    finally:
+        console.stderr = before
 
 
-# `evi run`'s exit code when Ctrl+C / SIGINT stopped it (128 + SIGINT).
-_INTERRUPTED_EXIT = 130
+def _print_line(line: str) -> None:
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
 
 
-def _report_interrupted_run(res, format: str) -> None:
-    """Print the result of an `evi run` that Ctrl+C / SIGINT cancelled and
-    exit with _INTERRUPTED_EXIT: the json result (stop_reason
-    "interrupted"), or the text that streamed before it plus a note on
-    stderr."""
-    import sys as _sys
-
+def _run_usage_error(message: str) -> NoReturn:
+    """An `evi run` that can't start: the message on stderr, exit 2."""
     from evi import headless as _hl
 
+    print(f"error: {message}", file=sys.stderr)
+    raise typer.Exit(_hl.USAGE_EXIT)
+
+
+def _run_session(resume: str, latest: bool):
+    """The (id, transcript) of the session `evi run --resume ID` /
+    `--continue` adds to; None for a new one."""
+    from evi.sessions import find_session, most_recent_session_id
+
+    if not resume and not latest:
+        return None
+    if resume:
+        _adopt_handoff(resume)  # as `evi sessions resume`
+    sid = resume or most_recent_session_id()
+    path = find_session(sid) if sid else None
+    if path is None:
+        _run_usage_error(f"no session {sid}" if sid else "no session to continue")
+    return sid, path
+
+
+def _check_run_backend(entry, settings) -> None:
+    """`--backend` picked a delegate CLI-agent backend: refused unattended
+    unless [llm] allow_cli_agent_unattended, as the configured one is."""
+    from evi.llm.cli_agent import DELEGATE_BACKENDS, CliAgentUnattended, unattended_refusal
+
+    kind = str(getattr(entry, "kind", "") or "").strip().lower()
+    if kind in DELEGATE_BACKENDS and settings.llm.allow_cli_agent_unattended is not True:
+        raise CliAgentUnattended(unattended_refusal(kind, "evi run", "--backend"))
+
+
+def _run_trust_state() -> str | None:
+    """The working folder's trust state (evi.trust), for the report."""
+    try:
+        from evi import trust as _trust
+
+        return _trust.status().state
+    except Exception:  # noqa: BLE001 — the report says nothing rather than fail
+        return None
+
+
+def _run_stop_note(res) -> str | None:
+    """What `evi run`'s text format says on stderr about a run that did not
+    simply finish, or finished with tool calls denied (still exit 0)."""
+    reason = res.stop_reason
+    if reason == "done":
+        if res.denied_tools:
+            return ("denied: " + ", ".join(res.denied_tools) + " (tool calls the permission "
+                    "checks refused; approve them with -y or [auto] auto_approve)")
+        return None
+    if reason == "error":
+        return f"error: {res.error or 'the run failed'}"
+    if reason == "interrupted":
+        return "interrupted: the run was cancelled (Ctrl+C / SIGINT)"
+    if reason == "max_turns":
+        turns = f"all {res.max_turns} turns" if res.max_turns else "all its turns"
+        return f"stopped: the run used {turns} before it finished (raise --max-turns)"
+    if reason == "permission_denied":
+        return "stopped: a tool call the permission checks refused ended the run"
+    if reason == "guardrail":
+        return "stopped: a guardrail or a user_prompt_submit hook refused the prompt"
+    return f"stopped: {reason}"
+
+
+def _finish_run(res, format: str, stream) -> NoReturn:
+    """Print an `evi run`'s result in `format` and exit with the code for
+    its stop_reason (evi.headless.exit_code). The text format prints the
+    answer, except after an error (a reply cut short is not the answer)."""
+    from evi import headless as _hl
+
+    if res.stop_reason is None:
+        res.stop_reason = "error" if res.error else "done"
     if format == "json":
         print(_hl.to_json(res))
+    elif format == "stream-json":
+        _print_line(stream.dumps(_hl.result_payload(res)))
     else:
-        if res.text:
+        if res.text and res.stop_reason != "error":
             print(res.text)
-        print("interrupted: the run was cancelled (Ctrl+C / SIGINT)", file=_sys.stderr)
-    raise typer.Exit(_INTERRUPTED_EXIT)
+        note = _run_stop_note(res)
+        if note:
+            print(note, file=sys.stderr)
+    raise typer.Exit(_hl.exit_code(res.stop_reason))
 
 
 @app.command()
@@ -4772,11 +4953,17 @@ def batch(
     parallel: int = typer.Option(1, "--parallel", "-j", help="Run N prompts concurrently."),
     mode: str = typer.Option("", "--mode", "-m", help="Default tool preset for items without one."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-approve all tool calls."),
+    max_turns: int = typer.Option(
+        12, "--max-turns", min=1, help="Most model round trips each prompt may take."
+    ),
 ) -> None:
     """Headless batch: run every prompt in a file, one JSON result per line.
 
     Each item gets its own agent (per-item `mode`/`schema` override the flags).
     Local analog of a Batch API — good for evals, bulk extraction, translations.
+    Each result line is the item's `id` and `prompt` plus its run report, as
+    `evi run --format json` prints it (stop_reason, tool_calls, usage, ...;
+    files_changed is not tracked, the items share the folder).
     Nothing prompts: as for `evi run`, tools outside your auto-approve list
     follow [auto] unattended_policy (denied by default) unless --yes.
     """
@@ -4809,15 +4996,8 @@ def batch(
         rf = None
         if item.get("schema"):
             rf = as_response_format(load_schema(str(item["schema"])))
-        res = run_headless(agent, str(item["prompt"]), response_format=rf)
-        return {
-            "id": item.get("id"),
-            "prompt": item["prompt"],
-            "text": res.text,
-            "error": res.error,
-            "usage": res.usage,
-            "policy": res.policy,
-        }
+        res = run_headless(agent, str(item["prompt"]), max_turns=max_turns, response_format=rf)
+        return {"id": item.get("id"), "prompt": item["prompt"], **res.to_dict()}
 
     try:
         with unattended("evi batch", Config.load()):

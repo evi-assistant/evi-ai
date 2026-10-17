@@ -7,7 +7,8 @@ killed, unanswered calls get "(cancelled)" results) and the run reports it:
 stop_reason "interrupted" in the json, exit code 130 in either format, the
 text that streamed before it on stdout. A second SIGINT stops waiting for the
 turn to wind down and still reports. headless.run_headless carries the stop
-reason for every caller (`stop_reason` in the json).
+reason for every caller (`stop_reason` in the json, the turn's own Done reason
+in `done_reason`).
 
 SIGINT is sent to this very process (signal.raise_signal from the tool's
 thread, delivered on the main thread where the handler is installed), as a
@@ -85,8 +86,10 @@ def test_the_result_carries_the_turns_stop_reason() -> None:
             yield Done("max_turns_reached")
 
     res = run_headless(_Fake(), "x")
-    assert res.stop_reason == "max_turns_reached" and not res.interrupted
-    assert json.loads(to_json(res))["stop_reason"] == "max_turns_reached"
+    assert res.stop_reason == "max_turns" and not res.interrupted
+    assert res.done_reason == "max_turns_reached"
+    out = json.loads(to_json(res))
+    assert (out["stop_reason"], out["done_reason"]) == ("max_turns", "max_turns_reached")
 
 
 def test_sigint_cancels_the_turn_and_the_result_says_interrupted() -> None:
@@ -152,7 +155,8 @@ def test_evi_run_json_on_sigint_reports_interrupted_and_exits_130(monkeypatch) -
     assert "Traceback" not in r.output
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert out["stop_reason"] == "interrupted"
-    assert out["tools"] == [{"name": "slow", "output": "stopped early"}]
+    assert [(c["name"], c["status"], c["output"]) for c in out["tool_calls"]] == [
+        ("slow", "ok", "stopped early")]
     assert out["text"].startswith("working on it") and out["error"] is None
 
 
@@ -168,8 +172,9 @@ def test_evi_run_interrupted_before_the_turn_starts_still_reports(monkeypatch) -
     """Ctrl+C while the agent is built (MCP servers starting, say)."""
     r = _invoke(monkeypatch, KeyboardInterrupt(), "--format", "json")
     assert r.exit_code == 130
-    assert json.loads(r.stdout.strip()) == {
-        "text": "", "tools": [], "usage": None, "error": None, "stop_reason": "interrupted"}
+    out = json.loads(r.stdout.strip())
+    assert out["schema_version"] == 1 and out["stop_reason"] == "interrupted"
+    assert (out["text"], out["tool_calls"], out["usage"], out["error"]) == ("", [], None, None)
 
 
 def test_evi_run_that_finishes_reports_its_stop_reason(monkeypatch) -> None:
@@ -178,5 +183,6 @@ def test_evi_run_that_finishes_reports_its_stop_reason(monkeypatch) -> None:
     r = _invoke(monkeypatch, agent, "--format", "json")
     assert r.exit_code == 0
     out = json.loads(r.stdout.strip())
-    assert out["stop_reason"] == "stop" and out["text"] == "all done"
+    assert out["stop_reason"] == "done" and out["done_reason"] == "stop"
+    assert out["text"] == "all done"
     assert HeadlessResult().stop_reason is None  # a result nobody filled in says nothing

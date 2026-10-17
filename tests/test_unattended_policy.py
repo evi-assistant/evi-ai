@@ -1177,10 +1177,14 @@ def test_evi_run_never_prompts_and_reports_the_policy(home, tmp_path, fake_llm, 
 
     monkeypatch.setattr(cli_main, "_build_agent", build)
     r = CliRunner().invoke(cli_main.app, ["run", "--format", "json", "go"])
+    # The model finished, with a call denied on the way: the run is done
+    # (exit 0) and the report lists the denial (loop-run-report).
     assert r.exit_code == 0, r.output
     data = json.loads(next(ln for ln in r.output.splitlines() if ln.startswith("{")))
     assert data["policy"] == "deny"
-    assert is_permission_denial(data["tools"][0]["output"])
+    assert data["stop_reason"] == "done"
+    assert data["denied_tools"] == ["run_command"]
+    assert is_permission_denial(data["tool_calls"][0]["output"])
     assert not (Path.cwd() / "marker.txt").exists()
 
 
