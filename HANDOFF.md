@@ -359,15 +359,15 @@ _Generated from the working tree by `python scripts/handoff_facts.py write`; `py
 
 | Fact | Count |
 |---|---|
-| Top-level modules in `evi/` | 90 |
+| Top-level modules in `evi/` | 99 |
 | Subpackages | 10 |
 | Built-in tool modules (`_BUILTIN_TOOL_MODULES`) | 22 |
 | Built-in tools (`@tool` functions under `evi/tools/`) | 61 |
-| Web routes (method + path) | 110, 105 under `/api/` |
-| CLI: top-level `evi` commands and groups | 59 (34 groups) |
-| CLI: every command and group, nested | 227 (38 groups) |
-| Test files, unit (`tests/test_*.py`) | 180 |
-| Test files, UI e2e (`tests/e2e/test_*.py`) | 19 |
+| Web routes (method + path) | 111, 106 under `/api/` |
+| CLI: top-level `evi` commands and groups | 62 (37 groups) |
+| CLI: every command and group, nested | 249 (42 groups) |
+| Test files, unit (`tests/test_*.py`) | 217 |
+| Test files, UI e2e (`tests/e2e/test_*.py`) | 26 |
 | Test files, CLI e2e (`tests/cli_e2e/test_*.py`) | 2 |
 | Test files, desktop e2e (`tests/desktop_e2e/test_*.py`) | 1 |
 | Optional-dependency extras | 22 |
@@ -397,13 +397,13 @@ Test files, not tests: the number of tests changes with nearly every commit. `py
 
 | Package | Modules |
 |---|---|
-| `evi/` (90) | a2a, anatomy, audio_input, backup, batch, bugledger, calendar, capabilities, checkpoints, citations, codeintel, commands, complete, config, configlint, context_report, debug, deeplinks, diarize, doclayout, doctor, downloads, dream, embedcap, embeddings, evals, federation, finetune, firstrun, gitsafe, guardmodel, guardrails, hardware, headless, hooks, index, keybindings, marketplace, memory, modelsdev, moderation, modes, netguard, notify, obsidian, otel, permissions, plugins, portprobe, proc, profiles, project, pyanalyze, reasoning, recipes, recommend, reflect, repl_input, reporting, review, routines, routing, safemode, sandbox, scheduled, scheduler, search, sessionimport, sessions, shell_guard, shellsplit, skills, skillscope, stats, statusline, structured, styles, sync, teams, toolcalling, transcripts, trust, ultracode, update, users, vision, voice, workdir, workflows, worktree |
+| `evi/` (99) | a2a, anatomy, attest, audio_input, backup, batch, bugledger, calendar, capabilities, checkpoints, checks, citations, codeintel, commands, complete, config, configlint, context_report, debug, deeplinks, diarize, doclayout, doctor, downloads, dream, embedcap, embeddings, evals, evals_fake, events, evidence, federation, finetune, firstrun, gitsafe, guardmodel, guardrails, hardware, headless, history, hooks, index, keybindings, marketplace, memory, modelsdev, moderation, modes, netguard, notify, obsidian, otel, permissions, plugins, policy, portprobe, proc, profiles, project, pyanalyze, reasoning, recipes, recommend, redact, reflect, repl_input, reporting, review, routines, routing, safemode, sandbox, scheduled, scheduler, search, sessionimport, sessions, shell_guard, shellsplit, skills, skillscope, stats, statusline, structured, styles, sync, tasks, teams, toolcalling, transcripts, trust, ultracode, update, users, vision, voice, workdir, workflows, worktree |
 | `evi/apps/cli/` (1) | main |
 | `evi/apps/web/` (3) | ids, mdlite, server |
 | `evi/backends/` (14) | amp_agent, base, claude_agent, codex_agent, copilot_agent, factory, gemini_agent, llamacpp, lmstudio, ollama, openai_compat, presets, qwen_agent, registry |
-| `evi/channels/` (3) | pairing, telegram, telegram_api |
+| `evi/channels/` (5) | inbox, pairing, policy, telegram, telegram_api |
 | `evi/llm/` (12) | agent, amp_agent, claude_agent, cli_agent, client, codex_agent, copilot_agent, gemini_agent, qwen_agent, responses, specialty, subagent |
-| `evi/mcp/` (4) | bridge, manager, publish, servers |
+| `evi/mcp/` (5) | agent_tools, bridge, manager, publish, servers |
 | `evi/runtime/` (5) | catalog, llama_server, llamacpp_runtime, reap, setup |
 | `evi/sdk/` (1) | builder |
 | `evi/tools/` (25) | ask, availability, base, bugledger, calendar, code, computer, federation, fs, git, image_comfy, index, memory, monitor, ocr, pdf, rerank, resolver, shell, skills, sqlite, subagent, vision_tool, voice, websearch |
@@ -445,7 +445,7 @@ Test files, not tests: the number of tests changes with nearly every commit. `py
 | `/api/routes` (3) | `GET /api/routes`, `POST /api/routes`, `POST /api/routes/remove` |
 | `/api/routine` (1) | `POST /api/routine/{token}` |
 | `/api/runtime` (11) | `GET /api/runtime/catalog`, `GET /api/runtime/detect`, `POST /api/runtime/gpu`, `POST /api/runtime/locate`, `GET /api/runtime/log`, `POST /api/runtime/model/remove`, `POST /api/runtime/model/use`, `GET /api/runtime/plan`, `POST /api/runtime/setup`, `GET /api/runtime/status`, `POST /api/runtime/stop` |
-| `/api/session` (17) | `GET /api/session/cwd`, `POST /api/session/cwd`, `POST /api/session/{session_id}/branch`, `GET /api/session/{session_id}/channel`, `POST /api/session/{session_id}/channel`, `GET /api/session/{session_id}/context`, `POST /api/session/{session_id}/edit`, `POST /api/session/{session_id}/handoff`, `GET /api/session/{session_id}/history`, `POST /api/session/{session_id}/message`, `POST /api/session/{session_id}/mode`, `POST /api/session/{session_id}/name`, `POST /api/session/{session_id}/reroll`, `POST /api/session/{session_id}/steer`, `POST /api/session/{session_id}/title`, `POST /api/session/{session_id}/truncate`, `GET /api/session/{session_id}/usage` |
+| `/api/session` (18) | `GET /api/session/cwd`, `POST /api/session/cwd`, `POST /api/session/{session_id}/branch`, `POST /api/session/{session_id}/cancel`, `GET /api/session/{session_id}/channel`, `POST /api/session/{session_id}/channel`, `GET /api/session/{session_id}/context`, `POST /api/session/{session_id}/edit`, `POST /api/session/{session_id}/handoff`, `GET /api/session/{session_id}/history`, `POST /api/session/{session_id}/message`, `POST /api/session/{session_id}/mode`, `POST /api/session/{session_id}/name`, `POST /api/session/{session_id}/reroll`, `POST /api/session/{session_id}/steer`, `POST /api/session/{session_id}/title`, `POST /api/session/{session_id}/truncate`, `GET /api/session/{session_id}/usage` |
 | `/api/specialty` (1) | `GET /api/specialty/status` |
 | `/api/stats` (1) | `GET /api/stats` |
 | `/api/styles` (1) | `GET /api/styles` |
@@ -463,13 +463,16 @@ Test files, not tests: the number of tests changes with nearly every commit. `py
 |---|---|
 | `evi` (commands) | anatomy, batch, chat, complete, doctor, dream, edit, init, link, lint, reflect, review, review-remember, rewind, run, scheduler, search, setup, stats, tail, tools, trust, ultracode, variants, web |
 | `evi agents` | list, new |
+| `evi attest` | init, status |
 | `evi backend` | add, list, remove, use |
 | `evi backup` | create, restore |
 | `evi calendar` | add, list, peek, remove |
 | `evi channel` | approve, revoke, serve, status |
 | `evi command` | list, new |
 | `evi config` | path, show |
-| `evi eval` | list, new, run |
+| `evi eval` | baseline, compare, list, new, run |
+| `evi eval baseline` | record |
+| `evi evidence` | collect, commit-body, prune |
 | `evi finetune` | export |
 | `evi guardrails` | list, path, test |
 | `evi hooks` | list, path, test |
@@ -492,6 +495,7 @@ Test files, not tests: the number of tests changes with nearly every commit. `py
 | `evi skill` | add, import, list, remove, show |
 | `evi style` | list, show, use |
 | `evi sync` | init, pull, push, status |
+| `evi task` | claim, list, new, reject, release, reopen, show, start, submit, verify |
 | `evi team` | add, clear, list, new, run |
 | `evi update` | check, from-wheel, history, prune, rollback, settings |
 | `evi voice` | backend, diarize, engines, listen, loop, speak, transcribe |
@@ -499,6 +503,6 @@ Test files, not tests: the number of tests changes with nearly every commit. `py
 | `evi web-config token` | clear, rotate, show |
 | `evi web-config users` | add, list, remove |
 | `evi workflow` | list, new, run, show |
-| `evi worktree` | chat, create, list, remove |
+| `evi worktree` | chat, create, list, prune, remove |
 
 <!-- END GENERATED FACTS -->
