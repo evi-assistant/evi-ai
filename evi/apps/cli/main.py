@@ -4811,6 +4811,13 @@ def run(
              "(repeatable); only an entry naming a protected file (e.g. "
              ".github/workflows/ci.yml) lets the run edit it.",
     ),
+    evidence: str = typer.Option(
+        "", "--evidence",
+        help="Write an evidence bundle to this folder after the run, whatever its "
+             "stop_reason (evi/evidence.py): the diff, the checks the run ran, a redacted "
+             "transcript excerpt and report.json. A new or empty folder, or an older bundle "
+             "(not under <eVi home>/evidence/, nor one a task names).",
+    ),
 ) -> None:
     """Headless: run a single prompt non-interactively and print the result.
 
@@ -4877,7 +4884,17 @@ def run(
     trusted, and its EVI.md), it stays locked while the run goes on (so
     `evi worktree prune` leaves it alone), and the report's worktree says
     what the run left there: path, branch, base and head, commits, dirty,
-    dirty_files and diffstat. Nothing is merged back."""
+    dirty_files and diffstat. Nothing is merged back.
+
+    --evidence DIR writes an evidence bundle there once the run is over,
+    whatever its stop_reason: the run's folder (its worktree with
+    --worktree) against where it started (the worktree's base, else the
+    commit checked out at the start) as diff.patch and diffstat.txt, the
+    checks the run ran, a redacted excerpt of its transcript and report.json
+    (the run report plus the environment); its path and hash go to stderr.
+    DIR must be new, empty or an older bundle (else a usage error, 2); a
+    bundle that can't be written is noted on stderr and leaves the exit
+    code alone."""
     import sys as _sys
 
     from evi import headless as _hl
@@ -4892,6 +4909,8 @@ def run(
     if base.strip() and not worktree.strip():
         _run_usage_error("--base needs --worktree")
     policy_name, scope_entries = _run_policy_args(policy, scope, yes)
+    evidence_dir = _run_evidence_dir(evidence)
+    evidence_start: dict = {}  # the run's folder and the commit it started from
     _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     stream = EventStream() if format == "stream-json" else None
 
@@ -4952,6 +4971,8 @@ def run(
                 iso = _run_open_worktree(worktree.strip(), base.strip())
                 folder = iso.path
                 os.chdir(folder)
+            if evidence_dir is not None:
+                evidence_start.update(_run_evidence_start(Path.cwd(), iso))
             settings = Config.load()
             with unattended("evi run", settings):
                 if entry is not None:
@@ -4993,6 +5014,9 @@ def run(
             if format == "text":
                 if iso is not None:
                     _print_worktree_note(_run_worktree_report(iso))
+                if evidence_dir is not None:
+                    _run_write_evidence(evidence_dir, evidence_start, _hl.stopped_result(
+                        agent, "error", error=str(exc), max_turns=max_turns))
                 raise typer.Exit(_hl.exit_code("error"))
             res = _hl.stopped_result(agent, "error", error=str(exc), max_turns=max_turns)
         except KeyboardInterrupt:
@@ -5016,7 +5040,69 @@ def run(
                 from evi.worktree import release
 
                 release(iso)
+        if evidence_dir is not None:
+            _run_write_evidence(evidence_dir, evidence_start, res)
         _finish_run(res, format, stream)
+
+
+def _run_evidence_dir(spec: str) -> Path | None:
+    """`evi run --evidence DIR`, checked before anything runs: DIR as an
+    absolute path (relative to the folder `evi run` was started in), or
+    None without the flag. A folder that holds something other than an
+    evidence bundle (or a file, or a link), one under eVi's evidence root,
+    or the bundle a task of this repository names, is a usage error (exit
+    2; evi.evidence.check_named_target)."""
+    from evi import evidence as _evidence
+    from evi import tasks as _tasks
+
+    if not spec.strip():
+        return None
+    try:
+        root = _tasks.repo_root(Path.cwd())
+    except _tasks.TaskError:  # not in a repository: no task names anything
+        root = None
+    try:
+        return _evidence.check_named_target(spec.strip(), root)
+    except _evidence.EvidenceError as exc:
+        _run_usage_error(f"--evidence: {exc}")
+
+
+def _run_evidence_start(folder: Path, iso) -> dict:
+    """Where an `evi run --evidence` run's work is and what it is compared
+    with: its worktree and that worktree's base, else the run's folder and
+    the commit checked out there now (before the run)."""
+    from evi import evidence as _evidence
+    from evi.project import git_toplevel
+
+    if iso is not None:
+        return {"folder": iso.path, "base": iso.base, "repo": iso.root}
+    return {"folder": folder, "base": _evidence.commit_of(folder), "repo": git_toplevel(folder)}
+
+
+def _run_write_evidence(out: Path, start: dict, res) -> None:
+    """Write `evi run --evidence`'s bundle (evi.evidence.collect) after the
+    run; its path and hash, or why it could not be written, on stderr. Never
+    raises: the run's result and exit code stand."""
+    from evi import evidence as _evidence
+
+    if res is None:
+        return
+    report = res.to_dict()
+    if report.get("stop_reason") is None:
+        report["stop_reason"] = "error" if report.get("error") else "done"
+    try:
+        bundle = _evidence.collect(
+            out, folder=start.get("folder"), base=start.get("base"), run_report=report,
+            check_records=list(res.checks or []), repo=start.get("repo"),
+        )
+    except KeyboardInterrupt:
+        print("note: the evidence bundle was not written (interrupted)", file=sys.stderr)
+        return
+    except Exception as exc:  # noqa: BLE001 — the run stands without its bundle
+        print(f"note: the evidence bundle was not written: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return
+    print(f"evidence: {bundle.path} ({bundle.hash})", file=sys.stderr)
 
 
 def _run_policy_args(policy: str, scope: list[str] | None, yes: bool) -> tuple[str, tuple]:
@@ -5337,9 +5423,13 @@ _TASK_FORMATS = ("text", "json")
 
 
 def _task_fail(message: str, code: int = 2) -> NoReturn:
-    """An `evi task` / `evi attest` command that can't go ahead: the message
-    on stderr, exit `code` (2: a refused request or a bad argument)."""
-    print(f"error: {message}", file=sys.stderr)
+    """An `evi task` / `evi attest` / `evi evidence` command that can't go
+    ahead: the message on stderr, exit `code` (2: a refused request or a bad
+    argument). It may quote a tracked task file, so it is printed without
+    control characters (evi.tasks.printable)."""
+    from evi.tasks import printable
+
+    print(f"error: {printable(message)}", file=sys.stderr)
     raise typer.Exit(code)
 
 
@@ -5445,6 +5535,9 @@ def _print_task(record: dict, label: str, path: Path) -> None:
             line("report", last["report"])
     if record.get("evidence"):
         line("evidence", record["evidence"])
+    summary = record.get("evidence_summary")
+    if isinstance(summary, dict) and summary:
+        line("evidence summary", _evidence_summary_text(summary))
     for note in record.get("reviewer_notes") or []:
         if isinstance(note, dict):
             line("reviewer note", f"{note.get('at')} {note.get('verdict')}: {note.get('note')}")
@@ -5454,6 +5547,22 @@ def _print_task(record: dict, label: str, path: Path) -> None:
                             f"{str(block.get('head') or '')[:12]} on {block.get('signed_at')} "
                             f"(director key {block.get('key')})")
     line("file", path)
+
+
+def _evidence_summary_text(summary: dict) -> str:
+    """A task's evidence_summary (evi.evidence.summarize) in one line."""
+    text = (f"{summary.get('files', 0)} file(s) (+{summary.get('insertions', 0)} "
+            f"-{summary.get('deletions', 0)}), checks {summary.get('checks_passed', 0)} passed "
+            f"{summary.get('checks_failed', 0)} failed")
+    junit = summary.get("junit")
+    if isinstance(junit, dict):
+        text += (f", junit {junit.get('tests', 0)} tests {junit.get('failures', 0)} failures "
+                 f"{junit.get('errors', 0)} errors {junit.get('skipped', 0)} skipped")
+    if summary.get("checks_skipped"):
+        text += f" (checks skipped: {summary['checks_skipped']})"
+    if summary.get("hash"):
+        text += f"; {summary['hash']}"
+    return text
 
 
 @task_app.command("new")
@@ -5502,9 +5611,9 @@ def task_new(
             extra=spec,
         )
         written = queue.create(record)
-    console.print(f"filed task {written['id']}: {written['title']} "
-                  f"({queue.path(written['id'])})", soft_wrap=True, highlight=False,
-                  markup=False)
+    console.print(_tasks.printable(f"filed task {written['id']}: {written['title']} "
+                                   f"({queue.path(written['id'])})"),
+                  soft_wrap=True, highlight=False, markup=False)
 
 
 @task_app.command("list")
@@ -5608,12 +5717,45 @@ def task_release(
 
 @task_app.command("submit")
 def task_submit(task_id: str = typer.Argument(..., help="The task id.")) -> None:
-    """Hand an implemented task to the director for review (needs_review)."""
+    """Hand an implemented task to the director for review (needs_review).
+
+    Its evidence bundle is collected again first (evi/evidence.py), from the
+    worktree git has its branch checked out in: the work against its base,
+    eVi's own run of its required checks (in a trusted repository) and the
+    latest start's run report; the bundle's path and summary are recorded
+    with the status. A bundle that can't be collected is noted on stderr and
+    the task keeps the evidence it had."""
+    from evi import evidence as _evidence
     from evi import tasks as _tasks
 
     queue = _task_queue()
     with _task_errors():
-        record = queue.update(task_id, _tasks.submit)
+        record = queue.read(task_id)
+        _tasks.submit(record)  # only an implemented task, before anything is collected
+    fields: dict = {}
+    if str(record.get("branch") or "").strip():
+        try:
+            fields = _evidence.record_fields(
+                _evidence.collect_task(queue.root, record, config=Config.load()))
+        except KeyboardInterrupt:
+            print("note: the evidence was not collected again (interrupted)", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — the hand-off stands without a new bundle
+            print(f"note: the evidence was not collected again: {_tasks.printable(exc)}",
+                  file=sys.stderr)
+    attempts = record.get("attempts")
+
+    def change(current: dict) -> dict:
+        if fields and current.get("attempts") != attempts:  # a start ran meanwhile
+            raise _tasks.TaskError(f"task {task_id} changed meanwhile; run the command again")
+        out = _tasks.submit(current)
+        out.update(fields)
+        return out
+
+    with _task_errors():
+        record = queue.update(task_id, change)
+    if fields:
+        print(f"evidence: {fields['evidence']} "
+              f"({_evidence_summary_text(fields['evidence_summary'])})", file=sys.stderr)
     console.print(f"task {record['id']}: needs_review", highlight=False, markup=False,
                   soft_wrap=True)
 
@@ -5666,7 +5808,16 @@ def task_start(
     work is and the outcome go to stderr. A delegate CLI-agent backend is
     refused: it runs its own tools, outside the policy. A worktree lock left
     by a start on this machine that died is taken over; any other lock
-    refuses the start (`git worktree unlock` it once no run uses it)."""
+    refuses the start (`git worktree unlock` it once no run uses it).
+
+    Whatever the run's stop_reason, its evidence bundle (evi/evidence.py)
+    goes to <eVi home>/evidence/: the work against the task's base, eVi's
+    own run of the required checks (a pytest one with its junit report;
+    none when the run stopped before its checks, and a Ctrl+C stops them), a
+    redacted transcript excerpt and report.json. Its path and summary are
+    recorded in the task; one that can't be collected is a note, and the
+    run stands."""
+    from evi import evidence as _evidence
     from evi import tasks as _tasks
     from evi.llm.cli_agent import CliAgentUnattended
     from evi.worktree import summary_line
@@ -5696,12 +5847,61 @@ def task_start(
                 raise _tasks.TaskError(str(exc)) from exc
         return _build_agent(model=model.strip() or None, backend=entry)
 
+    def collect_evidence(run) -> dict:
+        # The attempt's bundle, from the run's own report (evi.tasks.run_task
+        # calls this before it records the outcome). A run that stopped
+        # before its checks gets none run (run_stop); a Ctrl+C stops the
+        # check running, and a second one stops the collection.
+        import json as _json
+
+        report = None
+        if run.report_path is not None:
+            try:
+                report = _json.loads(Path(run.report_path).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                report = None
+        task_part = report.get("task") if isinstance(report, dict) else None
+        attempt = task_part.get("attempt") if isinstance(task_part, dict) else None
+        if not isinstance(attempt, int) or attempt < 1:
+            attempt = int(run.record.get("attempts") or 0) + 1
+        cancel = threading.Event()
+
+        def on_sigint(_signum, _frame) -> None:
+            if cancel.is_set():
+                raise KeyboardInterrupt
+            cancel.set()
+
+        try:
+            handler = signal.signal(signal.SIGINT, on_sigint)
+            installed = True
+        except ValueError:  # not the main thread: Ctrl+C keeps its default
+            handler, installed = None, False
+        try:
+            bundle = _evidence.collect_task(queue.root, run.record, worktree=run.worktree.path,
+                                            run_report=report, attempt=attempt,
+                                            config=Config.load(), run_stop=run.stop_reason,
+                                            cancel_token=cancel)
+        except KeyboardInterrupt as exc:  # the run is still recorded
+            raise RuntimeError("interrupted") from exc
+        finally:
+            if installed:
+                signal.signal(signal.SIGINT,
+                              signal.default_int_handler if handler is None else handler)
+        return _evidence.record_fields(bundle)
+
+    def print_verify_line(event) -> None:
+        # The verify gate's lines quote the task's required checks (tracked).
+        line = _verify_line(event)
+        if line:
+            print(_tasks.printable(line), file=sys.stderr)
+
     try:
         with _task_errors(), _console_on_stderr():
             run = _tasks.run_task(
                 queue, task_id, make_agent, base=fork or None, max_turns=max_turns,
                 ttl_minutes=ttl, force=force, backend=backend.strip(),
-                on_event=_print_verify_line, cancel_on_sigint=True,
+                on_event=print_verify_line, cancel_on_sigint=True,
+                evidence=collect_evidence,
             )
     finally:
         os.chdir(previous)
@@ -5718,7 +5918,7 @@ def task_start(
     for check in run.checks:
         status = "passed" if check.ok else (
             f"exit {check.exit}" if check.exit is not None else check.note or "did not finish")
-        print(f"required check {check.check.cmd}: {status}", file=sys.stderr)
+        print(_tasks.printable(f"required check {check.check.cmd}: {status}"), file=sys.stderr)
     record = run.record
     if run.implemented:
         outcome = f"task {record.get('id')}: implemented (attempt {record.get('attempts')})"
@@ -5726,12 +5926,16 @@ def task_start(
         last = record.get("last_result") or {}
         outcome = (f"task {record.get('id')}: back to open after attempt "
                    f"{record.get('attempts')} ({run.stop_reason}: "
-                   f"{_tasks.printable(last.get('summary') or '')})")
-    print(outcome, file=sys.stderr)
+                   f"{last.get('summary') or ''})")
+    print(_tasks.printable(outcome), file=sys.stderr)
     if run.note:
-        print(f"note: {run.note}", file=sys.stderr)
+        print(f"note: {_tasks.printable(run.note)}", file=sys.stderr)
     if run.report_path is not None:
         print(f"report: {run.report_path}", file=sys.stderr)
+    summary = record.get("evidence_summary")
+    if record.get("evidence") and isinstance(summary, dict) and summary:
+        print(_tasks.printable(f"evidence: {record['evidence']} "
+                               f"({_evidence_summary_text(summary)})"), file=sys.stderr)
     raise typer.Exit(run.exit_code if run.recorded else max(run.exit_code, 1))
 
 
@@ -5743,6 +5947,42 @@ def _director_refusal(action: str) -> None:
     why = attest.agent_context()
     if why:
         _task_fail(f"refusing to {action}: {why}. Only the director, from their own shell, may.")
+
+
+def _task_review_base(base: str, head: str, branch: str, root: Path) -> str:
+    """The commit a verify reviews the branch against, as a full sha. The
+    task file's `base` is tracked, so it is not taken as it is: it must name
+    a commit that is an ancestor of the branch's head and not the head
+    itself (an empty diff would give a clean review gate). TaskError (exit
+    2) saying why otherwise."""
+    import subprocess as _subprocess
+
+    from evi import attest, gitsafe
+    from evi import tasks as _tasks
+
+    try:
+        sha = attest.branch_head(base, cwd=root)
+    except attest.AttestError:
+        raise _tasks.TaskError(f"the task's base {base[:80]!r} names no commit here, so there "
+                               "is nothing to review the branch against") from None
+    if sha == head:
+        raise _tasks.TaskError(f"the task's base is the head of {branch} ({head[:12]}): there "
+                               "is no work to review, and an empty diff would pass the review "
+                               "gate")
+    try:
+        proc = gitsafe.run_git(["merge-base", "--is-ancestor", *gitsafe.rev_args(sha, head)],
+                               cwd=root, timeout=60)
+    except (OSError, ValueError, _subprocess.SubprocessError) as exc:
+        raise _tasks.TaskError(f"can't tell whether the task's base is an ancestor of "
+                               f"{branch}: {exc}") from exc
+    if proc.returncode == 1:
+        raise _tasks.TaskError(f"the task's base {sha[:12]} is not an ancestor of {branch} at "
+                               f"{head[:12]}, so a review against it would not cover the "
+                               "branch's work")
+    if proc.returncode != 0:
+        raise _tasks.TaskError(f"can't tell whether the task's base is an ancestor of "
+                               f"{branch}: {(proc.stderr or '').strip()[:200]}")
+    return sha
 
 
 @task_app.command("verify")
@@ -5760,7 +6000,10 @@ def task_verify(
 
     The attestation is evi/attest.py's. The review gate (`evi review --multi --exit-code` on the task branch's
     diff against its base) runs first, in the task's worktree, whose work
-    must be committed on the branch. Refused, with nothing written, from
+    must be committed on the branch. The base must be an ancestor of the
+    branch's head and not the head itself, and the evidence bundle the task
+    names (evi/evidence.py) must be one eVi wrote and unchanged since it was
+    collected; its hash is signed. Refused, with nothing written, from
     any process an eVi agent may have started."""
     from evi import attest, review
     from evi import tasks as _tasks
@@ -5800,7 +6043,15 @@ def task_verify(
             raise _tasks.TaskError(f"the worktree {folder} has uncommitted changes ({shown}): "
                                    f"commit the work on {branch} first, so the attestation "
                                    "covers it")
-        evidence = attest.evidence_hash(_tasks.evidence_path(record, queue.root))
+        base = _task_review_base(base, head, branch, queue.root)
+        bundle = _tasks.evidence_path(record, queue.root)
+        evidence = attest.evidence_hash(bundle)
+        summary = record.get("evidence_summary")
+        recorded = str(summary.get("hash") or "") if isinstance(summary, dict) else ""
+        if bundle and recorded and recorded != evidence:
+            raise _tasks.TaskError(f"task {task_id}: its evidence bundle changed since it was "
+                                   f"collected ({recorded[:19]}... then, {evidence[:19]}... "
+                                   f"now); collect it again (`evi evidence collect {task_id}`)")
     try:
         gate = attest.review_gate(base, cwd=folder)
     except review.ReviewError as exc:
@@ -5904,6 +6155,224 @@ def attest_status() -> None:
         _task_fail("there is no director key on this machine; `evi attest init` creates one", 1)
     console.print(f"director key {kid}\nkept in: {attest.key_location()}", highlight=False,
                   markup=False, soft_wrap=True)
+
+
+# ---- evi evidence: evidence bundles (evi/evidence.py) ---------------------------------
+
+evidence_app = typer.Typer(
+    help="Evidence bundles (evi/evidence.py): what a task's run did, kept under <eVi "
+         "home>/evidence/ for review. Collect one, render a task's commit message from it, "
+         "prune old ones."
+)
+app.add_typer(evidence_app, name="evidence")
+
+
+@contextmanager
+def _evidence_errors():
+    """An EvidenceError or a TaskError as an error line and exit 2; a bundle
+    that can't be written (an OSError) as one and exit 1."""
+    from evi import evidence as _evidence
+    from evi import tasks as _tasks
+
+    try:
+        yield
+    except (_evidence.EvidenceError, _tasks.TaskError) as exc:
+        _task_fail(str(exc))
+    except OSError as exc:
+        _task_fail(f"the evidence bundle could not be written: {exc}", 1)
+
+
+def _print_bundle(bundle, format: str) -> None:
+    import json as _json
+
+    if format == "json":
+        print(_json.dumps({"path": str(bundle.path), "hash": bundle.hash,
+                           "summary": bundle.summary}))
+        return
+    console.print(f"evidence: {bundle.path} ({_evidence_summary_text(bundle.summary)})",
+                  highlight=False, markup=False, soft_wrap=True)
+
+
+@evidence_app.command("collect")
+def evidence_collect(
+    task_id: str = typer.Argument("", help="The task id (or --worktree for a plain run)."),
+    worktree: str = typer.Option(
+        "", "--worktree", help="A plain run's work tree, instead of a task (with --base)."),
+    base: str = typer.Option(
+        "", "--base", help="With --worktree: the commit the run's work started from."),
+    report: str = typer.Option(
+        "", "--report",
+        help="With --worktree: the run's report, as `evi run --format json` printed it."),
+    check: list[str] = typer.Option(
+        [], "--check",
+        help="With --worktree: a check to run there (a command line, split the POSIX way; "
+             "repeatable; only in a trusted folder)."),
+    out: str = typer.Option(
+        "", "--out",
+        help="Write the bundle to this folder of your own (default: under <eVi "
+             "home>/evidence/, where --out may not point; nor at another task's bundle)."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Collect an evidence bundle for a task, or for a plain run.
+
+    For a task: the work in the worktree git has its branch checked out in,
+    against its base, eVi's own run of its required checks (a pytest one
+    with its junit report; in a trusted repository only), its latest
+    start's run report and a redacted excerpt of that run's transcript. The
+    bundle's path and summary are recorded in the task. Not for a claimed
+    task (a start may be running) nor a verified or rejected one (its
+    attestation signed the bundle it has).
+
+    For a plain run: --worktree PATH --base REF, with --report and --check
+    as you have them; the bundle goes under the repository's .runs/ folder."""
+    from evi import attest
+    from evi import evidence as _evidence
+    from evi import tasks as _tasks
+
+    _task_format(format)
+    if bool(task_id.strip()) == bool(worktree.strip()):
+        _task_fail("name a task id, or --worktree PATH --base REF for a plain run")
+    if task_id.strip() and (base.strip() or report.strip() or check):
+        _task_fail("--base, --report and --check are for a plain run (--worktree); a task "
+                   "has its own")
+    if worktree.strip():
+        with _evidence_errors():
+            folder = Path(worktree).expanduser().resolve()
+            if not folder.is_dir():
+                raise _evidence.EvidenceError(f"not a directory: {folder}")
+            if not base.strip():
+                raise _evidence.EvidenceError("--worktree needs --base: the commit the work "
+                                              "started from")
+            run_report = None
+            if report.strip():
+                import json as _json
+
+                try:
+                    run_report = _json.loads(Path(report).expanduser().read_text(
+                        encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise _evidence.EvidenceError(f"can't read the report {report}: {exc}") \
+                        from exc
+            argvs = [_tasks.check_argv(c) for c in check]
+            try:
+                repo = _tasks.repo_root(folder)
+            except _tasks.TaskError:
+                repo = folder
+            target = (_evidence.check_named_target(out.strip(), repo) if out.strip()
+                      else _evidence.run_bundle_path(repo))
+            bundle = _evidence.collect(target, folder=folder, base=base.strip(),
+                                       run_report=run_report, checks=argvs, repo=repo,
+                                       config=Config.load())
+        _print_bundle(bundle, format)
+        return
+    queue = _task_queue()
+    with _evidence_errors():
+        record = queue.read(task_id.strip())
+        status = _tasks.status_of(record)
+        if status == "claimed" or attest.claims_verdict(status):
+            raise _evidence.EvidenceError(
+                f"task {record['id']} is {status!r}: its evidence is collected by the start "
+                "that holds it, or was signed with its verdict (`evi task reopen` it first)")
+        attempts = record.get("attempts")
+        target = (_evidence.check_named_target(out.strip(), queue.root, own=str(record["id"]))
+                  if out.strip() else None)
+        if target is None:
+            bundle = _evidence.collect_task(queue.root, record, config=Config.load())
+        else:
+            bundle = _evidence.collect(
+                target, folder=_evidence.task_worktree(queue.root, record),
+                base=str(record.get("base") or "") or None,
+                run_report=_task_run_report(queue.root, record),
+                checks=_tasks.required_argvs(record), task=record, repo=queue.root,
+                config=Config.load())
+        fields = _evidence.record_fields(bundle)
+
+        def change(current: dict) -> dict:
+            if current.get("attempts") != attempts or _tasks.status_of(current) != status:
+                raise _tasks.TaskError(f"task {record['id']} changed meanwhile; run the "
+                                       "command again")
+            return {**current, **fields}
+
+        queue.update(str(record["id"]), change)
+    _print_bundle(bundle, format)
+
+
+def _task_run_report(root: Path, record: dict) -> dict | None:
+    """The run report of the task's latest start (evi.tasks.report_path)."""
+    import json as _json
+
+    from evi import tasks as _tasks
+
+    try:
+        path = _tasks.report_path(root, str(record["id"]), int(record.get("attempts") or 0))
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, _tasks.TaskError):
+        return None
+
+
+@evidence_app.command("commit-body")
+def evidence_commit_body(
+    task_id: str = typer.Argument(..., help="The task id."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Print the commit message for a task.
+
+    The subject is the task's title; the body its why, its acceptance
+    criteria with the evidence bundle's check results and the files changed;
+    then the trailers Implemented-by: eVi (<backend>/<model>), Task: <id>
+    and Evidence: <the bundle's hash>. Verified-by, Review-rounds and
+    Attestation come only from a valid director attestation at the task
+    branch's current head (evi/attest.py), so they check where the director
+    key is; what the message lacks, and why, goes to stderr."""
+    import json as _json
+
+    from evi import evidence as _evidence
+    from evi.tasks import printable
+
+    _task_format(format)
+    queue = _task_queue()
+    with _evidence_errors():
+        record = queue.read(task_id)
+        message, director, notes = _evidence.commit_body(queue.root, record)
+    for note in notes:
+        print(f"note: {printable(note)}", file=sys.stderr)
+    if format == "json":
+        print(_json.dumps({"message": message, "verified": bool(director),
+                           "trailers": director}))
+        return
+    sys.stdout.write(message)
+    sys.stdout.flush()
+
+
+@evidence_app.command("prune")
+def evidence_prune(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Say what would go; remove nothing."),
+    keep_days: int = typer.Option(
+        -1, "--keep-days", help="Keep bundles collected within this many days (default: "
+                                "\\[evidence] keep_days, 30; 0: only those a task names)."),
+) -> None:
+    """Remove this repository's old evidence bundles.
+
+    Under <eVi home>/evidence/ only (a folder you named with --evidence or
+    --out is yours): bundles collected more than \\[evidence] keep_days ago,
+    never one a task file names as its evidence (a verified task's
+    attestation re-checks its hash) nor any of a task whose file can't be
+    read; and half-written folders an interrupted write left."""
+    from evi import evidence as _evidence
+
+    queue = _task_queue()
+    days = keep_days if keep_days >= 0 else _evidence.keep_days(Config.load())
+    days = min(days, _evidence.MAX_KEEP_DAYS)  # more keeps every bundle all the same
+    refs, protected = _evidence.referenced(queue.root)
+    result = _evidence.prune(queue.root, days=days, referenced=refs, protected=protected,
+                             dry_run=dry_run)
+    for path in result.removed:
+        console.print(f"{'would remove' if dry_run else 'removed'} {path}", highlight=False,
+                      markup=False, soft_wrap=True)
+    kept_named = sum(1 for _, why in result.kept if why.startswith("a task names"))
+    console.print(f"{len(result.removed)} bundle(s) {'would be ' if dry_run else ''}removed; "
+                  f"{len(result.kept)} kept ({kept_named} named by a task), keep_days {days}",
+                  highlight=False, markup=False, soft_wrap=True)
 
 
 style_app = typer.Typer(help="Output styles — switchable response personas.")
@@ -7851,12 +8320,42 @@ def backup_restore(
 def stats_cmd(
     days: int = typer.Option(0, "--days", help="Only the last N days (0 = all)."),
     json_out: bool = typer.Option(False, "--json", help="Print the raw stats as JSON."),
+    provenance: bool = typer.Option(
+        False, "--provenance",
+        help="Who did the work in this repository's git history: commits, eVi's share and "
+             "review rounds, counting only director-attested trailers (evi/attest.py)."),
+    since: str = typer.Option(
+        "", "--since", help="With --provenance: only commits since this date (git log's "
+                            "--since, e.g. 2026-10-01 or '2 weeks ago')."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
 ) -> None:
-    """Local usage analytics from your transcripts (sessions, tools, busy days)."""
+    """Local usage analytics from your transcripts (sessions, tools, busy days).
+
+    --provenance reads the current repository's git history instead: the
+    commits, those whose trailers say Implemented-by: eVi, and those whose
+    Verified-by / Review-rounds / Attestation trailers check under this
+    machine's director key. Only attested commits count: eVi's share is
+    attested eVi commits over all commits, review rounds are summed over
+    attested ones, each attestation once (a later commit that copies its
+    trailers is replayed). A self-reported Verified-by line, an attestation
+    that doesn't check, a replayed one and an eVi claim without one are
+    listed apart, never counted. Where there is no director key (CI, an
+    agent's process) nothing checks, and the output says so."""
     from evi import stats as _stats
     from evi.sessions import fmt_when
 
+    if format not in ("text", "json"):
+        print(f"error: unknown --format {format!r} (choose: text | json)", file=sys.stderr)
+        raise typer.Exit(2)
+    if since.strip() and not provenance:
+        print("error: --since needs --provenance", file=sys.stderr)
+        raise typer.Exit(2)
+    if provenance:
+        _print_provenance(since.strip() or None, "json" if json_out else format)
+        return
     data = _stats.compute_stats(days=(days or None))
+    if format == "json":
+        json_out = True
     if json_out:
         import json as _json
 
@@ -7885,6 +8384,42 @@ def stats_cmd(
     if data["busiest_days"]:
         parts = ", ".join(f"{d} ({n})" for d, n in data["busiest_days"].items())
         console.print(f"  [dim]busiest days:[/dim] {parts}")
+
+
+def _print_provenance(since: str | None, format: str) -> None:
+    """`evi stats --provenance` (evi.stats.provenance) as text or JSON; exit
+    2 outside a git repository or for a bad --since."""
+    import json as _json
+
+    from evi import stats as _stats
+
+    try:
+        data = _stats.provenance(since=since)
+    except _stats.ProvenanceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(2)
+    if format == "json":
+        print(_json.dumps(data, indent=2))
+        return
+    total = data["commits"]
+    span = f" since {data['since']}" if data["since"] else ""
+    rounds = data["review_rounds"]
+    other = data["not_counted"]
+    lines = [
+        f"{total} commit{'' if total == 1 else 's'} in {data['repo']}{span}",
+        f"  attested (director key checks): {data['attested']}, for {data['attested_tasks']} "
+        f"task(s); review rounds {rounds['total']} (mean {rounds['mean']})",
+        f"  eVi share: {data['attested_evi']} attested eVi commit(s) of {total} "
+        f"({data['evi_share']:.1%}); {data['implemented_by_evi']} say Implemented-by: eVi",
+        f"  not counted: {other['unattested_evi_claims']} eVi claim(s) without a valid "
+        f"attestation, {other['self_reported']} self-reported Verified-by, "
+        f"{other['invalid']} invalid attestation(s), {other['replayed']} replayed (an "
+        f"earlier commit's attestation, copied), {other['unverifiable']} unverifiable here",
+    ]
+    if data["key_note"]:
+        lines.append(f"  note: attestations can't be checked here: {data['key_note']}")
+    for line in lines:
+        console.print(line, highlight=False, markup=False, soft_wrap=True)
 
 
 finetune_app = typer.Typer(

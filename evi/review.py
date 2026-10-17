@@ -172,17 +172,26 @@ def review_exit_code(text: str) -> int:
 
 # Per-repo review context + learned rules — eVi's local take on Bugbot's
 # BUGBOT.md + "@cursor remember". All under the repo's .evi/ dir, fully local.
-_REVIEW_CONTEXT_FILES = ("BUGBOT.md", "REVIEW.md")
+# REVIEW.md is the tracked checklist (the repository's .gitignore un-ignores
+# it), BUGBOT.md your own untracked guidance: both apply.
+_REVIEW_CONTEXT_FILES = ("REVIEW.md", "BUGBOT.md")
 _REVIEW_RULES_FILE = "review-rules.md"
 
 
 def _review_dir(start: Path | None = None) -> Path:
-    return (start or Path.cwd()) / ".evi"
+    if start is None:
+        # `evi review` run in a subfolder reads the repository's own .evi/.
+        from evi.project import git_toplevel
+
+        start = git_toplevel(Path.cwd()) or Path.cwd()
+    return start / ".evi"
 
 
 def load_review_context(start: Path | None = None) -> str:
-    """Repo-scoped review context: `.evi/BUGBOT.md` (or REVIEW.md) plus learned
-    rules in `.evi/review-rules.md`. Returns "" when none exist."""
+    """Repo-scoped review context: the tracked checklist `.evi/REVIEW.md`,
+    your own `.evi/BUGBOT.md`, then the learned rules in
+    `.evi/review-rules.md`, of `start` (default: the git top of the current
+    folder, else the folder). Returns "" when none exist."""
     d = _review_dir(start)
     parts: list[str] = []
     for name in _REVIEW_CONTEXT_FILES:
@@ -192,7 +201,6 @@ def load_review_context(start: Path | None = None) -> str:
                 parts.append(f.read_text(encoding="utf-8").strip())
             except OSError:
                 pass
-            break  # first one wins
     rules = d / _REVIEW_RULES_FILE
     if rules.is_file():
         try:

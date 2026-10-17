@@ -621,6 +621,28 @@ class HookSettings:
 
 
 @dataclass
+class TaskSettings:
+    """The task queue's runs (evi/tasks.py). `max_run_minutes`: how long a
+    run the MCP server's agent category starts (`evi mcp serve --categories
+    ...,agent`, evi/mcp/agent_tools.py) may take before it is cancelled
+    (stop_reason "interrupted"); a value under 1 means the default. Your own
+    config only: a repository's .evi.toml can't set it."""
+
+    max_run_minutes: int = 60
+
+
+@dataclass
+class EvidenceSettings:
+    """Evidence bundles (evi/evidence.py): what a task's run did, under
+    <eVi home>/evidence/. `keep_days`: `evi evidence prune` removes the
+    repository's bundles collected more than this many days ago, never one a
+    task file still names as its evidence (0: every bundle no task names; a
+    negative value means the default; 36500 or more keeps every bundle)."""
+
+    keep_days: int = 30
+
+
+@dataclass
 class RuntimeSettings:
     """Managed llama.cpp runtime. Normally eVi downloads + supervises its own
     `llama-server` under ~/.evi/runtime. Set `server_path` to point eVi at an
@@ -654,6 +676,8 @@ class Config:
     channels: ChannelSettings = field(default_factory=ChannelSettings)
     checks: CheckSettings = field(default_factory=CheckSettings)
     hooks: HookSettings = field(default_factory=HookSettings)
+    tasks: TaskSettings = field(default_factory=TaskSettings)
+    evidence: EvidenceSettings = field(default_factory=EvidenceSettings)
 
     @classmethod
     def load(cls) -> "Config":

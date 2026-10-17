@@ -25,7 +25,7 @@ Also: a start refuses an untrusted repository and a delegate CLI-agent
 backend (a [models] one too, whatever allow_cli_agent_unattended says),
 putting the task back as it was; a hostile or broken answer and a finish
 that can't be written never leave the run unrecorded behind a traceback;
-show and list print no control characters; a write the queue can't make is
+show, list, a start's lines and error lines print no control characters; a write the queue can't make is
 an error line; the other commands (new, list, show, claim, release, submit,
 reopen) and their exit codes.
 
@@ -288,6 +288,45 @@ def test_show_and_list_never_print_control_characters_from_a_task_file(repo):
     shown = _cli("task", "show", "T1").output
     assert "evil [2J]8;;http://x" in shown and "line two [1A" in shown
     assert "status: verified" in shown  # the text stays, only the controls go
+
+
+def test_error_lines_never_print_control_characters_from_a_task_file(repo):
+    """An error quoting the tracked task file (a lease holder, a branch) is
+    printed without its control characters, as show and list are."""
+    q = tasks.TaskQueue(repo)
+    q.create(tasks.new_task("T1", title="t"))
+    q.update("T1", lambda r: tasks.claim(r, holder="evil\x1b[2J\x1b]8;;http://x\x1b\\holder"))
+    res = _cli("task", "claim", "T1", "--holder", "bob")
+    assert res.exit_code == 2 and "claimed by evil[2J]8;;http://x\\holder" in res.output
+    assert "\x1b" not in res.output
+    q.create(tasks.new_task("T2", title="t"))
+    q.update("T2", lambda r: {**r, "status": "needs_review", "branch": "task/\x1b[1AT2",
+                              "base": "abc"})
+    res = _cli("task", "verify", "T2", "--yes")
+    assert res.exit_code == 2 and "\x1b" not in res.output
+
+
+def test_start_never_prints_control_characters_from_a_task_files_checks(repo, monkeypatch,
+                                                                        fake_llm):
+    """A start's lines quote the task's required checks (the verify gate's
+    and eVi's own run's): printed without the control characters a tracked
+    task file may hold, as show and list print them."""
+    from evi.config import _to_toml
+
+    _new()
+    q = tasks.TaskQueue(repo)
+    body = q.read("T1")
+    body["required_checks"] = [[PY, "-c", "pass", "\x1b]0;pwned\x07\x1b[2Jtail"]]
+    q.path("T1").write_text(_to_toml(body), encoding="utf-8")
+    _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
+        llm_text("Done: calc.x is 2."),
+    ])))
+    res = _cli("task", "start", "T1")
+    assert res.exit_code == 0, res.output
+    assert "required check " in res.stderr and "]0;pwned[2Jtail: passed" in res.stderr
+    assert "(round 1) passed" in res.stderr  # the verify gate's line
+    assert "\x1b" not in res.output and "\x07" not in res.output
 
 
 def test_an_expired_lease_is_reclaimed_from_the_cli(repo, monkeypatch):

@@ -28,11 +28,14 @@ agent yields a signed "verified" status. Each with its test:
   like the task branch never answers for it —
   test_a_tag_named_like_the_task_branch_never_answers_for_it; verify reviews
   the worktree git has on the branch —
-  test_verify_reviews_the_worktree_git_has_not_the_one_the_file_names; and
-  an evidence path is read only for a signed task, inside the repository or
-  the task's folder —
+  test_verify_reviews_the_worktree_git_has_not_the_one_the_file_names; its
+  base must be an ancestor of the branch's head, and not the head —
+  test_verify_never_trusts_the_base_a_task_file_names; and an evidence path
+  is read only for a signed task, and only when it is a bundle eVi wrote,
+  unchanged since it was collected —
   test_list_and_show_never_follow_an_evidence_path_from_a_task_file,
-  test_evidence_in_the_tasks_folder_is_signed_and_checked.
+  test_the_evidence_bundle_is_signed_and_checked,
+  test_verify_refuses_a_bundle_changed_since_it_was_collected.
 
 As tests/test_attest.py does, every test stubs evi.attest's process-tree
 walk (this process seen as the director's `evi task verify T1`), clears
@@ -308,19 +311,66 @@ def test_list_and_show_never_follow_an_evidence_path_from_a_task_file(task, gate
     assert _file(task).read_bytes() == before and gates == [] and hashed == []
 
 
-def test_evidence_in_the_tasks_folder_is_signed_and_checked(task, gates):
+def test_the_evidence_bundle_is_signed_and_checked(task, gates):
+    """`evi evidence collect T1` records the bundle (under eVi's home) and
+    its summary; verify signs the bundle's hash, and a bundle changed after
+    signing reads unverified."""
+    from evi import evidence
+
     attest.init_key(yes=True)
-    bundle = tasks.task_home(task, "T1") / "1" / "evidence"
-    bundle.mkdir(parents=True)
-    (bundle / "checks.txt").write_text("all passed\n", encoding="utf-8")
-    tasks.TaskQueue(task).update("T1", lambda r: {**r, "evidence": str(bundle)})
+    res = _cli("evidence", "collect", "T1")
+    assert res.exit_code == 0, res.output
+    record = _record(task)
+    bundle = Path(record["evidence"])
+    assert bundle == evidence.task_bundle_path(task, "T1", 1) and evidence.is_bundle(bundle)
+    assert record["evidence_summary"]["hash"] == attest.evidence_hash(bundle) != ""
+    assert record["evidence_summary"]["files"] == 1  # calc.py, committed on the branch
     res = _cli("task", "verify", "T1", "--yes")
     assert res.exit_code == 0, res.output
-    assert _record(task)["attestation"]["evidence"] == attest.evidence_hash(bundle) != ""
+    assert _record(task)["attestation"]["evidence"] == attest.evidence_hash(bundle)
     assert _label(task) == "verified"
-    (bundle / "checks.txt").write_text("one failed\n", encoding="utf-8")
+    (bundle / "diff.patch").write_text("nothing changed, honest\n", encoding="utf-8")
     assert _label(task) == "unverified (invalid signature: the evidence changed after it was " \
                            "signed)"
+    # A verified task's bundle is not collected again (that would void it).
+    res = _cli("evidence", "collect", "T1")
+    assert res.exit_code == 2 and "verified" in res.output
+
+
+def test_verify_refuses_a_bundle_changed_since_it_was_collected(task, gates):
+    attest.init_key(yes=True)
+    assert _cli("evidence", "collect", "T1").exit_code == 0
+    bundle = Path(_record(task)["evidence"])
+    (bundle / "diffstat.txt").write_text(" 0 files changed\n", encoding="utf-8")
+    before = _file(task).read_bytes()
+    res = _cli("task", "verify", "T1", "--yes")
+    assert res.exit_code == 2 and "changed since it was collected" in res.output
+    assert _file(task).read_bytes() == before and gates == []
+
+
+@pytest.mark.parametrize("how", ["head", "not an ancestor", "no commit"])
+def test_verify_never_trusts_the_base_a_task_file_names(task, gates, how):
+    """The base comes from the tracked task file: it must be an ancestor of
+    the branch's head and differ from it, or the review gate would review
+    an empty (or the wrong) diff and pass. Refused with exit 2, unsigned."""
+    attest.init_key(yes=True)
+    record = _record(task)
+    head = _git(task, "rev-parse", "task/T1").strip()
+    if how == "head":
+        forged = head
+    elif how == "not an ancestor":  # a commit off main the branch never had
+        _git(task, "commit", "-q", "--allow-empty", "-m", "elsewhere")
+        forged = _git(task, "rev-parse", "HEAD").strip()
+    else:
+        forged = "0" * 40
+    tasks.TaskQueue(task).update("T1", lambda r: {**r, "base": forged})
+    before = _file(task).read_bytes()
+    res = _cli("task", "verify", "T1", "--yes")
+    assert res.exit_code == 2, res.output
+    assert {"head": "no work to review", "not an ancestor": "is not an ancestor of task/T1",
+            "no commit": "names no commit"}[how] in res.output
+    assert _file(task).read_bytes() == before and gates == []
+    assert record["base"] != forged
 
 
 def test_reject_signs_the_reason_and_reopen_drops_the_attestation(task):

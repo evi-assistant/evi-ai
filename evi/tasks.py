@@ -30,15 +30,17 @@ Fields (`FIELDS`; every value survives the TOML round trip, none is null)
     implementer (a hint: evi-local, evi-frontier, director), created,
     attempts, backend, model, worktree, branch, base (the commit the branch
     started from: what a verify reviews against), evidence (the evidence
-    bundle's path, "" until there is one), reviewer_notes[] ({at, verdict,
+    bundle's path, "" until there is one, `evi.evidence`), evidence_summary
+    (the bundle's hash and numbers, `evi.evidence.summarize`; the bundle
+    itself stays under eVi's home), reviewer_notes[] ({at, verdict,
     note}), lease ({holder, expires_at}, empty when unclaimed), last_result
     ({stop_reason, exit_code, report, summary} of the latest start; the
     summary is the answer's first line, `printable`) and, on a task the
     director signed, attestation. Unknown fields are kept. A task file may
     come from anyone (a pulled branch), so its paths are never taken as
-    they are: the evidence is read only inside the repository or the task's
-    folder under eVi's home (`evidence_path`), the branch only as a branch
-    (`head_ref`, never a tag of its name).
+    they are: the evidence is read only when it is a bundle eVi wrote
+    (`evidence_path`), the branch only as a branch (`head_ref`, never a tag
+    of its name), and what it says reaches a terminal only `printable`.
     `evi.attest` signs every field but ``attestation``, so nothing writes a
     verified or rejected task but a transition out of it, which drops the
     attestation, and nothing but `evi.attest.sign` sets a verdict
@@ -80,8 +82,9 @@ Running a task (`run_task`, behind ``evi task start``)
 
     `run_task` returns the run (`TaskRun`: the task as recorded, the
     `evi.headless.HeadlessResult`, the report's path, the checks it ran), for
-    any caller: an evidence collector (the ``evidence`` hook) records its
-    bundle's path in the task.
+    any caller: an evidence collector (the ``evidence`` hook,
+    `evi.evidence.collect_task` behind ``evi task start``) records its
+    bundle's path and summary in the task, whatever the run's stop_reason.
 """
 
 from __future__ import annotations
@@ -115,7 +118,8 @@ LEASE_MINUTES = 240
 FIELDS = (
     "id", "title", "status", "why", "acceptance", "files_in_scope", "required_checks",
     "implementer", "created", "attempts", "backend", "model", "worktree", "branch",
-    "base", "evidence", "reviewer_notes", "lease", "last_result", "attestation",
+    "base", "evidence", "evidence_summary", "reviewer_notes", "lease", "last_result",
+    "attestation",
 )
 # What a new task starts with besides id, title and created.
 _DEFAULTS: dict[str, Any] = {
@@ -338,10 +342,17 @@ def evidence_path(record: Mapping[str, Any], root: str | os.PathLike[str]) -> st
     """The task's evidence bundle as an absolute path ("" for none): a
     relative one is read against the repository (`evi.attest`'s contract).
     The path comes from a tracked file, so it is never taken as it is:
-    TaskError unless it lies in the repository or in the task's folder under
-    eVi's home (`task_home`), through no link, and isn't a UNC or device
-    path (only stat'ing ``\\\\host\\share`` makes Windows log on to that
-    host). Nothing is expanded (``~`` is a folder of the repository)."""
+    TaskError unless it is a bundle eVi wrote (`evi.evidence.acceptable`: a
+    folder holding report.json under the repository's folder of
+    ``<eVi home>/evidence/``, through no link, or exactly a folder ``evi run
+    --evidence`` / ``evi evidence collect --out`` recorded there), and isn't
+    a UNC or device path (only stat'ing ``\\\\host\\share`` makes Windows log
+    on to that host). Anything else (".", the repository, its .git, any
+    folder elsewhere) is never hashed: callers read it as no evidence that
+    matches (a task list, a show) or refuse (a verify). Nothing is expanded
+    (``~`` is a folder of the repository)."""
+    from evi import evidence
+
     raw = str(record.get("evidence") or "").strip()
     if not raw:
         return ""
@@ -350,13 +361,12 @@ def evidence_path(record: Mapping[str, Any], root: str | os.PathLike[str]) -> st
     if "\0" not in raw and not unc:
         p = Path(raw)
         full = os.path.abspath(p if p.is_absolute() else Path(root) / p)
-        bases: list[str | os.PathLike[str]] = [root]
-        with contextlib.suppress(TaskError):
-            bases.append(task_home(root, task_id))
-        if any(_inside(full, base) for base in bases):
+        if evidence.acceptable(full, root):
             return full
-    raise TaskError(f"task {task_id}: its evidence path {printable(raw)[:200]!r} is not in the "
-                    "repository or the task's folder under eVi's home, so it is not read")
+    raise TaskError(f"task {task_id}: its evidence path {printable(raw)[:200]!r} is not an "
+                    "evidence bundle eVi wrote for this repository (under "
+                    f"{evidence.repo_folder(root)}, or a folder `evi run --evidence` or `evi "
+                    "evidence collect --out` recorded), so it is not read")
 
 
 # ---- records -----------------------------------------------------------------------
@@ -429,7 +439,8 @@ def lease_live(record: Mapping[str, Any], now: _dt.datetime | None = None) -> bo
 
 def _who(record: Mapping[str, Any]) -> str:
     lease = lease_of(record)
-    return f"{lease.get('holder') or 'someone'} (until {lease.get('expires_at') or '?'})"
+    return printable(f"{lease.get('holder') or 'someone'} (until "
+                     f"{lease.get('expires_at') or '?'})")
 
 
 def claim(
@@ -987,13 +998,23 @@ def run_task(
     backend: str = "",
     on_event: Callable[[Any], None] | None = None,
     cancel_on_sigint: bool = False,
-    evidence: Callable[[TaskRun], str | None] | None = None,
+    evidence: Callable[[TaskRun], str | Mapping[str, Any] | None] | None = None,
+    cancel_token: threading.Event | None = None,
 ) -> TaskRun:
     """Claim task `task_id`, run it in its worktree under the implementer
     policy and record the outcome (see the module doc). `make_agent(wt)`
     builds the agent for the worktree `wt` (an `evi.worktree.IsolatedWorktree`);
     this function holds it to the task. `evidence(run)`, when given, collects
-    the run's evidence and returns its path, recorded as the task's evidence.
+    the run's evidence and returns its path, recorded as the task's evidence,
+    or the fields to record (`evi.evidence.record_fields`: ``evidence`` and
+    ``evidence_summary``); when it raises, the run is kept, the note says
+    why, and an earlier attempt's evidence is cleared.
+
+    `cancel_token`, once set, cancels what runs after the agent's turn (the
+    caller cancels the turn itself, `Agent.cancel`): no further required
+    check starts, the running one is stopped (`evi.checks.run_check`), and
+    the run ends "interrupted", the task back to open, as a cancelled turn
+    does.
 
     TaskError (nothing ran, and the task is as it was) for an untrusted
     repository, a bad task, someone else's live lease, a worktree that can't
@@ -1091,9 +1112,14 @@ def run_task(
         if run_stop == "done":
             cs = checks.settings(getattr(agent, "config", None))
             for argv in argvs:
+                if cancel_token is not None and cancel_token.is_set():
+                    break
                 name = Path(argv[0]).name or argv[0]
                 runs.append(checks.run_check(checks.Check(name, argv, "test", "task"), wt.path,
-                                             timeout=cs.timeout, tail_lines=cs.tail_lines))
+                                             timeout=cs.timeout, tail_lines=cs.tail_lines,
+                                             cancel_token=cancel_token))
+            if cancel_token is not None and cancel_token.is_set():
+                run_stop = "interrupted"  # cancelled after its turn: its checks prove nothing
         implemented = run_stop == "done" and all(r.ok for r in runs)
         stop_reason = run_stop if run_stop != "done" else ("done" if implemented else "checks_failed")
         exit_code = headless.exit_code(stop_reason)
@@ -1112,18 +1138,23 @@ def run_task(
         }
         run.report_path = _write_report(report_path(queue.root, str(claimed["id"]), attempt),
                                         report)
-        evidence_at = None
+        evidence_at: Any = None
         if evidence is not None:
             try:
                 evidence_at = evidence(run)
             except Exception as exc:  # noqa: BLE001 — evidence never loses the run
-                run.note = f"evidence was not collected: {type(exc).__name__}: {exc}"
+                run.note = printable(f"evidence was not collected: {type(exc).__name__}: {exc}")
+                # An earlier attempt's bundle is not this attempt's evidence.
+                evidence_at = {"evidence": "", "evidence_summary": {}}
         fields: dict[str, Any] = {
             "worktree": str(wt.path), "branch": wt.branch, "base": start_base,
             "backend": backend or _backend_of(agent) or str(res.backend or ""),
             "model": str(res.model or ""),
         }
-        if evidence_at:
+        if isinstance(evidence_at, Mapping):  # {"evidence": path, "evidence_summary": {...}}
+            fields.update({k: v for k, v in evidence_at.items()
+                           if k in ("evidence", "evidence_summary") and v is not None})
+        elif evidence_at:
             fields["evidence"] = str(evidence_at)
         try:
             run.record = queue.update(task_id, lambda r: finish(

@@ -86,6 +86,62 @@ def test_review_context_includes_bugbot_md(tmp_path):
     assert "tabs, not spaces" in ctx
 
 
+def test_review_context_loads_the_tracked_review_checklist(tmp_path, monkeypatch):
+    """`.evi/REVIEW.md` is the repository's tracked checklist (.gitignore
+    un-ignores it): it loads with your own BUGBOT.md beside it, and from a
+    subfolder of the repository too."""
+    import shutil
+    import subprocess
+
+    d = tmp_path / ".evi"
+    d.mkdir()
+    (d / "REVIEW.md").write_text("- every fix ships a regression test", encoding="utf-8")
+    assert "regression test" in load_review_context(tmp_path)
+    (d / "BUGBOT.md").write_text("This repo uses tabs, not spaces.", encoding="utf-8")
+    remember_review_rule("no bare excepts", tmp_path)
+    ctx = load_review_context(tmp_path)
+    assert ctx.index("regression test") < ctx.index("tabs, not spaces") < ctx.index("bare excepts")
+    if shutil.which("git") is None:
+        return
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    sub = tmp_path / "pkg" / "deep"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    assert "regression test" in load_review_context()
+
+
+def test_the_review_gate_reads_the_checklist_of_the_branch_it_reviews(tmp_path):
+    """evi.attest.review_gate (what `evi task verify` runs) hands the
+    worktree's .evi/REVIEW.md to the reviewers."""
+    import shutil
+    import subprocess
+
+    from evi import attest
+
+    if shutil.which("git") is None:
+        return
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                        "-c", "commit.gpgsign=false", *args], cwd=tmp_path, check=True,
+                       capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".evi").mkdir()
+    (tmp_path / ".evi" / "REVIEW.md").write_text("- check the base", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "one")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    (tmp_path / "a.py").write_text("x = 2\n", encoding="utf-8")
+    git("commit", "-q", "-am", "two")
+    seen: list[str] = []
+    result = attest.review_gate(base, cwd=tmp_path,
+                                reviewer=lambda diff, context="": seen.append(context) or "APPROVE")
+    assert result.exit_code == 0 and seen == ["- check the base"]
+
+
 def test_review_prompt_prepends_context():
     p = review_prompt("--- a/x\n+++ b/x", context="follow PEP 8")
     assert "follow PEP 8" in p and "review guidance" in p.lower()

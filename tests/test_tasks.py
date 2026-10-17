@@ -12,8 +12,9 @@ concurrent claims one wins), task ids, finding the main checkout from inside
 a linked worktree, the queue's refusal to write a verdict nothing signed or
 to change a verified task but by reopening it, a run summary that is
 printable and writable whatever the model said, an evidence path from a task
-file read only inside the repository or the task's folder (never a UNC
-path, never through a link), task branches read as refs/heads/..., and the
+file read only when it is a bundle eVi wrote under its evidence folder (never
+the repository, a UNC path or through a link), task branches read as
+refs/heads/..., and the
 repository's .gitignore keeping .evi/ ignored but for the shared files at
 the root (`git check-ignore`).
 
@@ -98,7 +99,7 @@ def test_a_new_task_has_every_field_and_starts_open():
                    required_checks=["python -m pytest -q tests/test_x.py", ["ruff", "check"]],
                    implementer="evi-local")
     assert list(record)[:3] == ["id", "title", "status"]
-    assert set(record) == set(tasks.FIELDS) - {"last_result", "attestation"}
+    assert set(record) == set(tasks.FIELDS) - {"last_result", "attestation", "evidence_summary"}
     assert record["status"] == "open" and record["attempts"] == 0 and record["lease"] == {}
     assert record["created"] == "2026-10-17T12:00:00Z"
     assert record["required_checks"][1] == ["ruff", "check"]
@@ -562,42 +563,68 @@ def test_a_task_branch_is_read_as_a_branch_never_as_a_tag():
 
 def test_an_evidence_path_from_a_task_file_is_never_taken_as_it_is(repo, tmp_path):
     """The task file is tracked, so its evidence path may come from anyone:
-    it is read only inside the repository or the task's folder under eVi's
-    home, through no link, and never as a UNC or device path (stat'ing
-    \\\\host\\share makes Windows log on to that host)."""
+    it is read only when it is an evidence bundle eVi wrote (a folder with
+    report.json under the repository's folder of <eVi home>/evidence/, or
+    exactly one `evi run --evidence` recorded), through no link, and never
+    as a UNC or device path (stat'ing \\\\host\\share makes Windows log on to
+    that host). Never ".", the repository, its .git or a folder elsewhere:
+    a forged task file can't make `evi task list` hash the repository."""
+    from evi import evidence
+
     record = _task()
 
     def path(value: str) -> str:
         return tasks.evidence_path({**record, "evidence": value}, repo)
 
+    def bundle(at: Path) -> Path:
+        at.mkdir(parents=True, exist_ok=True)
+        (at / "report.json").write_text("{}\n", encoding="utf-8")
+        return at
+
     assert path("") == path("  ") == ""
-    assert Path(path("bundle")) == repo / "bundle"
-    assert Path(path("out/../bundle")) == repo / "bundle"
-    assert Path(path("~/bundle")) == repo / "~" / "bundle"  # nothing is expanded
-    assert Path(path(str(repo / "x" / "y"))) == repo / "x" / "y"
-    mine = tasks.task_home(repo, "T1") / "1" / "evidence"
+    mine = bundle(evidence.task_bundle_path(repo, "T1", 1))
     assert Path(path(str(mine))) == mine
+    run = bundle(evidence.run_bundle_path(repo))  # the repository's plain-run bundles too
+    assert Path(path(str(run))) == run
     assert tasks.report_path(repo, "T1", 3).parent.parent == tasks.task_home(repo, "T1")
-    outside = tmp_path / "outside"
-    outside.mkdir()
+    outside = bundle(tmp_path / "outside")  # shaped like a bundle, but nobody recorded it
+    bundle(repo / "bundle")
+    other_repo = bundle(evidence.task_bundle_path(tmp_path / "other", "T1", 1))
+    not_a_bundle = evidence.task_bundle_path(repo, "T1", 2)
+    not_a_bundle.mkdir(parents=True)
     for bad in ("//attacker.invalid/share/bundle", r"\\attacker.invalid\share\bundle",
-                r"\\?\C:\bundle", r"\\.\pipe\bundle", "/", str(outside), str(repo.parent),
-                "../outside", "bundle/../../outside", "CON", "sub/nul.txt", "a\0b",
-                str(tasks.task_home(repo, "T2")), str(tasks.task_home(repo, "T1").parent)):
+                r"\\?\C:\bundle", r"\\.\pipe\bundle", "/", ".", str(repo), ".git", "bundle",
+                str(repo / "bundle"), str(outside), str(repo.parent), "../outside", "CON",
+                "sub/nul.txt", "a\0b", str(other_repo), str(not_a_bundle),
+                str(evidence.repo_folder(repo)), str(evidence.evidence_root()),
+                str(mine / "report.json"), str(tasks.task_home(repo, "T1"))):
         with pytest.raises(TaskError, match="not read"):
             path(bad)
-    # Nor through a link (or a junction) from inside to somewhere else.
-    link = repo / "link"
+    # A folder `evi run --evidence` wrote (recorded in the registry) is read
+    # as it is, nothing below it.
+    evidence._register(outside)
+    assert Path(path(str(outside))) == outside
+    bundle(outside / "inner")
+    with pytest.raises(TaskError, match="not read"):
+        path(str(outside / "inner"))
+    # Nor through a link (or a junction) from the evidence folder elsewhere,
+    # nor a bundle that is itself one.
+    elsewhere = tmp_path / "elsewhere"
+    bundle(elsewhere / "1")
+    link = evidence.repo_folder(repo) / "T3"
+    bundle_link = evidence.repo_folder(repo) / "T4"
     try:
         if sys.platform == "win32":
             import _winapi
 
-            _winapi.CreateJunction(str(outside), str(link))
+            _winapi.CreateJunction(str(elsewhere), str(link))
+            _winapi.CreateJunction(str(elsewhere / "1"), str(bundle_link))
         else:
-            link.symlink_to(outside, target_is_directory=True)
+            link.symlink_to(elsewhere, target_is_directory=True)
+            bundle_link.symlink_to(elsewhere / "1", target_is_directory=True)
     except OSError:  # no junctions or links here: the rest stands
         return
-    for bad in ("link", "link/bundle", str(link / "deeper" / "bundle")):
+    for bad in (str(link / "1"), str(bundle_link)):
         with pytest.raises(TaskError, match="not read"):
             path(bad)
 
