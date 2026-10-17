@@ -144,7 +144,7 @@ A change, driven by eVi:
 3. eVi runs the tests and lint for the files it touched ([section 4](#4-test-and-lint)).
 4. eVi records each bug it fixed with `record_fix`, updates the feature doc and
    `examples/` when behaviour changed, and writes the hand-off that `EVI.md`
-   describes. The director reviews, verifies and commits; eVi can't mark its
+   describes. The director reviews, commits and verifies; eVi can't mark its
    own work verified ([section 6](#6-shipping-director-only)).
 
 Tips: `evi workflow` splits a large change into plan, implement and test stages.
@@ -159,10 +159,28 @@ only there: a change in progress can't break the checkout eVi runs from, and
 several fixes can go on side by side. Nothing is merged by the implementer; the
 director reviews each branch and merges it.
 
-**A headless run.** `evi run --policy implementer --worktree auto --mode code
-"<task brief>"` makes a fresh branch `fix-1` (then `fix-2`, …) at
-`.worktrees/fix-1` and runs there; `--worktree <branch>` names the branch
-instead, and a later run with the same name carries on in its worktree.
+**A task from the queue.** This is how the director delegates work. File the
+task with `evi task new --title "…" --acceptance "…" --scope <file> --check
+"<command>"` (it goes to `.evi/tasks/T<n>.toml`), then run it with
+`evi task start T<n>`. eVi claims the task, opens branch `task/T<n>` at
+`.worktrees/task__T<n>`, runs the implementer under the implementer policy
+with the task's scope and the verify gate on, and then runs the task's
+required checks itself. The task ends `implemented` (exit 0) or back to
+`open` with the attempt counted, and the run report goes under
+`~/.evi/tasks/`. The implementer never commits: review its work in the
+worktree, commit it on `task/T<n>` there, `evi task submit T<n>`, and sign it
+with `evi task verify T<n>`, which runs the multi-lens review gate first
+([section 6](#6-shipping-director-only)). `evi task reopen T<n>` sends it
+back for another attempt in the same worktree, and `evi task reject T<n>
+--reason "…"` turns it down. `evi task list` shows where every task stands.
+The repository must be trusted, and a delegate CLI-agent backend is refused.
+See [Task queue](features/tasks.md).
+
+**A headless run.** Without a task file, `evi run --policy implementer
+--worktree auto --mode code "<task brief>"` makes a fresh branch `fix-1`
+(then `fix-2`, …) at `.worktrees/fix-1` and runs there; `--worktree <branch>`
+names the branch instead, and a later run with the same name carries on in
+its worktree.
 `--policy implementer` takes the place of `-y`, which it refuses: the run may
 read and edit files in the worktree, run pytest, ruff and read-only git there,
 and nothing else (no network, no `run_python`, no subagents), and every other
@@ -275,20 +293,27 @@ on the way. Docs under `docs/` are published to the wiki automatically from
 `main` by `.github/workflows/docs-publish.yml`; nobody edits the wiki directly.
 See [releasing.md](releasing.md).
 
-**Only the director marks work verified.** In the Phase 1 task loop a task's
-`verified` or `rejected` status counts only when it carries an attestation
-signed with the director's key (`evi/attest.py`), which lives in the OS
-keyring or in `~/.evi/director/`. A status the implementer writes into a task
-file itself, or a task edited after it was signed, reads as unverified, and no
-`Verified-by` trailer is made for it. The implementer can't reach the key or
+**Only the director marks work verified.** A task's `verified` or `rejected`
+status counts only when it carries an attestation signed with the director's
+key (`evi/attest.py`), which lives in the OS keyring or in
+`~/.evi/director/`. `evi attest init` makes the key once per machine, and
+`evi attest status` shows its id and where it is kept. A status the
+implementer writes into a task file itself, a task edited after it was
+signed, or one whose branch has moved on since, reads as unverified in
+`evi task list` and `evi task show`. The implementer can't reach the key or
 the tooling that signs with it: in an eVi session a tool call that touches the
 key folder, sets or clears `EVI_AGENT` / `EVI_DIRECTOR`, or runs
-`evi task verify|reject` or `evi attest` is denied in every mode, `yolo` and
-`/auto on` included, and every command eVi runs for an agent carries
-`EVI_AGENT=1`, where director tooling refuses to run and never reads the key.
-So the director signs from their own shell, never from inside `evi chat`. The
-signing commands come with the task loop; the key handling and these checks
-are in place already. Details and limits: [security.md](security.md#the-directors-attestation-key).
+`evi task verify`, `evi task reject` or `evi attest` is denied in every mode,
+`yolo` and `/auto on` included. Every process eVi's agent-hosting commands
+start (`evi chat`, `evi run`, `evi task start`, `evi web` and the desktop
+app's server …) carries `EVI_AGENT=1`, where director tooling refuses to run
+and never reads the key, and where `evi trust` refuses too. So the director
+signs from their own shell, never from inside `evi chat` or a command eVi
+runs. `evi task verify` also wants the task's worktree at the branch head
+with nothing uncommitted, so commit the implementer's work on `task/<id>`
+before you verify it: the signature then covers exactly the commit you
+reviewed. Details and limits: [security.md](security.md#the-directors-attestation-key)
+and [Task queue](features/tasks.md#verify-and-reject-director-only).
 
 ## Local-model notes (from dogfooding)
 

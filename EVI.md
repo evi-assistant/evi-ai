@@ -22,7 +22,8 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 1. **Claim**: the task brief is your scope: files, acceptance criteria,
    tests. Anything else goes in the hand-off.
 2. **Worktree**: one per task. The director starts you with
-   `evi run --policy implementer --worktree <branch|auto>` or
+   `evi task start <id>` (branch `task/<id>`), `evi run --policy
+   implementer --worktree <branch|auto>` or
    `scripts/dev-bootstrap --worktree <branch>` (`--test` runs pytest
    there); work only in that worktree (`.worktrees/<branch>`, `/` as
    `__`), via `python -m evi` and `python -m pytest` from there.
@@ -76,8 +77,7 @@ types them.
 
 `.gitattributes`: LF everywhere except `*.ps1` (CRLF, and ASCII-only for
 Windows PowerShell 5.1). Never mass-convert files. When `evi doctor --dev`
-reports a mismatch, run the command it prints (a re-checkout, or
-`git add --renormalize .` when the index is wrong).
+reports a mismatch, run the command it prints.
 
 ## Web UI
 

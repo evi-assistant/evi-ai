@@ -554,10 +554,10 @@ task record, the branch head, the evidence bundle's hash, the verdict, the
 review rounds and the review gate's result (`evi review --multi --exit-code`
 on the branch). A task whose file says `status = "verified"` without one, or
 one edited (or whose evidence changed) after it was signed, reads as
-unverified, and no `Verified-by` commit trailer is made for it. The commands
-that sign (`evi task verify|reject`, `evi attest`) come with the Phase 1 task
-loop; this release has the key handling and the checks below, so the checks
-are in place before anything signs.
+unverified. The director makes the key with `evi attest init` and signs with
+`evi task verify` or `evi task reject`, from their own shell; see [Task
+queue](features/tasks.md) for the commands, what a verify checks before it
+signs, and how a task's status reads.
 
 **Where the key lives.** The key is 32 random bytes, made once. It goes in
 the OS keyring (service `evi-director`) when the optional `keyring` package is
@@ -605,15 +605,29 @@ can't drop the key folder.
 **`EVI_AGENT`.** Every process eVi starts for an agent carries `EVI_AGENT=1`:
 `run_command`, `run_python` and `monitor` commands and the delegate CLI-agent
 backends, whether the chat runs in the terminal, the web app or the desktop
-app. Director tooling refuses to run in such a process, or in anything it
-starts, and never reads the key there.
+app. eVi's agent-hosting entry points also set it in their own process when
+they start, so everything they start inherits it, however it is started (git,
+the checks `evi task start` runs): `evi chat` and every other CLI command
+that builds an agent, `evi run`, `evi batch`, `evi workflow run`,
+`evi team run`, `evi mcp serve`, `evi channel serve`, `evi scheduler` and
+`evi schedule run-now`, `evi task start`, and the web server (`evi web`, the
+desktop app's server). The spawners that build an environment of their own
+(hooks, MCP stdio servers, the linter and OCR runners, the Claude Agent SDK
+backend) set it there as well, so a server's own environment settings can't
+clear it. Director tooling never sets it, refuses to run in a process that
+has it or in anything that process starts, and never reads the key there.
+`evi trust` refuses there too, so an agent can't trust its own folder. A
+secret eVi redacts, the director key included, is still redacted in what
+such a process shows.
 
 **Limits.** An agent runs as the same OS user as the director. Code it writes
 to a file and then runs, or code these checks don't recognise, can do what
 `evi.attest` does: drop `EVI_AGENT`, patch the checks, read the keyring entry
 or the key file, and sign. The checks stop the direct routes and keep the rest
 from happening by accident or unnoticed; they don't stop an agent set on it.
-Full isolation needs the agent under a separate OS account.
+A process that drops `EVI_AGENT` and runs outside eVi's process tree (a job
+handed to a scheduler, say) escapes both the variable and the process-tree
+check. Full isolation needs the agent under a separate OS account.
 
 ## What changed for existing setups
 
@@ -653,6 +667,10 @@ Full isolation needs the agent under a separate OS account.
   logs and `evi run` JSON. A resumed or revived session shows
   `[REDACTED:<kind>]` where the live one had the value, and crash reports use
   the same markers instead of `<redacted>`.
+- **`evi trust` refuses in any process eVi's agent-hosting commands
+  started**, not only inside `evi chat`: a command an agent runs from
+  `evi run`, the web or desktop app, the scheduler or a channel can't trust a
+  folder. Run `evi trust` in your own terminal.
 - **The director's key folder is out of every tool's reach**, in every mode.
   On Windows a path argument that is a device path naming no drive
   (`\\?\Volume{…}`) is now denied rather than asked. A single-quoted commit
@@ -686,4 +704,4 @@ server a token of its own (see [Containers](#containers)).
 | `EVI_ALLOW_ANY_HOST=1` | No-token mode: accept any `Host` header (still loopback clients only). |
 | `EVI_ALLOW_CROSS_ORIGIN=1` | Turn off the cross-site `Origin` check. |
 | `EVI_TRUSTED_PROXY=1` | Trust `X-Forwarded-Host` / `X-Forwarded-Port` from a reverse proxy. |
-| `EVI_AGENT` | Set by eVi, not by you: `1` in every process its agents start. Director tooling refuses to run there and never reads the director key ([above](#the-directors-attestation-key)). |
+| `EVI_AGENT` | Set by eVi, not by you: `1` in every process its agents start, and in eVi's agent-hosting entry points (`evi chat`, `evi run`, `evi web`, the desktop app's server, `evi task start` …) and everything they start. Director tooling and `evi trust` refuse to run there, and the director key is never read there ([above](#the-directors-attestation-key)). |

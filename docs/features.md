@@ -148,15 +148,16 @@ there); delegate CLI-agent backends are refused there, and by
 `[llm] allow_cli_agent_unattended`; and the commands these runs start, like
 sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 [Guide](features/permissions-and-sandbox.md#unattended-runs).
-**Implementer policy** — `evi run --policy implementer` decides every call
-without asking: reads and edits inside the run's folder (protected files only
-when a `--scope` entry names them; `.evi/tasks/**`, `.git` and eVi's home
-never), shell lines whose every command is on a short allowlist (pytest, ruff,
-`npm test`, `cargo check|test|clippy`, read-only git) with arguments that
-stay in the folder, and nothing else: no network, MCP, `run_python`, memory
-or subagents. In an untrusted folder it runs no commands at all. A guardrail,
-not a sandbox: tests run the repository's code, so the worktree is the blast
-radius. [Guide](features/permissions-and-sandbox.md#implementer-policy).
+**Implementer policy** — `evi run --policy implementer` (and every
+`evi task start`) decides every call without asking: reads and edits inside
+the run's folder (protected files only when a `--scope` entry names them;
+`.evi/tasks/**`, `.git` and eVi's home never), shell lines whose every command
+is on a short allowlist (pytest, ruff, `npm test`, `cargo check|test|clippy`,
+read-only git) with arguments that stay in the folder, and nothing else: no
+network, MCP, `run_python`, memory or subagents. In an untrusted folder it
+runs no commands at all. A guardrail, not a sandbox: tests run the
+repository's code, so the worktree is the blast radius.
+[Guide](features/permissions-and-sandbox.md#implementer-policy).
 
 **Secret redaction** — API keys and tokens a tool printed show as
 `[REDACTED:<kind>]` in transcripts (from now on; older ones aren't
@@ -171,9 +172,13 @@ files). The model's own context isn't redacted. [Guide](features/secret-redactio
 verdict counts only with an attestation signed by the director's key
 (`evi/attest.py`, OS keyring or `~/.evi/director/`). In every mode an agent's
 calls that touch that folder, set or clear `EVI_AGENT` / `EVI_DIRECTOR` or run
-director tooling (`evi task verify|reject`, `evi attest`) are denied, and every
-process an agent starts carries `EVI_AGENT=1`. The signing commands come with
-the Phase 1 task loop. [Security](security.md#the-directors-attestation-key).
+director tooling (`evi task verify|reject`, `evi attest`) are denied. Every
+process an agent starts carries `EVI_AGENT=1`, and so does every process
+eVi's agent-hosting commands start (`evi chat`, `evi run`, `evi web` and the
+desktop app's server, `evi task start` …): director tooling and `evi trust`
+refuse to run there. `evi attest init` makes the key; `evi task verify` and
+`evi task reject` sign with it ([Task queue](#task-queue)).
+[Security](security.md#the-directors-attestation-key).
 
 **Content guardrails** — `~/.evi/guardrails.toml`, three layers: regex
 (block/redact), `[[judge]]` (the LLM classifies vs a policy), `[[classifier]]`
@@ -258,6 +263,26 @@ with read-only reviewers.
 through an exhaustive decompose → fan-out solvers → adversarial verify →
 synthesize pipeline; the solvers only read files, so it answers in text and
 never edits ([guide](features/ultracode.md)).
+
+## Task queue
+
+**Tasks in the repository** — `evi task new --title … --acceptance …
+--scope GLOB --check COMMAND` files a task in `.evi/tasks/<id>.toml`, tracked
+in git. `evi task start <id>` (in a trusted repository) claims it with a
+lease, runs it on branch `task/<id>` in `.worktrees/task__<id>` under the
+implementer policy with the verify gate on, then runs the task's required
+checks itself, writes the run report under `~/.evi/tasks/` and leaves the
+task `implemented`, or `open` again (exit codes as `evi run`'s; 2 when
+nothing ran). Nothing is committed: you review and commit the work on the
+branch, `evi task submit` it, and only your `evi task verify` (after the
+review gate, `evi review --multi --exit-code`) or `evi task reject --reason`
+gives it a verdict, signed with the director key (`evi attest init`,
+`evi attest status`). Both refuse in any process an eVi agent may have
+started. `evi task list` and `evi task show` (`--format json`) show a
+verdict only with a valid signature at the branch's current head; a
+hand-edited or outdated one reads `unverified (…)`. `evi task claim`,
+`evi task release` and `evi task reopen` manage leases and send work back.
+[Guide](features/tasks.md).
 
 ## MCP
 
@@ -367,9 +392,10 @@ and the anatomy come from the worktree alone. `evi worktree chat <branch>
 **Isolated runs** keep an agent off the checkout you work in:
 `evi run --worktree <branch|auto> [--base REF]` runs in a worktree and its
 report says what it left there ([the run
-report](features/structured-and-batch.md#the-run-report)); `evi team run
---worktree`, a workflow step's `isolate = "worktree"` (`evi workflow run
---worktree` for every step) and an `agents.toml` profile's
+report](features/structured-and-batch.md#the-run-report)); `evi task start`
+runs a task on its own `task/<id>` branch ([Task queue](#task-queue));
+`evi team run --worktree`, a workflow step's `isolate = "worktree"`
+(`evi workflow run --worktree` for every step) and an `agents.toml` profile's
 `isolate = "worktree"` (honoured by `delegate`) give each task a `fix-…`
 branch and worktree of its own. A live isolated run keeps its worktree
 locked, nothing is merged back, and runs isolated on a thread of their own

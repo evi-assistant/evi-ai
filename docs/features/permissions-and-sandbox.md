@@ -348,10 +348,19 @@ destructive-command guard: … director tooling …`); any other denied call rea
 
 **`EVI_AGENT`.** Every process eVi starts for an agent gets `EVI_AGENT=1` in
 its environment (see [What a command's environment
-holds](#what-a-commands-environment-holds)), and director tooling refuses to
-run in it or in anything it starts. It also refuses inside an `evi chat`
-session (`EVI_INTERACTIVE=1`) and under an eVi process (`evi chat`,
-`evi serve`, the desktop app's server), and never reads the key there.
+holds](#what-a-commands-environment-holds)). eVi's agent-hosting entry points
+set it in their own process when they start: `evi chat` and every other CLI
+command that builds an agent, `evi run`, `evi batch`, `evi workflow run`,
+`evi team run`, `evi mcp serve`, `evi channel serve`, the scheduler,
+`evi task start` and the web server (`evi web`, the desktop app's server).
+So everything they start carries it too, however it is started: git, hooks,
+MCP stdio servers, the linter and OCR runners, the Claude Agent SDK backend.
+Director tooling (`evi task verify|reject`, `evi attest`) never sets it and
+refuses to run in a process that has it, or in anything that process starts.
+It also refuses inside an `evi chat` session (`EVI_INTERACTIVE=1`) and under
+an eVi process (`evi chat`, `evi serve`, the desktop app's server), and never
+reads the key there. `evi trust` refuses wherever `EVI_AGENT=1` or
+`EVI_INTERACTIVE=1` is set, so an agent can't trust its own folder.
 
 This raises the bar; it is not a wall. An agent runs as your OS user, so a
 script it writes to a file and then runs can still do what `evi.attest` does.
@@ -455,6 +464,10 @@ would ask (so no shell, so no tests), or, with `-y` or
 `unattended_policy = "allow"`, allow everything. `evi run --policy
 implementer` is the narrow middle: what an implementer needs to change code in
 one folder and prove it works, and nothing else.
+
+`evi task start` runs every task from the [task queue](tasks.md) under this
+policy, with the task's `files_in_scope` as its scope and the task's required
+checks allowed as exact commands.
 
 ```bash
 evi run --policy implementer --worktree auto -m code --format json "Make tests/test_calc.py pass"
@@ -695,7 +708,9 @@ environment, with two changes:
 - **`EVI_AGENT=1` is always added**, whatever environment the caller passed.
   It marks the process as an agent's: director tooling refuses to run in it,
   or in anything it starts ([The director's ground](#the-directors-ground)),
-  and a shell line that sets or clears it is denied.
+  and a shell line that sets or clears it is denied. eVi's agent-hosting
+  entry points carry it in their own environment as well, so everything else
+  they start inherits it ([`EVI_AGENT`](#the-directors-ground)).
 - **Secrets are dropped when nobody is watching.** A `run_command`,
   `run_python` or `monitor` command gets no variable whose name ends in
   `_KEY`, `_TOKEN` or `_SECRET` (in any case) when it runs sandboxed, or in a
@@ -932,8 +947,9 @@ applies only in a folder you have trusted — `evi chat` asks the first time,
 edit it and it is off again until you re-trust. Trust is per repository (its
 worktrees share it); outside git it covers exactly the folder you trusted, not
 its subfolders. `evi trust` asks you to confirm (`--yes` in scripts) and
-refuses inside an `evi chat` session, so the agent there can't trust a folder
-for you.
+refuses inside an `evi chat` session and in any process eVi's agent-hosting
+commands started (`EVI_AGENT`: `evi run`, the web and desktop apps, the
+scheduler …), so an agent can't trust a folder for you.
 `evi run`, the web UI and the scheduler never ask; in an untrusted folder they
 run with the project config off. See
 [Trusting a folder](../configuration.md#trusting-a-folder).

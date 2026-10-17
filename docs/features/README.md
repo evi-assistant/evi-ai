@@ -15,6 +15,7 @@ tokens, the desktop app's LAN token, containers) see
 - [Chat channels (Telegram)](channels.md) — message eVi from your phone; pairing, the channel toolset (`evi channel`)
 - [Steering a running turn](steering.md) — type while eVi works; applied at the next step
 - [Agents & Orchestration](agents.md) — subagents, `delegate`, parallel research, workflows, dispatch, federation
+- [Task queue](tasks.md) — tasks tracked in the repository, run in a worktree under the implementer policy, verified only by the director's signature (`evi task`, `evi attest`)
 - [Ultracode](ultracode.md) — exhaustive multi-agent pipeline for one hard task (`evi ultracode` / `/ultra`)
 - [Content Guardrails](guardrails.md) — regex + LLM-judge + offline classifier rules
 - [Plugins & Marketplace](plugins.md) — bundled commands/skills/hooks/MCP/agents + `plugin search/install`

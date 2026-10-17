@@ -440,11 +440,13 @@ values).
   refuses. It also refuses, even with `--yes`, inside an `evi chat` session —
   a command the agent runs through its shell tool, or a `!` command in the
   REPL — so a repository's instructions can't get the agent to trust its own
-  folder; run it in your own terminal. (That check relies on the
-  `EVI_INTERACTIVE=1` marker the REPL sets; the web and desktop apps don't set
-  it, so don't auto-approve shell commands for an agent working in a
-  repository you haven't reviewed.) `evi trust --status [PATH]` shows the state without changing
-  it, `evi trust --list` lists trusted folders and `evi trust --revoke [PATH]`
+  folder; run it in your own terminal. It refuses the same way in any
+  process an eVi agent started (`EVI_AGENT=1`: `evi run`, `evi serve`, the web
+  and desktop apps and the other agent-hosting commands mark themselves, and
+  everything they start inherits it). A process detached from eVi's tree with
+  a cleaned environment escapes both markers, so don't auto-approve shell
+  commands for an agent working in a repository you haven't reviewed.
+  `evi trust --status [PATH]` shows the state without changing it, `evi trust --list` lists trusted folders and `evi trust --revoke [PATH]`
   removes one.
 - **`evi run`, `evi batch`, the web UI and the scheduler never ask**: in an
   untrusted folder they run with the project config off (fail closed) and
@@ -1173,7 +1175,7 @@ CLI-agent backend is refused unless `[llm] allow_cli_agent_unattended = true`.
 | `EVI_REMOTE_TOKEN` | Tauri desktop: the access token for the `EVI_REMOTE_URL` server |
 | `EVI_WEB_AUTH_TOKEN` | Web server: launch token that gates other machines ([Web access](#web-access--web-in-configtoml)) |
 | `EVI_DECISION_TIMEOUT_S` | Web server: permission-prompt deadline in seconds; overrides `[web] decision_timeout_s` |
-| `EVI_AGENT`        | Set by eVi, not by you: `1` in every process its agents start (`run_command`, `run_python`, `monitor`, delegate CLI agents). Director tooling refuses to run there and never reads the director key ([Secret redaction](features/secret-redaction.md#notes--limits)) |
+| `EVI_AGENT`        | Set by eVi, not by you: `1` in every agent-hosting eVi process (`evi chat`, `evi run`, `evi serve` and the web/desktop apps, batch, team and workflow runs, `evi mcp serve`, channels, the scheduler, `evi task start`) and so in everything it starts (tool commands, hooks, MCP servers, linters, delegate CLI agents). Director tooling and `evi trust` refuse to run there, and the director key is never read ([Task queue](features/tasks.md)) |
 
 The web server's other variables (`EVI_ALLOW_ANY_HOST`,
 `EVI_ALLOW_CROSS_ORIGIN`, `EVI_TRUSTED_PROXY`) are listed in

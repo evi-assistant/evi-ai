@@ -454,14 +454,109 @@ Windows); `git checkout main` there puts it right.
 ## A worktree "can't be locked for this run"
 
 An isolated run locks its worktree while it runs (`git worktree list` shows
-it `locked`; the reason is `eVi isolated run (pid N)`, or git's own words on
-git older than 2.36), so prune leaves it alone and no second run shares it.
-This message names the worktree another run still holds. If no eVi process
-with that pid is running, the run was killed outright (a crash, `kill -9`, a
-power cut) and couldn't take its lock off: unlock it with
-`git worktree unlock <path>`, the command the message prints. A lock you put
-on yourself is respected the same way; eVi only ever removes the lock its own
-run took.
+it `locked`; the reason is `eVi isolated run (pid N on HOST)`, or git's own
+words on git older than 2.36), so prune leaves it alone and no second run
+shares it. This message names the worktree another run still holds.
+
+When a run is killed outright (a crash, `kill -9`, a power cut), it can't take
+its lock off. `evi task start` handles that itself: the next start on the same
+machine takes over a lock whose reason names this machine and a process that
+no longer exists, and carries on. Its claim goes through at once when the dead
+start was yours (the same holder, `<user>@<host>` by default); anyone else
+waits for the lease to run out, or passes `--force`. Everything else is
+refused: a live run's lock, one taken on another machine (a repository on a
+shared drive), one in the older `eVi isolated run (pid N)` form, a lock you
+put on yourself, and any lock in the way of `evi run --worktree`, a team task
+or a workflow step. Once you are sure no run uses the worktree, unlock it with
+`git worktree unlock <path>`, the command the message prints. eVi only ever
+removes the lock its own runs took.
+
+## `evi task start` exits 2
+
+Nothing ran, and the task is exactly as it was. The `error:` line says why:
+
+- `… is not a trusted folder, so a task can't run there`: the implementer
+  policy runs no commands in an untrusted folder, so nothing could prove the
+  task. Run `evi trust` in the repository from your own terminal. It refuses
+  inside an eVi session and in any process an eVi command started
+  (`refusing to trust a folder from inside an eVi session`).
+- `task T1 is claimed by … (until …)`: someone else's claim or start holds a
+  live lease. Wait for it to run out, or pass `--force` if you know that
+  claim is dead.
+- `task T1 is 'implemented': only an open task (or a claimed one whose lease
+  ran out) can be claimed`: `evi task reopen T1` first to run it again.
+- `can't open the task's worktree: …`: `branch task/T1 is checked out at …`
+  means another checkout (your main one, say) has the branch: switch that one
+  to another branch. `… can't be locked for this run` is [another run's
+  lock](#a-worktree-cant-be-locked-for-this-run). `… is missing` means the
+  worktree folder was deleted: `git worktree prune` drops its record.
+- `the … backend is a CLI agent that runs its own tools …`, or
+  `[models] … = '…' is a CLI agent …`: a task runs only on a local or API
+  backend, whatever `[llm] allow_cli_agent_unattended` says. Pass
+  `--backend` with one, or clear that `[models]` setting.
+- `no saved backend named …`: see `evi backend list`.
+- `required check … doesn't parse`, `files_in_scope: …` or `… can't be read
+  as a task`: fix the task file.
+- `another eVi is changing the task queue`: another command held the queue's
+  lock for 15 seconds. Try again.
+
+Any other exit code means the run happened and the task is back to `open`
+(or `implemented`, exit 0); it means what it means for [`evi
+run`](#evi-run-exited-non-zero-what-the-exit-code-means). A start that ran
+but couldn't write its outcome exits at least 1 with `note: the outcome was
+not recorded …`, and `evi task release T1` puts the task back to `open`.
+
+## `evi task verify` refuses
+
+Exit 2 means nothing was written and no review ran:
+
+- `refusing to verify task T1: …`: the command runs where an eVi agent may
+  have started it (`EVI_AGENT is set`, `inside an eVi chat session`, `an eVi
+  process runs above this one`), or not as `evi task verify` itself. Run it
+  in your own terminal, not through eVi. `evi task reject` and
+  `evi attest init` refuse the same way.
+- `only a task in needs_review can be verified`: `evi task submit T1` first,
+  or `evi task reopen` a task that already has a verdict.
+- `has no branch and base to review (start it first)`: the task was never
+  started.
+- `no worktree has task/T1 checked out`: the task's worktree was removed.
+  Check the branch out again in one, for example
+  `git worktree add .worktrees/task__T1 task/T1`.
+- `the worktree … is not at the head of task/T1`: switch that worktree back
+  to the branch (`git -C <worktree> switch task/T1`).
+- `the worktree … has uncommitted changes (…): commit the work on task/T1
+  first`: the implementer never commits. Review its changes, commit them on
+  the branch in that worktree (or delete what shouldn't be there), then
+  verify. The signature covers the commit at the branch head, so it has to
+  hold the work you reviewed.
+- `its evidence path … is not in the repository or the task's folder under
+  eVi's home`: the task file names evidence eVi won't read. Fix the field.
+- `task T1 changed meanwhile; run the command again`: the task file changed
+  while the review ran.
+
+Exit 1 means the checks above passed but nothing was signed:
+
+- `the review gate could not run: …`: the review (`evi review --multi`)
+  needs a working backend and a diff git can produce.
+- The review report on stderr, then `` `evi review --multi --exit-code`
+  reported blocking findings ``: fix the findings and commit, or pass
+  `--reason "…"` to sign anyway; the reason is recorded in the attestation.
+- `there is no director key on this machine`: run `evi attest init`.
+- `there is no terminal to confirm on`: run it in a terminal, or pass
+  `--yes` from your own shell.
+
+## A task shows `unverified (…)`
+
+`evi task list` and `evi task show` show a verdict only with a valid director
+attestation at the branch's current head. `unverified (unsigned)` means the
+file says `verified` or `rejected` but nobody signed it; `stale` means the
+branch moved on after it was signed; `invalid signature: …` means the task
+file or its evidence changed after signing, or another key signed it;
+`no director key here …` means this machine has no director key, or the
+command ran where an agent may have started it. The full list is in [Task
+queue](features/tasks.md#how-a-tasks-status-reads). A verdict can't be
+refreshed in place: `evi task reopen` sends the task back to `open`, and it
+reaches `needs_review` again only through another `evi task start`.
 
 ## `evi worktree prune` keeps a worktree
 

@@ -71,8 +71,10 @@ shows either.
   tool's config, the OS keyring) is caught only by its shape. A value with no
   recognisable shape that isn't in the environment or eVi's files shows as it
   is.
-- **Processes eVi's agents start** (`run_command`, `run_python`, `monitor`,
-  delegate CLI agents) carry `EVI_AGENT=1` in their environment. Director
+- **Agent-hosting eVi processes** (`evi chat`, `evi run`, `evi serve` and
+  the web/desktop apps, and the other commands that run an agent) mark
+  themselves with `EVI_AGENT=1`, so every process they start carries it too
+  (tool commands, hooks, MCP servers, delegate CLI agents). Director
   tooling refuses to run, and never reads the director key, in such a process
   or anything it starts; the shell guard refuses a command that sets or clears
   it.

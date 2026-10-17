@@ -20,6 +20,10 @@ break work into focused pieces:
   workflow step a git worktree and branch of its own, so agents that edit
   files never edit the same checkout, or yours. See
   [Isolated runs](#isolated-runs-git-worktrees).
+- **Task queue** — the director files tasks in the repository, and
+  `evi task start <id>` runs one in a worktree of its own under the
+  implementer policy. eVi stops at `implemented`; only the director's signed
+  `evi task verify` marks a task verified. See [Task queue](tasks.md).
 - **Federation** — delegate a self-contained task to a *trusted peer eVi* (e.g.
   your GPU box) over plain HTTP, so a small local model can offload heavy work to
   a bigger remote one without any shared cloud.
@@ -228,7 +232,9 @@ lists them. Isolation comes in two kinds:
   in the worktree, run the tests, linters and read-only git there (in a
   trusted repository) and nothing else, without `-y`; once it has changed
   files, the project's checks run before it may finish. See [Implementer
-  policy](permissions-and-sandbox.md#implementer-policy).
+  policy](permissions-and-sandbox.md#implementer-policy). `evi task start
+  <id>` runs a task from the [queue](tasks.md) the same way, on branch
+  `task/<id>`, and then runs the task's required checks itself.
 - **One thread:** a subagent profile with `isolate = "worktree"`, a task of
   `evi team run --worktree` and a workflow step with `isolate = "worktree"`
   run beside other work in the same process. Only the agent's folder moves,
@@ -250,8 +256,11 @@ lists them. Isolation comes in two kinds:
 Every isolated run:
 
 - **holds its worktree locked** (`git worktree lock`, reason `eVi isolated
-  run (pid N)`) until it ends, so `evi worktree prune` leaves it alone and no
-  second run can share it. A run killed outright leaves the lock behind; see
+  run (pid N on HOST)`) until it ends, so `evi worktree prune` leaves it alone
+  and no second run can share it. A run killed outright leaves the lock
+  behind. `evi task start` takes over a lock that a start on the same machine
+  left when its process died; anything else needs `git worktree unlock` once
+  no run uses the worktree. See
   [Troubleshooting](../troubleshooting.md#a-worktree-cant-be-locked-for-this-run);
 - **fails closed:** outside git, with a refused backend or a worktree that
   can't be made, it fails rather than run in your checkout;

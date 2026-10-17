@@ -44,6 +44,8 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `rewind` | undo file writes | ✅ rewind dialog | ✅ | checkpoints |
 | `setup` | first-run wizard | ◐ | ✅ first-run | desktop onboarding |
 | `review` | multi-agent code review | ⌨️ | ⌨️ | dev workflow |
+| `task` | the repository's task queue: new/list/show/claim/release/submit/reopen/start, and the director's verify/reject | ⌨️ | ⌨️ | dev workflow; verify and reject run only from the director's own shell ([guide](features/tasks.md)) |
+| `attest` | the director's attestation key (init/status) | ⌨️ | ⌨️ | director only, never from inside eVi |
 | `finetune` | export training data | ⌨️ | ⌨️ | scripting |
 | `worktree`/`profile`/`scheduler` | dev/daemon | ⌨️ | ⌨️ | admin |
 

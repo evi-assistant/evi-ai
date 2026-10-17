@@ -73,7 +73,9 @@ All notable user-visible changes to eVi. Format loosely follows
   `evi sessions resume` / `continue` / `fork`) shows what the file sets and
   asks `y/N` the first time; `evi trust [PATH]` trusts a folder up front
   (`--status`, `--list`, `--revoke`, `--yes` for scripts) and refuses inside
-  an `evi chat` session, so the agent there can't trust its own folder. Trust
+  an `evi chat` session, or in any process eVi's agent-hosting commands
+  started (`evi run`, the web and desktop apps, the scheduler …), so an
+  agent can't trust its own folder. Trust
   is per repository and shared by its worktrees; outside git it covers exactly
   the folder you trusted. `evi run`, `evi batch`, the web UI and the scheduler
   never ask: in an untrusted folder they log `eVi: not applying project config
@@ -421,21 +423,25 @@ All notable user-visible changes to eVi. Format loosely follows
   transcript shows the marker where the live one had it. Transcripts written
   before this release are not rewritten. See docs/features/secret-redaction.md.
 - **eVi can't mark its own work verified.** A task's `verified` or `rejected`
-  status will count only with an attestation signed by the director's key.
-  This release adds the key handling and the guards around it; the commands
-  that make the key and sign come with the task loop. The key will live in
-  the OS keyring (`evi-director`) when the optional `keyring` package works,
-  else in `~/.evi/director/director.key`, readable only by you. In every
-  mode, `yolo` and `/auto on` included, and whatever allow rule or unattended
+  status counts only with an attestation signed by the director's key, which
+  `evi attest init` makes and `evi task verify|reject` signs with, from your
+  own shell (see the task queue under Added). The key lives in the OS
+  keyring (`evi-director`) when the optional `keyring` package works, else
+  in `~/.evi/director/director.key`, readable only by you. In every mode,
+  `yolo` and `/auto on` included, and whatever allow rule or unattended
   policy applies, eVi now denies a tool call that reads or writes that
   folder, and a shell line or `run_python` code that names the key, sets or
   clears `EVI_AGENT` / `EVI_DIRECTOR`, patches `evi.attest` or runs
   `evi task verify|reject` or `evi attest` (directly or through `ssh`,
-  `schtasks`, `find -exec` and the like). Every process eVi
-  starts for an agent carries `EVI_AGENT=1`, where director tooling refuses
-  to run. `destructive_allow`, `destructive_disable_rules`,
-  `block_destructive = false` and `protected_paths_remove` don't loosen any of
-  this. Two side effects: on Windows a path argument that is a device path
+  `schtasks`, `find -exec` and the like). Every process eVi starts for an
+  agent carries `EVI_AGENT=1`, and so does every process started by eVi's
+  agent-hosting commands (`evi chat`, `evi run`, `evi batch`, team and
+  workflow runs, `evi mcp serve`, `evi web` and the desktop app's server,
+  channels, the scheduler, `evi task start`), git, hooks, MCP servers and
+  the Claude Agent SDK included: director tooling refuses to run there, and
+  so does `evi trust`. `destructive_allow`, `destructive_disable_rules`,
+  `block_destructive = false` and `protected_paths_remove` don't loosen any
+  of this. Two side effects: on Windows a path argument that is a device path
   naming no drive (`\\?\Volume{…}`, `GLOBALROOT`) is now denied instead of
   asked, and a single-quoted commit message naming `evi attest` is denied
   (eVi also reads the line as cmd does); use double quotes. An agent running
@@ -838,6 +844,51 @@ All notable user-visible changes to eVi. Format loosely follows
   object. `examples/hooks/pytest-gate.toml` is a ready gate that blocks
   while the tests the turn touched fail. See "Blocking stop hooks" in
   docs/features/hooks.md.
+- **`evi task` keeps a task queue in the repository: eVi implements a task
+  in a worktree of its own, proves it with the task's checks and stops, and
+  only your signature marks it verified.** Handing eVi a fix meant writing a
+  brief for `evi run` and keeping track yourself of what was asked, what ran
+  and who accepted it. `evi task new` files a task in `.evi/tasks/<id>.toml`,
+  tracked in git, with its acceptance criteria, `files_in_scope` and
+  required checks (`--from FILE` reads them from a TOML file). In a trusted
+  repository, `evi task start <id>` claims it with a lease (240 minutes,
+  `--ttl`), opens branch `task/<id>` in `.worktrees/task__<id>` and runs it
+  under the implementer policy with the verify gate on, on `--backend` /
+  `--model` or your configured backend. A delegate CLI-agent backend is
+  refused, whatever `allow_cli_agent_unattended` says. eVi then runs the
+  task's required checks itself, writes the run report (with a `task`
+  section) to `~/.evi/tasks/`, and leaves the task `implemented`, or `open`
+  with the attempt counted. Its exit code is `evi run`'s, and 2 means nothing
+  ran: an untrusted repository, someone else's live lease, a worktree that
+  can't be opened. Nothing is committed: you review and commit the work on
+  the branch, `evi task submit` it, and `evi task verify` runs the review
+  gate (`evi review --multi --exit-code` on the branch's diff) and signs the
+  task with your director key, which `evi attest init` makes once (`evi
+  attest status` shows its id). `evi task reject --reason` signs a
+  rejection, and `evi task reopen` sends a task back for another attempt.
+  Verify and reject refuse, writing nothing, in any process an eVi agent may
+  have started, and verify wants the task's worktree at the branch head with
+  nothing uncommitted, so the signature covers the work you reviewed.
+  `evi task list` and `evi task show` (`--format json`) show a verdict only
+  with a valid signature at the branch's current head: a hand-written,
+  re-edited or outdated `verified` reads `unverified (…)`. `evi task claim`
+  and `evi task release` manage leases; an expired lease can be reclaimed.
+  A crashed start doesn't strand its task: the next start on the same
+  machine takes over the worktree lock the dead one left (the lock reason is
+  now `eVi isolated run (pid N on HOST)`). See docs/features/tasks.md.
+- **`search_fixes` finds eVi's earlier fixes in a fresh checkout, and the
+  task queue is shared through git.** The bug-fix ledger
+  (`.evi/bug-ledger.jsonl`, which `record_fix` writes) was ignored by git,
+  so what one session learned stayed on that machine. It is now tracked,
+  `record_fix` writes it with LF line endings on every platform, and it
+  starts with the 10 fixes from the 1.0.50 adversarial review that the
+  1.0.50 release commit documents. eVi's own `.gitignore` now ignores
+  `.evi/*` but keeps `.evi/tasks/`, `.evi/bug-ledger.jsonl`,
+  `.evi/REVIEW.md` and `.evi/review-rules.md` tracked, and `*/**/.evi/`
+  keeps an `.evi/` folder below the top level ignored. Another repository
+  that tracks its task queue needs the same lines: without them the queue's
+  lock file, `.evi/tasks.lock`, shows up in `git status`. See "Where the
+  files live" in docs/features/tasks.md.
 - **`evi worktree prune` clears away the worktrees you are done with.**
   Worktrees piled up under `.worktrees/` once their branches were merged.
   `evi worktree prune [--into BRANCH] [--dry-run]` removes those that are
