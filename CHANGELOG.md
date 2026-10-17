@@ -775,6 +775,69 @@ All notable user-visible changes to eVi. Format loosely follows
   (`400`) for now. `evi worktree chat` takes `--mode`. See "Isolated runs" in
   docs/features/agents.md and "The run report" in
   docs/features/structured-and-batch.md.
+- **`evi run --policy implementer` lets an unattended run change code and
+  run its tests, and nothing else.** An unattended run had two settings:
+  deny every call that would ask (so no shell, and no tests), or `-y` and
+  allow everything. Under the implementer policy every call is allowed or
+  denied with a reason, never asked: reads and edits inside the run's folder
+  (the worktree with `--worktree`, else the repository's top level), shell
+  lines whose every command is on a short allowlist (`pytest`, `ruff check`
+  / `ruff format`, `python -m pytest` / `ruff`, `npm test`,
+  `cargo check|test|clippy` and read-only git) with arguments that stay in
+  the folder, and nothing else: no network, MCP tools, `run_python`, memory
+  or subagents. `hard_deny`, `deny` rules and the director's ground still
+  deny first; `allow` rules, `yolo` and `unattended_policy` never widen it;
+  the destructive-command guard is always on. A protected file is editable
+  only when a `--scope GLOB` entry names it (`.github/workflows/ci.yml` or
+  `.github/workflows/*.yml`, not `**`), and `.evi/tasks/**`, `.git`, eVi's
+  home, the director's key and secret files never are. In a folder you
+  haven't trusted the policy runs no commands at all, since tests, git and
+  even `python -m ruff` can run the folder's code. The run report's `policy`
+  says `implementer`, and every denied call in `tool_calls` now carries its
+  `reason`. An unknown policy, `--policy` with `-y` and a `--scope` entry
+  outside the folder are usage errors (exit 2). It is a guardrail, not a
+  sandbox: the tests run the repository's code, so give the run a
+  `--worktree`. See "Implementer policy" in
+  docs/features/permissions-and-sandbox.md.
+- **A turn that changed files has to pass the project's checks before it
+  ends.** Small models declare success early, and only a check that ran
+  tells you otherwise. When the model would end a turn that changed files,
+  eVi now runs ruff on the changed `.py` files, only the tests that cover
+  them (each changed test file, and `tests/test_<module>.py`), `npm test` or
+  `cargo check` when JS/TS or Rust changed, and your own `[checks]
+  commands`, and hands any failure back to the model with the end of its
+  output. After `[checks] max_rounds` failing rounds (default 2) the run
+  stops with the new stop reason `checks_failed`, and `evi run` exits 5 (the
+  `evi-run` action reports it too). It is on by default under
+  `--policy implementer`; `[checks] verify = "always"` adds Code-mode
+  sessions, where each check asks through the normal permission flow, and
+  `"off"` turns it off. Checks never run in a folder you haven't trusted
+  (the report's new `checks_skipped` says why); a trusted repository can add
+  its own `[checks] commands` in `.evi.toml`. Each check is time-capped
+  (`timeout`, 300 s), stops with the turn, gets no API keys in its
+  environment, and its output is redacted. The run report's `checks` lists
+  every run (command, exit code, the end of its output, round), `evi run`
+  prints a line per check on stderr, the event stream gains `CheckResult`,
+  `ChecksSkipped`, `ChecksFailed` and `FilesChanged`, and the web chat shows
+  each check, a failing round as a note, and the files the turn's tools
+  wrote in a footer under the reply. See "Verify before done" in
+  docs/configuration.md.
+- **A stop hook can send the model back to work.** A `stop` hook could only
+  watch a turn end, so a gate such as "the tests must pass" couldn't stop a
+  model that quit early. A `[[stop]]` hook with `protocol = "json"` now gets
+  the event as JSON on stdin (session, folder, which attempt to finish this
+  is, the files changed) and blocks by printing
+  `{"decision": "block", "reason": "…"}` or exiting 2. The reason reaches the
+  model as a note and the turn goes on, at most `[hooks] max_blocks` times
+  per turn (default 3); one more block ends it with `stop_hook_exhausted`,
+  and `evi run` exits 6. A hook that errors or times out never blocks, and
+  plain `stop` hooks stay notifications. The run report gains `stop_blocks`,
+  the event stream `StopBlocked`, and the web chat shows a block as a note
+  in the conversation. A run's `text` is now the answer the model gave after
+  the last block or failing check round, so `--schema` still gets one JSON
+  object. `examples/hooks/pytest-gate.toml` is a ready gate that blocks
+  while the tests the turn touched fail. See "Blocking stop hooks" in
+  docs/features/hooks.md.
 - **`evi worktree prune` clears away the worktrees you are done with.**
   Worktrees piled up under `.worktrees/` once their branches were merged.
   `evi worktree prune [--into BRANCH] [--dry-run]` removes those that are

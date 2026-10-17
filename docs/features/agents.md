@@ -223,7 +223,12 @@ lists them. Isolation comes in two kinds:
 - **The whole process:** [`evi run --worktree <branch|auto>`](structured-and-batch.md#cli-single-headless-run)
   moves eVi itself into the worktree, so its `.evi.toml` (when the
   repository is trusted), `EVI.md`, MCP servers and every tool follow, and
-  the run report's `worktree` field says what it left there.
+  the run report's `worktree` field says what it left there. Add
+  `--policy implementer` for an implementer job: the run may then edit files
+  in the worktree, run the tests, linters and read-only git there (in a
+  trusted repository) and nothing else, without `-y`; once it has changed
+  files, the project's checks run before it may finish. See [Implementer
+  policy](permissions-and-sandbox.md#implementer-policy).
 - **One thread:** a subagent profile with `isolate = "worktree"`, a task of
   `evi team run --worktree` and a workflow step with `isolate = "worktree"`
   run beside other work in the same process. Only the agent's folder moves,

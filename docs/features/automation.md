@@ -190,11 +190,11 @@ Authenticate with your normal web token. `text` is required; `source` is optiona
 | Output | What it holds |
 |---|---|
 | `result` | `evi run`'s stdout: the answer, the JSON report or the NDJSON events. Untrusted model text. |
-| `exit_code` | `evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted. |
+| `exit_code` | `evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 5 checks_failed, 6 stop_hook_exhausted, 130 interrupted. |
 | `stop_reason` | The run report's `stop_reason` (`format` `json` or `stream-json`; empty for `text`). |
 | `session_id` | The run's session id (`format` `json` or `stream-json`; empty for `text`). |
 
-The step writes its outputs first and then exits with `evi run`'s exit code, so it fails whenever the run didn't end `done`: an error, a run out of turns (exit 3, in the `text` format too), a refused prompt. To act on such a run, give the step `continue-on-error: true` and check `outputs.stop_reason` in the next one. `stop_reason` and `session_id` carry only values eVi itself writes, a stop reason from the fixed list and a plain session id; anything else leaves them empty, so text a model put in the output can't forge them. Tool calls the action's config denies don't fail the step: the run is `done` when the model finishes without them, and the `json` report lists them in `denied_tools`.
+The step writes its outputs first and then exits with `evi run`'s exit code, so it fails whenever the run didn't end `done`: an error, a run out of turns (exit 3, in the `text` format too), a refused prompt, project checks that still fail (exit 5, `checks_failed`) or a stop hook that kept blocking (exit 6, `stop_hook_exhausted`). To act on such a run, give the step `continue-on-error: true` and check `outputs.stop_reason` in the next one. `stop_reason` and `session_id` carry only values eVi itself writes, a stop reason from the fixed list and a plain session id; anything else leaves them empty, so text a model put in the output can't forge them. Tool calls the action's config denies don't fail the step: the run is `done` when the model finishes without them, and the `json` report lists them in `denied_tools`.
 
 Read every output through `env:`, never as `${{ }}` inside a `run:` or `script:`, and don't print `result` without stopping workflow-command parsing (the [example workflow](../../.github/workflows/evi-run-example.yml) shows how):
 

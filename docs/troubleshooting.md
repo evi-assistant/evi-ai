@@ -112,14 +112,15 @@ its `error` says what went wrong.
 |---|---|---|---|
 | 0 | `done` | The model finished. | Nothing; but see `denied_tools` below. |
 | 1 | `error` | The backend failed (`LLM request failed: …`), the turn raised, or the agent couldn't be built (an MCP server that won't start, a delegate CLI-agent backend refused). | Read `error` (or the `error: …` line on stderr in text format); check the backend as in the sections above. |
-| 2 | — | A usage error: no run happened. No prompt, an unknown `--format`, `--max-turns` below 1, `--resume` with `--continue`, an unknown session id or no session to continue, a `--backend` name that isn't saved (`evi backend list`), a `--cwd` that isn't a folder, a bad `--schema`. | Fix the command line; the reason is on stderr. |
+| 2 | — | A usage error: no run happened. No prompt, an unknown `--format`, `--max-turns` below 1, `--resume` with `--continue`, an unknown session id or no session to continue, a `--backend` name that isn't saved (`evi backend list`), a `--cwd` that isn't a folder, a bad `--schema`, an unknown `--policy`, `--policy` with `-y`, `--scope` without `--policy` or a `--scope` entry outside the folder. | Fix the command line; the reason is on stderr. |
 | 3 | `max_turns` | The run used all its model round trips (`--max-turns`, default 12) before the model finished. The text so far is still printed. | Raise `--max-turns`, or split the task. |
 | 4 | `guardrail` | An input guardrail or a `user_prompt_submit` hook refused the prompt, or the backend's content filter ended the reply. | Check `~/.evi/guardrails.toml` and your hooks. |
+| 5 | `checks_failed` | The project checks still failed after `[checks] max_rounds` failing rounds. | See [below](#a-run-ended-checks_failed-exit-5-or-stop_hook_exhausted-exit-6). |
+| 6 | `stop_hook_exhausted` | A blocking stop hook (`protocol = "json"`) kept blocking past `[hooks] max_blocks`. | See [below](#a-run-ended-checks_failed-exit-5-or-stop_hook_exhausted-exit-6). |
 | 130 | `interrupted` | Ctrl+C or a SIGINT stopped the run (above). | — |
 
-`step_budget` and `loop_detected` (exit 3), `permission_denied` (4) and
-`stop_hook_exhausted` (6) are reserved for the task loop; no run stops with
-them yet.
+`step_budget` and `loop_detected` (exit 3) and `permission_denied` (4) are
+reserved for the task loop; no run stops with them yet.
 
 **Tool calls were denied but the run exited 0.** That is by design: the agent
 carries on past a denied call and the model answers without it, so the run is
@@ -132,6 +133,48 @@ should check `denied_tools`, and approve them as the next sections describe.
 when the run failed (the error was only in the JSON), and a run that ran out
 of turns exited 0 in every format. A script that treated any non-zero exit as
 "eVi crashed" should read `stop_reason` instead.
+
+## A run ended `checks_failed` (exit 5) or `stop_hook_exhausted` (exit 6)
+
+Both come from the gate a turn passes before it may end ([Verify before
+done](configuration.md#verify-before-done--checks-in-configtoml)). The work
+the run did stays where it did it (in its worktree, with `--worktree`).
+
+**`checks_failed`**: the project checks for the files the turn changed (ruff
+on the changed files, the targeted tests, `npm test`, `cargo check`, your
+`[checks] commands`) still failed after `[checks] max_rounds` failing rounds
+(default 2, so the model had one try at fixing them). `evi run` printed a
+`check <name> (round N) exit N …` line on stderr for each, and the report's
+`checks` lists every run with its `cmd`, `exit` and the end of its output
+(`tail`).
+
+- Read the last round's `tail`, or run the same `cmd` yourself for the whole
+  output.
+- `exit: null` means the check didn't finish, and its `tail` says why: it
+  timed out (raise `[checks] timeout`, 300 seconds by default) or couldn't
+  start (a `[checks] commands` program that isn't installed, say); both
+  count as failing. A check the policy or the permission checks refused is
+  recorded the same way but doesn't count. A detected tool eVi can't find
+  (pytest in the folder's `.venv`, in eVi's own Python or on `PATH`) isn't
+  run at all.
+- To give the model more tries, raise `[checks] max_rounds`; to turn the
+  checks off, set `[checks] verify = "off"`.
+
+**`stop_hook_exhausted`**: a [blocking stop
+hook](features/hooks.md#blocking-stop-hooks-protocol--json) sent the model
+back `[hooks] max_blocks` times (3 by default) and then blocked once more.
+The report's `stop_blocks` lists the blocks that went back to the model, each
+with its reason; the last block, the one that ended the run, isn't listed. A
+hook that errors or times out never blocks, so this hook really answered
+"block" each time. Run it by hand with an event on stdin to see what it
+objects to:
+
+```bash
+echo '{"event": "stop", "session_id": "x", "cwd": ".", "stop_hook_active": true, "iteration": 2, "files_changed": ["calc.py"]}' | python3 /path/to/gate.py
+```
+
+A gate that can never pass holds every turn until the cap: fix the hook, or
+raise `[hooks] max_blocks` if the model just needs more rounds.
 
 ## `run_command` timed out, or "left a process running in the background"
 
@@ -256,6 +299,43 @@ A Telegram turn follows `[channels] telegram_auto_approve` (the denial names
 writes, secret reads and commands the destructive-command guard flags stay
 denied in every unattended run; see the next section. Background: [Unattended
 runs](features/permissions-and-sandbox.md#unattended-runs).
+
+## "PERMISSION DENIED: … (the implementer policy allows …)"
+
+The run is under `evi run --policy implementer`, which allows a fixed set of
+calls and denies everything else without asking. `-y` can't be combined with
+it, and `[auto] unattended_policy`, `allow` rules and `auto_approve` don't
+widen it. The reason after `was not run:` says which rule refused the call;
+with `--format json` it is each denied call's `reason` in `tool_calls`, and
+the text format prints `denied: <tools> (the implementer policy refused them;
+…)` on stderr. The run still ends `done` if the model finishes without the
+call.
+
+| The reason says | Why | What to do |
+|---|---|---|
+| `… is not on the allowlist (…)`, `only npm test`, `git … is not a read-only git command` | That command (in a line of several, the reason quotes the one that failed) isn't on the shell allowlist. | Use an allowlisted form (`python -m pytest …`, `ruff check …`, `git diff`). A project check command of your own can go in `[checks] commands` in `config.toml`: in a trusted folder it is allowed exactly as written. Installing packages, the network or a deploy script are not part of an implementer run: do them yourself. |
+| `its argument … is outside the run's folder`, `… is not allowed (it writes a file of its choosing, …)` | An argument reaches outside the run's folder, or the option writes a file of its choosing, reaches the network or sets config that runs a program. | Keep paths inside the folder and drop the option. |
+| `… sets an environment variable before the command`, `… holds a shell expansion` | `X=1 pytest`, `$VAR`, a command substitution or subshell. | Write the command out plainly. |
+| `… is a protected file the task's files_in_scope doesn't name` | `EVI.md`, `AGENTS.md`, `.evi.toml`, `.evi/…`, `.github/workflows/…` or `.vscode/tasks.json`. | Name the file with `--scope`, exactly (`--scope .github/workflows/ci.yml`, or `--scope '.github/workflows/*.yml'`); `**` and other broad globs grant nothing. |
+| `… is protected and no task may write it` | `.evi/tasks/**`, `.git`, eVi's home, a secret file or another `[auto] protected_paths` entry. | No `--scope` grants it; do that part yourself. |
+| `… is not a trusted folder, so the implementer policy runs no commands there …` | No command runs in an untrusted folder: tests, git and even `python -m ruff` can run its code. | If you trust the repository's code, `evi trust` it from your own terminal (its worktrees share the trust) and run again. |
+| `… is not a tool the implementer policy allows …` | Network, MCP, `run_python`, memory, skills and subagents are outside the policy. | By design; use a normal run for that work. |
+| `the destructive-command guard: …` | The guard is always on under the policy; its opt-outs don't apply. | Do that step yourself. |
+
+See [Implementer policy](features/permissions-and-sandbox.md#implementer-policy).
+
+## "checks skipped: … is not a trusted folder"
+
+The turn changed files, but eVi ran none of the project's checks: a check runs
+the folder's own code (a test, a `conftest.py`, an npm script), and you
+haven't [trusted](configuration.md#trusting-a-folder) this folder. `evi run`
+prints the line on stderr, the report's `checks_skipped` holds the reason and
+`checks` is empty. Under `--policy implementer` the same rule means the model
+could run no commands at all there. If you trust the repository's code, run
+`evi trust` in your own terminal and run again; a worktree shares its
+repository's trust. A repository's own `[checks] commands` (in its
+`.evi.toml`) also need that version of the file approved: after an edit to
+`.evi.toml`, trust the folder again.
 
 ## "PERMISSION DENIED: … writes the protected path …"
 

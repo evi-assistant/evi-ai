@@ -546,13 +546,22 @@ force `block_destructive = true` — never the reverse. `[tools] transcripts` is
 not a tool category and can't be changed. Details in
 [Permissions & sandbox](features/permissions-and-sandbox.md#per-project-and-per-profile-overrides).
 
+**Check commands** (`[checks] commands`): the repository's own [verify
+checks](#verify-before-done--checks-in-configtoml), added to yours. They run
+code, so they are never merged into your settings: eVi reads them only when
+it is about to run the checks, and only while the folder is trusted and this
+version of the file is approved. The other `[checks]` keys (`verify`,
+`max_rounds`, …) are ignored, so a repository can't switch its checks off or
+give itself more rounds.
+
 **Always ignored**: anything that is an endpoint, credential, executable,
-shell command, listener or file path — `[llm]` `backend`, `base_url`,
-`api_key`, `api`, `responses_tools` — and the whole `[statusline]`,
-`[runtime]`, `[web]`, `[federation]`, `[channels]`, `[notify]`,
-`[telemetry]`, `[plugins]`, `[desktop]`, `[google]`, `[microsoft]`,
-`[obsidian]`, `[comfy]`, `[voice]`, `[models]` and `[ultracode]` sections, plus
-any unknown key. Put those in `config.toml` or a profile.
+shell command (the check commands above aside), listener or file path —
+`[llm]` `backend`, `base_url`, `api_key`, `api`, `responses_tools` — and the
+whole `[statusline]`, `[runtime]`, `[web]`, `[federation]`, `[channels]`,
+`[notify]`, `[telemetry]`, `[plugins]`, `[desktop]`, `[google]`,
+`[microsoft]`, `[obsidian]`, `[comfy]`, `[voice]`, `[models]`, `[ultracode]`
+and `[hooks]` sections, plus any unknown key. Put those in `config.toml` or a
+profile.
 
 ```toml
 # <repo>/.evi.toml
@@ -675,7 +684,8 @@ Env vars set in the child process (command hooks):
 - `EVI_HOOK_TOOL` — fully-qualified tool name (the event name for lifecycle
   events)
 - `EVI_HOOK_ARGS_JSON` — JSON of the call arguments (the prompt for
-  `user_prompt_submit`, the finish reason for `stop`), whole up to the OS limit
+  `user_prompt_submit`, the finish reason for a plain `stop` hook, the event
+  object for a `protocol = "json"` one), whole up to the OS limit
   for one environment variable (about 32,000 characters on Windows, 128 KiB on
   Linux)
 - `EVI_HOOK_ARGS_FILE` — path of a temp file holding the whole payload, set
@@ -705,8 +715,122 @@ command = ["python3", "/path/check_prompt.py"]   # prompt is in EVI_HOOK_ARGS_JS
 veto_on_nonzero = true
 
 [[before_compact]]       # before history compaction — veto keeps it intact
-[[stop]]                 # after a turn completes (notification; never blocks)
+[[stop]]                 # after a turn completes (a notification; never blocks)
 ```
+
+A `[[stop]]` hook with `protocol = "json"` is a **blocking stop hook**: it runs
+each time the model would end its turn, gets the event as one JSON object on
+stdin (`event`, `session_id`, `cwd`, `stop_hook_active`, `iteration`,
+`files_changed`), and sends the model back to work by printing
+`{"decision": "block", "reason": "…"}` or by exiting 2 (its stderr is the
+reason). Exit 0 without that JSON lets the turn end; a timeout or any other
+exit is an error, logged and never a block. A plain `stop` hook stays a
+notification. How many times per user turn the hooks may send the model back
+is set in `config.toml`:
+
+```toml
+[hooks]
+max_blocks = 3   # the block after the third ends the turn: stop_reason "stop_hook_exhausted" (evi run exits 6)
+```
+
+`0` means the first block ends the turn; a negative or non-numeric value means
+3. The block that ends the turn isn't recorded in the run report's
+`stop_blocks`. A repository's `.evi.toml` can't set `[hooks]`. Full protocol:
+[Hooks → Blocking stop hooks](features/hooks.md#blocking-stop-hooks-protocol--json);
+a working example is
+[`examples/hooks/pytest-gate.toml`](../examples/hooks/pytest-gate.toml).
+
+## Verify before done — `[checks]` in `config.toml`
+
+Once a turn has changed files and the model would end it, eVi can run the
+project's checks first and hand any failure back to the model, so "done" means
+the lint and the tests it touched pass, not that the model said so.
+
+```toml
+[checks]
+verify     = "auto"   # auto | always | off
+max_rounds = 2        # failing rounds per user turn before it ends as "checks_failed"
+timeout    = 300      # seconds per check command
+tail_lines = 40       # lines of each check's output kept (and shown to the model)
+detect     = true     # false: run only the commands below
+commands   = []       # your own checks: command lines ("make lint") or argv arrays
+```
+
+**When they run** (`verify`):
+
+- **`auto`** (the default): in a run under the [implementer
+  policy](features/permissions-and-sandbox.md#implementer-policy)
+  (`evi run --policy implementer`), never in an interactive session.
+- **`always`**: also in a Code-mode session (`evi chat --mode code`,
+  `evi run -m code`, or a web session set to `code` with
+  `POST /api/session/<id>/mode`). There each
+  check is offered as a `run_command` call through the normal permission
+  flow: it asks in a chat, and in a run nobody watches it follows
+  `[auto] unattended_policy`.
+- **`off`**: never, not even under the policy.
+
+An unknown `verify` value means `auto`; a `max_rounds`, `timeout` or
+`tail_lines` that isn't a positive number means its default.
+
+**What runs** is worked out from the files the turn changed (what its write
+tools wrote, plus what its commands changed, found by comparing `git status`,
+or the folder's files outside git, with the turn's start; caches, `.git`,
+`node_modules` and virtualenvs don't count). Never the whole suite by default:
+
+- **ruff**: `ruff check --no-cache <the changed .py files>`, when the folder
+  has a ruff config (`ruff.toml`, `.ruff.toml` or `[tool.ruff]` in
+  `pyproject.toml`);
+- **pytest**: only the targeted tests, `-q -p no:cacheprovider <targets>`: a
+  changed test file itself (`test_*.py`, `*_test.py`) and `tests/test_<name>.py`
+  for each changed `<name>.py` that has one. Exit 5 (no tests collected)
+  passes. It runs with the folder's own `.venv` (or `venv`) interpreter when
+  there is one;
+- **npm test**: when `package.json` has a real `scripts.test` (not npm init's
+  placeholder) and a `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs` or `.cjs` file
+  changed;
+- **cargo check**: when the folder has a `Cargo.toml` and a `.rs` file
+  changed;
+- **`commands`**: yours, run whenever files changed. A command line is split
+  into words the way a POSIX shell would (use `/` in paths, or give an argv
+  array), but pipes, `&&` and redirects are not interpreted. A trusted
+  repository can add its own in its `.evi.toml` (below).
+
+The checks run in the run's folder (the policy's, else the working folder's
+git top level), each through eVi's process runner: killed with its whole
+process tree at `timeout` or when you stop the turn, with no `*_KEY`,
+`*_TOKEN` or `*_SECRET` variables in its environment and no Python bytecode
+written. Their output is [redacted](features/secret-redaction.md) and cut to
+the last `tail_lines` lines.
+
+**Rounds.** If a check fails, eVi sends the model a framed note with each
+failing command, its exit code and the end of its output, and the turn goes
+on. A check that times out or can't start counts as failing; one the policy
+or you refused is recorded with exit `null` and doesn't. After `max_rounds`
+failing rounds the turn ends with stop reason **`checks_failed`**
+(`evi run` exits **5**): with the default of 2, the model gets one chance to
+fix what failed. Once a round passes, the checks run again at a later
+would-be end (a stop hook sent the model back) only if the changed files'
+contents changed since. No files changed: no checks. A failing round skips
+the [blocking stop hooks](features/hooks.md#blocking-stop-hooks-protocol--json)
+for that round; they run once the checks pass. Each reply after a failing
+round uses one of the run's `--max-turns` round trips.
+
+**Trust.** A check runs the folder's own code (a test, a `conftest.py`, an npm
+script), so in an [untrusted folder](#trusting-a-folder) no check runs at
+all: eVi says so once per turn ("checks skipped: … is not a trusted folder
+… so no check ran") and the run report's `checks_skipped` gives the reason.
+`evi trust` the folder to let them run. A repository's `.evi.toml` can add `[checks] commands`, and
+they count only while the folder is trusted and that version of the file is
+approved; it can't set the other `[checks]` keys.
+
+**Where you see them.** `evi run` prints one line per check on stderr
+(`check pytest (round 1) exit 1 in 2.3s — …`), whatever the format, and the
+report's `checks` lists every run (`name`, `cmd`, `exit`, `duration_ms`,
+`tail`, `round`, `source`); see [The run
+report](features/structured-and-batch.md#the-run-report). `evi chat` prints
+the same lines. The web and desktop chat show each check as a line (a failing
+one with its output folded underneath), a failing round as a note, and the
+files the turn's tools wrote as a footer under its reply.
 
 ## Keybindings — `~/.evi/keybindings.toml`
 

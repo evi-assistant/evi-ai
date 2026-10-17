@@ -22,7 +22,7 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 1. **Claim**: the task brief is your scope: files, acceptance criteria,
    tests. Anything else goes in the hand-off.
 2. **Worktree**: one per task. The director starts you with
-   `evi run --worktree <branch|auto>` or
+   `evi run --policy implementer --worktree <branch|auto>` or
    `scripts/dev-bootstrap --worktree <branch>` (`--test` runs pytest
    there); work only in that worktree (`.worktrees/<branch>`, `/` as
    `__`), via `python -m evi` and `python -m pytest` from there.

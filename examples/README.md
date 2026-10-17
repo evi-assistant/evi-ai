@@ -65,6 +65,29 @@ cp examples/hooks.toml ~/.evi/hooks.toml   # then edit paths/commands
 
 Full guide: [../docs/features/hooks.md](../docs/features/hooks.md).
 
+## `hooks/pytest-gate.toml` — a stop hook that blocks until the tests pass
+
+A blocking stop hook (`protocol = "json"`): each time the model would end its
+turn, it runs the tests for the files the turn changed (each changed test
+file, and `tests/test_<module>.py` for each changed `<module>.py`, never the
+whole suite) and, while they fail, sends the model back to work with the end
+of pytest's output. With no test touched it lets the turn end. Copy its
+`[[stop]]` entry into `~/.evi/hooks.toml` (append it if you already have
+one):
+
+```bash
+cat examples/hooks/pytest-gate.toml >> ~/.evi/hooks.toml
+```
+
+It needs pytest in the `python` on your `PATH`; point its `command` at your
+project's interpreter otherwise. `[hooks] max_blocks` in `config.toml`
+(default 3) caps how often it can send the model back in one turn; one more
+block ends the turn as `stop_hook_exhausted` (`evi run` exits 6). eVi's
+built-in project checks (`[checks]`, on by default for runs under
+`evi run --policy implementer`) do much the same job and run before this
+hook. Guide: [Blocking stop
+hooks](../docs/features/hooks.md#blocking-stop-hooks-protocol--json).
+
 ## `guardrails.toml` — content filter
 
 Copy `guardrails.toml` to `~/.evi/guardrails.toml` for a 3-layer filter (regex

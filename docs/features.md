@@ -26,24 +26,42 @@ switcher; per-turn headless: `evi run -m code`.
 
 **Headless** — `evi run "prompt" [-m mode] [-y] [--format text|json|stream-json]
 [--schema f] [--max-turns N] [--cwd DIR] [--model ID] [--backend NAME]
-[--resume ID | --continue]`. One-shot for scripts/CI; with no prompt argument
-it reads the prompt from stdin. Example: `{ echo "Review this diff for bugs:";
-git diff; } | evi run -f json`. `--format json` prints the **run report**
+[--resume ID | --continue] [--policy implementer [--scope GLOB]]`. One-shot
+for scripts/CI; with no prompt argument it reads the prompt from stdin.
+Example: `{ echo "Review this diff for bugs:"; git diff; } | evi run -f json`. `--format json` prints the **run report**
 (`schema_version` 1): session and transcript, backend, model, folder and its
 trust state, turns used, `stop_reason` (the agent's own reason in
 `done_reason`), the answer, every tool call (name, arguments, status,
-duration, output), the denied tools, usage summed over the run, duration and
-`files_changed`. `--format stream-json` prints one JSON event per line,
+duration, output, and a denied call's reason), the denied tools, usage summed
+over the run, duration, `files_changed`, the project checks it ran (`checks`,
+or `checks_skipped` saying why none ran) and the stop-hook blocks
+(`stop_blocks`). `--format stream-json` prints one JSON event per line,
 `RunStart` first and `RunResult` (the report) last, in the same versioned
 envelope as the web UI's stream. `--cwd` runs in another folder (its
 `.evi.toml` only if trusted), `--backend` picks a saved backend, `--resume` /
 `--continue` add the run to a past session. The exit code says why the run
-stopped: 0 done, 1 error, 2 usage error, 3 max_turns, 4 guardrail, 130
-interrupted (Ctrl+C or SIGINT, which still prints the result). Nothing
-prompts: without `-y`, a call outside `[auto] auto_approve` is denied
-(`[auto] unattended_policy`); the run still ends `done` when the model
-finishes, and the report lists those calls in `denied_tools`.
+stopped: 0 done, 1 error, 2 usage error, 3 max_turns, 4 guardrail, 5
+checks_failed, 6 stop_hook_exhausted, 130 interrupted (Ctrl+C or SIGINT,
+which still prints the result). Nothing prompts: without `-y`, a call outside
+`[auto] auto_approve` is denied (`[auto] unattended_policy`); the run still
+ends `done` when the model finishes, and the report lists those calls in
+`denied_tools`. `--policy implementer` (not with `-y`) lets a coding run edit
+files in its folder and run tests, linters and read-only git there, and
+nothing else; `--scope GLOB` names a protected file it may edit
+([Implementer policy](features/permissions-and-sandbox.md#implementer-policy)).
 [Guide](features/structured-and-batch.md#the-run-report).
+
+**Verify before done** — once a turn has changed files and the model would
+end it, eVi runs the project's checks (ruff on the changed files, the
+targeted tests, `npm test`, `cargo check`, your `[checks] commands`) and
+hands failures back to the model, up to `[checks] max_rounds` failing rounds,
+then the turn ends `checks_failed`. On by default under `--policy
+implementer`, and also in Code mode with `[checks] verify = "always"`; never
+in an untrusted folder. Blocking stop hooks (`protocol = "json"`) run after the
+checks. `evi run` prints each check on stderr; the web chat shows the
+checks, a stop block as a note, and the files the turn's tools wrote in a
+footer under its reply.
+[Guide](configuration.md#verify-before-done--checks-in-configtoml).
 
 **Batch** — `evi batch prompts.jsonl -o out.jsonl -j 4 [--max-turns N]`. Runs
 many prompts (each its own agent), optional parallelism. Input is
@@ -130,6 +148,15 @@ there); delegate CLI-agent backends are refused there, and by
 `[llm] allow_cli_agent_unattended`; and the commands these runs start, like
 sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 [Guide](features/permissions-and-sandbox.md#unattended-runs).
+**Implementer policy** — `evi run --policy implementer` decides every call
+without asking: reads and edits inside the run's folder (protected files only
+when a `--scope` entry names them; `.evi/tasks/**`, `.git` and eVi's home
+never), shell lines whose every command is on a short allowlist (pytest, ruff,
+`npm test`, `cargo check|test|clippy`, read-only git) with arguments that
+stay in the folder, and nothing else: no network, MCP, `run_python`, memory
+or subagents. In an untrusted folder it runs no commands at all. A guardrail,
+not a sandbox: tests run the repository's code, so the worktree is the blast
+radius. [Guide](features/permissions-and-sandbox.md#implementer-policy).
 
 **Secret redaction** — API keys and tokens a tool printed show as
 `[REDACTED:<kind>]` in transcripts (from now on; older ones aren't
@@ -193,7 +220,13 @@ undoes file writes. [Guide](features/sessions.md).
 
 `~/.evi/hooks.toml` — run a `command` (argv) or POST a `url` around events.
 Tool events (`before_tool_call`/`after_tool_call`, glob `match`, `veto_on_nonzero`)
-and lifecycle events (`user_prompt_submit`/`before_compact`/`stop`). See
+and lifecycle events (`user_prompt_submit`/`before_compact`/`stop`). A
+`[[stop]]` hook with `protocol = "json"` gets the event as JSON on stdin and
+can send the model back to work (print `{"decision": "block", "reason": …}`
+or exit 2), at most `[hooks] max_blocks` (3) times per turn, then the turn
+ends `stop_hook_exhausted`; its errors never block
+([guide](features/hooks.md#blocking-stop-hooks-protocol--json),
+[example](../examples/hooks/pytest-gate.toml)). See
 [configuration.md](configuration.md#hooks--evihookstoml).
 
 ## Plugins

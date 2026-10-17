@@ -133,7 +133,8 @@ as the web UI's Code mode; `chat` and `cowork` are the other presets. Without
 `--mode`, the session uses the tools enabled in your config. Under
 `--safe-mode`, `chat --mode` still leaves out the memory, skills and MCP tools.
 Approve shell and git calls as they come. Implementer runs never use `-y` or
-`/auto on`.
+`/auto on`: a headless implementer run uses `--policy implementer` instead
+([section 3](#3-worktrees-one-per-task)).
 
 A change, driven by eVi:
 
@@ -158,10 +159,24 @@ only there: a change in progress can't break the checkout eVi runs from, and
 several fixes can go on side by side. Nothing is merged by the implementer; the
 director reviews each branch and merges it.
 
-**A headless run.** `evi run --worktree auto --mode code "<task brief>"` makes
-a fresh branch `fix-1` (then `fix-2`, …) at `.worktrees/fix-1` and runs there;
-`--worktree <branch>` names the branch instead, and a later run with the same
-name carries on in its worktree. `--base REF` picks where a new branch starts
+**A headless run.** `evi run --policy implementer --worktree auto --mode code
+"<task brief>"` makes a fresh branch `fix-1` (then `fix-2`, …) at
+`.worktrees/fix-1` and runs there; `--worktree <branch>` names the branch
+instead, and a later run with the same name carries on in its worktree.
+`--policy implementer` takes the place of `-y`, which it refuses: the run may
+read and edit files in the worktree, run pytest, ruff and read-only git there,
+and nothing else (no network, no `run_python`, no subagents), and every other
+call is denied with a reason instead of asked. Protected files (`EVI.md`,
+`.github/workflows/…`) stay denied unless the task names them with
+`--scope <file>`; `.evi/tasks/**` never opens. Before the run may finish,
+eVi runs ruff on the `.py` files it changed and the matching
+`tests/test_<module>.py` files, and hands failures back to the model (at most
+`[checks] max_rounds` failing rounds, then the run exits 5,
+`checks_failed`). This needs the repository to be trusted (`evi trust`, from
+your own terminal): in an untrusted folder the policy runs no commands and no
+checks. See [Implementer
+policy](features/permissions-and-sandbox.md#implementer-policy) and [Verify
+before done](configuration.md#verify-before-done--checks-in-configtoml). `--base REF` picks where a new branch starts
 (default `[worktree] base_ref`, else `HEAD`). The worktree is the run's folder:
 `EVI.md` and the anatomy come from it alone, its `.evi.toml` applies when the
 repository is trusted (a worktree shares its repository's folder trust), and

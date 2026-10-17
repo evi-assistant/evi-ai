@@ -18,11 +18,11 @@ A hook is an entry in `hooks.toml` keyed by the **event** it fires on. There are
 | `after_tool_call` | After a tool returns | No | Veto is ignored (notification only); a non-zero exit is just logged |
 | `user_prompt_submit` | Before each turn, before the model sees your prompt | Yes | Blocks the prompt |
 | `before_compact` | Before history compaction | Yes | Keeps history intact (skips compaction) |
-| `stop` | Once per turn, when the reply is complete | No | Notification only; never blocks |
+| `stop` | Once per turn, when the reply is complete | Only with `protocol = "json"` | A plain `stop` hook is a notification and never blocks. A [blocking stop hook](#blocking-stop-hooks-protocol--json) runs each time the model would end its turn and can send it back to work |
 
 `before_tool_call` and `after_tool_call` are **tool-scoped**: their `match` is a glob over the tool name. The three lifecycle events (`user_prompt_submit`, `before_compact`, `stop`) are **not tied to a tool**, so they use `match = "*"` (the default).
 
-`stop` fires exactly once per completed turn, just before the turn ends. A re-roll is a turn of its own and fires it once. A subagent the turn spawns (`delegate`, `parallel_research`, …) does not fire it, nor `user_prompt_submit`: subagents inherit only the tool hooks (see [Where hooks apply](#where-hooks-apply)). `stop` does not fire for a prompt that a `user_prompt_submit` hook or an input guardrail blocked, or for a turn that ended in an LLM error. eVi waits for it before reporting the turn done, so keep it quick (or give it a short `timeout`).
+A plain `stop` hook fires exactly once per completed turn, just before the turn ends. A re-roll is a turn of its own and fires it once. A subagent the turn spawns (`delegate`, `parallel_research`, …) does not fire it, nor `user_prompt_submit`: subagents inherit only the tool hooks (see [Where hooks apply](#where-hooks-apply)). `stop` does not fire for a prompt that a `user_prompt_submit` hook or an input guardrail blocked, or for a turn that ended in an LLM error. eVi waits for it before reporting the turn done, so keep it quick (or give it a short `timeout`).
 
 Each hook does one of two things:
 
@@ -52,14 +52,14 @@ When eVi spawns a `command` hook it inherits your environment plus these:
 |----------|-------|
 | `EVI_HOOK_EVENT` | The event name (`before_tool_call`, `user_prompt_submit`, …) |
 | `EVI_HOOK_TOOL` | The tool name for tool events; the **event name** for lifecycle events |
-| `EVI_HOOK_ARGS_JSON` | Tool call arguments as JSON; for `user_prompt_submit`, the prompt text; for `before_compact`, the count of messages being compacted; for `stop`, the finish reason (`stop`, `length`, `max_turns_reached`, …). Whole unless it is too big for one environment variable (see [Big payloads](#big-payloads)) |
+| `EVI_HOOK_ARGS_JSON` | Tool call arguments as JSON; for `user_prompt_submit`, the prompt text; for `before_compact`, the count of messages being compacted; for a plain `stop` hook, the finish reason (`stop`, `length`, `max_turns_reached`, `checks_failed`, `stop_hook_exhausted`, …); for a [blocking stop hook](#blocking-stop-hooks-protocol--json), the event object it also gets on stdin. Whole unless it is too big for one environment variable (see [Big payloads](#big-payloads)) |
 | `EVI_HOOK_ARGS_FILE` | Path of a temp file holding the **whole** payload above, exactly. Set when `EVI_HOOK_ARGS_JSON` was cut, and always for a hook with `args_via_file = true`; otherwise unset, so small payloads never touch the disk. Deleted when the hook exits |
 | `EVI_HOOK_ARGS_TRUNCATED` | `1` when `EVI_HOOK_ARGS_JSON` was cut; unset otherwise |
 | `EVI_HOOK_RESULT` | Only for `after_tool_call`: the tool's stringified output, **truncated to 4 KB** |
 | `EVI_CWD` | The session working folder the tools resolve relative paths against (set by `/cd`, `--cwd`, the web folder chip); the process folder when none is set |
 | `EVI_EFFORT` | The active reasoning effort (`low` / `medium` / `high` / `max`) |
 
-A `command` hook **runs in the session working folder** (`EVI_CWD`), so a "stay inside this folder" guard resolves a relative `path` the same way the tool will. Its **stdin is the null device**: a hook that reads stdin gets end-of-file straight away instead of waiting on the terminal (or the desktop app's server pipe) until its timeout. A NUL character in the payload, which no environment variable can hold, reaches `EVI_HOOK_ARGS_JSON` as the JSON escape `\u0000`.
+A `command` hook **runs in the session working folder** (`EVI_CWD`), so a "stay inside this folder" guard resolves a relative `path` the same way the tool will. Its **stdin is the null device**: a hook that reads stdin gets end-of-file straight away instead of waiting on the terminal (or the desktop app's server pipe) until its timeout. The one exception is a blocking stop hook, which reads its event from stdin. A NUL character in the payload, which no environment variable can hold, reaches `EVI_HOOK_ARGS_JSON` as the JSON escape `\u0000`.
 
 #### Big payloads
 
@@ -78,11 +78,63 @@ eVi sends `Content-Type: application/json`, `User-Agent: evi-hook`, and a JSON b
 { "event": "after_tool_call", "tool": "generate_image", "args_json": "{…}", "result": "…", "effort": "medium", "cwd": "/home/me/project" }
 ```
 
-`result` is included only for `after_tool_call` (and is likewise capped at 4 KB). `args_json` is never cut, and `cwd` is the session working folder.
+`result` is included only for `after_tool_call` (and is likewise capped at 4 KB). `args_json` is never cut, and `cwd` is the session working folder. A blocking stop hook's `url` is POSTed its event object instead (below).
+
+### Blocking stop hooks (`protocol = "json"`)
+
+A `[[stop]]` hook with `protocol = "json"` is a gate on the end of the turn. It runs each time the model would end its turn, before the turn ends, and it can send the model back to work: "the tests still fail, fix them first". This is how you keep a small model from declaring success early. It doesn't run for a plan-mode turn, or when the backend cut the reply off (its token limit or content filter).
+
+```toml
+[[stop]]
+name     = "pytest-gate"
+protocol = "json"
+timeout  = 600
+command  = ["python", "/path/to/gate.py"]
+```
+
+[`examples/hooks/pytest-gate.toml`](../../examples/hooks/pytest-gate.toml) is a working one: it runs the tests the turn touched and blocks while they fail. Give such a hook a `timeout` that covers your tests: the default is 30 seconds, and a hook that times out doesn't block.
+
+**What the hook gets.** One JSON object on stdin (the same text is in `EVI_HOOK_ARGS_JSON`):
+
+```json
+{"event": "stop", "session_id": "3f9a1c2d7b40", "cwd": "/home/me/project",
+ "stop_hook_active": false, "iteration": 1, "files_changed": ["calc.py", "tests/test_calc.py"]}
+```
+
+| Field | What it holds |
+|---|---|
+| `event` | Always `"stop"`. |
+| `session_id` | The session the turn belongs to. |
+| `cwd` | The session working folder. The hook runs there. |
+| `stop_hook_active` | `true` once a stop hook has already sent the model back during this turn. |
+| `iteration` | Which would-be end of the turn this is: 1 the first time the model tries to finish, 2 the next, and so on. |
+| `files_changed` | The files the turn changed, relative to `cwd`: what its write tools wrote, plus what its commands changed when the [project checks](../configuration.md#verify-before-done--checks-in-configtoml) are on. |
+
+**How it answers.**
+
+- **Block:** print `{"decision": "block", "reason": "..."}` on stdout (as the whole output, or as the last line that is a JSON object), or exit with code **2**, with the reason on stderr.
+- **Let the turn end:** exit 0 without that JSON.
+- **Anything else is a hook error, never a block:** a timeout, another exit code, a hook that can't start. eVi logs it and the turn ends as usual, so a broken gate never traps a turn.
+
+A `url` hook with the protocol is POSTed the event object itself and blocks by sending the same `{"decision": "block", …}` JSON in a 2xx response. Any other status is an error, so it doesn't block.
+
+**What a block does.** The reason goes back to the model as a framed note (redacted, and cut to 6,000 characters), and the turn goes on. When several blocking hooks are configured they run in order and the first block wins; the rest don't run that time. In the web and desktop chat the block shows inline as a note (`⛔ stop hook "pytest-gate" blocked the end of the turn (iteration 1) — eVi keeps going`, then the reason), and a footer under the turn's final reply lists the files its tools wrote. `evi chat` and `evi run` print a `stop hook <name> blocked the end (iteration N): <reason>` line (`evi run` on stderr). In `evi run`'s run report each block is a `stop_blocks` entry (`hook`, `reason`, `iteration`), and in its event stream a `StopBlocked` event; see [The run report](structured-and-batch.md#the-run-report). Each reply after a block uses one of the run's `--max-turns` round trips.
+
+**The cap: `[hooks] max_blocks`** in `config.toml` (default 3) is how many times per user turn the stop hooks may send the model back. Exactly:
+
+- each block while fewer than `max_blocks` blocks have happened in this turn sends the model back, adds a note and a `stop_blocks` entry;
+- the next block ends the turn with stop reason **`stop_hook_exhausted`** (`evi run` exits **6**). That last block adds no note and no `stop_blocks` entry, so its reason is not recorded;
+- so a hook that always blocks runs `max_blocks` + 1 times: with the default, three blocks go back to the model and the fourth ends the turn;
+- `max_blocks = 0` means the first block ends the turn; a negative or non-numeric value means 3;
+- the count starts again with every message you send. A hook error doesn't count.
+
+**Order with the project checks.** When the [project checks](../configuration.md#verify-before-done--checks-in-configtoml) are on, they run first. A failing check round goes back to the model on its own and the stop hooks don't run that time; the hooks run once the checks pass (or when none ran).
+
+**What stays the same.** Only `protocol = "json"` blocks. A plain `[[stop]]` hook that happens to exit 2 is still a notification, run once when the turn ends, and a blocking hook is not run a second time as one. `protocol` is only for `[[stop]]`: on any other event the entry is skipped as malformed (and Settings → Hooks refuses to save it). Like every lifecycle hook, a blocking stop hook doesn't run for a subagent, and safe mode turns it off. eVi loads hooks only from your own `hooks.toml` and installed plugins, never from a repository, so a repository can't add a gate to your turns.
 
 ## Setup
 
-There are no config flags in `config.toml` to enable hooks and no pip extras — the feature is always on, driven entirely by the presence of `~/.evi/hooks.toml`. If the file doesn't exist, no hooks run.
+There are no config flags in `config.toml` to enable hooks and no pip extras — the feature is always on, driven entirely by the presence of `~/.evi/hooks.toml`. If the file doesn't exist, no hooks run. The one hook setting in `config.toml` is `[hooks] max_blocks`, the cap on [blocking stop hooks](#blocking-stop-hooks-protocol--json).
 
 Create `~/.evi/hooks.toml`. Each event is a TOML array-of-tables (`[[event_name]]`). Fields per entry:
 
@@ -95,6 +147,7 @@ Create `~/.evi/hooks.toml`. Each event is a TOML array-of-tables (`[[event_name]
 | `timeout` | number (seconds) | `30.0` | Subprocess / HTTP timeout |
 | `veto_on_nonzero` | bool | `false` | Only meaningful for `before_*` / `user_prompt_submit` / `before_compact` |
 | `args_via_file` | bool | `false` | The hook reads its payload from `EVI_HOOK_ARGS_FILE`, which is then always written. Lets a guard check payloads too big for `EVI_HOOK_ARGS_JSON` instead of blocking them ([Big payloads](#big-payloads)) |
+| `protocol` | string | `""` | `"json"` on a `[[stop]]` hook makes it a [blocking stop hook](#blocking-stop-hooks-protocol--json); not allowed on other events |
 
 A complete reference file:
 
@@ -133,9 +186,15 @@ args_via_file   = true                      # check prompts of any length
 name    = "log-compaction"
 command = ["bash", "-c", "echo compacting >> ~/.evi/logs/compaction.log"]
 
-[[stop]]                                     # after a turn completes (notification; never blocks)
+[[stop]]                                     # after a turn completes (a notification)
 name    = "ding"
 command = ["notify-send", "eVi finished a turn"]
+
+[[stop]]                                     # before the turn may end; can send the model back
+name     = "pytest-gate"
+protocol = "json"                           # the event arrives as JSON on stdin
+command  = ["python3", "/home/me/gate.py"]  # prints {"decision": "block", "reason": "…"} to block
+timeout  = 600
 ```
 
 Hooks are merged from your `hooks.toml` plus any `hooks.toml` shipped by installed plugins. There's no separate `evi hooks` CLI subcommand — you manage hooks by editing the file. (`evi plugin list` shows how many hooks each installed plugin contributes.)
@@ -181,6 +240,7 @@ Where to watch the effects:
 - `command` hooks write wherever you point them (e.g. `~/.evi/logs/tools.log` in the audit example).
 - When a `before_tool_call` hook vetoes, the model receives a `BLOCKED BY HOOK '…': …` tool result and typically tells you the action was blocked.
 - A vetoed `user_prompt_submit` stops the turn before the model runs.
+- When a blocking stop hook sends the model back, the chat shows its reason as a note and the model carries on; `evi run` prints a `stop hook … blocked the end` line on stderr and records the block in the report's `stop_blocks`.
 
 ## Examples
 
@@ -259,7 +319,7 @@ The endpoint receives `POST` with body `{"event": "after_tool_call", "tool": "<n
 - **A missing config is no hooks; a broken guard blocks.** A missing or malformed `hooks.toml` is treated as "no hooks", not an error. One bad entry is skipped with a warning while the rest load. Plugin-hook scanning failures never break your core hooks. But once a guard (`veto_on_nonzero`) is configured, anything that stops it from judging an action blocks the action: it can't be started (exit `126`), it times out (`124`), its input is too big for `EVI_HOOK_ARGS_JSON` and it doesn't set `args_via_file`, or eVi's hook runner itself fails. A hook that only observes never blocks, and its failure never breaks the turn.
 - **Commands are not shell-evaluated.** `command` is argv. A bare-string `command` becomes a one-element argv list — it is **not** split on spaces or expanded. For pipes, globs, redirects, or `$VAR` expansion, call a shell explicitly (`["bash", "-c", "…"]`) — note this means `bash`-based examples need a shell available (use the Python form on Windows).
 - **Timeouts.** Default `timeout` is `30.0` seconds (subprocess or HTTP). A timed-out hook reports exit code `124`; a command that fails to exec reports `126`. For a vetoing before-hook, a timeout therefore counts as a non-zero exit and **blocks** the action — keep guard hooks fast and set a tight `timeout`.
-- **`after_tool_call` and `stop` never block.** Their veto is ignored; a non-zero `after_tool_call` exit is only logged.
+- **`after_tool_call` and plain `stop` hooks never block.** Their veto is ignored; a non-zero `after_tool_call` exit is only logged. Only a `[[stop]]` hook with `protocol = "json"` can keep a turn going, at most `[hooks] max_blocks` times ([Blocking stop hooks](#blocking-stop-hooks-protocol--json)), and its errors and timeouts never block.
 - **4 KB result cap.** `EVI_HOOK_RESULT` (and the `result` field in a URL POST) is truncated to 4 KB to avoid blowing OS env/arg limits. Don't rely on receiving the full tool output.
 - **Big arguments.** `EVI_HOOK_ARGS_JSON` holds a payload whole up to the OS limit for one environment variable (about 32,000 characters on Windows, 128 KiB on Linux). Past it, a guard without `args_via_file` blocks and other hooks get a shortened copy plus `EVI_HOOK_ARGS_FILE` ([Big payloads](#big-payloads)). A URL hook's `args_json` field is never cut.
 - **Permission first, then hooks.** Tool calls pass through eVi's permission / auto-approve gate before before-hooks run; a denied tool never reaches a hook.

@@ -415,7 +415,8 @@ which makes your own sessions ask for it too, or block specific calls with
 `deny` rules or `hard_deny`.
 
 **Each run names its policy**: `deny`, `allow`, `allow-all` (`-y`, a routine's
-`yes`) or `interactive`, plus the mode when it lets calls through
+`yes`), `interactive`, or a named policy such as `implementer` ([below](#implementer-policy)),
+plus the mode when it lets calls through
 (`allow-all (mode=yolo)`, `deny (mode=accept_edits: file edits run)`). It is
 the `# policy:` line of a scheduled task's log, `"policy"` in `evi run --format
 json` and `evi batch` output and in the web app's workflow and recipe
@@ -446,6 +447,162 @@ though: it refuses a delegate CLI-agent backend as above, and its steps'
 commands get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables ([What a command's
 environment holds](#what-a-commands-environment-holds)). The web app's
 workflow runs follow the policy.
+
+### Implementer policy
+
+An unattended run has two settings without a policy: deny every call that
+would ask (so no shell, so no tests), or, with `-y` or
+`unattended_policy = "allow"`, allow everything. `evi run --policy
+implementer` is the narrow middle: what an implementer needs to change code in
+one folder and prove it works, and nothing else.
+
+```bash
+evi run --policy implementer --worktree auto -m code --format json "Make tests/test_calc.py pass"
+evi run --policy implementer --scope .github/workflows/ci.yml --worktree fix-ci -m code "Add Python 3.13 to the CI matrix"
+```
+
+**The run's folder** (the *root*) is the worktree with `--worktree`; without
+it, the git top level of `--cwd` (or of the current folder), else that folder
+itself. Without `--worktree` eVi prints a note on stderr recommending it,
+since the run then edits your checkout.
+
+**Every call is allowed or denied, never asked**, whatever `[auto] mode`,
+`auto_approve`, `unattended_policy` or `/auto on` say:
+
+1. `[auto] hard_deny`, `deny` rules and [the director's
+   ground](#the-directors-ground) deny first.
+2. Then the policy decides (below). An `allow` rule never widens it.
+3. Then the destructive-command guard checks a shell line. It is always on
+   here: `block_destructive = false`, `destructive_allow` and
+   `destructive_disable_rules` don't apply.
+
+A call the policy can't check is denied. The reason goes into the tool result
+the model sees (`PERMISSION DENIED: run_command was not run: 'curl x' is not
+allowed: curl is not on the allowlist (…) (the implementer policy allows …)`)
+and into the run report: `policy` is `"implementer"`, each denied call in
+`tool_calls` carries its `reason`, and `denied_tools` lists the tools. The
+text format prints `denied: <tools> (the implementer policy refused them; each
+reason is in --format json)` on stderr. The run still ends `done` when the
+model finishes.
+
+**Tools are an allowlist.**
+
+- **Reading** inside the root: `read_file`, `list_dir`, `find_files`,
+  `search_files`, `python_symbols`, `check_file` (only when its linter runs no
+  project code), `monitor` tailing a file, and the read-only git tools
+  (`git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_info`).
+- **Writing** inside the root: `write_file`, `edit_file`, `apply_patch`,
+  except protected files (below).
+- **Shell lines** (`run_command`, `monitor` commands) on the shell allowlist
+  (below), and `search_tools`.
+- **Everything else is denied**, unknown tools included: the network
+  (`web_fetch`, `web_search`, federation, A2A, the browser), MCP tools,
+  `run_python`, memory, skills, `ask_user`, subagents and delegate backends,
+  computer use and scheduling. A tool of another kind that reuses one of the
+  names above (an MCP tool called `read_file`) is unknown too.
+
+**Paths stay in the root.** Every path argument must resolve inside it on its
+real path (symlinks and junctions followed, case-insensitive on Windows), and
+a search glob can't climb out of the folder it searches. A relative path
+resolves where the tool resolves it (the session's working folder), never
+against the root, so a link in a subfolder is followed where the tool would
+follow it. A secret file (`.env`, a key) is never read, even inside the root.
+
+**The shell allowlist** is checked for every command in the line (`pytest &&
+curl x` is two, and the second is denied), and a denial names the command
+that failed:
+
+- `pytest`, and `python -m pytest` (`python`, `python3` or `py`, any path);
+- `ruff check` / `ruff format`, and `python -m ruff check|format`;
+- `npm test`, `npm run test`;
+- `cargo check` / `cargo test` / `cargo clippy`;
+- read-only git: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`,
+  `blame`, `grep`, and `branch --show-current` / `branch --list`;
+- the project's check commands ([`[checks]`](../configuration.md#verify-before-done--checks-in-configtoml),
+  in a trusted folder), exactly as configured. Words added after one must
+  meet the rule above for that program (so `python -m pytest tests/x.py -q`
+  passes, while words after a custom command such as `make lint` are refused).
+
+`pytest`, `ruff`, `npm`, `cargo` and `git` must be bare names. A wrapper in
+front (`sudo`, `env`, `timeout`) is not on the list. A line that can't be
+parsed, a command substitution, backticks, a subshell, a variable expansion
+(`$x`) or an environment-variable prefix (`X=1 pytest`) is denied. Redirects
+must stay inside the root, the command must run in a folder inside it, and the
+line can't write a protected file.
+
+**A command's own arguments stay in the root too.** A file or folder argument,
+an option's value (`--name=value`, `-ovalue`) and the value in a `key=value`
+must resolve inside the root, so `ruff format ../x.py` and `git diff ../x
+calc.py` are denied. Options that write a file of their choosing, send output
+over the network or set config that runs a program are refused outright:
+pytest's `--junitxml`, `--basetemp`, `--pastebin`, `-o` / `--override-ini` and
+its other report files; ruff's `--output-file` and `--cache-dir`; cargo's
+`--config` and `-Z`; any npm option before `--` other than `--silent` and
+`--if-present`; and git's `-c`, `--config-env`, `--exec-path`, `--output`,
+`--ext-diff`, `-O`, `--no-index` and `--contents` (or an abbreviation git would
+take for one), plus a `-C`, `--git-dir` or `--work-tree` outside the root.
+Except for read-only git, no argument may name a protected file the task
+can't write (`ruff format EVI.md`). These checks lean toward denying: a few
+harmless commands are refused too, such as an argument that starts with `/`
+or `~`, or `pytest -o` with any key.
+
+**Untrusted folders run no commands.** Every allowlisted command can run the
+folder's own code: tests and builds by design, git through the programs a
+repository's `.git/config` names, `python -m` through a package in the folder,
+and on Windows the shell finds a program in the folder before `PATH`. So in a
+folder you haven't [trusted](../configuration.md#trusting-a-folder) (`evi
+trust`) the policy runs no command line at all (no `run_command`, `monitor`
+command or [verify check](../configuration.md#verify-before-done--checks-in-configtoml))
+and no `check_file` linter. The model can still read and edit files, and read
+the history with the `git_*` tools, which run git with the repository's
+programs off ([Repositories you didn't write](#repositories-you-didnt-write)).
+`evi run` says so on stderr. A worktree shares its repository's trust.
+
+**Protected files.** The repository's own [protected files](#protected-paths)
+that a task may need to edit (`.github/workflows/**`, `EVI.md`, `AGENTS.md`,
+`.evi.toml`, `.evi/**`, `.vscode/tasks.json`) are denied unless a
+`--scope GLOB` entry names the file explicitly: the entry's folder part has no
+wildcard and is the file's folder, and its last part is the file's name or,
+below the top folder, a wildcard that matches it.
+
+| `--scope` entry | Grants `.github/workflows/ci.yml`? |
+|---|---|
+| `.github/workflows/ci.yml` | yes |
+| `.github/workflows/*.yml` | yes |
+| `.github/**`, `**`, `*.yml`, `**/*.yml` | no |
+
+A file at the top of the folder is granted only by its exact name:
+`--scope EVI.md` grants `EVI.md`, `--scope '*.md'` doesn't. Matching ignores
+case on Windows. **Never granted**, named or not: `.evi/tasks/**`, anything
+under `.git`, eVi's home (`~/.evi`, `EVI_HOME`), the director's key folder,
+the secret and shell start-up files, and every other `[auto] protected_paths`
+entry in force. `[auto] protected_paths_remove` doesn't open the files above
+under the policy; only `--scope` does. `--scope` grants protected files and
+nothing else: it doesn't narrow what else the run may edit inside the root.
+
+**Usage errors** (exit 2, nothing runs): an unknown policy (`--policy foo`),
+`--policy` together with `-y`, `--scope` without `--policy`, and a `--scope`
+entry that is empty, absolute (`/x`, `C:\x`, `~/x`) or climbs out with `..`.
+
+**The verify checks.** Under the policy, `[checks] verify = "auto"` (the
+default) runs the project's lint and targeted tests whenever the model would
+end a turn that changed files, and sends failures back to it; see [Verify
+before done](../configuration.md#verify-before-done--checks-in-configtoml).
+Each check must pass the policy too.
+
+**Residual risk: a guardrail, not a sandbox.** An allowlisted test or build
+command runs repository code (`conftest.py`, a test, `build.rs`, an npm
+script, a pytest plugin), and that code can still reach the network or write
+outside the root. That is why nothing runs in an untrusted folder. The
+argument check reads the words, not what the tool does with them: a folder
+argument covers everything in it, and a tool's cache or temporary files land
+where its configuration in the folder says. The commands get no `*_KEY` /
+`*_TOKEN` / `*_SECRET` variables ([What a command's environment
+holds](#what-a-commands-environment-holds)), which limits what such code can
+take, and the worktree is the blast radius: run implementer jobs with
+`--worktree`, in a repository you trust, and review the branch before you
+merge it. In this version the policy is not handed down: the run can't start
+subagents.
 
 ### What `web_fetch` will fetch
 
@@ -980,6 +1137,10 @@ turn returns to your normal policy.
 - `C:\evi\evi\proc.py` — how commands run for an agent: `EVI_AGENT`
   (`agent_env`), the secret-free environment (`scrubbed_env`,
   `runs_unattended`), and the process-tree runner (`run`).
+- `C:\evi\evi\policy.py` — the implementer policy (`implementer_policy`,
+  `Policy.check`, the shell allowlist `SHELL_RULES`, the grant rule
+  `scope_names`); `Agent._policy_verdict` in agent.py puts it in front of the
+  permission flow.
 - `C:\evi\evi\netguard.py` — `web_fetch`'s address, redirect and size checks.
 - `C:\evi\evi\gitsafe.py` — the hardened git calls.
 - `C:\evi\evi\sandbox.py` — `wrap()` / `available()` / `status()` per-OS.
