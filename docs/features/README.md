@@ -15,7 +15,8 @@ tokens, the desktop app's LAN token, containers) see
 - [Chat channels (Telegram)](channels.md) — message eVi from your phone; pairing, the channel toolset (`evi channel`)
 - [Steering a running turn](steering.md) — type while eVi works; applied at the next step
 - [Agents & Orchestration](agents.md) — subagents, `delegate`, parallel research, workflows, dispatch, federation
-- [Task queue](tasks.md) — tasks tracked in the repository, run in a worktree under the implementer policy, verified only by the director's signature (`evi task`, `evi attest`)
+- [Task queue](tasks.md) — tasks tracked in the repository, run in a worktree under the implementer policy, verified only by the director's signature (`evi task`, `evi attest`; over MCP with `evi mcp serve --categories agent`)
+- [Evidence bundles and provenance](evidence.md) — what each task run did (diff, eVi's own checks with junit, a redacted transcript excerpt), commit messages with provenance trailers, `evi stats --provenance` (`evi evidence`)
 - [Ultracode](ultracode.md) — exhaustive multi-agent pipeline for one hard task (`evi ultracode` / `/ultra`)
 - [Content Guardrails](guardrails.md) — regex + LLM-judge + offline classifier rules
 - [Plugins & Marketplace](plugins.md) — bundled commands/skills/hooks/MCP/agents + `plugin search/install`
@@ -28,7 +29,7 @@ tokens, the desktop app's LAN token, containers) see
 - [Structured Outputs & Batch](structured-and-batch.md) — JSON-Schema output + `evi batch`
 - [Permissions & Sandbox](permissions-and-sandbox.md) — modes, rules, trusted dirs/domains, OS sandbox
 - [Secret redaction](secret-redaction.md) — API keys and tokens become `[REDACTED:<kind>]` in transcripts, logs and tool-call displays
-- [MCP](mcp.md) — client (`mcp.json`) + server (`evi mcp serve`)
+- [MCP](mcp.md) — client (`mcp.json`) + server (`evi mcp serve`), and the opt-in `agent` category: the director's task API
 - [Recipes, Routines, Scheduled tasks, Channels](automation.md) — session channels (alerts into a live web session)
 - [Web & Desktop](web-desktop.md) — settings (groups, explainers, health banners), multi-user, deep links, updater
 - [Observability](observability.md) — OpenTelemetry, `evi stats`, crash reports

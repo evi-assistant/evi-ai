@@ -24,8 +24,14 @@ verify` or `evi task reject` gives the task a verdict.
 - **Director tooling refuses where an agent may be.** `evi task verify`,
   `evi task reject` and `evi attest` refuse, and write nothing, in any process
   an eVi agent may have started.
+- **Every run leaves evidence.** A start writes an [evidence
+  bundle](evidence.md) (the diff, eVi's own run of the required checks, a
+  redacted transcript excerpt), and the verdict signs its hash.
 
-The queue is CLI-only for now: the web app and `evi mcp serve` don't offer it.
+An MCP client can drive the queue too: `evi mcp serve --categories agent`
+serves tools to file, start, follow, steer and cancel tasks, but none that
+gives a verdict ([Over MCP](#over-mcp-evi-mcp-serve)). The web app doesn't
+offer the queue.
 
 ## How it works
 
@@ -48,7 +54,8 @@ A task is a TOML table. `evi task new` writes the fields the director files;
 | `attempts` | How many starts ran, successful or not. |
 | `backend`, `model` | What the latest start ran on. |
 | `worktree`, `branch`, `base` | The task's worktree, its branch and the commit the branch started from. A verify reviews the diff from `base`. |
-| `evidence` | The evidence bundle's path, `""` until there is one. |
+| `evidence` | The [evidence bundle](evidence.md)'s path, `""` until there is one. |
+| `evidence_summary` | The bundle's `hash` (what a verify signs), files changed, insertions, deletions, checks passed and failed, the junit totals when a pytest check ran, and why no check ran when none did. A new task has none: the first bundle adds it. |
 | `reviewer_notes` | `{at, verdict, note}` entries, from a reopen, a verify or a reject. |
 | `lease` | `{holder, expires_at}` while the task is claimed, empty otherwise. |
 | `last_result` | The latest start's `{stop_reason, exit_code, report, summary}`. The summary is the first line of the answer, with control characters removed. |
@@ -131,8 +138,8 @@ is denied when nothing can answer. The implementer policy never opens
 `.evi/tasks/**`, whatever the task's scope says. And a written verdict counts
 for nothing without the director's signature.
 
-Run reports are not in the repository. They go under eVi's home (see
-[What `evi task start` does](#what-evi-task-start-does)).
+Run reports and evidence bundles are not in the repository. They go under
+eVi's home (see [What `evi task start` does](#what-evi-task-start-does)).
 
 ### States and leases
 
@@ -213,15 +220,24 @@ Run reports are not in the repository. They go under eVi's home (see
    report](structured-and-batch.md#the-run-report) plus a `task` section:
    the id, attempt, repository, branch, base, outcome, stop reason, exit code
    and the required checks' results.
-9. Records the attempt, backend, model and `last_result`, and leaves the task
-   `implemented` or `open`. When eVi's own run of a required check fails, the
-   task's stop reason is `checks_failed` (exit 5) even if the run itself
-   ended `done`. The worktree is unlocked.
+9. Collects the attempt's [evidence bundle](evidence.md), whatever the run's
+   stop reason, in `<eVi home>/evidence/<repo key>/<id>/<attempt>/`: the
+   worktree's diff against the base, eVi's own run of the required checks
+   again (a pytest one with its junit report; none when the run stopped
+   before its checks, and a Ctrl+C stops them), a redacted excerpt of the
+   run's transcript and `report.json`. A bundle that can't be collected is a
+   note; the run is recorded all the same, without evidence.
+10. Records the attempt, backend, model, `last_result`, `evidence` and
+    `evidence_summary`, and leaves the task `implemented` or `open`. When
+    eVi's own run of a required check fails, the task's stop reason is
+    `checks_failed` (exit 5) even if the run itself ended `done`. The
+    worktree is unlocked.
 
 The hand-off, the model's answer, goes to stdout. The verify gate's check
-lines, the worktree summary, each required check, the outcome, any note and
-the report's path go to stderr. Nothing is merged or committed, and the
-checkout you work in is never touched.
+lines, the worktree summary, each required check, the outcome, any note, the
+report's path and the evidence bundle with its summary go to stderr.
+Nothing is merged or committed, and the checkout you work in is never
+touched.
 
 A refusal before the run (exit 2) means nothing ran and the task is exactly
 as it was before. A failure while building the agent counts as the run's
@@ -233,6 +249,38 @@ it back to `open`.
 The prompt doesn't include the reviewer notes. When you send a task back,
 put what has to change in its `why` or `acceptance`. An open task's file is
 plain TOML with no signature, so you can edit it.
+
+### Over MCP (`evi mcp serve`)
+
+`evi mcp serve --categories agent` gives an MCP client (the director's own
+agent, say) the queue's tools: `task_create`, `task_list`, `task_show` and
+`task_start`, then `run_status`, `run_steer`, `run_cancel` and `run_result`
+for the run a start queues. See [MCP → The agent
+category](mcp.md#the-agent-category-the-directors-task-api) for each tool,
+the transport rules and what may be served beside it.
+
+A run started this way goes through the steps of [`evi task
+start`](#what-evi-task-start-does), one run at a time, and records the same
+things: the attempt, backend, model and `last_result`, the run report under
+`<eVi home>/tasks/` and the evidence bundle under `<eVi home>/evidence/`.
+What differs:
+
+- **The claim** is held by `<user>@<host> (evi mcp serve, pid N)`, with a
+  10-minute lease renewed every 2 minutes once the run's agent is built. A
+  server that dies leaves a claim that runs out within 10 minutes, after
+  which anyone can start the task.
+- **A cancel** (`run_cancel`, or a run past [`[tasks]
+  max_run_minutes`](../configuration.md#task-runs-over-mcp--tasks-in-configtoml),
+  or the server closing) ends the run `interrupted`, unless its outcome is
+  already being recorded: the task goes back to `open` with the attempt
+  counted, and its bundle has the diff and the transcript but no checks run,
+  with the reason in `checks_skipped`. A queued run that is cancelled never
+  claims its task.
+- **No verdict.** No tool submits, verifies, rejects or reopens a task. The
+  server runs as an agent's process, where the director key isn't read, so
+  `task_list` and `task_show` show a signed verdict as `unverified (no
+  director key here …)`. Review, commit, submit and verify from your own
+  shell.
 
 ### Verify and reject (director only)
 
@@ -263,24 +311,33 @@ ground](permissions-and-sandbox.md#the-directors-ground)).
    allows only read-only git), so **review the agent's work and commit it on
    `task/<id>` in its worktree first**. Otherwise the attestation would sign
    a head without the work, and the review would see an empty diff.
-4. The evidence path, if the task names one, lies in the repository or in
-   the task's folder under eVi's home, through no link.
-5. The review gate runs: `evi review --multi --exit-code` on the diff from
-   `base` to the branch head, in the worktree. It needs a working backend. No
-   changes is a clean result. Blocking findings print the review on stderr
-   and exit 1, unless `--reason` says why to sign anyway; that reason is
-   recorded in the attestation and in the reviewer notes.
-6. You confirm on the terminal: the prompt names the head, the evidence, the
+4. The task's `base` is a commit the review can trust. The field comes from
+   a tracked file, so it isn't taken as it is: it is resolved to a commit in
+   the main checkout, and that commit must be an ancestor of the branch head
+   and not the head itself, where the diff would be empty and pass any
+   review.
+5. The evidence, if the task names any, is a bundle eVi wrote ([which
+   folders a task may name](evidence.md#which-folders-a-task-may-name)),
+   unchanged since it was collected: its hash matches the one
+   `evidence_summary` recorded. After a change, `evi evidence collect <id>`
+   collects it again.
+6. The review gate runs: `evi review --multi --exit-code` on the diff from
+   that base commit to the branch head, in the worktree. It needs a working
+   backend. Blocking findings print the review on stderr and exit 1, unless
+   `--reason` says why to sign anyway; that reason is recorded in the
+   attestation and in the reviewer notes.
+7. You confirm on the terminal: the prompt names the head, the evidence, the
    rounds, the review result and any override. `--yes` skips it from your own
    shell. With no terminal and no `--yes`, verify refuses (exit 1).
-7. The director key signs (no key: exit 1, `evi attest init` makes one), and
+8. The director key signs (no key: exit 1, `evi attest init` makes one), and
    the signed task is written back only if the file hasn't changed since it
    was read (otherwise exit 2: run the command again).
 
 **`evi task reject`** needs a `needs_review` task that has a branch, and
 `--reason`, which goes into the reviewer notes before signing, so it is
-signed too. There's no worktree or review check. `evi task reopen` then sends
-the task back for rework.
+signed too. There's no worktree, base or review check, but an evidence path
+eVi won't read refuses it as well. `evi task reopen` then sends the task back
+for rework.
 
 `--rounds N` (default 1) records how many review rounds the task took.
 
@@ -343,16 +400,23 @@ git -C .worktrees/task__T1 add -A
 git -C .worktrees/task__T1 commit -m "fix(parser): keep a trailing token"
 evi task submit T1
 evi task verify T1
+evi evidence commit-body T1 > msg.txt
+git merge --no-ff -F msg.txt task/T1
 ```
 
 `--backend local` names a saved backend (`evi backend list`); leave it out to
 use your configured one. Review the work in `.worktrees/task__T1` (and the
-hand-off and the report) before you commit it. If it isn't right,
-`evi task reopen T1 --reason "…"`, adjust the task's `why` or `acceptance`,
-and `evi task start T1` again: the next attempt carries on in the same
-branch and worktree. To turn it down for
-good, `evi task reject T1 --reason "…"`. Once verified, merge `task/T1` as
-usual; `evi worktree prune` then removes the worktree.
+hand-off, the report and the evidence bundle) before you commit it.
+`evi task submit` collects the bundle again from what you committed. If it
+isn't right, `evi task reopen T1 --reason "…"`, adjust the task's `why` or
+`acceptance`, and `evi task start T1` again: the next attempt carries on in
+the same branch and worktree. To turn it down for good,
+`evi task reject T1 --reason "…"`. Once verified, merge `task/T1` with the
+message `evi evidence commit-body` prints: it ends with the provenance
+trailers, `Verified-by` and `Attestation` included ([Commit
+messages](evidence.md#commit-messages)). Don't commit on `task/T1` after
+verifying, or the signature no longer matches its head. `evi worktree prune`
+then removes the worktree.
 
 ### Commands
 
@@ -374,8 +438,9 @@ text|json` (`-f`); JSON gives `id`, `title`, `status`, `label`,
 read is a warning on stderr.
 
 **`evi task show ID`** shows one task: its fields, the status as it reads,
-the lease, the last result and report, the reviewer notes, the attestation
-and the file. `--format json` gives `{task, label, path}`.
+the lease, the last result and report, the evidence bundle and its summary,
+the reviewer notes, the attestation and the file. `--format json` gives
+`{task, label, path}`.
 
 **`evi task claim ID`** claims an open task, or one whose lease ran out.
 `--holder NAME` (default `<user>@<host>`), `--ttl MINUTES` (default 240),
@@ -385,7 +450,11 @@ and the file. `--format json` gives `{task, label, path}`.
 `--holder NAME`, `--force`.
 
 **`evi task submit ID`** hands an implemented task to review
-(`needs_review`).
+(`needs_review`). First it collects the task's evidence bundle again, from
+the worktree git has `task/<id>` checked out in (so it holds the work you
+committed), running the required checks once more, and records it with the
+status. A bundle that can't be collected is a note on stderr, and the task
+keeps the evidence it had.
 
 **`evi task reopen ID`** sends an implemented, needs_review, verified or
 rejected task back to `open`, dropping any attestation. `--reason TEXT` is
@@ -410,14 +479,18 @@ rejected. `--reason TEXT` (required), `--rounds N`, `--yes`.
 
 **`evi attest status`** shows whether this machine has a director key.
 
+**`evi evidence collect ID`**, **`evi evidence commit-body ID`** and
+**`evi evidence prune`** collect a task's bundle on demand, print its commit
+message and remove old bundles; see [Evidence bundles](evidence.md#commands).
+
 ### Exit codes
 
 | Command | 0 | 1 | 2 | Other |
 |---|---|---|---|---|
 | `new`, `list`, `show`, `claim`, `release`, `submit`, `reopen` | done | | refused | |
 | `start` | implemented | the run's error, or its outcome not recorded | refused before anything ran | as `evi run`: 3 `max_turns`, 4 `guardrail`, 5 `checks_failed`, 6 `stop_hook_exhausted`, 130 `interrupted` |
-| `verify` | signed | no key, not confirmed, the review gate couldn't run or reported blocking findings | refused (an agent's process, the status, the worktree, the evidence path, a file that changed meanwhile) | |
-| `reject` | signed | no key, not confirmed | refused (an agent's process, the status, no branch, no reason) | |
+| `verify` | signed | no key, not confirmed, the review gate couldn't run or reported blocking findings | refused (an agent's process, the status, the worktree, the base, the evidence path or a bundle that changed since it was collected, a file that changed meanwhile) | |
+| `reject` | signed | no key, not confirmed | refused (an agent's process, the status, no branch, no reason, the evidence path) | |
 | `attest init` | key created | a key exists (no `--rotate`), not confirmed | refused in an agent's process | |
 | `attest status` | key found | no key, or refused in an agent's process | | |
 
@@ -435,8 +508,13 @@ the refusals.
 - **A verdict checks only where the key is.** See [The director
   key](#the-director-key-evi-attest).
 - **The review gate reads the branch's own guidance.** It loads
-  `.evi/REVIEW.md` and `.evi/review-rules.md` from the task's worktree, so
-  when the diff changes those files, read that part yourself.
+  `.evi/REVIEW.md` (the tracked checklist), `.evi/BUGBOT.md` (untracked
+  guidance of your own, when the worktree has one) and
+  `.evi/review-rules.md` from the task's worktree, so when the diff changes
+  those files, read that part yourself.
+- **Check the base the review ran against.** Verify proves the task's base
+  is in the branch's history, not that it is the commit the branch started
+  from. The confirmation prompt names the base the review gate used.
 - **Deleting the highest-numbered task file frees its number.** The next
   `evi task new` gets the same `T<n>`, and its start carries on in the old
   `task/T<n>` branch and worktree. Remove that worktree and branch first.
@@ -450,9 +528,12 @@ the refusals.
 
 ## Relevant source files
 
-- `evi/tasks.py`: the queue, the states and leases, `run_task`.
+- `evi/tasks.py`: the queue, the states and leases, `run_task`,
+  `evidence_path`.
 - `evi/attest.py`: the director key, signing, `status_label`, who may sign.
-- `evi/apps/cli/main.py`: `evi task …` and `evi attest …`.
+- `evi/evidence.py`: evidence bundles ([Evidence bundles](evidence.md)).
+- `evi/mcp/agent_tools.py`: the queue over MCP.
+- `evi/apps/cli/main.py`: `evi task …`, `evi attest …` and `evi evidence …`.
 - `evi/worktree.py`: `open_isolated`, the worktree lock and a dead run's
   lock.
 - `evi/policy.py`: the implementer policy.

@@ -529,8 +529,27 @@ Exit 2 means nothing was written and no review ran:
   the branch in that worktree (or delete what shouldn't be there), then
   verify. The signature covers the commit at the branch head, so it has to
   hold the work you reviewed.
-- `its evidence path … is not in the repository or the task's folder under
-  eVi's home`: the task file names evidence eVi won't read. Fix the field.
+- `the task's base … names no commit here, so there is nothing to review the
+  branch against`: the commit in the task's `base` field isn't in this
+  repository (the field was edited, or the commit is gone). Set `base` to the
+  commit `task/T1` started from; `git merge-base <the branch it started
+  from> task/T1` finds it for a branch that hasn't been rebased.
+- `the task's base is the head of task/T1 (…): there is no work to review`:
+  the branch has no commits since its base. Commit the work on `task/T1`
+  first.
+- `the task's base … is not an ancestor of task/T1 at …, so a review against
+  it would not cover the branch's work`: the branch was rebased onto
+  something else, or the field was edited. Set `base` to the commit the
+  branch now starts from.
+- `its evidence path … is not an evidence bundle eVi wrote for this
+  repository …, so it is not read`: the task file names a folder that isn't
+  one of eVi's bundles ([which folders a task may
+  name](features/evidence.md#which-folders-a-task-may-name)). Run
+  `evi evidence collect T1` to collect a bundle and record its path.
+- `its evidence bundle changed since it was collected (… then, … now); collect
+  it again`: something changed a file in the bundle after its hash was
+  recorded. `evi evidence collect T1` collects a fresh one (it runs the
+  required checks again), then verify.
 - `task T1 changed meanwhile; run the command again`: the task file changed
   while the review ran.
 
@@ -634,6 +653,48 @@ get unstuck. Check:
    ComfyUI's models directory. If not, the workflow fails immediately —
    tail ComfyUI's terminal for the actual error.
 3. The sampler/scheduler combo is valid (`euler` + `normal` is safe).
+
+## `evi mcp serve` refuses the agent category
+
+`evi mcp serve` and `evi mcp serve-config` exit 2 with one `error:` line:
+
+- `refusing to serve the agent category over HTTP without --token …`: over
+  `--http` the task API needs a bearer token, even on 127.0.0.1. Pass
+  `--token`, or serve it over stdio (what a desktop client spawns).
+- `refusing to serve the agent category beside git, …: while a task runs, this
+  server works in its worktree …`: only `memory`, `calendar` and `web` may be
+  served with `agent`. Serve the other categories from a second
+  `evi mcp serve` (a second `mcpServers` entry with another name).
+- `the agent category serves a repository's task queue: the task queue lives
+  in a git repository: …`: the server started outside a repository. Pass
+  `--repo DIR`, or make the snippet with `evi mcp serve-config --categories
+  …,agent` inside the repository, which adds `--repo` for you.
+
+Settings → MCP → Serve in the web or desktop app answers ``could not build
+MCP server: the agent category is served only by `evi mcp serve --categories
+...,agent` …`` (and its snippet request `the 'agent' category isn't offered
+here …`): the app never serves it. Use `evi mcp serve-config` in the
+repository.
+
+Once it runs, a `task_start` the server can't take comes back as an
+`ERROR: …` result, and nothing is queued:
+
+- `… is not a trusted folder, so a task can't run there`: run `evi trust` in
+  the repository from your own terminal.
+- `task T1 is claimed by … until …`: another start or server holds a live
+  lease. A server that died lets go within 10 minutes.
+- `task T1 is 'implemented': only an open task (or a claimed one whose lease
+  ran out) can be started`: review it, or `evi task reopen T1` from your own
+  shell to run it again.
+- `task T1 is already running as run …` (or `queued`): follow that run with
+  `run_status`.
+- `the run queue is full (16 runs wait)`: start it once one has run.
+- `no saved backend named …`: see `evi backend list`.
+
+A run that ends `cancelled` with `cancel_reason` `the run went past
+[tasks] max_run_minutes (60)` took longer than that setting allows; raise it
+in `config.toml` ([Task runs over
+MCP](configuration.md#task-runs-over-mcp--tasks-in-configtoml)).
 
 ## MCP server says "spawned but no tools registered"
 

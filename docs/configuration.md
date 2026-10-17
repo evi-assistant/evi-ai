@@ -834,7 +834,40 @@ the same lines. The web and desktop chat show each check as a line (a failing
 one with its output folded underneath), a failing round as a note, and the
 files the turn's tools wrote as a footer under its reply.
 
-## Keybindings — `~/.evi/keybindings.toml`
+## Task runs over MCP — `[tasks]` in `config.toml`
+
+```toml
+[tasks]
+max_run_minutes = 60   # how long a task run the MCP server starts may take
+```
+
+A run the MCP server's `agent` category starts (`task_start` under
+`evi mcp serve --categories agent`) is cancelled once it has taken longer than
+this, counted from when it starts rather than while it waits in the queue,
+as `run_cancel` would cancel it: stop reason `interrupted`, the task back to
+`open` with the attempt counted. The value is read when each run starts; one
+under 1 means the default, 60. `evi task start` isn't limited by it (Ctrl+C
+stops that one). A repository's `.evi.toml` can't set it. See [MCP → The
+agent category](features/mcp.md#the-agent-category-the-directors-task-api).
+
+## Evidence bundles — `[evidence]` in `config.toml`
+
+```toml
+[evidence]
+keep_days = 30   # evi evidence prune removes bundles collected more than this many days ago
+```
+
+[Evidence bundles](features/evidence.md) collect under
+`~/.evi/evidence/<repo key>/`, one per task attempt (plus any plain-run
+bundles), and nothing removes them on its own. `evi evidence prune`, run in
+a repository, removes that repository's bundles collected more than
+`keep_days` days ago (`--keep-days N` for one run, `--dry-run` to see what
+would go). It never removes a bundle a task file names as its evidence, any
+bundle of a task whose file can't be read, a folder you named yourself
+(`evi run --evidence DIR`, `--out DIR`) or another repository's bundles.
+`0` keeps only the bundles a task names; `36500` or more keeps every bundle;
+anything but a whole number of 0 or more means 30. A repository's
+`.evi.toml` can't set it.
 
 Map a key to a slash command in the interactive chat REPL — pressing it
 replaces the line with that command and submits it.

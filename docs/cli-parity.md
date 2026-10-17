@@ -20,7 +20,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `workflow` | run/list/new/show | ◐ run+list via 🗂 Dispatch | ◐ | authoring stays CLI |
 | `peer` | federation peers (list/add/remove/scan/run) | ✅ settings → Peers | ✅ | live status + LAN scan; `/api/federate` serves |
 | `link` | make `evi://` deep links | n/a | ✅ scheme handler | desktop opens the links |
-| `stats` | local usage analytics | ✅ settings → Usage | ✅ | sessions/messages/tokens, roles, top tools, busy days |
+| `stats` | local usage analytics | ✅ settings → Usage | ✅ | sessions/messages/tokens, roles, top tools, busy days; `--provenance` (attested eVi share of a repository's history) is CLI-only |
 | `sessions` | list/resume/fork/handoff | ✅ tabs/history; handoff API | ✅ | resume via `/?session=` |
 | `recipe` | saved multi-turn flows | ✅ settings → Routes & Recipes | ✅ | browse steps + run; also via `routine` webhook |
 | `routine` | webhook → recipe | ◐ `/api/routine/{token}` | ◐ | inbound trigger |
@@ -32,7 +32,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `keybindings` | path/list (effective bindings) | n/a | n/a | REPL-only feature |
 | `plugin` | add/list/remove/search/install | ✅ settings → Plugins | ✅ | list installed, search marketplace, install/remove |
 | `skill` | list/show/import/remove (incl. Claude skills) | ◐ used in chat via `invoke_skill` | ◐ | skills load on demand; no manager UI (file/CLI managed) |
-| `mcp` | servers add/remove/enable/list + serve | ✅ settings → MCP | ✅ | manage servers in-app; env vars via CLI/file |
+| `mcp` | servers add/remove/enable/list + serve | ✅ settings → MCP | ✅ | manage servers in-app; env vars via CLI/file; the `agent` category (the director's task API) is served only by `evi mcp serve`, never from the app |
 | `models` | list/use/info/pull | ✅ Model picker + settings | ✅ | recommended-pull flow |
 | `config` | show/path | ✅ full settings screen | ✅ | the settings UI *is* config |
 | `route` | multi-model routing | ✅ settings → Routes & Recipes | ✅ | add/list/remove routing rules |
@@ -44,8 +44,9 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `rewind` | undo file writes | ✅ rewind dialog | ✅ | checkpoints |
 | `setup` | first-run wizard | ◐ | ✅ first-run | desktop onboarding |
 | `review` | multi-agent code review | ⌨️ | ⌨️ | dev workflow |
-| `task` | the repository's task queue: new/list/show/claim/release/submit/reopen/start, and the director's verify/reject | ⌨️ | ⌨️ | dev workflow; verify and reject run only from the director's own shell ([guide](features/tasks.md)) |
+| `task` | the repository's task queue: new/list/show/claim/release/submit/reopen/start, and the director's verify/reject | ⌨️ | ⌨️ | dev workflow; an MCP client can file, start, steer and cancel tasks through `evi mcp serve --categories agent`; verify and reject run only from the director's own shell ([guide](features/tasks.md)) |
 | `attest` | the director's attestation key (init/status) | ⌨️ | ⌨️ | director only, never from inside eVi |
+| `evidence` | evidence bundles: `evi evidence collect`, `evi evidence commit-body`, `evi evidence prune` | ⌨️ | ⌨️ | dev workflow; `evi run --evidence DIR` for a plain run ([guide](features/evidence.md)) |
 | `finetune` | export training data | ⌨️ | ⌨️ | scripting |
 | `worktree`/`profile`/`scheduler` | dev/daemon | ⌨️ | ⌨️ | admin |
 

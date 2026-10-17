@@ -49,6 +49,8 @@ ends `done` when the model finishes, and the report lists those calls in
 files in its folder and run tests, linters and read-only git there, and
 nothing else; `--scope GLOB` names a protected file it may edit
 ([Implementer policy](features/permissions-and-sandbox.md#implementer-policy)).
+`--evidence DIR` writes an [evidence bundle](features/evidence.md) once the
+run is over.
 [Guide](features/structured-and-batch.md#the-run-report).
 
 **Verify before done** — once a turn has changed files and the model would
@@ -282,12 +284,34 @@ started. `evi task list` and `evi task show` (`--format json`) show a
 verdict only with a valid signature at the branch's current head; a
 hand-edited or outdated one reads `unverified (…)`. `evi task claim`,
 `evi task release` and `evi task reopen` manage leases and send work back.
+An MCP client can file, start, steer and cancel tasks through
+`evi mcp serve --categories agent`, never verify them.
 [Guide](features/tasks.md).
+
+**Evidence bundles** — every task run leaves a bundle under
+`~/.evi/evidence/`: the diff against the task's base, eVi's own run of the
+required checks (pytest's junit report included), a redacted transcript
+excerpt and a `report.json` with a JSON Schema; the task records its path and
+hash, and `evi task verify` signs that hash and refuses a bundle that changed.
+`evi run --evidence DIR` writes one for a plain run; `evi evidence collect`
+collects one on demand, `evi evidence commit-body` prints a task's commit
+message with `Implemented-by`, `Task` and `Evidence` trailers (and
+`Verified-by` / `Attestation` only from a valid signature), and
+`evi evidence prune` removes old bundles (`[evidence] keep_days`, 30), never
+one a task names. `evi stats --provenance` counts the commits, eVi's share and
+review rounds in the history, counting only attested trailers.
+[Guide](features/evidence.md).
 
 ## MCP
 
 **Client**: `~/.evi/mcp.json` servers, `tools.mcp` on; `evi mcp list-tools`.
 **Server**: `evi mcp serve` exposes eVi's tools/memory/commands over stdio+HTTP.
+`--categories …,agent` adds the director's task API for one repository
+(`task_create`, `task_start`, `run_status`, `run_steer`, `run_cancel`,
+`run_result` …): runs one at a time as `evi task start` runs them, no tool
+that gives a verdict, `--token` required over HTTP even on loopback, only
+`memory`, `calendar` and `web` beside it, and never from the web app.
+[Guide](features/mcp.md#the-agent-category-the-directors-task-api).
 
 ## Automation
 
@@ -358,7 +382,9 @@ can you do? / Give me a quick tour). **Status line** — customizable REPL statu
 
 **OpenTelemetry** — opt-in traces/metrics around tool calls (`[telemetry]
 traces/metrics` + `otlp_endpoint`, `[otel]` extra). **Local stats** — `evi
-stats` aggregates sessions/tools/tokens from transcripts. **Crash reporting** —
+stats` aggregates sessions/tools/tokens from transcripts; `evi stats
+--provenance` reads the repository's git history instead
+([Provenance](features/evidence.md#provenance-counts)). **Crash reporting** —
 opt-in Sentry (`[telemetry] crash_reports` + `dsn`, `[telemetry]` extra).
 
 ## SDK (programmatic)

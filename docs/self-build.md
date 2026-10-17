@@ -166,15 +166,20 @@ task with `evi task new --title "…" --acceptance "…" --scope <file> --check
 `.worktrees/task__T<n>`, runs the implementer under the implementer policy
 with the task's scope and the verify gate on, and then runs the task's
 required checks itself. The task ends `implemented` (exit 0) or back to
-`open` with the attempt counted, and the run report goes under
-`~/.evi/tasks/`. The implementer never commits: review its work in the
-worktree, commit it on `task/T<n>` there, `evi task submit T<n>`, and sign it
-with `evi task verify T<n>`, which runs the multi-lens review gate first
-([section 6](#6-shipping-director-only)). `evi task reopen T<n>` sends it
-back for another attempt in the same worktree, and `evi task reject T<n>
---reason "…"` turns it down. `evi task list` shows where every task stands.
-The repository must be trusted, and a delegate CLI-agent backend is refused.
-See [Task queue](features/tasks.md).
+`open` with the attempt counted, the run report goes under `~/.evi/tasks/`
+and its evidence bundle (the diff, eVi's own run of the required checks, a
+redacted transcript excerpt) under `~/.evi/evidence/`. The implementer never
+commits: review its work in the worktree, commit it on `task/T<n>` there,
+`evi task submit T<n>` (which collects the bundle again from your commit),
+and sign it with `evi task verify T<n>`, which runs the multi-lens review
+gate first ([section 6](#6-shipping-director-only)). `evi task reopen T<n>`
+sends it back for another attempt in the same worktree, and `evi task reject
+T<n> --reason "…"` turns it down. `evi task list` shows where every task
+stands. The repository must be trusted, and a delegate CLI-agent backend is
+refused. A director working from an MCP client can file and start tasks
+through `evi mcp serve --categories agent` instead; verifying still happens
+in the director's own shell. See [Task queue](features/tasks.md) and
+[Evidence bundles](features/evidence.md).
 
 **A headless run.** Without a task file, `evi run --policy implementer
 --worktree auto --mode code "<task brief>"` makes a fresh branch `fix-1`
@@ -289,7 +294,17 @@ cargo test --locked
 
 The implementer stops at the hand-off. The director reviews it, commits with the
 template in `EVI.md`, merges and releases; CI runs the unit, lint and e2e suites
-on the way. Docs under `docs/` are published to the wiki automatically from
+on the way. For a task from the queue, the message that lands it comes from
+the task itself: once `evi task verify T<n>` has signed it,
+`evi evidence commit-body T<n> > msg.txt` writes the subject, the why, the
+acceptance criteria, the checks from the evidence bundle and the files
+changed, then the trailers `Implemented-by`, `Task`, `Evidence` and, from
+the signature alone, `Verified-by`, `Review-rounds` and `Attestation`. Merge
+with it, `git merge --no-ff -F msg.txt task/T<n>`, and add no commit to
+`task/T<n>` after verifying: the signature names that branch's head.
+`evi stats --provenance` later counts the work eVi implemented from those
+trailers, counting only what the director key signed. See [Commit
+messages](features/evidence.md#commit-messages). Docs under `docs/` are published to the wiki automatically from
 `main` by `.github/workflows/docs-publish.yml`; nobody edits the wiki directly.
 See [releasing.md](releasing.md).
 

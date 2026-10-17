@@ -444,7 +444,13 @@ All notable user-visible changes to eVi. Format loosely follows
   of this. Two side effects: on Windows a path argument that is a device path
   naming no drive (`\\?\Volume{…}`, `GLOBALROOT`) is now denied instead of
   asked, and a single-quoted commit message naming `evi attest` is denied
-  (eVi also reads the line as cmd does); use double quotes. An agent running
+  (eVi also reads the line as cmd does); use double quotes. A task file is
+  tracked, so the evidence path it names is read only when it is a bundle
+  eVi wrote (under `~/.evi/evidence/`, reached through no link, or a folder
+  `evi run --evidence` or `evi evidence collect --out` recorded): a
+  hand-edited path can't make a verify hash the repository, its `.git` or a
+  network share, and reads as evidence that changed. What a task file says
+  reaches your terminal with its control characters removed. An agent running
   as your OS user can still get round this with a script it writes and then
   runs. See "The director's attestation key" in docs/security.md.
 - **Commands in a run nobody watches no longer see your API keys.** A
@@ -730,6 +736,23 @@ All notable user-visible changes to eVi. Format loosely follows
   process group: a Ctrl+C in eVi's console reaches eVi, which decides what to
   stop. Commands still running when eVi exits (Ctrl+C at `evi serve` or
   `evi scheduler`) are stopped with it instead of holding up the exit.
+- **`evi mcp serve` serves only `memory`, `calendar` and `web` beside the new
+  `agent` category.** While a task run goes on, the server process works in
+  the task's worktree (as `evi task start` does), so a git, index, file, code
+  or shell tool served next to the task API would read or change the run's
+  unfinished work as if it were the repository. `evi mcp serve --categories
+  git,agent`, or any other category together with `agent`, now exits 2 with
+  one line saying so, and `evi mcp serve-config` refuses the same lists.
+  Serve the other categories from a second `evi mcp serve`. The fix ledger's
+  tools (`record_fix`, `search_fixes`) stay with the served repository. See
+  "The agent category" in docs/features/mcp.md.
+- **`evi review` reads the tracked checklist and your own guidance
+  together.** `.evi/REVIEW.md`, the checklist a repository tracks, and
+  `.evi/BUGBOT.md`, your own, now both load (then the learned rules); before,
+  the first one found won, so a local `BUGBOT.md` silently hid the tracked
+  checklist, in the `evi task verify` review gate too. Run in a subfolder,
+  `evi review` now reads the repository top's `.evi/`, and `evi
+  review-remember` writes its rule there.
 
 ### Added
 - **`evi run` reports what a run did, can stream it as it goes, and can pick
@@ -875,7 +898,9 @@ All notable user-visible changes to eVi. Format loosely follows
   and `evi task release` manage leases; an expired lease can be reclaimed.
   A crashed start doesn't strand its task: the next start on the same
   machine takes over the worktree lock the dead one left (the lock reason is
-  now `eVi isolated run (pid N on HOST)`). See docs/features/tasks.md.
+  now `eVi isolated run (pid N on HOST)`). Each start also leaves an
+  evidence bundle that the verdict signs, and an MCP client can drive the
+  queue (both below). See docs/features/tasks.md.
 - **`search_fixes` finds eVi's earlier fixes in a fresh checkout, and the
   task queue is shared through git.** The bug-fix ledger
   (`.evi/bug-ledger.jsonl`, which `record_fix` writes) was ignored by git,
@@ -889,6 +914,79 @@ All notable user-visible changes to eVi. Format loosely follows
   that tracks its task queue needs the same lines: without them the queue's
   lock file, `.evi/tasks.lock`, shows up in `git status`. See "Where the
   files live" in docs/features/tasks.md.
+- **Every task run leaves an evidence bundle, and your signature covers
+  it.** A review had the model's hand-off and a run report to go on; the
+  work itself, the checks' full output and what the model was told had to be
+  dug out by hand. `evi task start` now collects a bundle after every run,
+  whatever its stop reason, in `~/.evi/evidence/<repo>/<task>/<attempt>/`:
+  `diff.patch` and `diffstat.txt` (the commits and uncommitted work against
+  the task's base, new files included), eVi's own run of the required checks
+  (each one's output; a pytest check also writes its junit report there,
+  whose totals sit next to the counts pytest printed), a redacted excerpt of
+  the run's transcript (its last 60 messages) and `report.json`, which
+  validates against a JSON Schema (`evi.evidence.SCHEMA`). Everything is
+  redacted before it is cut, a junit report as the XML it is. The checks run
+  only in a trusted repository, without your API keys in their environment,
+  not at all for a run that stopped before its checks, and a Ctrl+C stops
+  them. The task records the bundle's path and an `evidence_summary` (its
+  hash, files and lines changed, checks passed and failed, junit totals),
+  which `evi task show` prints. `evi task submit` collects the bundle again
+  from the work you committed, and `evi task verify` signs its hash and
+  refuses (exit 2) a bundle that changed since it was collected, or a task
+  base that isn't an ancestor of the branch head or is the head itself. A
+  plain run gets one with `evi run --evidence DIR` (a folder a bundle can't
+  go in is a usage error before anything runs), and
+  `evi evidence collect T1` (or `--worktree PATH --base REF`) collects one
+  on demand. Bundles stay until `evi evidence prune [--dry-run]` removes the
+  repository's bundles older than `[evidence] keep_days` (30), never one a
+  task names, nor a folder you named. The required checks now run again for
+  the bundle: twice per start, once more at submit. See
+  docs/features/evidence.md.
+- **`evi evidence commit-body` writes a task's commit message, and
+  `evi stats --provenance` counts eVi's share of the history from what you
+  signed.** Who implemented a commit, and whether anyone reviewed it, lived
+  in commit messages anyone could write. `evi evidence commit-body T1`
+  (`--format json`) prints the subject, why, acceptance criteria, the
+  bundle's check results and the files changed, then `Implemented-by: eVi
+  (<backend>/<model>)`, `Task:` and `Evidence:` trailers; `Verified-by`,
+  `Review-rounds` and `Attestation` come only from a valid "verified"
+  attestation at the task branch's current head, and a line of the task's
+  text that reads like a trailer is quoted. `evi stats --provenance`
+  (`--since DATE`, `--format json`) reads the repository's history: the
+  commits, those that say `Implemented-by: eVi`, those whose `Attestation`
+  trailer checks under your director key, eVi's share (attested eVi commits
+  over all commits) and the review rounds. Each attestation counts once, a
+  copy in a later commit as replayed; unsigned claims, self-reported
+  `Verified-by` lines and attestations that don't check are listed apart,
+  never counted. The trailer is an HMAC, so it checks only where your key is
+  (in CI nothing is attested, and the output says why), and the
+  `Implemented-by` line itself is not signed. See "Commit messages" and
+  "Provenance counts" in docs/features/evidence.md.
+- **An MCP client can run the task queue: `evi mcp serve --categories agent`
+  files tasks, starts them, follows and steers the runs and collects their
+  reports, and nothing it serves can mark a task verified.** Driving the
+  queue took a terminal, so the director's own agent (Claude Desktop,
+  Claude Code) could chat with eVi but not hand it a task and come back for
+  the result. The opt-in `agent` category adds eight tools: `task_create`,
+  `task_list`, `task_show`, `task_start`, `run_status`, `run_steer`,
+  `run_cancel` and `run_result`. Starts run one at a time, first in first
+  out (at most 16 wait), through the same code as `evi task start`: the
+  claim, the worktree, the implementer policy, the required checks, the run
+  report and the evidence bundle. A run claims its task with a 10-minute
+  lease renewed every 2 minutes, so a server that dies lets go soon;
+  `[tasks] max_run_minutes` (default 60) cancels a run that takes longer;
+  `run_cancel` stops one in its turn or in the checks after it (stop reason
+  `interrupted`, the task back to `open`); closing the server cancels the
+  running run and drops the queued ones. No tool verifies, rejects, signs or
+  reopens a task, an argument a tool doesn't list is refused, and the server
+  runs as an agent's process, where the director key isn't read. The
+  category is never a default and never in eVi's own tool registry, so no
+  eVi agent gets these tools; over `--http` it needs `--token`, on loopback
+  too; beside it only `memory`, `calendar` and `web` may be served (see
+  Changed); and the web and desktop app's Settings → MCP → Serve refuses it
+  (`400`). `--repo DIR` names the repository, and `evi mcp serve-config
+  --categories …,agent` adds `--repo` for the repository you run it in. See
+  "The agent category" in docs/features/mcp.md.
 - **`evi worktree prune` clears away the worktrees you are done with.**
   Worktrees piled up under `.worktrees/` once their branches were merged.
   `evi worktree prune [--into BRANCH] [--dry-run]` removes those that are

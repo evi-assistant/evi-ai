@@ -5,10 +5,12 @@ that read and write files and run commands, so every request is checked before
 it reaches a handler. This page is the reference for those checks: who gets in,
 what a browser has to send, how the UI keeps model output inert, how the
 desktop app's LAN token and window are locked down, and what changed for
-existing setups. Two sections cover what holds however you reach eVi: the
+existing setups. Three sections cover what holds however you reach eVi: the
 [secrets it redacts](#secrets-in-what-evi-writes-and-shows) from what it
-writes and shows, and [the director's attestation
-key](#the-directors-attestation-key), which eVi's own agents can't reach.
+writes and shows, [the director's attestation
+key](#the-directors-attestation-key), which eVi's own agents can't reach,
+and [the MCP server's task API](#the-mcp-servers-task-api), which only a
+client you name gets.
 
 ## The request matrix
 
@@ -620,6 +622,36 @@ has it or in anything that process starts, and never reads the key there.
 secret eVi redacts, the director key included, is still redacted in what
 such a process shows.
 
+**Evidence.** The attestation signs the hash of the task's [evidence
+bundle](features/evidence.md). A task file is tracked, so the evidence path
+it names may come from anyone who can push: eVi reads it only when it is a
+bundle eVi wrote, under the repository's own folder of
+`<eVi home>/evidence/` and reached through no link, or a folder
+`evi run --evidence` or `evi evidence collect --out` recorded. Any other
+path (the repository, its `.git`, a network share) is never hashed and reads
+as evidence that changed. `evi task verify` also refuses a bundle that
+changed since it was collected, and a base that isn't an ancestor of the
+branch head or is the head itself. What a task file says reaches your
+terminal with its control characters removed. A bundle is redacted like a
+transcript, with the same limits ([The transcript excerpt and
+redaction](features/evidence.md#the-transcript-excerpt-and-redaction)).
+
+**Provenance trailers.** `evi evidence commit-body` writes `Verified-by`,
+`Review-rounds` and `Attestation` only from a valid attestation at the task
+branch's current head, and `evi stats --provenance` counts a commit as
+attested only when its `Attestation` trailer checks under this machine's
+key, each attestation once. What that proves, and what it doesn't:
+
+- the trailer is an HMAC, so it checks only where the director key is: not
+  in CI, on another machine or in a process an eVi agent may have started.
+  Rotating the key voids every trailer signed before;
+- it signs the task, the head, the review rounds, the signer and the key,
+  not the commit it sits in and not the `Implemented-by` line. Who
+  implemented an attested commit is whatever its message says;
+- trailers are public text: a later commit carrying an attestation an older
+  one already carries counts as replayed, not attested, and "older" follows
+  the order git lists the history in.
+
 **Limits.** An agent runs as the same OS user as the director. Code it writes
 to a file and then runs, or code these checks don't recognise, can do what
 `evi.attest` does: drop `EVI_AGENT`, patch the checks, read the keyring entry
@@ -628,6 +660,36 @@ from happening by accident or unnoticed; they don't stop an agent set on it.
 A process that drops `EVI_AGENT` and runs outside eVi's process tree (a job
 handed to a scheduler, say) escapes both the variable and the process-tree
 check. Full isolation needs the agent under a separate OS account.
+
+## The MCP server's task API
+
+`evi mcp serve --categories agent` serves an MCP client tools that file
+tasks in one repository's queue, start them and steer the runs ([MCP → The
+agent category](features/mcp.md#the-agent-category-the-directors-task-api)).
+A task's required checks are commands eVi runs, and the run tests the
+repository's code, so whoever can call these tools can have commands run in
+the repository's worktree. The exposure rules:
+
+- **Opt-in only.** It is never a default category and never in eVi's tool
+  registry: only `--categories …,agent` serves it, and no eVi agent (a chat,
+  the web app, a task's own run) gets the tools.
+- **A token over HTTP, on loopback too.** Without `--token`,
+  `evi mcp serve --http` refuses the category (exit 2): any program on this
+  machine could otherwise start and steer runs.
+- **Not from the web or desktop app.** Settings → MCP → Serve
+  (`POST /api/mcp/serve`) and its client snippet (`GET
+  /api/mcp/serve/config`) answer `400` when `agent` is named, so no
+  browser-reachable route serves it.
+- **Few neighbours.** Beside it only `memory`, `calendar` and `web` may be
+  served. While a run goes on the server works in the task's worktree, and a
+  tool that uses the process's folder would act on the run's work as if it
+  were the repository.
+- **Bounded runs.** Runs go only in a trusted repository, in the task's
+  worktree under the implementer policy, one at a time, with at most 16
+  waiting, and are cancelled past `[tasks] max_run_minutes`.
+- **No verdicts.** No tool verifies, rejects, signs or reopens a task. The
+  server runs as an agent's process (`EVI_AGENT=1`), where director tooling
+  refuses and the director key is never read.
 
 ## What changed for existing setups
 
