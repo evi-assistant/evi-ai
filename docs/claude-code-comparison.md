@@ -84,7 +84,7 @@ planned (philosophy mismatch / separate big track).
 | CLI | Typer CLI | ✅ |
 | Desktop app | Tauri desktop (menus/tray/updater) | ✅ |
 | Web | FastAPI + SSE web UI | ✅ |
-| Headless / print mode | `evi run` (Ph 65) | ✅ |
+| Headless / print mode | `evi run` (Ph 65): `--format` `text`, `json` or `stream-json`, `--max-turns`, `--cwd`, `--model`, `--backend`, `--resume` / `--continue`; exit code says why it stopped ([structured-and-batch.md](features/structured-and-batch.md#the-run-report)) | ✅ |
 | VS Code / JetBrains extensions | VS Code extension (`editors/vscode/`: local ghost-text completion + a chat panel); JetBrains via `evi mcp serve` | ⚠️ VS Code only |
 | Mobile / web cloud platform | Telegram channel for the phone; no hosted platform | ⚠️ phone via Telegram; 🚫 cloud |
 | Computer use | `computer` tool | ✅ |
@@ -133,7 +133,7 @@ planned (philosophy mismatch / separate big track).
 
 | Claude Code | eVi equivalent | Status |
 |---|---|---|
-| Headless mode | `evi run --format json` (Ph 65) | ✅ |
+| Headless mode | `evi run --format json` (the versioned run report: session, turns, `stop_reason`, tool calls, usage, `files_changed`) and `--format stream-json` (NDJSON events in the web stream's envelope, `RunResult` last) (Ph 65) | ✅ |
 | Custom tools | `@tool` decorator | ✅ |
 | File checkpointing | `evi rewind` (Ph 64) | ✅ |
 | Structured outputs | `/json` + JSON-Schema (`/schema`, `evi run --schema`) | ✅ |

@@ -380,9 +380,11 @@ watching refuses one, as `[llm] backend` or as any `[models] *_backend`: a
 scheduled task, `evi run` / `evi batch` / `evi team run`, a subagent with no
 parent UI (and so `evi dream`), an ultracode stage, and the web app's
 workflow, recipe, routine, ultracode, channel-push, federation and A2A runs.
-The refusal names the setting; the web app answers `409` (an A2A task fails
-instead). Point `[llm] backend` and any `[models] *_backend` at a local or API
-backend on a machine that serves those, or set `[llm]
+`evi run --backend <name>` refuses a saved backend of those kinds the same
+way. The refusal names the setting (or `--backend`); the web app answers
+`409` (an A2A task fails instead), and `evi run` exits 1 with `stop_reason`
+`error` in its report. Point `[llm] backend` and any `[models] *_backend` at
+a local or API backend on a machine that serves those, or set `[llm]
 allow_cli_agent_unattended = true` to accept the risk. The Telegram channel
 refuses a delegate backend even then. A chat you are watching is not affected.
 
@@ -447,8 +449,12 @@ values).
 - **`evi run`, `evi batch`, the web UI and the scheduler never ask**: in an
   untrusted folder they run with the project config off (fail closed) and
   print the warning above. Trust the folder first with `evi trust` if a
-  scripted run should use it. The web API exposes the same state for a
-  session's working folder at `GET /api/project/trust?session_id=…`;
+  scripted run should use it. `evi run --cwd <folder>` runs in that folder,
+  so its `.evi.toml` and `EVI.md` are the ones that count, and the run
+  report's `trust` field says which case applied: `trusted`, `changed`
+  (trusted, but the `.evi.toml` is new or edited since) or `untrusted`. The
+  web API exposes the same state for a session's working folder at
+  `GET /api/project/trust?session_id=…`;
   `POST /api/project/trust` with `{session_id, trust: true|false,
   config_sha256}` records the answer (pass the `config_sha256` the GET
   returned and a file that changed in between is refused with 409; in

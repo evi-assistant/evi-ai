@@ -11,7 +11,7 @@ These four features make up eVi's **automation** surface. They let you save reus
 | **Scheduled tasks** | A saved prompt (or an eval suite) plus a cron expression. A background scheduler fires it on schedule and writes the output to a log file. | `~/.evi/scheduled/*.json` (one file per task), logs in `~/.evi/logs/scheduled/` |
 | **Channels** | A way to push an external alert/notification into a **live web session** so the assistant sees it on its next turn. | In-memory on the running web session (not persisted) |
 
-Use **recipes** for repeatable multi-step flows you run by hand (a morning standup, a release-notes draft). Promote a recipe to a **routine** when you want a cron box, IFTTT, a GitHub Action, or a home-automation hub to trigger it over HTTP. Use **scheduled tasks** for single recurring prompts (a daily digest) or to watch for model drift with **scheduled evals**. Use **channels** to nudge an already-open chat with a fresh fact (a build finished, a sensor tripped).
+Use **recipes** for repeatable multi-step flows you run by hand (a morning standup, a release-notes draft). Promote a recipe to a **routine** when you want a cron box, IFTTT, a GitHub Action, or a home-automation hub to trigger it over HTTP. Use **scheduled tasks** for single recurring prompts (a daily digest) or to watch for model drift with **scheduled evals**. Use **channels** to nudge an already-open chat with a fresh fact (a build finished, a sensor tripped). To run one prompt inside a CI job, with no eVi server to call, use the [`evi-run` GitHub Action](#ci--the-evi-run-github-action).
 
 ## How it works
 
@@ -172,6 +172,58 @@ GET  /api/session/<session_id>/channel   -> {"messages": [...]}
 ```
 
 Authenticate with your normal web token. `text` is required; `source` is optional.
+
+### CI — the `evi-run` GitHub Action
+
+`.github/actions/evi-run` is a composite action that installs eVi on the runner, writes a throwaway config for your backend and runs one prompt with [`evi run`](structured-and-batch.md#cli-single-headless-run). Reference it as `evi-assistant/evi-ai/.github/actions/evi-run@main`; [`examples/github/pr-review.yml`](../../examples/github/pr-review.yml) is a ready PR-review workflow built on it.
+
+| Input | Default | What it does |
+|---|---|---|
+| `prompt` / `prompt_file` | — | The prompt, or a file holding it (set one of the two). |
+| `format` | `text` | `text` (the answer), `json` (the [run report](structured-and-batch.md#the-run-report)) or `stream-json` (the run's events, one JSON object per line). |
+| `max_turns` | blank: eVi's default, 12 | The most model round trips the run may take (`evi run --max-turns`). |
+| `mode` | blank | The tool preset: `chat`, `cowork` or `code`. |
+| `auto_approve` | `false` | `true` approves every tool call (`evi run --yes`). With `false`, the config the action writes approves no tool category, so every tool call is denied. Leave it `false` for untrusted input. |
+| `backend`, `base_url`, `api_key`, `model` | blank | The backend to use. Leave them blank to bring your own `$EVI_HOME/config.toml`. |
+| `version`, `extras`, `python-version` | latest, `web,mcp,web-tools`, `3.13` | What to install. |
+
+| Output | What it holds |
+|---|---|
+| `result` | `evi run`'s stdout: the answer, the JSON report or the NDJSON events. Untrusted model text. |
+| `exit_code` | `evi run`'s exit code: 0 done, 1 error, 2 usage, 3 max_turns, 4 permission_denied or guardrail, 6 stop_hook_exhausted, 130 interrupted. |
+| `stop_reason` | The run report's `stop_reason` (`format` `json` or `stream-json`; empty for `text`). |
+| `session_id` | The run's session id (`format` `json` or `stream-json`; empty for `text`). |
+
+The step writes its outputs first and then exits with `evi run`'s exit code, so it fails whenever the run didn't end `done`: an error, a run out of turns (exit 3, in the `text` format too), a refused prompt. To act on such a run, give the step `continue-on-error: true` and check `outputs.stop_reason` in the next one. `stop_reason` and `session_id` carry only values eVi itself writes, a stop reason from the fixed list and a plain session id; anything else leaves them empty, so text a model put in the output can't forge them. Tool calls the action's config denies don't fail the step: the run is `done` when the model finishes without them, and the `json` report lists them in `denied_tools`.
+
+Read every output through `env:`, never as `${{ }}` inside a `run:` or `script:`, and don't print `result` without stopping workflow-command parsing (the [example workflow](../../.github/workflows/evi-run-example.yml) shows how):
+
+```yaml
+- name: Triage
+  id: triage
+  continue-on-error: true
+  uses: evi-assistant/evi-ai/.github/actions/evi-run@main
+  with:
+    prompt_file: triage-prompt.md
+    format: json
+    mode: chat
+    max_turns: "4"
+    backend: openai_compat
+    base_url: ${{ secrets.LLM_BASE_URL }}
+    api_key: ${{ secrets.LLM_API_KEY }}
+    model: ${{ secrets.LLM_MODEL }}
+
+- name: Use the answer
+  env:
+    STOP: ${{ steps.triage.outputs.stop_reason }}
+    CODE: ${{ steps.triage.outputs.exit_code }}
+    REPORT: ${{ steps.triage.outputs.result }}
+  run: |
+    echo "eVi stopped: $STOP (exit $CODE)"
+    printf '%s\n' "$REPORT" | jq -r .text > triage.md
+```
+
+The safety notes for prompts that carry untrusted text (a PR diff, an issue body) are at the top of `.github/actions/evi-run/action.yml`: use `mode: chat`, put the text in `prompt_file`, and leave `auto_approve` off.
 
 ## Examples
 

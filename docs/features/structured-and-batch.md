@@ -9,6 +9,8 @@ Two related features let you treat eVi like a programmable text-to-data tool ins
 
 The two compose: each batch item can carry its own schema, so you can run hundreds of schema-constrained extractions in one command.
 
+Both sit on eVi's headless engine, which `evi run` exposes for a single prompt. Every headless run produces a versioned **run report**: what the run used, what it did, why it stopped and what it changed. `evi run --format json` prints it, `--format stream-json` streams the run's events and ends with it, each `evi batch` line carries one, and the exit code of `evi run` says why the run stopped. See [The run report](#the-run-report).
+
 ## How it works
 
 ### Structured Outputs
@@ -39,14 +41,100 @@ That `response_format` is passed through `agent.chat(...)` and only attached to 
   - anything else — one prompt per non-blank line, with `#` comment lines ignored.
   - Every item without an explicit `id` is assigned its list index, so outputs can be correlated back to inputs.
   - A missing file or a malformed/empty-`prompt` item raises `BatchError`.
-- `run_batch(items, run_one, parallel=1)` runs each item through the supplied `run_one` callable, preserving input order. With `parallel > 1` it uses a `ThreadPoolExecutor` (capped at the number of items). Crucially, **a failure in one item never aborts the batch** — per-item exceptions are caught and recorded as `{"id", "prompt", "error": "<Type>: <message>"}`.
+- `run_batch(items, run_one, parallel=1)` runs each item through the supplied `run_one` callable, preserving input order. With `parallel > 1` it uses a `ThreadPoolExecutor` (capped at the number of items). Crucially, **a failure in one item never aborts the batch** — per-item exceptions are caught and recorded as `{"id", "prompt", "error": "<Type>: <message>", "stop_reason": "error"}`.
 - `to_jsonl(results)` renders the result list as JSONL (one compact JSON object per line, `ensure_ascii=False`).
 
-The CLI's `batch` command supplies a `run_one` that builds a fresh agent per item, applies the item's `mode`/`schema` (falling back to the command flags), and runs it through the headless engine.
+The CLI's `batch` command supplies a `run_one` that builds a fresh agent per item, applies the item's `mode`/`schema` (falling back to the command flags), runs it through the headless engine, and returns the item's `id` and `prompt` followed by its full run report.
 
 ### Headless engine (shared substrate)
 
-Both `evi run` and `evi batch` drain a single agent turn-loop via `run_headless(agent, prompt, max_turns=12, response_format=None)` in `evi/headless.py`. It collects streamed text, tool results (truncated to 2000 chars each), usage stats, and any error into a `HeadlessResult`, and forwards `response_format` to the backend when given. `to_json(res)` serializes it to `{"text", "tools", "usage", "error"}`.
+Both `evi run` and `evi batch` drain a single agent turn-loop via `run_headless(agent, prompt, max_turns=12, response_format=None)` in `evi/headless.py`. It forwards `response_format` to the backend when given and collects the run into a `HeadlessResult`, which is the run report: `to_dict()` gives it as a dict, and `to_json(res)` as the one line of JSON `evi run --format json` prints. Its keyword options are what `evi run` builds on: `cancel_on_sigint` (Ctrl+C cancels the turn and comes back as the result), `on_event` (called with every event as it arrives, which feeds `stream-json`), `track_files` (the folder whose changes become `files_changed`) and `report_errors` (an exception during the turn becomes the report's `error` instead of propagating).
+
+The event shapes live in `evi/events.py`: `SCHEMA` is the JSON Schema (draft 2020-12) every event of a stream validates against, and `report_schema()` is the run report's part of it.
+
+### The run report
+
+`evi run --format json` prints one JSON object. Every field is always present (`null` when it doesn't apply):
+
+| Field | What it holds |
+|---|---|
+| `schema_version` | `1`. Adding a field keeps the version; renaming or removing one, or changing what one means, bumps it. |
+| `session_id` | The session the run used. With `--resume` / `--continue`, the session it added to. |
+| `transcript_path` | The session's transcript file; `null` when it wasn't logged (`[tools] transcripts` off, safe mode). |
+| `backend`, `model` | The backend kind (`lmstudio`, `openai_compat`, …; with `--backend`, the saved backend's kind) and the model id. |
+| `cwd` | The working folder (`--cwd`, or the current directory). |
+| `trust` | That folder's [trust state](../configuration.md#trusting-a-folder): `trusted`; `changed` (trusted, but its `.evi.toml` is new or edited since); `untrusted` (its `.evi.toml`, if any, was ignored); `null` when not checked (`evi batch`). |
+| `turns_used` | Model round trips the run made. |
+| `max_turns` | The limit it ran with (`--max-turns`). |
+| `stop_reason` | Why the run stopped, from a fixed list (see below). |
+| `done_reason` | The agent's own reason for ending the turn, as it gave it: `stop`, `length`, `max_turns_reached`, `interrupted`, `guardrail_blocked`, `hook_blocked`, … `null` when the turn ended without one (an error, a run stopped before its turn). |
+| `text` | The model's answer: all the text it streamed, trimmed. Not redacted. |
+| `error` | What went wrong, redacted; `null` when nothing did. |
+| `tool_calls` | One entry per call, in call order: `name`; `args` (the JSON arguments, redacted, then cut to 2000 characters); `status` (`ok`, `error`, `denied` by the permission checks, `blocked` by a hook, or `cancelled`: stopped, or never answered); `duration_ms` (from the call until its result was reported; the calls of one batch run in parallel and report together; `null` when no result came); `output` (redacted, then cut to 2000 characters; `null` when no result came). |
+| `denied_tools` | The tools whose calls the permission checks denied, each named once, in order. A call a hook blocked isn't listed. |
+| `usage` | `{"prompt", "completion", "total"}` tokens, summed over every model call of the run; `null` when the backend reported none. |
+| `duration_s` | How long the run took, in seconds. |
+| `files_changed` | What the run changed under `cwd` (see below); `null` when it wasn't tracked or couldn't be worked out. |
+| `checks` | Always `[]` for now: reserved for test and lint results a later step attaches. |
+| `policy` | How a call that would ask was settled: `deny` (the default), `allow` (`[auto] unattended_policy = "allow"`) or `allow-all` (`-y`), with an `[auto] mode` that lets calls through named after it, such as `allow-all (mode=yolo)`. |
+| `redactions` | What was redacted from the tool calls and the error, by kind: `{"github_token": 1}`. |
+
+Redaction (`[REDACTED:<kind>]`, see [Secret redaction](secret-redaction.md)) happens before anything is cut short, so no prefix of a secret survives the cut. A tool's name, arguments and output and the error are redacted; the model's answer is not, so a secret the model repeats appears in `text`.
+
+**`files_changed`** lists `{"path", "status", "added", "deleted"}` per file: `path` relative to `cwd`, `status` `added`, `modified` or `deleted`, and `added` / `deleted` the line counts (`null` when unknown, such as for a binary file). Only `evi run` tracks it (`evi batch` items share one folder, so theirs is `null`).
+
+- In a git work tree it compares `git status` from before and after the run, so a file that was already dirty shows only if the run changed it again. Files touched by commits the run made are included, and line counts are against the commit checked out when the run started (a new file: its line count). A new file that a `.gitignore` pattern matches is not listed. git runs with repository hooks, filters and fsmonitor off.
+- Outside git, or in a folder git ignores, it compares the size and modification time of the files under `cwd`, skipping `.git`, `node_modules`, virtualenvs and caches, with line counts only for new files. Over 5,000 files, or a walk that takes over a second (a home directory, say), gives `null`.
+- It is also `null` when git fails or reports more than 20,000 dirty files.
+- What eVi itself writes is left out: its home folder and transcripts when they are inside `cwd`, and the file stdout or stderr is redirected to (`evi run --format stream-json … > run.ndjson`).
+
+### Stop reasons and exit codes
+
+`stop_reason` is one of these, and `evi run` exits with the code next to it in every format:
+
+| `stop_reason` | Exit | Meaning |
+|---|---|---|
+| `done` | 0 | The model finished. Tool calls denied along the way don't change that: the agent carries on past a denial, so they are listed in `denied_tools` (status `denied` in `tool_calls`), and the text format notes them on stderr. A reply the backend cut at its token limit is `done` too, with `done_reason` `length`. |
+| `error` | 1 | The backend failed (the turn's `Error` event), the turn raised, or the agent couldn't be built (an MCP server that won't start, a delegate CLI-agent backend refused). `error` says what happened; `text` keeps what streamed before it. |
+| `max_turns` | 3 | The run used all its `--max-turns` model round trips before the model finished. |
+| `step_budget`, `loop_detected` | 3 | Reserved for run limits of the task loop; no run stops this way yet. |
+| `permission_denied` | 4 | Reserved for a turn that stops on a denial (its `Done` reason says so). Today the agent never stops on one, so a denied call alone never gives this. |
+| `guardrail` | 4 | An input guardrail or a `user_prompt_submit` hook refused the prompt, or the backend ended the reply with `content_filter`. |
+| `stop_hook_exhausted` | 6 | Reserved, like `step_budget`. |
+| `interrupted` | 130 | Ctrl+C or a SIGINT cancelled the run (128 + SIGINT). See [Stopping a turn](steering.md#stopping-a-turn). |
+
+Exit code **2** is a usage error: no run happened, nothing goes to stdout, and the reason goes to stderr. That covers no prompt, an unknown `--format`, `--max-turns` below 1, `--resume` together with `--continue`, a session id that doesn't exist or no session to continue, a `--backend` name that isn't saved, a `--cwd` that isn't a directory, and a bad `--schema`.
+
+### stream-json: the run as events
+
+`evi run --format stream-json` prints one JSON object per line (NDJSON) while the run goes:
+
+1. **`RunStart`**: `session_id`, `backend`, `model`, `cwd`, `max_turns`, `policy`, and `resumed` (`true` with `--resume` / `--continue`). It comes once the agent is built, so the session id is known even if the run is killed later. A run that fails before that (a refused `--backend`, an agent that can't be built, a Ctrl+C while the prompt is read from stdin) prints only the `RunResult` line.
+2. **The turn's events**, as the web chat receives them: `TextDelta`, `ThinkingDelta`, `ToolCall`, `ToolResult`, `ToolProgress`, `UsageStats`, `LogProbs`, `Guardrail`, `RouteInfo`, `Steering`, `Error` and `Done`.
+3. **`RunResult`**: the run report's fields, always the last line, also after an error or a Ctrl+C.
+
+Every line carries the same envelope: `schema_version` (`1`), `kind` (what happened), `seq` (1, 2, 3, … in the order sent) and `ts` (UTC, ISO 8601 with milliseconds), followed by the kind's own fields:
+
+```json
+{"schema_version": 1, "kind": "ToolCall", "seq": 3, "ts": "2026-10-16T09:30:12.345Z", "name": "read_file", "arguments": "{\"path\": \"README.md\"}"}
+```
+
+It is the same versioned envelope the web UI's SSE stream sends (`POST /api/chat`, including slash commands, and a re-roll), so one parser reads both. The web stream adds its own kinds (`PermissionRequest`, `PermissionExpired`, `SystemMessage`), and its `seq` starts again at 1 for each response. In every stream a tool call's name and arguments, a tool's name, output and citations, and an `Error` or `Guardrail` message are redacted; the agent's history keeps what the tool really returned. A new kind, or a new field on a kind, can arrive without a version bump (only renaming or removing one, or changing what one means, bumps `schema_version`), so a consumer should skip kinds and keys it doesn't know.
+
+To check a stream against the schema in Python (`pip install jsonschema`):
+
+```python
+import json
+import jsonschema
+from evi import events
+
+validator = jsonschema.Draft202012Validator(events.SCHEMA)
+with open("run.ndjson", encoding="utf-8") as f:
+    for line in f:
+        validator.validate(json.loads(line))
+```
+
+`events.report_schema()` validates a `--format json` report the same way.
 
 ## Setup
 
@@ -57,8 +145,8 @@ There is **no dedicated config section** for Structured Outputs or Batch — the
 - **Defaults**:
   - `as_response_format`: `name="output"`, `strict=true`.
   - `run_headless`: `max_turns=12`.
-  - `evi run`: `--format text`, no schema.
-  - `evi batch`: `--parallel 1` (sequential), output to **stdout** unless `--out` is given.
+  - `evi run`: `--format text`, `--max-turns 12`, no schema, the current directory, a new session.
+  - `evi batch`: `--parallel 1` (sequential), `--max-turns 12` per item, output to **stdout** unless `--out` is given.
 - **Backend support** — schema enforcement depends on the backend. Point eVi at a backend that supports OpenAI-style `response_format` (OpenAI, LM Studio, recent llama.cpp / Ollama) for hard schema guarantees; others fall back to best-effort JSON.
 
 ## Usage
@@ -78,18 +166,27 @@ Inside the interactive REPL:
 ### CLI: single headless run
 
 ```
-evi run "<prompt>" --schema <file|inline-json> [--format text|json] [--mode chat|cowork|code] [--yes]
+evi run "<prompt>" [--format text|json|stream-json] [--schema <file|inline-json>]
+        [--mode chat|cowork|code] [--yes] [--max-turns N] [--cwd DIR]
+        [--model ID] [--backend NAME] [--resume ID | --continue]
 ```
 
-- `--schema` accepts a file path or inline JSON. A bad schema prints `error: ...` to stderr and exits with code **2**.
-- `--format json` prints the full `{text, tools, usage, error}` envelope; `text` (default) prints just the final answer.
-- If `prompt` is omitted, eVi reads it from stdin.
-- Without `--yes`, tool calls that aren't already auto-approved are **denied** (so a scripted run never blocks waiting for a permission prompt).
+- **Prompt** — the argument, or, when it is omitted, everything on stdin. The two don't combine: with a prompt argument, piped input is ignored, so put the text you want the model to read in the prompt (or pipe the whole prompt).
+- `--format` / `-f` — `text` (default) prints the answer on stdout (nothing after an error) and a one-line note on stderr when the run didn't simply finish or had calls denied. `json` prints the [run report](#the-run-report). `stream-json` prints [the run as events](#stream-json-the-run-as-events), one per line. While `evi run` runs, eVi's own console output (MCP warnings, notes) goes to stderr, so stdout holds only the answer, the report or the events.
+- `--schema` — a file path or inline JSON. A bad schema prints `error: ...` to stderr and exits **2**.
+- `--max-turns N` — the most model round trips the run may take (default 12, at least 1). A run that hits it stops with `stop_reason` `max_turns` and exits **3**.
+- `--cwd` / `-C DIR` — run in `DIR` instead of the current directory: `EVI.md` comes from there, its `.evi.toml` applies only if the folder is [trusted](../configuration.md#trusting-a-folder) (`evi trust`), and `files_changed` is tracked there. An untrusted folder still runs, with its project config off; the report's `trust` says which case applied.
+- `--model ID` — the model id for this run.
+- `--backend NAME` — run on a saved backend (`evi backend list`; the name is matched without regard to case). A delegate CLI-agent backend (`codex`, `gemini`, `amp`, `qwen`, `copilot`) is refused, as for the configured backend, unless `[llm] allow_cli_agent_unattended = true`: the error names `--backend` and the run exits **1**.
+- `--resume` / `-r ID` — add this run to the session `ID` (`evi sessions list`): its history is loaded first, and the report keeps that session id and transcript. A copy of the session handed off from another device is taken in first, as `evi sessions resume` does.
+- `--continue` / `-c` — add this run to the most recently active session. That is the newest session anywhere, not the newest for this folder, so prefer `--resume` when several jobs run side by side.
+- `--mode` / `-m` — the tool preset: `chat`, `cowork` or `code`.
+- `--yes` / `-y` — approve every tool call. Without it, tool calls that aren't already auto-approved are **denied** (so a scripted run never blocks waiting for a permission prompt), and the run still counts as `done` if the model finishes.
 
 ### CLI: batch
 
 ```
-evi batch <input_file> [--out results.jsonl] [--parallel N] [--mode <preset>] [--yes]
+evi batch <input_file> [--out results.jsonl] [--parallel N] [--mode <preset>] [--yes] [--max-turns N]
 ```
 
 - `<input_file>` — `.jsonl` / `.json`, or a plain one-prompt-per-line file.
@@ -97,7 +194,10 @@ evi batch <input_file> [--out results.jsonl] [--parallel N] [--mode <preset>] [-
 - `--parallel` / `-j` — run N items concurrently.
 - `--mode` / `-m` — default tool preset for items that don't specify one.
 - `--yes` / `-y` — auto-approve tool calls (otherwise non-approved tools are denied).
+- `--max-turns N` — the most model round trips each item may take (default 12).
 - Per-item `mode` and `schema` fields in the input file **override** the command-line flags.
+
+Each output line is the item's `id` and `prompt` followed by its [run report](#the-run-report), the same fields `evi run --format json` prints (`files_changed` is `null` and `trust` is `null`). An item that raised before it could report gets only `id`, `prompt`, `error` and `"stop_reason": "error"`. The command itself exits 0 once it has written the results, whatever each item's `stop_reason`.
 
 ### Web UI / API
 
@@ -110,7 +210,7 @@ POST /api/chat
 
 - `output_schema` may be a JSON Schema **object** or an inline-JSON **string** (a string is run through `load_schema`).
 - An invalid schema returns **HTTP 400** with `bad schema: <reason>`.
-- The reply streams back over SSE exactly like a normal turn, but the model's output is constrained to the schema.
+- The reply streams back over SSE exactly like a normal turn, in the [versioned event envelope](#stream-json-the-run-as-events), but the model's output is constrained to the schema.
 
 ## Examples
 
@@ -131,26 +231,53 @@ Create a schema file `contact.json`:
 }
 ```
 
-Run a one-shot extraction and get the parsed JSON envelope:
+Run a one-shot extraction and get the run report:
 
 ```bash
-echo "Jane Doe, VP Engineering, jane@acme.io" | \
-  evi run "Extract the contact fields from this signature." \
+evi run "Extract the contact fields from this signature: Jane Doe, VP Engineering, jane@acme.io" \
   --schema contact.json --format json
 ```
 
-The `text` field of the result will contain a JSON object matching the schema, e.g.:
+The report is printed on one line; spread out, it reads:
 
 ```json
-{"text":"{\"name\":\"Jane Doe\",\"email\":\"jane@acme.io\",\"title\":\"VP Engineering\"}","tools":[],"usage":{"prompt":120,"completion":24,"total":144},"error":null}
+{
+  "schema_version": 1,
+  "session_id": "3f9a1c2d7b40",
+  "transcript_path": "/home/you/.evi/transcripts/2026-10-16/3f9a1c2d7b40.jsonl",
+  "backend": "lmstudio",
+  "model": "qwen2.5-7b-instruct",
+  "cwd": "/home/you/project",
+  "trust": "untrusted",
+  "turns_used": 1,
+  "max_turns": 12,
+  "stop_reason": "done",
+  "done_reason": "stop",
+  "text": "{\"name\":\"Jane Doe\",\"email\":\"jane@acme.io\",\"title\":\"VP Engineering\"}",
+  "error": null,
+  "tool_calls": [],
+  "denied_tools": [],
+  "usage": {"prompt": 120, "completion": 24, "total": 144},
+  "duration_s": 1.284,
+  "files_changed": [],
+  "checks": [],
+  "policy": "deny",
+  "redactions": {}
+}
+```
+
+The `text` field holds the JSON object matching the schema; `jq -r .text` pulls it out. To pipe the input in instead, send the whole prompt on stdin and leave the prompt argument off:
+
+```bash
+{ echo "Extract the contact fields from this signature:"; cat signature.txt; } | \
+  evi run --schema contact.json --format json | jq -r .text
 ```
 
 You can also pass the schema inline instead of a file:
 
 ```bash
-evi run "Classify the sentiment." \
-  --schema '{"type":"object","properties":{"sentiment":{"type":"string","enum":["pos","neg","neu"]}},"required":["sentiment"]}' \
-  "I absolutely love this product"
+evi run --schema '{"type":"object","properties":{"sentiment":{"type":"string","enum":["pos","neg","neu"]}},"required":["sentiment"]}' \
+  "Classify the sentiment: I absolutely love this product"
 ```
 
 ### Example 2 — Batch extraction with per-item schemas
@@ -169,12 +296,22 @@ Run all three, four at a time, writing results to a file:
 evi batch jobs.jsonl --out out.jsonl --parallel 4 --yes
 ```
 
-eVi prints a summary (`wrote 3 results (3 ok) -> out.jsonl`) and `out.jsonl` contains one JSON object per line, keyed by your `id`:
+eVi prints a summary (`wrote 3 results (3 ok) -> out.jsonl`) and `out.jsonl` holds one JSON object per line, keyed by your `id`, each with a full run report. The first line, for example:
 
 ```jsonl
-{"id": "a1", "prompt": "Extract contacts from: Bob Lee, CTO, bob@x.io", "text": "{\"name\":\"Bob Lee\",\"email\":\"bob@x.io\",\"title\":\"CTO\"}", "error": null, "usage": {"prompt": 90, "completion": 22, "total": 112}}
-{"id": "a2", "prompt": "Extract contacts from: Amy Ng, amy@y.io", "text": "{\"name\":\"Amy Ng\",\"email\":\"amy@y.io\"}", "error": null, "usage": {"prompt": 84, "completion": 18, "total": 102}}
-{"id": "a3", "prompt": "Summarize in one sentence: the quick brown fox...", "text": "A fast brown fox leaps over a lazy dog.", "error": null, "usage": {"prompt": 60, "completion": 12, "total": 72}}
+{"id": "a1", "prompt": "Extract contacts from: Bob Lee, CTO, bob@x.io", "schema_version": 1, "session_id": "9c04e1b2aa31", "transcript_path": "/home/you/.evi/transcripts/2026-10-16/9c04e1b2aa31.jsonl", "backend": "lmstudio", "model": "qwen2.5-7b-instruct", "cwd": "/home/you/project", "trust": null, "turns_used": 1, "max_turns": 12, "stop_reason": "done", "done_reason": "stop", "text": "{\"name\":\"Bob Lee\",\"email\":\"bob@x.io\",\"title\":\"CTO\"}", "error": null, "tool_calls": [], "denied_tools": [], "usage": {"prompt": 90, "completion": 22, "total": 112}, "duration_s": 0.912, "files_changed": null, "checks": [], "policy": "allow-all", "redactions": {}}
+```
+
+To see how each item went:
+
+```bash
+jq -c '{id, stop_reason, text}' out.jsonl
+```
+
+```jsonl
+{"id":"a1","stop_reason":"done","text":"{\"name\":\"Bob Lee\",\"email\":\"bob@x.io\",\"title\":\"CTO\"}"}
+{"id":"a2","stop_reason":"done","text":"{\"name\":\"Amy Ng\",\"email\":\"amy@y.io\"}"}
+{"id":"a3","stop_reason":"done","text":"A fast brown fox leaps over a lazy dog."}
 ```
 
 A plain one-prompt-per-line file works too (no schema, no ids needed — eVi assigns indexes):
@@ -189,14 +326,32 @@ Translate to French: See you tomorrow
 evi batch prompts.txt -j 2
 ```
 
+### Example 3 — Follow a run as it goes, then pick it up again
+
+Stream a run's events, keep them, and act on the result line:
+
+```bash
+evi run --format stream-json -m code -y "Add a .gitignore for Python" > run.ndjson
+echo "exit $?"
+jq -c 'select(.kind == "ToolCall") | .name' run.ndjson   # what it called
+tail -n 1 run.ndjson | jq '{stop_reason, files_changed}'    # how it ended
+```
+
+Continue the same session with a follow-up, using the id from the first line:
+
+```bash
+sid=$(head -n 1 run.ndjson | jq -r .session_id)
+evi run --resume "$sid" --format json "Now add a pytest cache entry too" | jq .stop_reason
+```
+
 ## Notes / limits
 
 - **Schema enforcement is backend-dependent.** Only backends that support OpenAI-style `response_format` actually *guarantee* the shape. Others ignore it and return best-effort JSON — design your downstream parsing to tolerate the occasional non-conforming reply when running against such a backend.
 - **No double-wrapping.** You can pass a bare schema, a `{"name","schema"}` pair, or a full `{"type":"json_schema",...}` envelope; `as_response_format` detects and preserves the richer forms. To control the `strict` flag or schema `name`, pass the full envelope yourself.
 - **`/schema` vs `/json`.** `/json` forces an unstructured JSON object; `/schema` forces a specific schema. Use `/schema off` to clear an armed schema between turns.
-- **Batch is fail-open per item.** One bad prompt or one item-level exception never aborts the run — the failing item gets an `error` string and the rest proceed. Always inspect each output line's `error` field; a present `error` means that item failed even though the batch "succeeded".
-- **Unattended permission policy.** In both `evi run` and `evi batch`, without `--yes` any tool call not already on your auto-approve list is **denied** rather than prompting (a scripted run can't answer a prompt). Pass `--yes` to auto-approve all tool calls for genuinely unattended jobs — and only do so when you trust the prompts, since it removes the human-in-the-loop guard.
+- **Batch is fail-open per item.** One bad prompt or one item-level exception never aborts the run — the failing item gets `"stop_reason": "error"` and an `error` string, and the rest proceed. Check each line's `stop_reason`: anything but `done` means that item didn't simply finish, even though the batch "succeeded".
+- **Unattended permission policy.** In both `evi run` and `evi batch`, without `--yes` any tool call not already on your auto-approve list is **denied** rather than prompting (a scripted run can't answer a prompt). The run carries on and still ends `done` (exit 0) when the model finishes; the report lists the refused tools in `denied_tools`, so check that list when a job needs its tools. Pass `--yes` to auto-approve all tool calls for genuinely unattended jobs — and only do so when you trust the prompts, since it removes the human-in-the-loop guard.
 - **Parallelism caveats.** `--parallel` uses threads; the effective worker count is capped at the number of items. Higher concurrency can hit backend rate limits or local-model memory limits — tune `N` to your hardware/backend.
-- **Tool output truncation.** Headless results truncate each tool's captured output to 2000 characters, and `max_turns` defaults to 12 — long multi-tool reasoning chains may be cut short in headless/batch mode.
-- **Input validation.** `evi run`/`evi batch` exit with code **2** on a bad schema or unparseable/empty batch input; an empty batch (no prompts) exits **1**. A headless `run` whose turn errored (text mode) exits **1** with the error on stderr.
+- **Tool calls are cut short in the report.** Each call's arguments and output are redacted and then cut to 2000 characters, and `max_turns` defaults to 12 — raise `--max-turns` for long multi-tool tasks (a run that runs out exits **3**).
+- **Exit codes.** `evi run` exits with the code for its `stop_reason` in every format (0 done, 1 error, 3 max_turns, 4 guardrail, 130 interrupted; [table above](#stop-reasons-and-exit-codes)) and **2** on a usage error. `evi batch` exits **2** on unparseable input or a bad item, **1** when the file holds no prompts, and **0** once it has written its results.
 - **Privacy.** Like the rest of eVi, these run locally against your configured backend; no data leaves your machine beyond what your chosen backend itself sends.

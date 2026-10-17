@@ -160,7 +160,7 @@ Event types (all exported from `evi.sdk`):
 | `Error` | `message` | Turn failed. |
 
 For a non-streaming convenience, use `run_headless(agent, prompt)` → a
-`HeadlessResult(text, tools, usage, error, policy)`.
+`HeadlessResult`, the v1 run report (`text`, `tool_calls`, `stop_reason`, `usage`, `error`, `policy`, `files_changed`, …; see [Structured output & batch](features/structured-and-batch.md)).
 
 ## Custom tools
 
@@ -343,7 +343,7 @@ preset; `as_response_format(...)` wraps a plain schema into the
 from evi.sdk import build_agent, run_headless, to_json
 
 res = run_headless(build_agent(tool_categories=["fs"]), "Does a README exist?")
-print(to_json(res))            # {"text":..., "tools":[...], "usage":{...}, "error":..., "policy":"deny"}
+print(to_json(res))            # the v1 run report: {"schema_version": 1, "text": ..., "tool_calls": [...], "stop_reason": "done", ...}
 raise SystemExit(1 if res.error else 0)
 ```
 

@@ -47,6 +47,13 @@ python -m playwright install chromium
 the image) and skips those tests when there is none on `PATH` (on Windows, put
 Git for Windows' `usr\bin` on `PATH`).
 
+`tests/test_run_report.py` (and, for the frames the browser gets,
+`tests/e2e/test_ui_smoke.py`) validates the web UI's SSE frames and
+`evi run --format stream-json` lines against the one event schema,
+`evi.events.SCHEMA`, using `jsonschema`. That package comes with the `mcp`
+extra, which CI and `scripts/dev-bootstrap.*` install; without it these
+tests fail rather than skip.
+
 E2E is opt-in: both suites are marked `e2e` and excluded from the default run via
 `addopts = -m "not e2e"`. `tests/e2e/conftest.py` (UI) skips its dir when
 Playwright isn't installed; `tests/cli_e2e/` (CLI) has no browser dependency, so

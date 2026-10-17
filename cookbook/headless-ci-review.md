@@ -40,7 +40,7 @@ from evi.sdk import build_agent, run_headless, to_json
 agent = build_agent(tool_categories=["fs", "code"])
 result = run_headless(agent, "Does this diff introduce any obvious bug? Answer with findings.", max_turns=8)
 
-print(to_json(result))          # {"text", "tools", "usage", "error"}
+print(to_json(result))          # the v1 run report (text, tool_calls, stop_reason, usage, error, ...)
 raise SystemExit(1 if result.error else 0)
 ```
 

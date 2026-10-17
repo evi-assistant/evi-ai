@@ -411,11 +411,12 @@ All notable user-visible changes to eVi. Format loosely follows
   `config.toml`, the active profile, `backends.json`, `peers.json`,
   `users.json`, `mcp.json` and `routines.json` (values under 12 characters
   never count). It applies to every transcript line as it is written; the web
-  and desktop `ToolCall`, `ToolResult` and `PermissionRequest` events and the
-  tool calls `/history` redraws; the CLI's tool lines and permission prompts;
-  `evi run --format json` tool outputs; scheduled-task logs and statuses;
-  subagent traces; and crash reports, which now say `[REDACTED:<kind>]`
-  instead of `<redacted>`. A preview is redacted before it is cut. The model
+  and desktop `ToolCall`, `ToolResult`, `PermissionRequest`, `Error` and
+  `Guardrail` events and the tool calls `/history` redraws; the CLI's tool
+  lines and permission prompts; `evi run`'s run report and `stream-json`
+  events (tool names, arguments and outputs, and errors; not the model's own
+  answer); scheduled-task logs and statuses; subagent traces; and crash
+  reports, which now say `[REDACTED:<kind>]` instead of `<redacted>`. A preview is redacted before it is cut. The model
   itself still gets the real value, so a session resumed or revived from its
   transcript shows the marker where the live one had it. Transcripts written
   before this release are not rewritten. See docs/features/secret-redaction.md.
@@ -460,6 +461,33 @@ All notable user-visible changes to eVi. Format loosely follows
   come from `prompt_file`, the config is written owner-only under
   `$RUNNER_TEMP`, and `EVI_HOME` is no longer exported to later steps. The
   PR-review example runs in `chat` mode with the diff in the prompt.
+- **`evi run`'s exit code now says why a run stopped, and `--format json`
+  prints the versioned run report.** A script couldn't trust the exit code:
+  `--format json` exited 0 when the run failed (the error was only in the
+  JSON), and a run that ran out of turns or had its prompt refused by a
+  guardrail exited 0 in every format. Now every format exits with the code
+  for the run's `stop_reason`: 0 `done`, 1 `error`, 2 a usage error (no run
+  happened), 3 `max_turns`, 4 `guardrail`, 130 `interrupted`. Breaking for
+  existing `evi run --format json` consumers: `tools` is now `tool_calls`,
+  each with `name`, `args`, `status`, `duration_ms` and `output`;
+  `stop_reason` is normalized to a fixed list (`stop` and `length` become
+  `done`, `max_turns_reached` becomes `max_turns`, `guardrail_blocked` and
+  `hook_blocked` become `guardrail`), with the agent's raw reason moved to
+  the new `done_reason`; `usage` is summed over the run instead of holding
+  only the last model call; and a failure while the agent is built or during
+  the turn ends with a report (`stop_reason` `error`, exit 1; in text format,
+  an `error: …` line on stderr) instead of a traceback. A denied tool call
+  doesn't change the outcome: a run the model finished is `done` and exits
+  0, with the refused tools listed in `denied_tools` (and, in text format, a
+  `denied: …` line on stderr). While `evi run` runs, eVi's own console output
+  goes to stderr, so stdout holds only the answer or the JSON. `evi batch` lines carry the same report, so their `usage` is
+  summed too. The `evi-run` action's step fails with this exit code (a
+  failed run in `format: json`, a run out of turns in any format), after it
+  has written its outputs. In the SDK, `HeadlessResult` is the report: its
+  `stop_reason` takes the new values and `to_json()` prints the new shape,
+  while the old `tools=` keyword and `.tools` still work (deprecated; use
+  `tool_calls`). See "Stop reasons and exit codes" in
+  docs/features/structured-and-batch.md.
 - **A release waits for the browser tests and its CHANGELOG entry.** 1.0.49
   reached PyPI with a dead button because a release ran only the unit suite.
   The e2e suite now gates the PyPI publish (and runs on every push to main),
@@ -692,6 +720,40 @@ All notable user-visible changes to eVi. Format loosely follows
   `evi scheduler`) are stopped with it instead of holding up the exit.
 
 ### Added
+- **`evi run` reports what a run did, can stream it as it goes, and can pick
+  up a past session.** A script, a CI job or a task loop had the answer and
+  little else, so it couldn't tell which tools ran, what changed or why a
+  run ended without scraping text. `--format json` now prints a run report
+  (`schema_version` 1): the session and its transcript, the backend, model
+  and working folder and that folder's trust state, the turns used and
+  allowed, `stop_reason` and `done_reason`, the answer, every tool call with
+  its arguments, status, duration and output (redacted, then cut to 2000
+  characters), the tools the permission checks denied, token usage summed
+  over the run, how long it took and the files it changed
+  (`files_changed`, with line counts: from `git status` in a work tree, a
+  bounded scan of the folder elsewhere, eVi's own output left out). The new
+  `--format stream-json` prints one JSON object per line as the run goes:
+  `RunStart` (the session id comes first), the turn's events, and
+  `RunResult`, the report, last, even after an error or a Ctrl+C. Every line
+  carries `schema_version`, `kind`, `seq` and `ts`, the same envelope the
+  web UI's SSE stream now sends, and both validate against one JSON Schema
+  (`evi.events.SCHEMA`). New flags: `--max-turns`, `--cwd`/`-C` (that
+  folder's `.evi.toml` applies only if it is trusted), `--model`,
+  `--backend` (a saved backend; a delegate CLI-agent one is refused as
+  usual), and `--resume`/`-r` ID or `--continue`/`-c` (the most recently
+  active session, in any folder) to add the run to a past session. `evi
+  batch` takes `--max-turns`, and each of its lines is the item's `id` and
+  `prompt` plus its run report. See "The run report" in
+  docs/features/structured-and-batch.md.
+- **The `evi-run` GitHub Action says why a run stopped.** A workflow could
+  read only the action's stdout. The action now takes a `max_turns` input
+  and `format: stream-json`, and has `exit_code`, `stop_reason` and
+  `session_id` outputs (the last two from the run report with `format: json`
+  or `stream-json`, and only values eVi itself writes, so model text can't
+  forge them). The step writes its outputs before it exits with eVi's exit
+  code, so a step with `continue-on-error: true` lets the next one branch on
+  `stop_reason`. See "CI — the evi-run GitHub Action" in
+  docs/features/automation.md.
 - **Stop a running turn, from every surface.** The web and desktop chat has
   a **Stop** button next to Send while a turn runs, and an open permission
   prompt has **Stop turn** (`POST /api/session/<id>/cancel`, which answers
@@ -708,9 +770,9 @@ All notable user-visible changes to eVi. Format loosely follows
   `(cancelled)`, a pending permission prompt is answered no and nothing more
   is asked, and the `stop` hook fires. A tool that ignores the stop is left
   behind after 2 s; MCP calls and a delegate CLI-agent backend's own process
-  run on until their own timeout. `evi run --format json` also reports why a
-  finished turn stopped (`"stop_reason": "stop"`, `"max_turns_reached"`, …).
-  See "Stopping a turn" in docs/features/steering.md.
+  run on until their own timeout. `evi run`'s run report also says why a
+  finished run stopped (`stop_reason`, see the run report above). See
+  "Stopping a turn" in docs/features/steering.md.
 - **SDK: stop a turn.** `Agent.cancel(reason)` ends the running turn as above
   and is safe to call from another thread or a signal handler.
   `ToolContext.cancel_token` is set when the turn is stopped; each turn has

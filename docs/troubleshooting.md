@@ -81,11 +81,15 @@ the backend as in the section above.
 - **Web and desktop:** **Stop** next to Send (or **Stop turn** on an open
   permission prompt). The chat then says `Stopped — the turn was cancelled.`
 - **`evi run`:** Ctrl+C or a SIGINT stops the turn and still prints a result:
-  `--format json` gives the usual object with `"stop_reason": "interrupted"`,
-  text mode prints what streamed so far and `interrupted: the run was
-  cancelled (Ctrl+C / SIGINT)` on stderr. The exit code is **130** either way,
-  so a script can tell a stopped run from a finished one. A second Ctrl+C
-  stops waiting for the turn to wind down.
+  `--format json` gives the run report with `"stop_reason": "interrupted"`,
+  `--format stream-json` still ends with its `RunResult` line, and text mode
+  prints what streamed so far and `interrupted: the run was cancelled
+  (Ctrl+C / SIGINT)` on stderr. The exit code is **130** in every format, so
+  a script can tell a stopped run from a finished one. A second Ctrl+C stops
+  waiting for the turn to wind down. A Ctrl+C after the turn, while eVi
+  lists the files it changed, skips that list (`files_changed` is `null`)
+  and keeps the report, with the stop reason and exit code the turn ended
+  with.
 
 A stopped reply keeps its text, marked `(interrupted) The reply was cut off
 here: …`; running `run_command`, `run_python` and `monitor` commands have
@@ -96,6 +100,38 @@ seconds, then answered `(cancelled)` and left behind to finish on its own
 timeout. With a delegate CLI-agent backend as the model, the CLI's own process
 also runs on until its timeout (or until eVi exits). See [Stopping a
 turn](features/steering.md#stopping-a-turn).
+
+## `evi run` exited non-zero: what the exit code means
+
+`evi run` exits with a code that says why the run stopped, the same in the
+`text`, `json` and `stream-json` formats. With `--format json` (or the last
+`stream-json` line) the report's `stop_reason` says the same in words, and
+its `error` says what went wrong.
+
+| Exit | `stop_reason` | What happened | What to do |
+|---|---|---|---|
+| 0 | `done` | The model finished. | Nothing; but see `denied_tools` below. |
+| 1 | `error` | The backend failed (`LLM request failed: …`), the turn raised, or the agent couldn't be built (an MCP server that won't start, a delegate CLI-agent backend refused). | Read `error` (or the `error: …` line on stderr in text format); check the backend as in the sections above. |
+| 2 | — | A usage error: no run happened. No prompt, an unknown `--format`, `--max-turns` below 1, `--resume` with `--continue`, an unknown session id or no session to continue, a `--backend` name that isn't saved (`evi backend list`), a `--cwd` that isn't a folder, a bad `--schema`. | Fix the command line; the reason is on stderr. |
+| 3 | `max_turns` | The run used all its model round trips (`--max-turns`, default 12) before the model finished. The text so far is still printed. | Raise `--max-turns`, or split the task. |
+| 4 | `guardrail` | An input guardrail or a `user_prompt_submit` hook refused the prompt, or the backend's content filter ended the reply. | Check `~/.evi/guardrails.toml` and your hooks. |
+| 130 | `interrupted` | Ctrl+C or a SIGINT stopped the run (above). | — |
+
+`step_budget` and `loop_detected` (exit 3), `permission_denied` (4) and
+`stop_hook_exhausted` (6) are reserved for the task loop; no run stops with
+them yet.
+
+**Tool calls were denied but the run exited 0.** That is by design: the agent
+carries on past a denied call and the model answers without it, so the run is
+`done`. The report lists those tools in `denied_tools` (each call has status
+`denied` in `tool_calls`), and the text format prints `denied: <tools> (tool
+calls the permission checks refused; …)` on stderr. A job that needs its tools
+should check `denied_tools`, and approve them as the next sections describe.
+
+**It used to exit 0.** Before the run report, `--format json` exited 0 even
+when the run failed (the error was only in the JSON), and a run that ran out
+of turns exited 0 in every format. A script that treated any non-zero exit as
+"eVi crashed" should read `stop_reason` instead.
 
 ## `run_command` timed out, or "left a process running in the background"
 
@@ -188,7 +224,11 @@ workflow or recipe the web app runs, or an SDK agent built without a
 `permission_callback`. Such a run denies every call that would ask unless you
 opted in (`[auto] unattended_policy = "deny"` is the default). For a scheduled
 task, `evi schedule list` shows the refusal as `denied: <tools> (policy deny)`
-and the log's header says `# policy: deny`.
+and the log's header says `# policy: deny`. For `evi run` and `evi batch`,
+the run report names the policy (`"policy": "deny"`) and lists the refused
+tools in `denied_tools`; `evi run`'s text format prints them on stderr. The
+run still exits 0 when the model finishes without them (see the exit-code
+section above).
 
 To let the call run, from narrowest to widest:
 
@@ -262,10 +302,12 @@ drive path.
 eVi replaced a secret with a marker naming where it came from:
 `[REDACTED:OPENAI_API_KEY]` (an environment variable), `[REDACTED:llm.api_key]`
 (a `config.toml` field), `[REDACTED:github_token]` (a token's shape). It does
-this in transcripts, tool-call displays, `evi run` JSON, scheduled-task logs
-and crash reports; the model itself still got the real value. A session
-resumed or revived from its transcript has the marker in place of the value,
-so if the model needs it again it has to read it again. See [Secret
+this in transcripts, tool-call displays, `evi run`'s run report and
+`stream-json` events, scheduled-task logs and crash reports; the model itself
+still got the real value (and the model's own answer, `text` in the report,
+is not redacted). A session resumed or revived from its transcript has the
+marker in place of the value, so if the model needs it again it has to read
+it again. See [Secret
 redaction](features/secret-redaction.md).
 
 If ordinary text is redacted, it is the value of an environment variable whose

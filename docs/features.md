@@ -24,16 +24,31 @@ count) while a turn runs.
 at launch with `evi chat -m code` (an unknown mode exits 2); Web: the mode
 switcher; per-turn headless: `evi run -m code`.
 
-**Headless** — `evi run "prompt" [-m mode] [-y] [--format json] [--schema f]`.
-One-shot for scripts/CI. Example: `git diff | evi run "review for bugs" -y`.
-Nothing prompts: without `-y`, a call outside `[auto] auto_approve` is denied
-(`[auto] unattended_policy`), and the JSON result names the run's `policy` and
-why the turn ended (`stop_reason`). Ctrl+C or a SIGINT still prints the result
-(`"stop_reason": "interrupted"`, or the text so far) and exits 130.
+**Headless** — `evi run "prompt" [-m mode] [-y] [--format text|json|stream-json]
+[--schema f] [--max-turns N] [--cwd DIR] [--model ID] [--backend NAME]
+[--resume ID | --continue]`. One-shot for scripts/CI; with no prompt argument
+it reads the prompt from stdin. Example: `{ echo "Review this diff for bugs:";
+git diff; } | evi run -f json`. `--format json` prints the **run report**
+(`schema_version` 1): session and transcript, backend, model, folder and its
+trust state, turns used, `stop_reason` (the agent's own reason in
+`done_reason`), the answer, every tool call (name, arguments, status,
+duration, output), the denied tools, usage summed over the run, duration and
+`files_changed`. `--format stream-json` prints one JSON event per line,
+`RunStart` first and `RunResult` (the report) last, in the same versioned
+envelope as the web UI's stream. `--cwd` runs in another folder (its
+`.evi.toml` only if trusted), `--backend` picks a saved backend, `--resume` /
+`--continue` add the run to a past session. The exit code says why the run
+stopped: 0 done, 1 error, 2 usage error, 3 max_turns, 4 guardrail, 130
+interrupted (Ctrl+C or SIGINT, which still prints the result). Nothing
+prompts: without `-y`, a call outside `[auto] auto_approve` is denied
+(`[auto] unattended_policy`); the run still ends `done` when the model
+finishes, and the report lists those calls in `denied_tools`.
+[Guide](features/structured-and-batch.md#the-run-report).
 
-**Batch** — `evi batch prompts.jsonl -o out.jsonl -j 4`. Runs many prompts (each
-its own agent), optional parallelism. Input is `.jsonl`/`.json` objects
-(`{prompt, id?, mode?, schema?}`) or one prompt per line.
+**Batch** — `evi batch prompts.jsonl -o out.jsonl -j 4 [--max-turns N]`. Runs
+many prompts (each its own agent), optional parallelism. Input is
+`.jsonl`/`.json` objects (`{prompt, id?, mode?, schema?}`) or one prompt per
+line. Each result line is the item's `id` and `prompt` plus its run report.
 
 **Variants** — `evi variants "prompt" -n 3` — N independent takes on one prompt.
 
@@ -119,10 +134,11 @@ sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 **Secret redaction** — API keys and tokens a tool printed show as
 `[REDACTED:<kind>]` in transcripts (from now on; older ones aren't
 rewritten), tool-call displays (web events and `/history`, CLI tool lines and
-permission prompts), `evi run` JSON, scheduled-task logs, subagent traces and
-crash reports. Found by token shape and by the keys this machine has (env
-`*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD`, eVi's own config files). The
-model's own context isn't redacted. [Guide](features/secret-redaction.md).
+permission prompts), `evi run`'s run report and `stream-json` events (tool
+names, arguments and outputs, and errors), scheduled-task logs, subagent
+traces and crash reports. Found by token shape and by the keys this machine
+has (env `*_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD`, eVi's own config
+files). The model's own context isn't redacted. [Guide](features/secret-redaction.md).
 
 **Director attestation** — eVi never marks its own work verified: a task's
 verdict counts only with an attestation signed by the director's key

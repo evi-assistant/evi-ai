@@ -60,18 +60,41 @@ python examples/python/structured_output.py
 
 ## From the CLI
 
-`evi run` takes a `--schema` flag — a file path or inline JSON — and
-`--format json` prints the full `{text, tools, usage, error}` envelope:
+`evi run` takes a `--schema` flag — a file path or inline JSON. The default
+text format prints just the answer, which is the JSON object itself:
 
 ```bash
-echo "Jane Doe, VP Engineering, jane@acme.io" | \
-  evi run "Extract the contact fields from this signature." \
-  --schema contact.json --format json
+evi run "Extract the contact fields from this signature: Jane Doe, VP Engineering, jane@acme.io" \
+  --schema contact.json
+```
+
+```json
+{"name":"Jane Doe","email":"jane@acme.io","title":"VP Engineering"}
+```
+
+`--format json` prints the run report instead (`schema_version` 1): the
+answer is its `text` field, next to why the run stopped (`stop_reason`), the
+tool calls it made (`tool_calls`), the token `usage` summed over the run, the
+session id and more. Read the answer back out with `jq`:
+
+```bash
+evi run "Extract the contact fields from this signature: Jane Doe, VP Engineering, jane@acme.io" \
+  --schema contact.json --format json | jq -r .text
+```
+
+The prompt is either the argument or, when you leave the argument off,
+everything on stdin; the two don't combine, so pipe the whole prompt:
+
+```bash
+{ echo "Extract the contact fields from this signature:"; cat signature.txt; } | \
+  evi run --schema contact.json
 ```
 
 `--schema` also accepts inline JSON directly (handy for a one-off enum
-classification), and the prompt can be a positional argument or piped on stdin.
-A bad schema prints `error: ...` to stderr and exits **2**. Inside the REPL,
+classification). A bad schema prints `error: ...` to stderr and exits **2**.
+Every other exit code says why the run stopped: **0** when the model finished,
+**1** on an error (the backend failed, say), **3** when it ran out of
+`--max-turns`. Check it before you parse the answer. Inside the REPL,
 `/schema <file|inline-json> [prompt]` constrains the next turn (with no prompt it
 arms the schema for your next message); `/schema off` clears it.
 
@@ -83,14 +106,15 @@ arms the schema for your next message); `/schema off` clears it.
 - To control `strict` or the schema `name`, pass the full envelope yourself —
   `as_response_format` leaves richer forms untouched.
 
-The full field reference lives in
+The full field reference, including every field of the run report and every
+exit code, lives in
 [`docs/features/structured-and-batch.md`](https://github.com/evi-assistant/evi-ai/blob/main/docs/features/structured-and-batch.md),
 which also covers running many schema-constrained extractions at once with
-`evi batch`.
+`evi batch` (each result line carries its own run report).
 
 ## Where to go next
 
 - [Build an agent with the SDK](agent-sdk-quickstart.md) — the `build_agent` /
   `run_headless` basics this recipe builds on.
-- [Review a pull request in CI](headless-ci-review.md) — feed the JSON envelope
+- [Review a pull request in CI](headless-ci-review.md) — feed the run report
   into an unattended job.
