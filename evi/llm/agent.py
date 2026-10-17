@@ -4,7 +4,8 @@ Events yielded by `Agent.chat`:
 - TextDelta(text)        — incremental assistant text
 - ToolCall(name, args)   — model requested a tool
 - ToolResult(name, out)  — tool finished, output appended to history
-- Done(reason)           — turn complete (stop, length, ...)
+- Done(reason)           — turn complete (stop, length, ...; "interrupted"
+                           after Agent.cancel)
 - Error(message)         — recoverable error to surface to the UI
 """
 
@@ -12,14 +13,16 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import itertools
 import json
+import queue
 import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Generator, Iterable, Iterator
 
 from openai import OpenAI
 
@@ -609,6 +612,52 @@ Event = (
 # Seconds between ToolProgress heartbeats while tools are still running.
 PROGRESS_INTERVAL = 2.0
 
+# Cancelling a turn (`Agent.cancel`). The loop checks for a cancel every
+# CANCEL_POLL seconds while it waits on the model or on tools. Calls still
+# running when the turn is cancelled get CANCEL_GRACE seconds to stop on
+# their own (run_command kills its process tree and keeps its partial
+# output); any still running then are left behind, answered CANCELLED.
+CANCEL_POLL = 0.1
+CANCEL_GRACE = 2.0
+CANCELLED = "(cancelled)"
+# Done.reason of a cancelled turn.
+INTERRUPTED_REASON = "interrupted"
+
+_STREAM_END = object()  # what _pump_stream puts last
+_NOT_STARTED = object()  # what _start_call returns for a call it didn't start
+
+
+@dataclass
+class _Raised:
+    """An exception `_pump_stream` or `_until_cancelled`'s helper caught, to
+    raise again on the loop's thread (KeyboardInterrupt, a stand-in stream's
+    BaseException: whatever _iter_stream lets through)."""
+
+    exc: BaseException
+
+
+def _pump_stream(stream: Any, failed: list[Exception], out: queue.Queue,
+                 stop: threading.Event) -> None:
+    """Read `stream` (via _iter_stream) into `out` on its own thread, ending
+    with _STREAM_END. Once `stop` is set it closes the stream at its next
+    chunk: here, on the one thread that reads it, never under a read."""
+    chunks = _iter_stream(stream, failed)
+    try:
+        for chunk in chunks:
+            if stop.is_set():
+                break
+            out.put(chunk)
+    except BaseException as exc:  # noqa: BLE001 — handed to the loop's thread
+        out.put(_Raised(exc))
+    finally:
+        if stop.is_set():
+            chunks.close()
+            close = getattr(stream, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()  # end the request: the server stops generating
+        out.put(_STREAM_END)
+
 
 # --- Agent ---------------------------------------------------------------
 
@@ -720,8 +769,16 @@ class Agent:
         # continuing a revived session's count (_sync_turn_index).
         self.turn_index: int = 0
         self._turns_of: str | None = None  # the session_id turn_index counts for
-        # ToolContext.cancel_token. Nothing sets it yet (Agent cancel will).
+        # ToolContext.cancel_token: the running (or last) turn's, set by
+        # `cancel`. Each turn gets a fresh one when it is created (chat /
+        # continue_chat), so a call a cancelled turn left behind keeps seeing
+        # its cancel while later turns run.
         self.cancel_token = threading.Event()
+        self._cancel_reason = ""
+        # The tool call running where this turn started (a subagent's turn runs
+        # inside its parent's call): a cancel of any turn up that chain stops
+        # this one too (`_cancelled`).
+        self._turn_parent: ToolContext | None = None
         # This agent's bindings of tools that have a `binder`, made at each
         # tool's first call (`_session_tool`): unbound tool's id → (that tool,
         # kept alive so the id stays unique; its binding; the session bound for).
@@ -787,6 +844,130 @@ class Agent:
         with self._steer_lock:
             out, self._steer_queue = self._steer_queue, []
         return out
+
+    # --- cancelling a turn -------------------------------------------------
+
+    def cancel(self, reason: str = "") -> bool:
+        """Stop the running turn: it ends with ``Done("interrupted")``. Safe to
+        call from any thread, and from a signal handler: it only sets
+        `cancel_token`, which the loop's own thread checks but never waits on.
+
+        Within about CANCEL_POLL seconds, wherever the turn is: a reply being
+        streamed stops (its text so far is kept, marked as cut off), a request
+        still waiting for its first token is abandoned, no further call is
+        asked about or started, and calls already running see
+        ``ToolContext.cancel_token`` (run_command, run_python and monitor kill
+        their process trees). Every call left without a result gets a
+        "(cancelled)" one, so the history stays valid, and the `stop` hook
+        fires. A turn starts, uncancelled, when chat() / continue_chat() is
+        called: a cancel sent after that, before anything iterates the turn
+        (the web claims a turn, then a worker runs it), ends it at its first
+        step, while one sent when no turn runs does nothing to the next.
+        `reason` ("the user pressed Ctrl+C") is what those notes give as the
+        cause. False if the turn was already cancelled."""
+        token = self.cancel_token
+        if token.is_set():
+            return False
+        self._cancel_reason = (reason or "").strip() or "the turn was cancelled"
+        token.set()
+        return True
+
+    def _begin_turn(self) -> None:
+        """Start a turn uncancelled, under the tool call running here (if any).
+        It gets a token of its own: one set for an earlier turn stays set, so
+        a call that turn left behind still sees its cancel."""
+        self._cancel_reason = ""
+        self.cancel_token = threading.Event()
+        self._turn_parent = active_context()
+
+    def _cancelled(self) -> bool:
+        """True once this turn is cancelled: by `cancel`, or by a cancel of the
+        turn whose tool call this one runs inside (a subagent stops with its
+        parent). That cancel is copied to this agent's own token, which its
+        running tools watch. Never waits on the token: a signal handler on
+        this thread may be setting it (`cancel`)."""
+        if self.cancel_token.is_set():
+            return True
+        ctx = self._turn_parent
+        while ctx is not None:
+            token = getattr(ctx, "cancel_token", None)
+            if token is not None and token.is_set():
+                self.cancel("the turn this one runs inside was cancelled")
+                return True
+            ctx = getattr(ctx, "parent", None)
+        return False
+
+    def _cancel_note(self) -> str:
+        return self._cancel_reason or "the turn was cancelled"
+
+    def _until_cancelled(self, fn: Callable[[], Any]) -> tuple[bool, Any]:
+        """Call `fn` on a helper thread (under a copy of this context) and wait
+        for it, checking for a cancel every CANCEL_POLL seconds: a request can
+        take long before its first token. Returns (True, result), or (False,
+        None) once the turn is cancelled first; the helper is then left to
+        finish and closes whatever `fn` returns. `fn`'s exception is raised
+        here."""
+        lock = threading.Lock()
+        done = threading.Event()
+        state: dict[str, Any] = {"abandoned": False}
+
+        def helper() -> None:
+            try:
+                state["value"] = fn()
+            except BaseException as exc:  # noqa: BLE001 — raised again on the caller's thread
+                state["value"] = _Raised(exc)
+            with lock:
+                done.set()
+                abandoned = state["abandoned"]
+            close = getattr(state["value"], "close", None)
+            if abandoned and callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+
+        ctx = contextvars.copy_context()
+        threading.Thread(target=ctx.run, args=(helper,), name="evi-llm-open", daemon=True).start()
+        while not done.wait(CANCEL_POLL):
+            if self._cancelled():
+                with lock:
+                    if not done.is_set():
+                        state["abandoned"] = True
+                        return False, None
+                break
+        value = state["value"]
+        if isinstance(value, _Raised):
+            raise value.exc
+        return True, value
+
+    def _read_stream(
+        self, stream: Any, failed: list[Exception], cancelled: list[bool]
+    ) -> Iterator[Any]:
+        """`stream`'s chunks, as _iter_stream yields them, read on a helper
+        thread (_pump_stream) so a cancel ends the wait at once, even while the
+        model has yet to send anything. On a cancel it stops and appends True
+        to `cancelled`; the helper closes the stream at its next chunk."""
+        chunks: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        ctx = contextvars.copy_context()
+        threading.Thread(
+            target=ctx.run, args=(_pump_stream, stream, failed, chunks, stop),
+            name="evi-llm-stream", daemon=True,
+        ).start()
+        try:
+            while True:
+                if self._cancelled():
+                    cancelled.append(True)
+                    return
+                try:
+                    item = chunks.get(timeout=CANCEL_POLL)
+                except queue.Empty:
+                    continue
+                if item is _STREAM_END:
+                    return
+                if isinstance(item, _Raised):
+                    raise item.exc
+                yield item
+        finally:
+            stop.set()
 
     def _compose_system_prompt(self) -> str:
         """Stitch base + style + memory + skills + project context together."""
@@ -1595,7 +1776,30 @@ class Agent:
         rejection. Only applied to the FIRST LLM round-trip in this turn;
         once any tool runs, the prediction is stale and we let the model
         write freely.
+
+        `cancel` (from any thread) ends the turn early with
+        ``Done("interrupted")``. The turn starts here, when chat() is called,
+        not at the first next(): a cancel sent in between still ends it.
         """
+        self._begin_turn()
+        return self._chat_turn(
+            user_msg, max_turns, images, response_format, tool_choice, prediction,
+            parallel_tool_calls, logit_bias, audio,
+        )
+
+    def _chat_turn(
+        self,
+        user_msg: str,
+        max_turns: int,
+        images: list[str] | None,
+        response_format: dict | None,
+        tool_choice: str | dict | None,
+        prediction: str | None,
+        parallel_tool_calls: bool | None,
+        logit_bias: dict | None,
+        audio: list[str] | None,
+    ) -> Iterator[Event]:
+        """The events of the turn `chat` started, as it documents."""
         # Scope file tools to this session's working folder for the turn. Tool
         # bodies run on pool threads, so _dispatch_run sets it there too.
         if getattr(self, "cwd", ""):
@@ -1804,7 +2008,13 @@ class Agent:
         """Resume inference against the current `history` without appending a
         new user message. Caller is responsible for setting history up — the
         typical use is re-roll: pop the last assistant message (and any
-        intervening tool messages), then invoke this to regenerate."""
+        intervening tool messages), then invoke this to regenerate. Like
+        `chat`, the turn starts when this is called."""
+        self._begin_turn()
+        return self._continue_turn(max_turns)
+
+    def _continue_turn(self, max_turns: int) -> Iterator[Event]:
+        """The events of the turn `continue_chat` started."""
         # A re-roll answers the last user message afresh: the turn that set
         # the old skill scope was rewound away with it.
         self.active_skill_scope = None
@@ -1949,6 +2159,12 @@ class Agent:
             extra_body["cache_prompt"] = True
 
         for turn_idx in range(max_turns):
+            # A cancel that came in during the last tool round (or before the
+            # first request) ends the turn here, between steps. Queued steering
+            # stays queued for the caller (take_pending_steering).
+            if self._cancelled():
+                yield from self._finish_turn(INTERRUPTED_REASON)
+                return
             # Non-interrupting steering: a follow-up the user sent while this
             # turn was running lands HERE — between steps, once the previous
             # tool round is complete — instead of interrupting work in flight.
@@ -2107,16 +2323,23 @@ class Agent:
                 last_err: Exception | None = None
                 for ci, cand in enumerate(candidates):
                     try:
-                        stream = _open(cand)
+                        # On a helper thread: a cancel needn't wait for a
+                        # backend still busy with the prompt.
+                        opened, stream = self._until_cancelled(functools.partial(_open, cand))
                     except Exception as e:  # network / model not loaded / etc.
                         last_err = e
                         dlog("llm.error",
                              {"type": type(e).__name__, "msg": str(e), "model": cand})
                         continue
+                    if not opened:  # cancelled while the request was being made
+                        break
                     if ci > 0:  # we fell back — tell the UI which model won
                         yield RouteInfo(model=cand, route="fallback")
                         dlog("llm.fallback", {"to": cand})
                     break
+                if stream is None and self._cancelled():
+                    yield from self._finish_turn(INTERRUPTED_REASON)
+                    return
                 if stream is None:
                     yield Error(
                         f"LLM request failed: "
@@ -2143,6 +2366,7 @@ class Agent:
             hold_text = False
             hold_decided = False
             stream_failed: list[Exception] = []  # set by _iter_stream when the stream breaks
+            stream_cancelled: list[bool] = []  # set by _read_stream on a cancel
 
             def _maybe_hold() -> None:
                 nonlocal hold_text, hold_decided
@@ -2153,7 +2377,7 @@ class Agent:
                     hold_decided = True
                     hold_text = head[:1] in ("`", "{", "[")
 
-            for chunk in _iter_stream(stream, stream_failed):
+            for chunk in self._read_stream(stream, stream_failed, stream_cancelled):
                 # The final chunk in a stream_options.include_usage stream
                 # has no choices but carries the usage tally.
                 if getattr(chunk, "usage", None) is not None:
@@ -2199,9 +2423,14 @@ class Agent:
             # A stream that broke before the model finished (a dropped
             # connection, an error event mid-reply) ends the turn with an Error
             # but keeps what arrived. One that broke after the last choice
-            # (finish_reason seen) only lost its trailing usage chunk.
-            stream_error = stream_failed[0] if stream_failed and finish_reason is None else None
-            if stream_failed:
+            # (finish_reason seen) only lost its trailing usage chunk. A
+            # cancelled one is no error, whatever its reader saw after.
+            cancelled = bool(stream_cancelled)
+            stream_error = (
+                stream_failed[0] if stream_failed and finish_reason is None and not cancelled
+                else None
+            )
+            if stream_failed and not cancelled:
                 dlog("llm.stream_error", {
                     "type": type(stream_failed[0]).__name__, "msg": str(stream_failed[0]),
                     "finished": finish_reason is not None,
@@ -2254,7 +2483,7 @@ class Agent:
             # no structured calls AND the reply leads with JSON / a code fence,
             # so we never execute a tool-call example buried in normal prose.
             # Never from a reply cut off mid-stream.
-            if not tool_buf and text_buf and stream_error is None:
+            if not tool_buf and text_buf and stream_error is None and not cancelled:
                 _stripped = "".join(text_buf).strip()
                 if _stripped[:1] in ("`", "{", "["):
                     _recovered = recover_text_tool_calls(_stripped, set(self.tools))
@@ -2293,6 +2522,19 @@ class Agent:
                     return
                 cut_note = f"{INTERRUPTED} The reply was cut off here: the model's stream failed."
                 text_buf.append(f"\n\n{cut_note}" if "".join(text_buf).strip() else cut_note)
+
+            if cancelled:
+                # A reply stopped mid-stream keeps its text, marked as cut off.
+                # A call it was still sending never runs and isn't kept (it
+                # would only need a made-up result); with no text either, no
+                # assistant message is made up.
+                tool_buf = {}
+                if not "".join(text_buf).strip():
+                    yield from self._finish_turn(INTERRUPTED_REASON)
+                    return
+                text_buf.append(
+                    f"\n\n{INTERRUPTED} The reply was cut off here: {self._cancel_note()}."
+                )
 
             # ALWAYS set `content` (empty string on a tool-calls-only turn).
             # Ollama's OpenAI-compat endpoint rejects an assistant message with
@@ -2371,6 +2613,10 @@ class Agent:
                 )
                 return
 
+            if cancelled:
+                yield from self._finish_turn(INTERRUPTED_REASON)
+                return
+
             if not tool_buf:
                 self._maybe_autocompact()
                 yield from self._finish_turn(finish_reason or "stop")
@@ -2418,16 +2664,21 @@ class Agent:
                 else:
                     m["blocked"] = None
             # 2) Permission for the calls still standing, at once (batched when
-            #    possible): a call refused above never prompts.
-            self._gate_permissions([m for m in calls_meta if m["blocked"] is None])
-            # 3) Per-call: permission denial → hook veto.
-            for m in calls_meta:
-                if m["blocked"] is not None:
-                    continue
-                if not m["perm"]:
-                    m["blocked"] = self._denial_message(m.get("tool"), m["name"], m["args"])
-                else:
-                    m["blocked"] = self._run_before_hooks(m["name"], m["args"])
+            #    possible): a call refused above never prompts. A turn
+            #    cancelled by now asks about nothing and runs nothing.
+            cancelled = self._cancelled()
+            if not cancelled:
+                self._gate_permissions([m for m in calls_meta if m["blocked"] is None])
+                # 3) Per-call: permission denial → hook veto.
+                for m in calls_meta:
+                    if m["blocked"] is not None or m.get("cancelled"):
+                        continue
+                    if not m["perm"]:
+                        m["blocked"] = self._denial_message(m.get("tool"), m["name"], m["args"])
+                    else:
+                        m["blocked"] = self._run_before_hooks(m["name"], m["args"])
+                # A permission prompt or a hook can take a while.
+                cancelled = self._cancelled()
 
             # Each entry is either a `ToolOutput` (success or blocked) or
             # None (slot not filled yet). Permission denials / hook vetoes
@@ -2438,58 +2689,26 @@ class Agent:
                     outputs.append(None)
                 else:
                     outputs.append(ToolOutput(text=m["blocked"]))
-            runnable = [
-                (i, m) for i, m in enumerate(calls_meta) if outputs[i] is None
-            ]
-            if runnable:
-                import concurrent.futures as _futures
-
-                # 1 worker is fine for a single tool call; cap at 4 to avoid
-                # thrashing a local LLM box that's also running the model.
-                max_workers = min(4, len(runnable)) or 1
-                with _futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    # Each call runs on its own copy of this thread's context
-                    # (one Context can't be entered by two threads at once), so
-                    # ContextVars set for the turn reach the tool body. Nothing
-                    # a tool sets there comes back: results do (skill scope).
-                    future_to_idx = {
-                        ex.submit(
-                            contextvars.copy_context().run,
-                            self._dispatch_run, m["tool"], m["name"], m["args"],
-                            batch_scope,
-                        ): i
-                        for i, m in runnable
-                    }
-                    # Instead of blocking silently until tools finish (the old
-                    # `as_completed`), poll with a timeout and emit ToolProgress
-                    # heartbeats so a slow tool shows live status. Tools flagged
-                    # `long` announce immediately (elapsed 0); any tool still
-                    # running past PROGRESS_INTERVAL announces on each tick.
-                    start = time.monotonic()
-                    long_now = [
-                        m["name"] for _, m in runnable
-                        if getattr(m["tool"], "long", False)
-                    ]
-                    if long_now:
-                        yield ToolProgress(long_now, 0.0)
-                    pending = set(future_to_idx)
-                    while pending:
-                        done, pending = _futures.wait(
-                            pending,
-                            timeout=PROGRESS_INTERVAL,
-                            return_when=_futures.FIRST_COMPLETED,
-                        )
-                        for fut in done:
-                            i = future_to_idx[fut]
-                            try:
-                                outputs[i] = fut.result()
-                            except Exception as exc:
-                                outputs[i] = ToolOutput(
-                                    text=f"ERROR: {type(exc).__name__}: {exc}"
-                                )
-                        if pending:
-                            names = [calls_meta[future_to_idx[f]]["name"] for f in pending]
-                            yield ToolProgress(names, round(time.monotonic() - start, 1))
+            runnable = [(i, m) for i, m in enumerate(calls_meta) if outputs[i] is None]
+            not_run: set[int] = set()  # calls cancelled before they started
+            if cancelled:
+                not_run.update(i for i, _m in runnable)
+            elif runnable:
+                cancelled = yield from self._run_calls(
+                    runnable, calls_meta, outputs, batch_scope, not_run
+                )
+            # Every call still without a result (never started, or still
+            # running when the turn was cancelled) is answered, so each call
+            # in history keeps its result.
+            for i, output in enumerate(outputs):
+                if output is None:
+                    outputs[i] = ToolOutput(text=(
+                        f"{CANCELLED} Not run: the turn was cancelled ({self._cancel_note()}) "
+                        "before this call started." if i in not_run else
+                        f"{CANCELLED} The turn was cancelled ({self._cancel_note()}) while this "
+                        "call was running. eVi stopped waiting for it: it may have done part "
+                        "of its work, and its result is unknown."
+                    ))
 
             # A skill invoked this round scopes the rounds after it. Applied
             # here, on the loop's thread, in call order (skillscope.narrow).
@@ -2500,7 +2719,7 @@ class Agent:
 
             # Emit results + append history in the ORIGINAL order so
             # tool_call_id pairing stays consistent.
-            for m, output in zip(calls_meta, outputs):
+            for i, (m, output) in enumerate(zip(calls_meta, outputs)):
                 fname = m["name"]
                 call = m["call"]
                 out_obj = output or ToolOutput(text="(no output)")
@@ -2515,11 +2734,141 @@ class Agent:
                         "content": out_obj.text if out_obj.text is not None else "",
                     }
                 )
+                # A call that never ran is logged without tool_name, which
+                # marks one that ran (stats counts executions by it).
                 self._log_to_transcript(
-                    "tool", out_obj.text, tool_name=fname, tool_call_id=call["id"]
+                    "tool", out_obj.text, tool_name=None if i in not_run else fname,
+                    tool_call_id=call["id"],
                 )
+            if cancelled:
+                yield from self._finish_turn(INTERRUPTED_REASON)
+                return
 
-        yield from self._finish_turn("max_turns_reached")
+        yield from self._finish_turn(
+            INTERRUPTED_REASON if self._cancelled() else "max_turns_reached"
+        )
+
+    def _run_calls(
+        self,
+        runnable: list[tuple[int, dict[str, Any]]],
+        calls_meta: list[dict[str, Any]],
+        outputs: list[ToolOutput | None],
+        batch_scope: skillscope.Scope | None,
+        not_run: set[int],
+    ) -> Generator[Event, None, bool]:
+        """Run the cleared calls in parallel, filling `outputs` and yielding
+        ToolProgress heartbeats. Returns True when the turn was cancelled
+        while they ran: they get CANCEL_GRACE seconds to stop on their own
+        (they see ``ToolContext.cancel_token``; run_command kills its process
+        tree and returns its partial output), and any still running then keep
+        a None output and are left behind. A call still waiting for a worker
+        never starts once the turn is cancelled (its index goes in `not_run`):
+        the queued ones are dropped as soon as the cancel is seen, and one a
+        worker picks up after it doesn't run (`_start_call`). A consumer that
+        stops reading (the generator is closed, or raises) cancels the calls
+        still running the same way, so none is left to run on unwatched."""
+        import concurrent.futures as _futures
+
+        token = self.cancel_token  # this turn's, which every call here watches
+
+        def drop_queued() -> None:
+            # A call no worker has picked up yet never starts.
+            for fut in list(pending):
+                if fut.cancel():
+                    pending.discard(fut)
+                    not_run.add(future_to_idx[fut])
+
+        # 1 worker is fine for a single tool call; cap at 4 to avoid
+        # thrashing a local LLM box that's also running the model.
+        ex = _futures.ThreadPoolExecutor(max_workers=min(4, len(runnable)) or 1)
+        future_to_idx: dict[_futures.Future, int] = {}
+        pending: set[_futures.Future] = set()
+        try:
+            # Each call runs on its own copy of this thread's context
+            # (one Context can't be entered by two threads at once), so
+            # ContextVars set for the turn reach the tool body. Nothing
+            # a tool sets there comes back: results do (skill scope).
+            future_to_idx = {
+                ex.submit(
+                    contextvars.copy_context().run,
+                    self._start_call, token, m["tool"], m["name"], m["args"],
+                    batch_scope,
+                ): i
+                for i, m in runnable
+            }
+            pending = set(future_to_idx)
+            # Instead of blocking silently until tools finish (the old
+            # `as_completed`), poll with a timeout and emit ToolProgress
+            # heartbeats so a slow tool shows live status. Tools flagged
+            # `long` announce immediately (elapsed 0); any tool still
+            # running past PROGRESS_INTERVAL announces on each tick, and
+            # whenever another call of the batch finishes. Each poll also
+            # checks for a cancel.
+            start = beat = time.monotonic()
+            long_now = [
+                m["name"] for _, m in runnable
+                if getattr(m["tool"], "long", False)
+            ]
+            if long_now:
+                yield ToolProgress(long_now, 0.0)
+            cancelled_at: float | None = None
+            while pending:
+                done, pending = _futures.wait(
+                    pending,
+                    timeout=min(CANCEL_POLL, PROGRESS_INTERVAL),
+                    return_when=_futures.FIRST_COMPLETED,
+                )
+                for fut in done:
+                    i = future_to_idx[fut]
+                    try:
+                        output = fut.result()
+                    except Exception as exc:
+                        output = ToolOutput(text=f"ERROR: {type(exc).__name__}: {exc}")
+                    if output is _NOT_STARTED:
+                        not_run.add(i)
+                    else:
+                        outputs[i] = output
+                if not pending:
+                    break
+                now = time.monotonic()
+                if cancelled_at is None and self._cancelled():
+                    cancelled_at = now
+                    drop_queued()
+                    if not pending:
+                        break
+                if cancelled_at is not None and now - cancelled_at >= CANCEL_GRACE:
+                    break  # the rest are left behind, answered "(cancelled)"
+                if done or now - beat >= PROGRESS_INTERVAL:
+                    beat = now
+                    names = [calls_meta[future_to_idx[f]]["name"] for f in pending]
+                    yield ToolProgress(names, round(now - start, 1))
+            return cancelled_at is not None
+        finally:
+            if pending and not token.is_set():
+                # The consumer stopped reading mid-batch: stop the calls too.
+                self.cancel("the turn was abandoned while its tools ran")
+                drop_queued()
+                pending = _futures.wait(pending, timeout=CANCEL_GRACE).not_done
+            # A call still queued never starts; one still running is left to
+            # finish on its own, and the pool's thread ends with it.
+            drop_queued()
+            ex.shutdown(wait=not pending, cancel_futures=True)
+
+    def _start_call(
+        self,
+        token: threading.Event,
+        tool: Tool,
+        name: str,
+        args_json: str,
+        skill_scope: skillscope.Scope | None,
+    ) -> ToolOutput | object:
+        """One call of a tool batch, on its pool thread: `_dispatch_run` with
+        `token` (its turn's cancel token) as its ``ToolContext.cancel_token``.
+        A call whose turn was cancelled while it waited for a worker never
+        starts: _NOT_STARTED."""
+        if token.is_set() or self._cancelled():
+            return _NOT_STARTED
+        return self._dispatch_run(tool, name, args_json, skill_scope, cancel_token=token)
 
     def _finish_turn(self, reason: str) -> Iterator[Event]:
         """End the turn: fire the `stop` lifecycle hook, then yield Done.
@@ -2542,13 +2891,15 @@ class Agent:
 
     # --- session-bound tools ----------------------------------------------
 
-    def tool_context(self) -> ToolContext:
-        """The ToolContext a tool call made now runs with."""
+    def tool_context(self, cancel_token: threading.Event | None = None) -> ToolContext:
+        """The ToolContext a tool call made now runs with. Its cancel token is
+        `cancel_token` (the call's turn's) when given, else the current
+        turn's."""
         return ToolContext(
             agent=self,
             session_id=self.session_id,
             cwd=getattr(self, "cwd", "") or "",
-            cancel_token=self.cancel_token,
+            cancel_token=self.cancel_token if cancel_token is None else cancel_token,
             turn_index=self.turn_index,
             user_root=self.user_root,
             parent=getattr(self, "parent_context", None),
@@ -2725,6 +3076,9 @@ class Agent:
         if not need_prompt:
             return
 
+        # A call whose question the turn's cancel cut short (Ctrl+C at the
+        # prompt), or came after, is marked "cancelled": it is answered as a
+        # cancelled call, not as one the user refused.
         if self.permission_batch_callback is not None and len(need_prompt) >= 2:
             triples = [
                 (m["tool"].name, m["args"], self._call_category(m["tool"], m["args"]))
@@ -2734,11 +3088,17 @@ class Agent:
                 decisions = list(self.permission_batch_callback(triples))
             except Exception:
                 decisions = [False] * len(need_prompt)
+            cut_short = self._cancelled()
             for i, m in enumerate(need_prompt):
                 m["perm"] = bool(decisions[i]) if i < len(decisions) else False
+                m["cancelled"] = cut_short
         else:
             for m in need_prompt:
+                if self._cancelled():  # ask no more
+                    m["perm"], m["cancelled"] = False, True
+                    continue
                 m["perm"] = self._ask_permission(m["tool"], m["args"])
+                m["cancelled"] = self._cancelled()
 
     def _dispatch_run(
         self,
@@ -2746,6 +3106,7 @@ class Agent:
         name: str,
         args_json: str,
         skill_scope: skillscope.Scope | None = None,
+        cancel_token: threading.Event | None = None,
     ) -> ToolOutput:
         """Execute the tool body + run after-hooks. Safe to call in parallel
         across multiple tools — each tool gets its own thread of execution
@@ -2756,14 +3117,15 @@ class Agent:
 
         A tool that declares ``ctx`` gets this session's ToolContext, and one
         with a `binder` runs as this agent's own binding of it (made here at
-        its first call; a binder that fails makes the call's ERROR).
+        its first call; a binder that fails makes the call's ERROR). Its
+        cancel token is `cancel_token` (the call's turn's) when given.
 
         Returns a `ToolOutput` carrying both visible text and any citations
         the tool produced.
         """
         dlog("tool.call", {"name": name, "args": args_json})
         _t0 = time.monotonic()
-        ctx = self.tool_context()
+        ctx = self.tool_context(cancel_token)
         # The tool body sees this session's folder ("" = the process cwd, not
         # whatever folder the calling thread last had), hooks, skill scope and
         # tool context. In the chat loop this runs on a pool thread under a

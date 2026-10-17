@@ -172,7 +172,11 @@ def test_ctx_tool_gets_session_cwd_id_and_turn(home, tmp_path, fake_llm):
         assert c.session_id == "sess-1"
         assert c.cwd == str(tmp_path)
         assert c.user_root is None  # single-user
-        assert c.cancel_token is agent.cancel_token and not c.cancel_token.is_set()
+        assert not c.cancel_token.is_set()
+    # Each turn's calls share that turn's cancel token (one a cancelled turn
+    # left behind keeps seeing its cancel); the agent holds the latest turn's.
+    assert got["second"].cancel_token is got["third"].cancel_token is agent.cancel_token
+    assert got["first"].cancel_token is not agent.cancel_token
     assert agent.turn_index == 2
 
 

@@ -8,18 +8,21 @@ a sandboxed run is "code_read" (`Tool.category_for`). `python_symbols` only
 reads (always "code_read"), and `check_file` is "code_read" only on a file
 whose linters run no project code (`evi.permissions.classify_call`). All
 three stay in the "code" category for the `[tools] code` toggle and modes.
+
+`run_python` runs through `evi.proc.run` like run_command: its whole process
+tree is killed at the timeout or when the turn is cancelled, and the output
+so far comes back.
 """
 
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from evi import workdir
-from evi.tools.base import tool
+from evi import proc, workdir
+from evi.tools.base import ToolContext, tool
 
 
 _TIMEOUT_SECONDS = 10
@@ -65,7 +68,7 @@ def _run_python_category(_args: dict) -> str | None:
     category="code",
     category_for=_run_python_category,
 )
-def run_python(code: str) -> str:
+def run_python(code: str, ctx: ToolContext | None = None) -> str:
     exe = _python_exe()
     if exe is None:
         return (
@@ -74,34 +77,41 @@ def run_python(code: str) -> str:
             "can't execute scripts). Install Python 3, or run eVi from a Python "
             "environment."
         )
-    with tempfile.TemporaryDirectory(prefix="evi-py-") as tmp:
+    # A killed snippet's processes may still be letting go of the folder (its
+    # working directory) on Windows when it is removed.
+    with tempfile.TemporaryDirectory(prefix="evi-py-", ignore_cleanup_errors=True) as tmp:
         script = Path(tmp) / "snippet.py"
         script.write_text(code, encoding="utf-8")
         argv = [exe, str(script)]
         note = ""
+        sandboxed = False
         try:
             from evi import sandbox
 
             if sandbox.requested():
                 if sandbox.available():
                     argv = sandbox.wrap(argv, tmp, allow_network=False)
+                    sandboxed = True
                 else:
                     note = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
         except Exception:  # noqa: BLE001
             pass
-        try:
-            res = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=_TIMEOUT_SECONDS,
-                cwd=tmp,
-            )
-        except subprocess.TimeoutExpired:
-            return f"ERROR: timeout after {_TIMEOUT_SECONDS}s"
-        out = (res.stdout or "") + (res.stderr or "")
+        res = proc.run(
+            argv,
+            cwd=tmp,
+            timeout=_TIMEOUT_SECONDS,
+            cancel_token=getattr(ctx, "cancel_token", None),
+            env=proc.scrubbed_env() if sandboxed or proc.runs_unattended(ctx) else None,
+        )
+        out = res.output
         if len(out) > _MAX_OUTPUT:
             out = out[:_MAX_OUTPUT] + f"\n... [truncated, {len(out)} bytes total]"
+        if res.cancelled:
+            return (f"{note}(cancelled) The turn was cancelled, so the snippet was stopped "
+                    f"and its process tree killed. Output so far:\n{out or '(no output)'}")
+        if res.timed_out:
+            return (f"{note}ERROR: timeout after {_TIMEOUT_SECONDS}s; its process tree was "
+                    f"killed. Output so far:\n{out or '(no output)'}")
         return note + (out or f"(no output, exit={res.returncode})")
 
 

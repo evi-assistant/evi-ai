@@ -45,6 +45,7 @@ from evi.hooks import HookRegistry
 from evi.llm.agent import Done, Error, TextDelta, ToolResult
 from evi.llm.client import make_client
 from evi.memory import MemoryStore
+from evi.redact import Redactor
 from evi.tools.base import REGISTRY, Tool, active_context
 
 # Default for `hooks=` / `skill_scope=`: take the spawning agent's (None outside
@@ -213,6 +214,9 @@ def run_subagent(
     text_parts: list[str] = []
     tool_trace: list[str] = []
     error: str | None = None
+    # The trace is cut short, so it is redacted first: a key straddling the
+    # cut would leave a prefix no later redaction (a display's) can match.
+    red = Redactor()
     try:
         # Nobody can approve anything a delegate CLI agent's own tools do.
         gate = contextlib.nullcontext() if attended else unattended("subagent", config)
@@ -256,7 +260,7 @@ def run_subagent(
                     text_parts.append(event.text)
                 elif isinstance(event, ToolResult):
                     # Keep a short trace so the caller can see what the sub-agent did.
-                    preview = event.output[:200].replace("\n", " ")
+                    preview = red(event.output)[:200].replace("\n", " ")
                     tool_trace.append(f"{event.name}: {preview}")
                 elif isinstance(event, Error):
                     error = event.message

@@ -227,3 +227,33 @@ def test_subagent_memory_tools_use_the_parents_store(stub_llm, monkeypatch, tmp_
     own = MemoryStore(root=tmp_path / "own-mem")
     subagent_mod.run_subagent(system_prompt="t", task="x", tools=["remember"], memory=own)
     assert _RecordingAgent.built[-1].memory is own
+
+
+def test_the_subagent_trace_redacts_before_it_cuts(stub_llm, monkeypatch) -> None:
+    """The trace a subagent hands back cuts each tool output to 200
+    characters. Redacted first: a key straddling the cut would leave a prefix
+    that no later redaction (the parent's ToolResult display) can match."""
+    import os
+
+    from evi import redact
+
+    secret = "Zq8vN2kLp4Xr7Tw1Ys5M-env"
+    for name in list(os.environ):
+        if redact._SECRET_NAME.search(name):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ACME_API_KEY", secret)
+    redact.refresh()
+
+    class _Straddling(_FakeAgent):
+        def chat(self, task: str, max_turns: int = 6) -> Iterator[Event]:
+            yield TextDelta("done")
+            yield ToolResult(name="read_file", output="y" * 190 + secret)
+            yield Done(reason="stop")
+
+    _build_with(monkeypatch, _Straddling)
+    try:
+        out = subagent_mod.run_subagent(system_prompt="t", task="x", tools=["read_file"])
+    finally:
+        redact.refresh()
+    assert "read_file: " + "y" * 190 + "[REDACTED:" in out
+    assert not any(secret[i:i + 8] in out for i in range(len(secret) - 7))

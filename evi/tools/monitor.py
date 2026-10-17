@@ -16,20 +16,22 @@ call is checked as "shell" (`Tool.category_for`: the shell rules, hard_deny
 and the destructive guard apply, and it is never auto-approved unless "shell"
 is), it is refused outright in a session that doesn't offer the shell tools
 (`[tools] shell = false`, outside a mode that turns them on), and it runs
-under the OS sandbox when `[tools] sandbox` is on.
+under the OS sandbox when `[tools] sandbox` is on. It runs through
+`evi.proc.run` like run_command: at the timeout, on an `until` match or when
+the turn is cancelled (`ToolContext.cancel_token`), the command's whole
+process tree is killed. A file tail also stops when the turn is cancelled.
 """
 
 from __future__ import annotations
 
 import os
-import queue
 import re
-import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from evi import proc
 from evi.tools.base import ToolContext, tool
 
 _MAX_TIMEOUT = 300.0
@@ -45,13 +47,18 @@ def _clip(lines: list[str]) -> str:
     return out[-_MAX_OUTPUT:]
 
 
-def _tail_file(path: Path, until_rx, deadline: float, poll: float) -> str:
+def _tail_file(
+    path: Path, until_rx, deadline: float, poll: float,
+    cancel_token: threading.Event | None = None,
+) -> str:
     if not path.is_file():
         return f"ERROR: not a file: {path}"
     collected: list[str] = []
     with path.open("r", encoding="utf-8", errors="replace") as f:
         f.seek(0, 2)  # start at EOF — we only want NEW lines
         while time.monotonic() < deadline:
+            if cancel_token is not None and cancel_token.is_set():
+                return (_clip(collected) if collected else "(no new lines)") + "\n[cancelled]"
             line = f.readline()
             if not line:
                 time.sleep(poll)
@@ -105,7 +112,8 @@ def _file_target(args: dict) -> list[str]:
 
 
 def _watch_command(
-    command: str, until_rx, deadline: float, poll: float, *, sandboxed: bool = False
+    command: str, until_rx, deadline: float, *, sandboxed: bool = False,
+    cancel_token: threading.Event | None = None, scrub: bool = False,
 ) -> str:
     # Like run_command: under the OS sandbox when [tools] sandbox is on and a
     # sandboxer is present. It runs in the eVi process's cwd, as it always has
@@ -119,57 +127,30 @@ def _watch_command(
         if sandbox.available():
             argv = sandbox.wrap(["/bin/sh", "-c", command], os.getcwd(), allow_network=False)
             use_shell = False
+            scrub = True
         else:
             prefix = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
     try:
-        proc = subprocess.Popen(
-            argv, shell=use_shell, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1,
+        res = proc.run(
+            argv, shell=use_shell, merge_stderr=True,
+            timeout=max(0.0, deadline - time.monotonic()),
+            cancel_token=cancel_token,
+            until=until_rx.search if until_rx is not None else None,
+            env=proc.scrubbed_env() if scrub else None,
         )
     except OSError as exc:
         return f"ERROR: could not start command: {exc}"
 
-    q: queue.Queue = queue.Queue()
-
-    def _reader() -> None:
-        try:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                q.put(line)
-        finally:
-            q.put(None)  # sentinel
-
-    threading.Thread(target=_reader, daemon=True).start()
-
-    collected: list[str] = []
-    note = "[timed out]"
-    while time.monotonic() < deadline:
-        try:
-            line = q.get(timeout=poll)
-        except queue.Empty:
-            if proc.poll() is not None:  # process ended, drained
-                note = f"[command exited {proc.returncode}]"
-                break
-            continue
-        if line is None:  # stdout closed — wait so returncode is populated
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass
-            note = f"[command exited {proc.returncode}]"
-            break
-        collected.append(line)
-        if until_rx is not None and until_rx.search(line):
-            note = f"[matched /{until_rx.pattern}/]"
-            break
-
-    if proc.poll() is None:  # still running at timeout/match — stop it
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    body = _clip(collected) if collected else "(no output)"
+    if res.matched:
+        note = f"[matched /{until_rx.pattern}/]"
+    elif res.cancelled:
+        note = "[cancelled: the turn was cancelled, so the command was stopped]"
+    elif res.timed_out:
+        note = "[timed out]"
+    else:
+        note = f"[command exited {res.returncode}]"
+    lines = res.stdout.splitlines(keepends=True)
+    body = _clip(lines) if lines else "(no output)"
     return prefix + body + "\n" + note
 
 
@@ -217,8 +198,10 @@ def monitor(
         return f"ERROR: bad until regex {until!r}: {exc}"
     deadline = time.monotonic() + timeout
     poll = 0.2
+    cancel_token = getattr(ctx, "cancel_token", None)
     if kind == "command":
         return _watch_command(
-            target, until_rx, deadline, poll, sandboxed=bool(getattr(tools, "sandbox", False))
+            target, until_rx, deadline, sandboxed=bool(getattr(tools, "sandbox", False)),
+            cancel_token=cancel_token, scrub=proc.runs_unattended(ctx),
         )
-    return _tail_file(Path(target).expanduser(), until_rx, deadline, poll)
+    return _tail_file(Path(target).expanduser(), until_rx, deadline, poll, cancel_token)

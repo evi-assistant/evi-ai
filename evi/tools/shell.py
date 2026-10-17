@@ -19,15 +19,19 @@ Safety posture (matches eVi's existing stance):
   present, the command runs sandboxed (read-only FS except the workdir, no
   network), same as `run_python`. Falls back to unsandboxed with a note.
 - Runs in the session working folder (evi.workdir) unless `cwd` is given.
+- Runs through `evi.proc.run`: at the timeout, or when the turn is cancelled
+  (`ToolContext.cancel_token`), the command's whole process tree is killed
+  and the output so far comes back. Its stdin is the null device, and a run
+  that is sandboxed or unattended (nobody to ask) gets no *_KEY / *_TOKEN /
+  *_SECRET environment variables (`evi.proc.scrubbed_env`).
 """
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-from evi import workdir
-from evi.tools.base import tool
+from evi import proc, workdir
+from evi.tools.base import ToolContext, tool
 
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
@@ -43,7 +47,10 @@ _MAX_OUTPUT = 32 * 1024
     ),
     category="shell",
 )
-def run_command(command: str, cwd: str = "", timeout: int = _DEFAULT_TIMEOUT) -> str:
+def run_command(
+    command: str, cwd: str = "", timeout: int = _DEFAULT_TIMEOUT,
+    ctx: ToolContext | None = None,
+) -> str:
     command = (command or "").strip()
     if not command:
         return "ERROR: command is required"
@@ -58,6 +65,7 @@ def run_command(command: str, cwd: str = "", timeout: int = _DEFAULT_TIMEOUT) ->
     use_shell = True
     argv: list[str] | str = command
     note = ""
+    sandboxed = False
     try:
         from evi.config import Config
 
@@ -68,27 +76,35 @@ def run_command(command: str, cwd: str = "", timeout: int = _DEFAULT_TIMEOUT) ->
                 argv = sandbox.wrap(["/bin/sh", "-c", command], str(workdir_path),
                                     allow_network=False)
                 use_shell = False
+                sandboxed = True
             else:
                 note = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
     except Exception:  # noqa: BLE001
         pass
 
     try:
-        res = subprocess.run(
+        res = proc.run(
             argv,
             shell=use_shell,
             cwd=str(workdir_path),
-            capture_output=True,
-            text=True,
             timeout=timeout,
+            cancel_token=getattr(ctx, "cancel_token", None),
+            env=proc.scrubbed_env() if sandboxed or proc.runs_unattended(ctx) else None,
         )
-    except subprocess.TimeoutExpired:
-        return f"ERROR: command timed out after {timeout}s"
     except OSError as exc:
         return f"ERROR: failed to run command: {exc}"
 
-    out = (res.stdout or "") + (res.stderr or "")
+    out = res.output
     if len(out) > _MAX_OUTPUT:
         out = out[:_MAX_OUTPUT] + f"\n... [truncated, {len(out)} bytes total]"
     body = out.rstrip() or "(no output)"
+    if res.cancelled:
+        return (f"{note}(cancelled) The turn was cancelled, so the command was stopped "
+                f"and its process tree killed. Output so far:\n{body}")
+    if res.timed_out:
+        return (f"{note}ERROR: command timed out after {timeout}s; its process tree was "
+                f"killed. Output so far:\n{body}")
+    if res.detached:
+        body += ("\n(it left a process running in the background that still holds its "
+                 "output; eVi stopped reading and left that process running)")
     return f"{note}exit {res.returncode}\n{body}"

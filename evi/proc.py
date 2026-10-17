@@ -15,21 +15,64 @@ found by walking down from it, but it is still in the job / group. On Windows
 the child is created suspended and only resumed once it is in the job, so
 nothing it starts can be created outside it, however long eVi takes to get
 there (a first ``import ctypes``, another busy thread holding the GIL).
+
+``run(argv, ...)`` runs a command to completion the way an agent's tools need
+it (run_command, run_python, monitor): started by ``spawn``, its output read by
+threads, and its whole tree killed at a timeout, on a cancel or when an
+``until`` line shows up, with the output read so far coming back.
+``subprocess.run(timeout=)`` kills only the direct child and, on Windows, then
+waits for pipes a grandchild still holds, which can hang a turn for good.
+
+A spawned child is out of reach of the console's Ctrl+C (its own process group
+or session), so eVi stops the ones still running when it exits, before the
+interpreter waits for the threads that run them (`_stop_at_exit`).
+
+Every process ``spawn`` starts (and so ``run``: the agent's run_command,
+run_python and monitor, the delegate CLI-agent drivers) runs for an agent and
+gets ``EVI_AGENT=1`` in its environment (`agent_env`), on top of whatever
+environment the caller passed: director tooling (`evi.attest`) refuses to run,
+and never reads the director key, in a process that has it, nor in anything
+that process starts.
 """
 
 from __future__ import annotations
 
 import atexit
+import codecs
+# Imported before _stop_at_exit is registered, so that it runs before this
+# module's exit hook, which waits for every tool pool thread.
+import concurrent.futures.thread  # noqa: F401
+import contextlib
 import functools
+import locale
 import os
 import signal
 import subprocess
 import sys
 import threading
+import time
 import weakref
+from dataclasses import dataclass
+from typing import Any, Callable
 
 _WAIT = 3.0  # seconds to wait for killed processes to be reaped
 _POPEN = subprocess.Popen  # the real class; a test may patch subprocess.Popen
+
+# run(): how often it checks on the child, how long it keeps reading once the
+# child has exited (something it left in the background may hold the pipes
+# for good), and how long it waits for the pipes to close after a kill.
+_RUN_POLL = 0.05
+_EXIT_GRACE = 2.0
+_KILL_GRACE = 2.0
+# Windows: a child in its own process group gets no CTRL_C_EVENT when the
+# user presses Ctrl+C in eVi's console; eVi decides what Ctrl+C stops.
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+# Environment variables a command run unattended or sandboxed doesn't get
+# (`scrubbed_env`): API keys, access tokens, client secrets.
+_SECRET_SUFFIXES = ("_KEY", "_TOKEN", "_SECRET")
+# Set in the environment of every process spawn() starts (`agent_env`); the
+# name evi.attest.AGENT_ENV reads (not imported: attest is a director module).
+AGENT_ENV = "EVI_AGENT"
 
 # Windows job settings. BREAKAWAY_OK lets a process that explicitly asks to
 # leave the job (CREATE_BREAKAWAY_FROM_JOB) do so; without it that
@@ -43,14 +86,27 @@ _CREATE_SUSPENDED = 0x00000004
 # Ctrl-C, and must not outlive eVi.
 _live: weakref.WeakSet = weakref.WeakSet()
 _live_lock = threading.Lock()
+# Set once eVi is exiting (`_stop_at_exit`): run() stops what it runs.
+_exiting = threading.Event()
+
+
+def agent_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """A copy of `env` (default: eVi's environment) with ``EVI_AGENT=1``:
+    the environment of a process run for an agent (see the module doc)."""
+    out = dict(os.environ if env is None else env)
+    out[AGENT_ENV] = "1"
+    return out
 
 
 def spawn(argv, **kwargs):
     """``subprocess.Popen(argv, **kwargs)`` started as the root of a killable
-    tree (see the module docstring). On Windows the child is created
-    suspended, put in its job, then resumed; if it can't be resumed it is
-    killed and ``OSError`` is raised. ``subprocess.Popen`` is looked up at call
-    time, so a test that patches it gets its stand-in back, untouched."""
+    tree (see the module docstring), with ``EVI_AGENT=1`` added to its
+    environment (`agent_env`: the `env` passed, else eVi's own). On Windows
+    the child is created suspended, put in its job, then resumed; if it can't
+    be resumed it is killed and ``OSError`` is raised. ``subprocess.Popen`` is
+    looked up at call time, so a test that patches it gets its stand-in back,
+    untouched."""
+    kwargs["env"] = agent_env(kwargs.get("env"))
     popen = subprocess.Popen
     # Suspend only under the real Popen: a test stand-in that wraps it might
     # not hand the Popen back, and then nothing would resume the child.
@@ -191,6 +247,235 @@ def _kill_pgid(pgid) -> None:
         pass
 
 
+# --- running a command to completion ------------------------------------------
+
+
+@dataclass
+class RunResult:
+    """What :func:`run` saw. ``stdout`` holds stderr too when it was merged.
+
+    At most one of ``timed_out``, ``cancelled`` and ``matched`` is set: why
+    run() stopped early. ``killed`` says whether it then killed the tree (a
+    line can match after the command has exited, which needs no kill).
+    ``detached``: the command exited, but something it started in the
+    background still held its output; run() stopped reading and left that
+    running (a server it launched, a build daemon)."""
+
+    returncode: int | None
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+    cancelled: bool = False
+    matched: bool = False
+    killed: bool = False
+    detached: bool = False
+
+    @property
+    def output(self) -> str:
+        """stdout then stderr, as a tool shows them."""
+        return self.stdout + self.stderr
+
+
+def scrubbed_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """A copy of `env` (default: eVi's environment) without the variables whose
+    names end in _KEY, _TOKEN or _SECRET, in any case: what a command run for
+    an unattended or sandboxed agent has no business reading."""
+    source = os.environ if env is None else env
+    return {k: v for k, v in source.items() if not k.upper().endswith(_SECRET_SUFFIXES)}
+
+
+def runs_unattended(ctx: Any) -> bool:
+    """True when `ctx` (a tool call's ToolContext, or None) belongs to a run
+    nobody watches:
+
+    - its agent has no permission callback (a scheduled task, `evi run`, a
+      subagent of an unattended run);
+    - its agent serves a remote trigger (``remote_trigger``: a channel push,
+      federation, A2A, a routine), which may keep a callback that refuses
+      every call (`evi.llm.agent.remote_unattended`);
+    - it runs inside an unattended entry point
+      (`evi.llm.cli_agent.unattended`, which tool threads see too).
+
+    A call made outside any agent (ctx None or without one) is not."""
+    agent = getattr(ctx, "agent", None)
+    if agent is None:
+        return False
+    if getattr(agent, "remote_trigger", False) is True:
+        return True
+    if (getattr(agent, "permission_callback", None) is None
+            and getattr(agent, "permission_batch_callback", None) is None):
+        return True
+    from evi.llm.cli_agent import current_unattended  # it imports this module
+
+    return current_unattended() is not None
+
+
+def _decode(data: bytes, encoding: str) -> str:
+    """Bytes as text the way ``text=True`` reads them (universal newlines),
+    but a byte the encoding can't read never fails the call."""
+    text = data.decode(encoding, errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def run(
+    argv: Any,
+    *,
+    cwd: str | None = None,
+    timeout: float | None = None,
+    cancel_token: threading.Event | None = None,
+    shell: bool = False,
+    env: dict[str, str] | None = None,
+    input: str | bytes | None = None,  # subprocess.run's name for it
+    merge_stderr: bool = False,
+    until: Callable[[str], Any] | None = None,
+    encoding: str | None = None,
+    exit_grace: float = _EXIT_GRACE,
+) -> RunResult:
+    """Run `argv` to completion as the root of a killable tree (:func:`spawn`)
+    and return what it wrote. Raises OSError when it can't be started; never
+    for a timeout or a cancel.
+
+    - Threads read stdout and stderr (merged into stdout with `merge_stderr`),
+      so a full pipe can't stall the child and the wait itself stays bounded.
+    - The whole tree is killed (:func:`kill_tree`: the Job Object / process
+      group reaches what an exited child left behind) after `timeout` seconds,
+      as soon as `cancel_token` is set (or eVi is exiting: ``cancelled`` too),
+      or once `until` returns true for a line of stdout (without its line
+      break). Whatever was read until then comes back, partial.
+    - Once the child itself has exited, the pipes are read for at most
+      `exit_grace` more seconds (or until `timeout`): a process it started in
+      the background may hold them open for good. That returns ``detached``
+      and is left running; what it writes later is read and dropped, so it
+      never blocks on a full pipe.
+
+    stdin is the null device unless `input` is given: a command run for an
+    agent can't wait on the terminal. Its environment is `env` (default:
+    eVi's) plus ``EVI_AGENT=1`` (:func:`spawn`). Text is decoded with
+    `encoding` (default: the locale's, as ``text=True`` does), bad bytes
+    replaced."""
+    enc = encoding or locale.getpreferredencoding(False)
+    kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "env": env,
+        "shell": shell,
+        "stdin": subprocess.DEVNULL if input is None else subprocess.PIPE,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = _CREATE_NEW_PROCESS_GROUP
+    proc = spawn(argv, **kwargs)
+
+    lock = threading.Lock()
+    wake = threading.Event()     # set when output arrives or a pipe closes
+    discard = threading.Event()  # set once nobody will read what comes next
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+
+    def _drain(pipe, sink: list[bytes]) -> None:
+        try:
+            read = getattr(pipe, "read1", pipe.read)
+            while True:
+                data = read(65536)
+                if not data:
+                    break
+                if not discard.is_set():
+                    with lock:
+                        sink.append(data)
+                wake.set()
+        except (OSError, ValueError):  # a pipe closed under us is just EOF
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                pipe.close()
+            wake.set()
+
+    readers = []
+    for pipe, sink in ((proc.stdout, out_chunks), (proc.stderr, err_chunks)):
+        if pipe is not None:
+            t = threading.Thread(target=_drain, args=(pipe, sink), name="evi-proc-read",
+                                 daemon=True)
+            t.start()
+            readers.append(t)
+    if input is not None and proc.stdin is not None:
+        data = input.encode("utf-8") if isinstance(input, str) else input
+
+        def _feed() -> None:
+            try:
+                proc.stdin.write(data)
+            except (OSError, ValueError):  # the child stopped reading
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    proc.stdin.close()
+
+        threading.Thread(target=_feed, name="evi-proc-write", daemon=True).start()
+
+    # `until` sees whole lines of stdout, decoded as they arrive.
+    decoder = codecs.getincrementaldecoder(enc)(errors="replace")
+    partial = ""
+    seen = 0
+
+    def _matched() -> bool:
+        nonlocal partial, seen
+        with lock:
+            fresh = out_chunks[seen:]
+            seen = len(out_chunks)
+        if not fresh:
+            return False
+        *lines, partial = (partial + decoder.decode(b"".join(fresh))).split("\n")
+        return any(until(line.rstrip("\r")) for line in lines)
+
+    result = RunResult(returncode=None)
+    deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+    exited_at: float | None = None
+    finished = False
+    while True:
+        wake.wait(_RUN_POLL)
+        wake.clear()
+        rc = proc.poll()
+        finished = rc is not None and not any(t.is_alive() for t in readers)
+        if until is not None and _matched():
+            result.matched = True
+            break
+        if finished:
+            break
+        if (cancel_token is not None and cancel_token.is_set()) or _exiting.is_set():
+            result.cancelled = True
+            break
+        now = time.monotonic()
+        if rc is None:
+            if deadline is not None and now >= deadline:
+                result.timed_out = True
+                break
+            continue
+        if exited_at is None:
+            exited_at = now
+        if now - exited_at >= exit_grace or (deadline is not None and now >= deadline):
+            result.detached = True
+            break
+    if finished and until is not None and not result.matched and partial:
+        result.matched = bool(until(partial.rstrip("\r")))  # a last line with no break
+
+    if result.timed_out or result.cancelled or (result.matched and not finished):
+        result.killed = True
+        kill_tree(proc)
+        # Every holder of the pipes is dead now, so the readers reach EOF
+        # (unless something broke away from the job / group: then drop it).
+        stop = time.monotonic() + _KILL_GRACE
+        for t in readers:
+            t.join(max(0.0, stop - time.monotonic()))
+    discard.set()
+    try:
+        result.returncode = proc.wait(timeout=_WAIT)
+    except subprocess.TimeoutExpired:
+        result.returncode = proc.poll()
+    with lock:
+        out, err = b"".join(out_chunks), b"".join(err_chunks)
+    result.stdout, result.stderr = _decode(out, enc), _decode(err, enc)
+    return result
+
+
 # --- Windows Job Objects -----------------------------------------------------
 
 
@@ -311,3 +596,22 @@ def _kill_running_at_exit() -> None:
             running = False
         if running:
             kill_tree(p, wait=0.5)
+
+
+def _stop_at_exit() -> None:
+    """eVi is exiting (Ctrl+C at `evi serve` or the scheduler daemon, a quit):
+    stop every :func:`spawn` child still running, and make run() report
+    ``cancelled`` and stop anything it starts from now on. The interpreter
+    runs this before it waits for its non-daemon threads, a tool call's pool
+    thread blocked in run() among them; `atexit` hooks only run after that
+    wait, which would last until the command's own timeout. Never raises: that
+    would skip the rest of the interpreter's shutdown."""
+    _exiting.set()
+    with contextlib.suppress(Exception):
+        _kill_running_at_exit()
+
+
+# Called in reverse order of registration: before concurrent.futures' own hook
+# (registered when it was imported, above), which joins the pool threads.
+with contextlib.suppress(AttributeError, RuntimeError):  # a private hook; shutdown begun
+    threading._register_atexit(_stop_at_exit)
