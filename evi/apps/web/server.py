@@ -1953,6 +1953,11 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         nonlocal mcp_manager, scheduler_obj
+        # The server hosts agents (`evi web`, the desktop sidecar, the dev
+        # uvicorn): EVI_AGENT=1 for everything it starts (evi.proc).
+        from evi.proc import mark_agent_process
+
+        mark_agent_process()
         cfg = Config.load()
         # Safe mode: never spawn external MCP servers — they're user
         # customization (and arbitrary local processes), exactly what a clean

@@ -8,8 +8,8 @@ the narrow middle: what an implementer needs to change code and prove it works
 in the one folder it was given, and nothing else.
 
 Selected by ``evi run --policy implementer`` (``--scope GLOB`` adds the task's
-``files_in_scope``) and, later, by ``evi task start``, both through
-`implementer_policy`. Set as ``Agent.policy``, it replaces the permission
+``files_in_scope``) and by ``evi task start`` (`evi.tasks.run_task`), both
+through `implementer_policy`. Set as ``Agent.policy``, it replaces the permission
 flow: every tool call is allowed or denied, never asked about, whatever
 ``[auto] mode``, ``unattended_policy`` or ``/auto on`` say. ``[auto]
 hard_deny``, ``deny`` rules and the director's ground (`evi.permissions`)

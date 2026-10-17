@@ -6,7 +6,10 @@ append-only log of "symptom → root cause → fix" the agent can search BEFORE
 trying again, so hard-won debugging knowledge persists across sessions.
 
 Stored as JSONL at ``<root>/.evi/bug-ledger.jsonl`` (per-project: bugs are
-project-specific). Backs the ``record_fix`` / ``search_fixes`` tools.
+project-specific). Backs the ``record_fix`` / ``search_fixes`` tools. The file
+is meant to be tracked in git (eVi's own .gitignore un-ignores it), so a fix
+recorded on a task branch travels with the branch: one JSON object per line,
+with LF line endings on every platform (the repository's eol=lf).
 """
 
 from __future__ import annotations
@@ -54,7 +57,7 @@ def record(symptom: str, cause: str, fix: str, *, root: str | Path | None = None
     )
     p = ledger_path(root)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as fh:
+    with p.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
     return p
 

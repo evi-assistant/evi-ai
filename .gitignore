@@ -53,6 +53,16 @@ desktop/src-tauri/binaries/
 .env
 .env.local
 
-# User-level Evi state never belongs in the repo (lives in ~/.evi/)
-# but ignore stray test dumps just in case.
-.evi/
+# Repo-local eVi state stays out of git (user-level state lives in ~/.evi/),
+# except what the loop shares through the repository: the task queue
+# (evi/tasks.py), the bug-fix ledger (evi/bugledger.py) and the review
+# guidance (evi/review.py). `.evi/*`, not `.evi/`: git can't re-include a
+# file inside an ignored folder. Both rules are anchored to this folder, so
+# `*/**/.evi/` keeps every .evi/ below it ignored (a session started in a
+# subfolder leaves one there; the shared files live at the root only).
+.evi/*
+!.evi/tasks/
+!.evi/bug-ledger.jsonl
+!.evi/REVIEW.md
+!.evi/review-rules.md
+*/**/.evi/

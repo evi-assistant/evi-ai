@@ -7,7 +7,8 @@ mirroring eVi's tesseract/ffmpeg optional-tool pattern. No hosted service.
 
 Used by `[tools] format_on_edit` (auto-format after a write) and the
 `check_file` tool (on-demand diagnostics) — eVi's take on opencode's
-formatter + LSP-diagnostics feedback.
+formatter + LSP-diagnostics feedback. The tool runs for an agent, so it gets
+``EVI_AGENT=1`` (`evi.proc.agent_env`).
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+
+from evi.proc import agent_env
 
 # ext -> candidate formatter argv (file path appended); first installed wins.
 _FORMATTERS: dict[str, list[list[str]]] = {
@@ -67,7 +70,7 @@ def format_file(path: str | Path) -> tuple[bool, str]:
         return (False, "")
     try:
         subprocess.run([*cmd, str(p)], capture_output=True, text=True,
-                       timeout=_FORMAT_TIMEOUT)
+                       timeout=_FORMAT_TIMEOUT, env=agent_env())
     except (OSError, subprocess.SubprocessError):
         return (False, cmd[0])
     return (True, cmd[0])
@@ -86,7 +89,7 @@ def diagnose(path: str | Path) -> str:
         return f"(no linter installed for {p.suffix} — tried: {tried})"
     try:
         res = subprocess.run([*cmd, str(p)], capture_output=True, text=True,
-                             timeout=_LINT_TIMEOUT)
+                             timeout=_LINT_TIMEOUT, env=agent_env())
     except (OSError, subprocess.SubprocessError) as exc:
         return f"{cmd[0]} failed: {exc}"
     # Linters (ruff/eslint/go vet/clippy) exit 0 only when clean. Key off the

@@ -34,7 +34,8 @@ Acceptance criteria, each with its test below:
 What keeps the isolation from leaking, each with its regression test: a case
 variant of a checked-out branch is refused, also when a checkout's HEAD
 spells it in another case; a failed add takes back its branch; worktrees
-never nest; a live run's worktree stays locked; prune keeps a worktree
+never nest; a live run's worktree stays locked, and only a dead run's lock
+on this machine is ever taken over; prune keeps a worktree
 holding another one and sees untracked work whatever the status config says;
 thread-isolated runs go without the tools that work in the process's folder
 (monitor, git, MCP); an isolated workflow step's prompt carries the
@@ -48,6 +49,7 @@ too (never ~/.evi). Agents run against the shared fake_llm client.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -641,6 +643,51 @@ def test_a_live_runs_worktree_stays_locked_until_release(repo) -> None:
     _git(repo, "worktree", "lock", "--reason", "director review", str(iso.path))
     wt.release(iso)
     assert _locked(repo, iso.path)
+
+
+def _dead_pid() -> int:
+    import psutil
+
+    pid = 4_000_000
+    while psutil.pid_exists(pid):
+        pid += 4
+    return pid
+
+
+def test_take_stale_takes_over_only_a_dead_runs_lock_on_this_machine(repo) -> None:
+    """A run that died before `release` leaves its worktree locked under its
+    pid and host. `take_stale` (what `evi task start` passes) takes that lock
+    over; never a live run's, this process's, another machine's (a repository
+    on a shared drive), an older eVi's without a host, or a hand-made one."""
+    iso = wt.open_isolated("topic", start=repo)
+    assert wt._lock_reason_of(iso.path) == wt._run_lock_reason()
+    host = wt._host()
+    assert wt._run_lock_reason() == f"eVi isolated run (pid {os.getpid()} on {host})"
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        for reason in (f"eVi isolated run (pid {sleeper.pid} on {host})",
+                       wt._run_lock_reason(),
+                       f"eVi isolated run (pid {_dead_pid()} on elsewhere.invalid)",
+                       f"eVi isolated run (pid {_dead_pid()})",
+                       "director review"):
+            _git(repo, "worktree", "unlock", str(iso.path))
+            _git(repo, "worktree", "lock", "--reason", reason, str(iso.path))
+            with pytest.raises(wt.WorktreeError, match="can't be locked"):
+                wt.open_isolated("topic", start=repo, take_stale=True)
+            assert wt._lock_reason_of(iso.path) == reason
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    dead = f"eVi isolated run (pid {_dead_pid()} on {host})"
+    _git(repo, "worktree", "unlock", str(iso.path))
+    _git(repo, "worktree", "lock", "--reason", dead, str(iso.path))
+    with pytest.raises(wt.WorktreeError, match="can't be locked"):
+        wt.open_isolated("topic", start=repo)  # only when asked
+    again = wt.open_isolated("topic", start=repo, take_stale=True)
+    assert again.path == iso.path and not again.created
+    assert wt._lock_reason_of(iso.path) == wt._run_lock_reason()
+    wt.release(again)
+    assert not _locked(repo, iso.path)
 
 
 def test_evi_run_holds_its_worktree_locked_while_it_runs(repo, monkeypatch, fake_llm):

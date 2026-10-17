@@ -58,6 +58,8 @@ When a hook fires we set these env vars in the child process:
                     (truncated to 4 KB to avoid blowing the env limit)
   EVI_EFFORT        the active reasoning effort (low/medium/high/max)
   EVI_CWD           the session working folder the tools resolve paths against
+  EVI_AGENT         "1": the hook runs for an agent (evi.proc.agent_env), so
+                    director tooling (evi.attest) refuses to run under it
 
 A command hook runs in that session folder (EVI_CWD), and its stdin is the null
 device, so a hook that reads stdin gets EOF instead of hanging on the terminal
@@ -123,6 +125,7 @@ from typing import Literal
 import tomllib
 
 from evi.config import HOOKS_CONFIG_PATH
+from evi.proc import agent_env
 
 
 logger = logging.getLogger(__name__)
@@ -668,7 +671,7 @@ def _run_hook(
         return _run_http_hook(hook, tool_name, args_json, result_output, cwd, body=stdin)
 
     _retry_pending()
-    env = dict(os.environ)
+    env = agent_env()
     env.pop("EVI_HOOK_ARGS_TRUNCATED", None)
     env.pop("EVI_HOOK_ARGS_FILE", None)
     env["EVI_HOOK_EVENT"] = hook.event

@@ -26,6 +26,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from evi import proc as _proc
 from evi.backends import default_base_url, get_backend, KNOWN_BACKENDS
 from evi.commands import CommandStore
 from evi.config import CONFIG_PATH, MCP_CONFIG_PATH, Config, ensure_dirs
@@ -475,6 +476,9 @@ def _build_agent(
     # overrides the model id for this agent (ultracode per-stage routing).
     from evi.sdk.builder import build_agent
 
+    # This process hosts an agent from here on: EVI_AGENT=1 for everything
+    # it starts (evi.proc). Never reached by director tooling.
+    _proc.mark_agent_process()
     config = Config.load()
     safe = _safe_mode()
     if not safe:
@@ -1695,9 +1699,12 @@ def chat(
 
 
 def _inside_evi_session() -> bool:
-    """Running under an eVi REPL: a command the agent runs through its shell
-    tool (or a `!` command) inherits EVI_INTERACTIVE=1 from `_run_repl`."""
-    return os.environ.get("EVI_INTERACTIVE") == "1"
+    """Running under eVi: a command the agent runs through its shell tool (or
+    a `!` command) inherits EVI_INTERACTIVE=1 from `_run_repl`, and every
+    process an agent-hosting entry point starts inherits EVI_AGENT=1
+    (`evi.proc.mark_agent_process`; `evi run -y`, `evi serve` ...). Checked
+    before a process marks itself (`_project_trust_prompt` runs first)."""
+    return os.environ.get("EVI_INTERACTIVE") == "1" or os.environ.get(_proc.AGENT_ENV) == "1"
 
 
 def _can_ask_about_trust() -> bool:
@@ -3991,6 +3998,7 @@ def channel_serve_cmd() -> None:
     """
     from evi.channels import telegram as tg
 
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     ch = tg.start_if_configured()
     if ch is None:
         console.print("[yellow]Telegram channel is off or has no token.[/yellow]")
@@ -4628,6 +4636,7 @@ def workflow_run(
     from evi.llm.cli_agent import CliAgentUnattended, check_unattended, unattended
     from evi.modes import mode_tools
 
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     try:
         w = workflows.load_workflow(name)
     except workflows.WorkflowError as exc:
@@ -4883,6 +4892,7 @@ def run(
     if base.strip() and not worktree.strip():
         _run_usage_error("--base needs --worktree")
     policy_name, scope_entries = _run_policy_args(policy, scope, yes)
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     stream = EventStream() if format == "stream-json" else None
 
     def emit(item) -> None:
@@ -5279,6 +5289,7 @@ def batch(
     if not items:
         console.print("[dim]no prompts in input[/dim]")
         raise typer.Exit(1)
+    _proc.mark_agent_process()  # before the items' threads start (evi.proc)
 
     def run_one(item: dict) -> dict:
         agent = _build_agent()
@@ -5309,6 +5320,590 @@ def batch(
         console.print(f"[green]wrote[/green] {len(results)} results ({ok} ok) -> [cyan]{out}[/cyan]")
     else:
         print(payload, file=_sys.stdout)
+
+
+# ---- evi task: the repository's task queue (evi/tasks.py) -----------------------------
+
+task_app = typer.Typer(
+    help="The repository's task queue (.evi/tasks/<id>.toml): file a task with acceptance "
+         "criteria, run it in a worktree under the implementer policy, review it. Only the "
+         "director's `evi task verify|reject` marks one verified or rejected."
+)
+app.add_typer(task_app, name="task")
+attest_app = typer.Typer(help="The director's attestation key (evi/attest.py).")
+app.add_typer(attest_app, name="attest")
+
+_TASK_FORMATS = ("text", "json")
+
+
+def _task_fail(message: str, code: int = 2) -> NoReturn:
+    """An `evi task` / `evi attest` command that can't go ahead: the message
+    on stderr, exit `code` (2: a refused request or a bad argument)."""
+    print(f"error: {message}", file=sys.stderr)
+    raise typer.Exit(code)
+
+
+@contextmanager
+def _task_errors():
+    """A TaskError (evi/tasks.py) as an error line and exit 2."""
+    from evi import tasks as _tasks
+
+    try:
+        yield
+    except _tasks.TaskError as exc:
+        _task_fail(str(exc))
+
+
+def _task_queue():
+    """The task queue of the repository here (its main checkout)."""
+    from evi import tasks as _tasks
+
+    with _task_errors():
+        return _tasks.TaskQueue.at()
+
+
+def _task_format(format: str) -> str:
+    if format not in _TASK_FORMATS:
+        _task_fail(f"unknown --format {format!r} (choose: {' | '.join(_TASK_FORMATS)})")
+    return format
+
+
+def _task_label(verifier, record: dict, root: Path) -> str:
+    """The task's status as shown (evi.attest's status_label): a verdict only
+    with a valid attestation at its branch's current head (None when the
+    branch is gone; the branch itself, never a tag of its name) and over its
+    evidence as it is now. Both are read only for a task that claims a
+    verdict and carries an attestation (nothing else looks at them), and
+    the evidence only where evi.tasks.evidence_path allows: the task file is
+    tracked, so its paths may come from anyone."""
+    from evi import attest
+    from evi import tasks as _tasks
+
+    head = None
+    evidence = ""
+    if attest.claims_verdict(_tasks.status_of(record)) and _tasks.ATTESTATION in record:
+        branch = str(record.get("branch") or "").strip()
+        if branch:
+            try:
+                head = attest.branch_head(_tasks.head_ref(branch), cwd=root)
+            except attest.AttestError:
+                head = None  # merged and deleted, or never made
+        try:
+            evidence = attest.evidence_hash(_tasks.evidence_path(record, root))
+        except _tasks.TaskError:
+            evidence = "refused"  # matches no signed hash: reads as changed
+    return verifier.status_label(record, evidence_hash=evidence, head=head)
+
+
+def _print_task(record: dict, label: str, path: Path) -> None:
+    """`evi task show` as text. Every value is the tracked file's (or the
+    model's, for the last result), so control characters are dropped
+    (evi.tasks.printable) as well as Rich markup escaped."""
+    from rich.markup import escape
+
+    from evi.tasks import printable
+
+    def shown(value: object) -> str:
+        return escape(printable(value))
+
+    def line(name: str, value: object) -> None:
+        console.print(f"[bold]{name}:[/bold] {shown(value)}", soft_wrap=True,
+                      highlight=False)
+
+    console.print(f"[bold cyan]{shown(record.get('id'))}[/bold cyan]  "
+                  f"{shown(record.get('title') or '')}", soft_wrap=True, highlight=False)
+    line("status", label)
+    if record.get("why"):
+        line("why", record["why"])
+    for name, key in (("acceptance", "acceptance"), ("files in scope", "files_in_scope"),
+                      ("required checks", "required_checks")):
+        items = record.get(key) or []
+        if items:
+            console.print(f"[bold]{name}:[/bold]")
+            for n, item in enumerate(items, 1):
+                text = " ".join(map(str, item)) if isinstance(item, list) else str(item)
+                console.print(f"  {n}. {shown(text)}", soft_wrap=True, highlight=False)
+    if record.get("implementer"):
+        line("implementer", record["implementer"])
+    if record.get("branch"):
+        line("branch", f"{record['branch']} (base {str(record.get('base') or '?')[:12]}, "
+                       f"worktree {record.get('worktree') or '?'})")
+    if record.get("attempts"):
+        bits = [f"{record['attempts']}"]
+        if record.get("backend") or record.get("model"):
+            bits.append(f"(backend {record.get('backend') or '?'}, model "
+                        f"{record.get('model') or '?'})")
+        line("attempts", " ".join(bits))
+    lease = record.get("lease") or {}
+    if isinstance(lease, dict) and lease.get("holder"):
+        line("lease", f"{lease.get('holder')} until {lease.get('expires_at')}")
+    last = record.get("last_result") or {}
+    if isinstance(last, dict) and last:
+        line("last result", f"{last.get('stop_reason')} (exit {last.get('exit_code')}): "
+                            f"{last.get('summary') or ''}")
+        if last.get("report"):
+            line("report", last["report"])
+    if record.get("evidence"):
+        line("evidence", record["evidence"])
+    for note in record.get("reviewer_notes") or []:
+        if isinstance(note, dict):
+            line("reviewer note", f"{note.get('at')} {note.get('verdict')}: {note.get('note')}")
+    block = record.get("attestation")
+    if isinstance(block, dict):
+        line("attestation", f"{block.get('verdict')} by {block.get('signer')} at "
+                            f"{str(block.get('head') or '')[:12]} on {block.get('signed_at')} "
+                            f"(director key {block.get('key')})")
+    line("file", path)
+
+
+@task_app.command("new")
+def task_new(
+    title: str = typer.Option("", "--title", help="What the task is, in one line."),
+    why: str = typer.Option("", "--why", help="Why: the bug or the need."),
+    acceptance: list[str] = typer.Option(
+        [], "--acceptance", help="An acceptance criterion (repeatable)."),
+    scope: list[str] = typer.Option(
+        [], "--scope", help="A files_in_scope glob, relative to the repository (repeatable)."),
+    check: list[str] = typer.Option(
+        [], "--check",
+        help="A required check: a command line, split the POSIX way (use / in paths; "
+             "repeatable). eVi runs each in the task's worktree before the task counts as "
+             "implemented."),
+    implementer: str = typer.Option(
+        "", "--implementer", help="Who should implement it (a hint): evi-local | "
+                                  "evi-frontier | director."),
+    task_id: str = typer.Option("", "--id", help="The task id (default: the next T<n>)."),
+    from_file: str = typer.Option(
+        "", "--from", help="Read the task's fields from a TOML file (the flags override them)."),
+) -> None:
+    """File a new task in the repository's queue.
+
+    It goes to .evi/tasks/<id>.toml in the main checkout (commit it to share
+    it) and starts open."""
+    from evi import tasks as _tasks
+
+    queue = _task_queue()
+    with _task_errors():
+        spec: dict = {}
+        if from_file:
+            path = Path(from_file).expanduser()
+            try:
+                spec = _tasks.spec_from_toml(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError) as exc:
+                raise _tasks.TaskError(f"can't read {path}: {exc}") from exc
+        record = _tasks.new_task(
+            task_id.strip() or str(spec.get("id") or "").strip(),
+            title=title or str(spec.get("title") or ""),
+            why=why or str(spec.get("why") or ""),
+            acceptance=list(acceptance) or spec.get("acceptance") or [],
+            files_in_scope=list(scope) or spec.get("files_in_scope") or [],
+            required_checks=list(check) or spec.get("required_checks") or [],
+            implementer=implementer or str(spec.get("implementer") or ""),
+            extra=spec,
+        )
+        written = queue.create(record)
+    console.print(f"filed task {written['id']}: {written['title']} "
+                  f"({queue.path(written['id'])})", soft_wrap=True, highlight=False,
+                  markup=False)
+
+
+@task_app.command("list")
+def task_list(
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """List the repository's tasks and their status.
+
+    A verdict shows only with a valid director attestation."""
+    import json as _json
+
+    from rich.markup import escape
+
+    from evi import attest
+    from evi.tasks import printable
+
+    _task_format(format)
+    queue = _task_queue()
+    records, problems = queue.all()
+    verifier = attest.Verifier()  # one for the whole list: the key is read once
+    rows = [{
+        "id": r.get("id"), "title": r.get("title") or "", "status": r.get("status") or "",
+        "label": _task_label(verifier, r, queue.root), "implementer": r.get("implementer") or "",
+        "branch": r.get("branch") or "", "attempts": r.get("attempts") or 0,
+    } for r in records]
+    for task_id, problem in problems:
+        print(f"warning: task {task_id}: {problem}", file=sys.stderr)
+    if format == "json":
+        print(_json.dumps(rows))
+        return
+    if not rows:
+        console.print(f"[dim]no tasks in {escape(str(queue.folder))}[/dim] (file one with "
+                      "`evi task new --title ...`)", soft_wrap=True, highlight=False)
+        return
+    for row in rows:
+        console.print(f"[bold]{escape(printable(row['id']))}[/bold]  "
+                      f"[cyan]{escape(printable(row['label']))}[/cyan]  "
+                      f"{escape(printable(row['title']))}", soft_wrap=True, highlight=False)
+
+
+@task_app.command("show")
+def task_show(
+    task_id: str = typer.Argument(..., help="The task id."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Show a task and its status.
+
+    The status is as the director's attestation has it."""
+    import json as _json
+
+    from evi import attest
+
+    _task_format(format)
+    queue = _task_queue()
+    with _task_errors():
+        record = queue.read(task_id)
+    label = _task_label(attest.Verifier(), record, queue.root)
+    path = queue.path(str(record["id"]))
+    if format == "json":
+        print(_json.dumps({"task": record, "label": label, "path": str(path)}))
+        return
+    _print_task(record, label, path)
+
+
+@task_app.command("claim")
+def task_claim(
+    task_id: str = typer.Argument(..., help="The task id."),
+    holder: str = typer.Option("", "--holder", help="Who claims it (default: user@host)."),
+    ttl: int = typer.Option(240, "--ttl", min=1, help="Minutes the claim holds."),
+    force: bool = typer.Option(False, "--force", help="Take over a live claim someone else holds."),
+) -> None:
+    """Claim an open task (or one whose claim ran out)."""
+    from evi import tasks as _tasks
+
+    queue = _task_queue()
+    who = holder.strip() or _tasks.default_holder()
+    with _task_errors():
+        record = queue.update(task_id, lambda r: _tasks.claim(r, holder=who, ttl_minutes=ttl,
+                                                              force=force))
+    console.print(f"claimed task {record['id']} for {who} until "
+                  f"{record['lease']['expires_at']}", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@task_app.command("release")
+def task_release(
+    task_id: str = typer.Argument(..., help="The task id."),
+    holder: str = typer.Option("", "--holder", help="Who holds the claim (default: user@host)."),
+    force: bool = typer.Option(False, "--force", help="Release a live claim someone else holds."),
+) -> None:
+    """Give a claimed task back: it is open again."""
+    from evi import tasks as _tasks
+
+    queue = _task_queue()
+    who = holder.strip() or _tasks.default_holder()
+    with _task_errors():
+        record = queue.update(task_id, lambda r: _tasks.release(r, holder=who, force=force))
+    console.print(f"released task {record['id']}: open", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@task_app.command("submit")
+def task_submit(task_id: str = typer.Argument(..., help="The task id.")) -> None:
+    """Hand an implemented task to the director for review (needs_review)."""
+    from evi import tasks as _tasks
+
+    queue = _task_queue()
+    with _task_errors():
+        record = queue.update(task_id, _tasks.submit)
+    console.print(f"task {record['id']}: needs_review", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@task_app.command("reopen")
+def task_reopen(
+    task_id: str = typer.Argument(..., help="The task id."),
+    reason: str = typer.Option("", "--reason", help="Why (kept in the reviewer notes)."),
+) -> None:
+    """Send a task back to open for rework.
+
+    From implemented, needs_review, verified or rejected. A verdict's
+    attestation is dropped: it no longer applies."""
+    from evi import tasks as _tasks
+
+    queue = _task_queue()
+    with _task_errors():
+        record = queue.update(task_id, lambda r: _tasks.reopen(r, note=reason))
+    console.print(f"task {record['id']}: open", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@task_app.command("start")
+def task_start(
+    task_id: str = typer.Argument(..., help="The task id."),
+    backend: str = typer.Option(
+        "", "--backend", help="Run on this saved backend (`evi backend list`)."),
+    model: str = typer.Option("", "--model", help="Model id for this run."),
+    base: str = typer.Option(
+        "", "--base",
+        help="The branch or commit a new task branch starts from (default: \\[worktree] "
+             "base_ref, else HEAD). A later attempt reuses the branch."),
+    max_turns: int = typer.Option(
+        30, "--max-turns", min=1, help="Most model round trips the run may take."),
+    ttl: int = typer.Option(240, "--ttl", min=1, help="Minutes the claim holds."),
+    force: bool = typer.Option(False, "--force", help="Take over a live claim someone else holds."),
+) -> None:
+    """Claim a task and run it in its own worktree.
+
+    The worktree is branch task/<id> under <repo>/.worktrees/; the run goes
+    under the implementer policy with the task's files_in_scope and the
+    verify gate on, and eVi runs the task's required checks itself
+    afterwards. Only in a trusted repository (`evi trust`). The task ends
+    implemented (exit 0) when the run finished and every required check
+    passed, else open again with the attempt counted (the exit code says
+    why, as `evi run`'s: 5 for a failed check). The run report goes to
+    <eVi home>/tasks/. Nothing is merged or committed.
+
+    The hand-off (the model's answer) goes to stdout; check lines, where the
+    work is and the outcome go to stderr. A delegate CLI-agent backend is
+    refused: it runs its own tools, outside the policy. A worktree lock left
+    by a start on this machine that died is taken over; any other lock
+    refuses the start (`git worktree unlock` it once no run uses it)."""
+    from evi import tasks as _tasks
+    from evi.llm.cli_agent import CliAgentUnattended
+    from evi.worktree import summary_line
+
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
+    queue = _task_queue()
+    entry = None
+    if backend.strip():
+        from evi.backends.registry import get_entry
+
+        entry = get_entry(backend)
+        if entry is None:
+            _task_fail(f"no saved backend named {backend.strip()!r} (see `evi backend list`)")
+    fork = base.strip() or (Config.load().worktree.base_ref or "")
+    previous = os.getcwd()
+
+    def make_agent(wt):
+        # The worktree is the run's folder, as for `evi run --worktree`: its
+        # .evi.toml (the repository being trusted), its EVI.md, and where
+        # stdio MCP servers start.
+        os.chdir(wt.path)
+        settings = Config.load()
+        if entry is not None:
+            try:
+                _check_run_backend(entry, settings)
+            except CliAgentUnattended as exc:
+                raise _tasks.TaskError(str(exc)) from exc
+        return _build_agent(model=model.strip() or None, backend=entry)
+
+    try:
+        with _task_errors(), _console_on_stderr():
+            run = _tasks.run_task(
+                queue, task_id, make_agent, base=fork or None, max_turns=max_turns,
+                ttl_minutes=ttl, force=force, backend=backend.strip(),
+                on_event=_print_verify_line, cancel_on_sigint=True,
+            )
+    finally:
+        os.chdir(previous)
+    res = run.result
+    if res.text and run.stop_reason != "error":
+        try:
+            print(res.text)
+        except UnicodeEncodeError:  # a lone surrogate in the answer: escape it
+            out = sys.stdout
+            enc = getattr(out, "encoding", None) or "utf-8"
+            print(res.text.encode(enc, "backslashreplace").decode(enc, "replace"), file=out)
+    if res.worktree:
+        print(summary_line(res.worktree), file=sys.stderr)
+    for check in run.checks:
+        status = "passed" if check.ok else (
+            f"exit {check.exit}" if check.exit is not None else check.note or "did not finish")
+        print(f"required check {check.check.cmd}: {status}", file=sys.stderr)
+    record = run.record
+    if run.implemented:
+        outcome = f"task {record.get('id')}: implemented (attempt {record.get('attempts')})"
+    else:
+        last = record.get("last_result") or {}
+        outcome = (f"task {record.get('id')}: back to open after attempt "
+                   f"{record.get('attempts')} ({run.stop_reason}: "
+                   f"{_tasks.printable(last.get('summary') or '')})")
+    print(outcome, file=sys.stderr)
+    if run.note:
+        print(f"note: {run.note}", file=sys.stderr)
+    if run.report_path is not None:
+        print(f"report: {run.report_path}", file=sys.stderr)
+    raise typer.Exit(run.exit_code if run.recorded else max(run.exit_code, 1))
+
+
+def _director_refusal(action: str) -> None:
+    """Director tooling refuses, writing nothing, where an eVi agent may have
+    started it or it isn't director tooling (evi.attest.agent_context)."""
+    from evi import attest
+
+    why = attest.agent_context()
+    if why:
+        _task_fail(f"refusing to {action}: {why}. Only the director, from their own shell, may.")
+
+
+@task_app.command("verify")
+def task_verify(
+    task_id: str = typer.Argument(..., help="The task id."),
+    reason: str = typer.Option(
+        "", "--reason",
+        help="Why to sign although the review gate reports blocking findings (recorded in "
+             "the attestation and the reviewer notes)."),
+    rounds: int = typer.Option(1, "--rounds", min=0, help="Review rounds the task took."),
+    yes: bool = typer.Option(False, "--yes", help="Don't ask for confirmation (the director's "
+                                                  "own shell only)."),
+) -> None:
+    """Director only: sign a needs_review task as verified.
+
+    The attestation is evi/attest.py's. The review gate (`evi review --multi --exit-code` on the task branch's
+    diff against its base) runs first, in the task's worktree, whose work
+    must be committed on the branch. Refused, with nothing written, from
+    any process an eVi agent may have started."""
+    from evi import attest, review
+    from evi import tasks as _tasks
+    from evi import worktree as _wt
+
+    _director_refusal(f"verify task {task_id}")
+    queue = _task_queue()
+    with _task_errors():
+        record = queue.read(task_id)
+        body = _tasks.for_verdict(record, verdict="verified", note=reason)
+        branch = str(record.get("branch") or "").strip()
+        base = str(record.get("base") or "").strip()
+        if not branch or not base:
+            raise _tasks.TaskError(f"task {task_id} has no branch and base to review (start it "
+                                   "first)")
+        # The worktree git has on the branch, not the path the (tracked) task
+        # file names: that could point anywhere, a UNC share included.
+        try:
+            folder = next((e.path for e in _wt.list_worktrees(queue.root)
+                           if e.branch == branch), None)
+        except _wt.WorktreeError as exc:
+            raise _tasks.TaskError(str(exc)) from exc
+        if folder is None or not folder.is_dir():
+            raise _tasks.TaskError(f"no worktree has {branch} checked out (the task's was "
+                                   f"{_tasks.printable(record.get('worktree') or '?')}); the "
+                                   "review gate reviews the branch there")
+        try:
+            head = attest.branch_head(_tasks.head_ref(branch), cwd=queue.root)
+            at = attest.branch_head("HEAD", cwd=folder)
+        except attest.AttestError as exc:
+            raise _tasks.TaskError(str(exc)) from exc
+        if at != head:
+            raise _tasks.TaskError(f"the worktree {folder} is not at the head of {branch}")
+        dirty = _wt.dirty_files(folder)
+        if dirty is None or dirty:
+            shown = "; ".join((dirty or ["(can't be told)"])[:5])
+            raise _tasks.TaskError(f"the worktree {folder} has uncommitted changes ({shown}): "
+                                   f"commit the work on {branch} first, so the attestation "
+                                   "covers it")
+        evidence = attest.evidence_hash(_tasks.evidence_path(record, queue.root))
+    try:
+        gate = attest.review_gate(base, cwd=folder)
+    except review.ReviewError as exc:
+        _task_fail(f"the review gate could not run: {exc}", 1)
+    try:
+        signed = attest.sign(body, head=head, evidence_hash=evidence, verdict="verified",
+                             rounds=rounds, review=gate, override_reason=reason, yes=yes)
+    except attest.AgentRefused as exc:
+        _task_fail(str(exc))
+    except attest.ReviewBlocked as exc:
+        print(gate.report, file=sys.stderr)
+        _task_fail(str(exc), 1)
+    except attest.AttestError as exc:  # no key, not confirmed
+        _task_fail(str(exc), 1)
+    with _task_errors():
+        queue.replace(record, signed)
+    console.print(f"task {task_id}: verified at {head[:12]} (director key "
+                  f"{signed['attestation']['key']})", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@task_app.command("reject")
+def task_reject(
+    task_id: str = typer.Argument(..., help="The task id."),
+    reason: str = typer.Option(..., "--reason", help="Why (kept in the reviewer notes, signed)."),
+    rounds: int = typer.Option(1, "--rounds", min=0, help="Review rounds the task took."),
+    yes: bool = typer.Option(False, "--yes", help="Don't ask for confirmation (the director's "
+                                                  "own shell only)."),
+) -> None:
+    """Director only: sign a needs_review task as rejected.
+
+    The attestation (evi/attest.py) signs the reason with it. `evi task reopen` sends it back for rework. Refused,
+    with nothing written, from any process an eVi agent may have started."""
+    from evi import attest
+    from evi import tasks as _tasks
+
+    _director_refusal(f"reject task {task_id}")
+    queue = _task_queue()
+    with _task_errors():
+        if not reason.strip():
+            raise _tasks.TaskError("a rejection needs a --reason")
+        record = queue.read(task_id)
+        body = _tasks.for_verdict(record, verdict="rejected", note=reason)
+        branch = str(record.get("branch") or "").strip()
+        if not branch:
+            raise _tasks.TaskError(f"task {task_id} has no branch (start it first)")
+        try:
+            head = attest.branch_head(_tasks.head_ref(branch), cwd=queue.root)
+        except attest.AttestError as exc:
+            raise _tasks.TaskError(str(exc)) from exc
+        evidence = attest.evidence_hash(_tasks.evidence_path(record, queue.root))
+    try:
+        signed = attest.sign(body, head=head, evidence_hash=evidence, verdict="rejected",
+                             rounds=rounds, yes=yes)
+    except attest.AgentRefused as exc:
+        _task_fail(str(exc))
+    except attest.AttestError as exc:
+        _task_fail(str(exc), 1)
+    with _task_errors():
+        queue.replace(record, signed)
+    console.print(f"task {task_id}: rejected at {head[:12]}", highlight=False, markup=False,
+                  soft_wrap=True)
+
+
+@attest_app.command("init")
+def attest_init(
+    rotate: bool = typer.Option(
+        False, "--rotate", help="Replace an existing key (every attestation so far becomes "
+                                "invalid)."),
+    yes: bool = typer.Option(False, "--yes", help="Don't ask for confirmation (the director's "
+                                                  "own shell only)."),
+) -> None:
+    """Director only: create the director's attestation key.
+
+    It goes in the OS keyring when that works, else a user-only file under
+    eVi's home. Refused from any process an eVi agent may have started."""
+    from evi import attest
+
+    try:
+        kid = attest.init_key(rotate=rotate, yes=yes)
+    except attest.AgentRefused as exc:
+        _task_fail(str(exc))
+    except attest.AttestError as exc:
+        _task_fail(str(exc), 1)
+    console.print(f"director key {kid} is in {attest.key_location()}", highlight=False,
+                  markup=False, soft_wrap=True)
+
+
+@attest_app.command("status")
+def attest_status() -> None:
+    """Show whether this machine has a director key.
+
+    Its id and where it is kept, never the key itself."""
+    from evi import attest
+
+    why = attest.agent_parent()
+    if why:
+        _task_fail(f"the director key isn't read here: {why}", 1)
+    kid = attest.key_id()
+    if kid is None:
+        _task_fail("there is no director key on this machine; `evi attest init` creates one", 1)
+    console.print(f"director key {kid}\nkept in: {attest.key_location()}", highlight=False,
+                  markup=False, soft_wrap=True)
 
 
 style_app = typer.Typer(help="Output styles — switchable response personas.")
@@ -7031,6 +7626,7 @@ def team_run(
         except _wt.WorktreeError as exc:
             console.print(f"[red]--worktree:[/red] {escape(str(exc))}", highlight=False)
             raise typer.Exit(1)
+    _proc.mark_agent_process()  # before any teammate starts (evi.proc)
     console.print(
         f"[dim]teammates run unattended · policy={config_policy_label(cfg)}[/dim]"
     )
@@ -8204,6 +8800,8 @@ def mcp_serve(
     except ImportError:
         console.print("[red]`mcp` package not installed — run: pip install 'evi-assistant[mcp]'[/red]")
         raise typer.Exit(1)
+    # Its tools run for the client's agent: EVI_AGENT=1 for what they start.
+    _proc.mark_agent_process()
     cats = tuple(c.strip() for c in categories.split(",") if c.strip())
     allow = tuple(t.strip() for t in tools.split(",") if t.strip()) or None
     if http and not token:
@@ -8326,6 +8924,7 @@ def schedule_run_now(task_id: str) -> None:
     """Run a task immediately, regardless of its cron."""
     from evi.scheduler import Scheduler
 
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     sched = Scheduler()
     log_path = sched.run_now(task_id)
     status = sched.store.get(task_id).last_status or ""
@@ -8345,6 +8944,7 @@ def scheduler(reload_interval: int = 60) -> None:
     from evi.llm.agent import config_policy_label
     from evi.scheduler import Scheduler
 
+    _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     sched = Scheduler()
     try:
         sched.start()

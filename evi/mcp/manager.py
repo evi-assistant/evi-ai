@@ -29,6 +29,7 @@ from typing import Any
 
 from evi.mcp.bridge import MCPBridge
 from evi.mcp.servers import MCPServer
+from evi.proc import AGENT_ENV
 from evi.tools.base import REGISTRY, Tool
 
 
@@ -167,6 +168,9 @@ class MCPManager:
             # Inject identifiers so a stdio MCP server knows it's running under
             # eVi (parity with Claude Code's SESSION_ID / CLAUDECODE=1). Merge
             # onto the SDK's safe default env so the child keeps PATH etc.
+            # The server runs tools for an agent: EVI_AGENT=1 (evi.proc), last,
+            # so a server's own env can't clear it. The SDK's default env keeps
+            # only a few variables, so it is never inherited from eVi's.
             try:
                 from mcp.client.stdio import get_default_environment
 
@@ -175,7 +179,7 @@ class MCPManager:
                 import os
 
                 base_env = dict(os.environ)
-            child_env = {**base_env, **(server.env or {}), "EVI": "1"}
+            child_env = {**base_env, **(server.env or {}), "EVI": "1", AGENT_ENV: "1"}
             if self.session_id:
                 child_env["EVI_SESSION_ID"] = self.session_id
             params = StdioServerParameters(

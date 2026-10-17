@@ -56,6 +56,23 @@ from typing import Any, Iterator  # noqa: E402
 import pytest  # noqa: E402
 
 
+# eVi's agent-hosting entry points mark their own process EVI_AGENT=1
+# (evi.proc.mark_agent_process: `evi run` through CliRunner, the web server's
+# lifespan under TestClient). Run in-process, that would stay set in this
+# test process, and every later test would look like an agent's to
+# evi.attest. Put it back as it was when the run began, after every test.
+_EVI_AGENT_AT_START = _os.environ.get("EVI_AGENT")
+
+
+@pytest.fixture(autouse=True)
+def _restore_evi_agent():
+    yield
+    if _EVI_AGENT_AT_START is None:
+        _os.environ.pop("EVI_AGENT", None)
+    else:
+        _os.environ["EVI_AGENT"] = _EVI_AGENT_AT_START
+
+
 @pytest.fixture(autouse=True)
 def _isolate_session_contextvars(monkeypatch):
     from evi import hooks, skillscope, workdir

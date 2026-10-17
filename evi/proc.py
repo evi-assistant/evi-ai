@@ -33,6 +33,17 @@ gets ``EVI_AGENT=1`` in its environment (`agent_env`), on top of whatever
 environment the caller passed: director tooling (`evi.attest`) refuses to run,
 and never reads the director key, in a process that has it, nor in anything
 that process starts.
+
+The rest of what an agent's process starts (git through `evi.gitsafe`, a
+hook, a linter, OCR, an MCP stdio server, a scheduled job's tools) gets it
+too: eVi's agent-hosting entry points (``evi chat`` and every CLI command
+that builds an agent, ``evi run``, ``evi batch``, team and workflow runs,
+``evi mcp serve``, the web server and the desktop sidecar, channels, the
+scheduler, ``evi task start``) call `mark_agent_process` at startup, so
+every child inherits it, and the spawners that build an environment of their
+own (hooks, MCP stdio servers, the linter and OCR runners, the Claude Agent
+SDK) set it there as well. Director tooling (``evi task verify|reject``,
+``evi attest``) never marks itself.
 """
 
 from __future__ import annotations
@@ -96,6 +107,26 @@ def agent_env(env: dict[str, str] | None = None) -> dict[str, str]:
     out = dict(os.environ if env is None else env)
     out[AGENT_ENV] = "1"
     return out
+
+
+def mark_agent_process() -> None:
+    """Mark this process as one that hosts eVi agents: ``EVI_AGENT=1`` in its
+    own environment, so every process it starts inherits it, however it is
+    started (see the module doc). Called by the agent-hosting entry points
+    at startup; never by director tooling (``evi task verify|reject``,
+    ``evi attest``), which refuses to run with it set. The secrets redaction
+    knows of are read first (`evi.redact.prime`): once this is set,
+    `evi.attest` no longer reads the director key here, and it is to be
+    redacted from what this process shows all the same."""
+    if os.environ.get(AGENT_ENV) == "1":
+        return
+    try:
+        from evi import redact
+
+        redact.prime()
+    except Exception:  # noqa: BLE001 — redaction never stops an entry point
+        pass
+    os.environ[AGENT_ENV] = "1"
 
 
 def spawn(argv, **kwargs):

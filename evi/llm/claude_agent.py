@@ -26,6 +26,7 @@ from evi.llm.cli_agent import (
     tool_call_delta,
     usage_chunk,
 )
+from evi.proc import AGENT_ENV
 
 # The in-process MCP server prefixes tool names ``mcp__<server>__<tool>``.
 _MCP_SERVER = "evi"
@@ -159,6 +160,9 @@ async def _run_claude_turn(sdk, *, model, system_prompt, sdk_msgs, tools, out):
         "tools": [],                 # no built-in Claude Code tools
         "setting_sources": [],       # never load a CLAUDE.md / settings from disk
         "max_turns": 1,
+        # The CLI the SDK spawns runs for an agent (evi.proc): on top of
+        # eVi's environment, which the SDK passes on.
+        "env": {AGENT_ENV: "1"},
     }
     if has_tools:
         opts_kwargs["mcp_servers"] = {_MCP_SERVER: server}

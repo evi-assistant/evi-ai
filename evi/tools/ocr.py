@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from evi.proc import agent_env
 from evi.tools.base import tool
 
 
@@ -77,6 +78,7 @@ def _run_tesseract(image: Path, language: str) -> str:
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS,
+            env=agent_env(),  # it runs for an agent: EVI_AGENT=1
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"tesseract timed out after {_TIMEOUT_SECONDS}s")

@@ -820,6 +820,7 @@ def test_trust_command_refuses_inside_an_evi_session(
     # it: a repo's (untrusted, still loaded) AGENTS.md must not be able to get
     # the agent to run `evi trust --yes` on its own folder.
     env.project(REPO_TOML)
+    monkeypatch.delenv("EVI_AGENT", raising=False)
     monkeypatch.setenv("EVI_INTERACTIVE", "1")
     runner = CliRunner()
     for args in (["trust", "--yes"], ["trust", str(env.repo), "-y"], ["trust"]):
@@ -841,6 +842,20 @@ def test_trust_command_refuses_inside_an_evi_session(
     monkeypatch.setenv("EVI_INTERACTIVE", "1")
     assert runner.invoke(cli_main.app, ["trust", "--status"]).exit_code == 0
     assert runner.invoke(cli_main.app, ["trust", "--revoke"]).exit_code == 0
+    assert not trust.status(env.repo).trusted
+
+
+def test_trust_command_refuses_in_a_process_an_agent_started(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every process an agent-hosting entry point starts carries EVI_AGENT=1
+    # (`evi run -y`, `evi serve` ...: no REPL, so no EVI_INTERACTIVE): the
+    # agent's shell can't trust its own folder there either.
+    env.project(REPO_TOML)
+    monkeypatch.delenv("EVI_INTERACTIVE", raising=False)
+    monkeypatch.setenv("EVI_AGENT", "1")
+    r = CliRunner().invoke(cli_main.app, ["trust", "--yes"])
+    assert r.exit_code == 2 and "inside an eVi session" in r.output
     assert not trust.status(env.repo).trusted
 
 

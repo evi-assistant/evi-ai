@@ -68,8 +68,8 @@ Limits
     Full isolation needs the agent under a separate OS account (or a
     director key that needs a secret the agent never sees to sign with).
 
-Contract for the task queue, the evidence bundle and their CLI (later items:
-evi/tasks.py, evi/evidence.py, ``evi task ...``, ``evi evidence ...``)
+Contract for the task queue, the evidence bundle and their CLI (evi/tasks.py
+and ``evi task ...``; later evi/evidence.py and ``evi evidence ...``)
 
 - A task is a TOML table with at least ``id`` and ``status``. The signature
   covers EVERY field of the record except the ``attestation`` table, so
@@ -120,11 +120,14 @@ evi/tasks.py, evi/evidence.py, ``evi task ...``, ``evi evidence ...``)
   ``evi attest ...`` (e.g. a key-setup ``evi attest init``): those are the
   forms the shell guard refuses in agent shells and the only command lines
   `authorize` signs from.
-- Processes eVi's agents run carry ``EVI_AGENT=1`` (`AGENT_ENV`): the
-  spawners (evi/proc.py, the shell / code / monitor tools) are to set it,
-  and ``evi task verify`` must not ship before they do. Until then only
-  ``EVI_INTERACTIVE`` and the process-tree check stand in for it, and a
-  process detached from eVi's tree escapes the latter.
+- Processes eVi's agents run carry ``EVI_AGENT=1`` (`AGENT_ENV`): evi/proc.py
+  sets it for what it spawns (the shell / code / monitor tools, the CLI-agent
+  drivers), the spawners that build an environment of their own (hooks, MCP
+  stdio servers, the linter and OCR runners, the Claude Agent SDK) set it
+  too, and eVi's agent-hosting entry points set it in their own process at
+  startup (`evi.proc.mark_agent_process`), so everything else they start
+  inherits it. Director tooling never sets it. A process that drops it and
+  is detached from eVi's tree escapes both this and the process-tree check.
 """
 
 from __future__ import annotations

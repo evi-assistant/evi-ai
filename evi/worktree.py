@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import socket
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
@@ -675,8 +676,38 @@ def auto_branch_name(task: str = "", *, start: Path | None = None) -> str:
     raise WorktreeError(f"no free branch name like {stem}-<n> in {root}")
 
 
+_RUN_LOCK = re.compile(r"eVi isolated run \(pid ([0-9]{1,10}) on (.+)\)\Z")
+
+
+def _host() -> str:
+    try:
+        return socket.gethostname() or "?"
+    except OSError:
+        return "?"
+
+
 def _run_lock_reason() -> str:
-    return f"eVi isolated run (pid {os.getpid()})"
+    return f"eVi isolated run (pid {os.getpid()} on {_host()})"
+
+
+def _stale_run_lock(reason: str | None) -> bool:
+    """`reason` is the lock of an isolated run on this machine whose process
+    is gone (it died before `release`), as `_run_lock_reason` wrote it.
+    Anything else is not: another machine's run (a repository on a shared
+    drive), a lock someone put on by hand, this process, a live (or reused)
+    pid, or no psutil to tell."""
+    m = _RUN_LOCK.match(reason or "")
+    if m is None or m.group(2).casefold() != _host().casefold():
+        return False
+    pid = int(m.group(1))
+    if pid == os.getpid():
+        return False
+    try:
+        import psutil
+
+        return not psutil.pid_exists(pid)
+    except Exception:  # noqa: BLE001 — can't tell: not stale
+        return False
 
 
 def _lock_reason_of(path: Path) -> str | None:
@@ -689,10 +720,19 @@ def _lock_reason_of(path: Path) -> str | None:
         return None
 
 
-def _lock_for_run(root: Path, path: Path, branch: str, reason: str) -> None:
+def _lock_for_run(root: Path, path: Path, branch: str, reason: str,
+                  take_stale: bool = False) -> None:
     """Lock a reused worktree for the run; refused when it is locked already
-    (by another run using it, or by someone keeping it)."""
-    problem = "it is locked" if _has_lock_file(path) else ""
+    (by another run using it, or by someone keeping it), but for a dead
+    run's lock (`_stale_run_lock`) when `take_stale`."""
+    held = _has_lock_file(path)
+    if held and take_stale and _stale_run_lock(_lock_reason_of(path)):
+        try:
+            _git("worktree", "unlock", str(path), cwd=root)
+            held = _has_lock_file(path)
+        except WorktreeError:
+            pass
+    problem = "it is locked" if held else ""
     if not problem:
         try:
             _git("worktree", "lock", "--reason", reason, str(path), cwd=root)
@@ -712,6 +752,7 @@ def open_isolated(
     task: str = "",
     start: Path | None = None,
     base: str | None = None,
+    take_stale: bool = False,
 ) -> IsolatedWorktree:
     """Open the worktree an isolated run works in, locked until `release`.
 
@@ -727,9 +768,11 @@ def open_isolated(
     is refused: an isolated run never edits a checkout someone may be
     working in. The worktree is `git worktree lock`ed for the run, so
     prune and remove leave it alone and no second run shares it (a locked
-    one is refused); call `release` when the run is over. Opening is
-    serialized within the process; an auto name another process took
-    meanwhile moves on to the next one.
+    one is refused); call `release` when the run is over. With `take_stale`,
+    a reused worktree whose lock a run on this machine left when its process
+    died is taken over (``evi task start``, whose claim says the worktree is
+    its now). Opening is serialized within the process; an auto name another
+    process took meanwhile moves on to the next one.
     """
     name = (branch or "").strip()
     reason = _run_lock_reason()
@@ -778,7 +821,7 @@ def open_isolated(
                     "`git worktree prune` drops its record"
                 )
             if existing is not None:
-                _lock_for_run(root, existing, name, reason)
+                _lock_for_run(root, existing, name, reason, take_stale)
                 path, created = existing, False
             else:
                 have = name in branches
