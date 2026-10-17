@@ -184,6 +184,49 @@ const chipGoal = document.getElementById('chip-goal');
 const chipPlan = document.getElementById('chip-plan');
 const chipAuto = document.getElementById('chip-auto');
 
+// Stop: ends the running turn (POST /api/session/{id}/cancel). Shown next to
+// Send only while a turn this page started (a message or a re-roll) runs; the
+// turn then ends with Done "interrupted" on its own stream, which resets it.
+const stopBtn = document.createElement('button');
+stopBtn.type = 'button';
+stopBtn.id = 'stop';
+stopBtn.textContent = 'Stop';
+stopBtn.title = 'Stop this turn';
+stopBtn.style.cssText = 'display:none;background:var(--err);color:#fff;border:none;'
+  + 'padding:0 14px;border-radius:4px;cursor:pointer;font:inherit;font-weight:600';
+send.insertAdjacentElement('afterend', stopBtn);
+let stopSid = null;  // the session whose turn Stop ends
+function showStop(sid) {
+  stopSid = sid;
+  stopBtn.disabled = false;
+  stopBtn.textContent = 'Stop';
+  stopBtn.style.display = '';
+}
+function hideStop() {
+  stopSid = null;
+  stopBtn.style.display = 'none';
+}
+async function stopTurn() {
+  const sid = stopSid;
+  if (!sid || stopBtn.disabled) return;
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping…';
+  let ok = false;
+  try {
+    const r = await fetch('/api/session/' + encodeURIComponent(sid) + '/cancel', { method: 'POST' });
+    ok = r.ok;
+  } catch (e) { /* the stream's own end (or error) still resets the UI */ }
+  if (ok) {
+    // The server denied any question the turn was waiting on; close it here
+    // too, so the stream's reader (awaiting the answer) reads on to the end.
+    settlePermissionPrompts(sid);
+  } else if (stopSid === sid) {
+    stopBtn.disabled = false;  // not stopped: the question stays answerable
+    stopBtn.textContent = 'Stop';
+  }
+}
+stopBtn.addEventListener('click', stopTurn);
+
 async function refreshUsage() {
   try {
     const r = await fetch(`/api/session/${sessionId}/usage`);
@@ -642,6 +685,7 @@ async function streamReroll() {
   send.disabled = true;
   let assistant = null;
   const turnSid = sessionId;
+  showStop(turnSid);
   try {
     const r = await fetch(`/api/session/${turnSid}/reroll`, { method: 'POST' });
     if (r.status === 409) throw new Error('a turn is still running in this session');
@@ -678,6 +722,7 @@ async function streamReroll() {
     addBubble('error').textContent = `re-roll failed: ${err.message}`;
   } finally {
     send.disabled = false;
+    hideStop();
     refreshUsage();
     // The notes the re-roll held (drawn below the new reply meanwhile) are
     // back in the history, after it: draw them in their place.
@@ -1134,12 +1179,25 @@ function renderStreamed(bubble) {
   if (bubble.isConnected) log.scrollTop = log.scrollHeight;  // as handleEvent does
 }
 
+// Permission overlays open now ({sid, settle}): Stop settles its turn's with
+// null, as the server denies them (WebSession.cancel_turn).
+const openPermissionPrompts = new Set();
+function settlePermissionPrompts(sid) {
+  for (const p of [...openPermissionPrompts]) {
+    if (!sid || p.sid === sid) p.settle(null);
+  }
+}
+
 // Permission overlay: returns a Promise<boolean> for approve / deny, or null
-// when the server's deadline (timeout_s) passes first — it has denied by then.
-function askPermission({ decision_id, tool_name, args, category, timeout_s }) {
+// when the server's deadline (timeout_s) passes first — it has denied by then
+// — or the turn was stopped. `sid` is the session the asking turn runs in.
+function askPermission({ decision_id, tool_name, args, category, timeout_s }, sid) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'perm-overlay';
+    // The overlay covers the composer's Stop button, so it carries its own
+    // for the turn that asks (it settles this question once stopped).
+    const stoppable = stopSid !== null && stopSid === (sid || sessionId);
     overlay.innerHTML = `
       <div class="perm-card">
         <h3>Permission required</h3>
@@ -1148,6 +1206,7 @@ function askPermission({ decision_id, tool_name, args, category, timeout_s }) {
            <span style="color:var(--dim)">(${escapeHtml(String(category || ''))})</span></p>
         <div class="perm-args">${escapeHtml(String(args || ''))}</div>
         <div class="perm-actions">
+          ${stoppable ? '<button class="stop-turn" title="Stop the whole turn" style="margin-right:auto">Stop turn</button>' : ''}
           <button class="deny">Deny</button>
           <button class="approve">Approve</button>
         </div>
@@ -1155,9 +1214,25 @@ function askPermission({ decision_id, tool_name, args, category, timeout_s }) {
     document.body.appendChild(overlay);
     const secs = Number(timeout_s);
     const timer = secs > 0 ? setTimeout(() => { cleanup(); resolve(null); }, secs * 1000) : null;
+    const entry = { sid: sid || sessionId, settle: (v) => { cleanup(); resolve(v); } };
+    openPermissionPrompts.add(entry);
     overlay.querySelector('.approve').onclick = () => { cleanup(); resolve(true); };
     overlay.querySelector('.deny').onclick = () => { cleanup(); resolve(false); };
-    function cleanup() { if (timer) clearTimeout(timer); overlay.remove(); }
+    const stopHere = overlay.querySelector('.stop-turn');
+    if (stopHere) {
+      stopHere.onclick = () => {
+        stopHere.disabled = true;
+        stopHere.textContent = 'Stopping…';
+        stopTurn().then(() => {
+          if (overlay.isConnected) { stopHere.disabled = false; stopHere.textContent = 'Stop turn'; }
+        });
+      };
+    }
+    function cleanup() {
+      if (timer) clearTimeout(timer);
+      overlay.remove();
+      openPermissionPrompts.delete(entry);
+    }
   });
 }
 
@@ -1955,6 +2030,7 @@ async function sendMessage(text, images) {
     send.textContent = 'Queue';
     send.title = 'This turn is running — your message is applied at the next step';
     workStatus.start();
+    showStop(turnSid);
   }
   // The plan badge is one-shot — clear it once a turn starts.
   if (planArmed && !text.startsWith('/')) {
@@ -2025,6 +2101,7 @@ async function sendMessage(text, images) {
       send.textContent = 'Send';
       send.title = '';
       workStatus.stop();
+      hideStop();
       send.disabled = false;
       // Notes held while the turn ran joined the history as it ended.
       syncNotes(turnSid);
@@ -2117,7 +2194,7 @@ async function handleEvent(ev, assistant, sid) {
     renderToolResult(b, ev.name, ev.output, ev.citations || []);
     maybeRenderImages(b, ev.output);
   } else if (ev.kind === 'PermissionRequest') {
-    const approved = await askPermission(ev);
+    const approved = await askPermission(ev, sid || sessionId);
     // null = the prompt timed out; the server has already denied it.
     if (approved !== null) await postDecision(ev.decision_id, approved, sid || sessionId);
   } else if (ev.kind === 'PermissionExpired') {
@@ -2169,6 +2246,10 @@ async function handleEvent(ev, assistant, sid) {
       assistant.appendChild(el);
     }
   } else if (ev.kind === 'Done') {
+    if (ev.reason === 'interrupted') {
+      // Stopped (POST /cancel): what streamed so far stays, the rest never ran.
+      addBubble('system').textContent = 'Stopped — the turn was cancelled.';
+    }
     // The turn's final assistant bubble is now the newest — move the re-roll
     // affordance onto it (and off any earlier ones).
     updateRerollButtons();

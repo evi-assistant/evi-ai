@@ -4,7 +4,13 @@ One `WebSession` is held per session id; each owns an `Agent` plus a small
 registry of pending permission decisions. The browser POSTs to `/api/chat`
 with `{session_id, message}` and receives an SSE stream of JSON event
 lines. Tool calls that aren't auto-approved surface as `PermissionRequest`
-events that the browser answers via `/api/decide`.
+events that the browser answers via `/api/decide`. `POST
+/api/session/{id}/cancel` stops the running turn (the UI's Stop button).
+
+Tool-call displays are redacted (`evi.redact`): the ToolCall / ToolResult /
+PermissionRequest events and the tool messages /history redraws show
+`[REDACTED:<kind>]` where a secret was. The agent's own history, which the
+model works from, keeps what the tools returned.
 
 Slash commands (`/help`, `/goal`, `/plan`, `/auto`, `/reset`, `/tools`,
 `/model`) match CLI behavior and are dispatched server-side so the browser
@@ -26,6 +32,7 @@ import posixpath
 import secrets
 import re
 import threading
+import time
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
@@ -45,9 +52,13 @@ from evi.backends import get_backend
 from evi.commands import CommandStore
 from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
 from evi.history import COMPACTION_ACK, is_note, note_message
-from evi.llm.agent import Agent, Done, Error, Event, make_unattended, remote_unattended
+from evi.llm.agent import (
+    CANCEL_GRACE, CANCEL_POLL, Agent, Done, Error, Event, ToolCall, ToolResult,
+    make_unattended, remote_unattended,
+)
 from evi.llm.client import make_client
 from evi.mcp import MCPManager, filter_allowed, load_servers
+from evi.redact import Redactor
 
 # Import tool modules for their @tool side effects.
 import evi.tools.fs  # noqa: F401
@@ -1200,6 +1211,10 @@ class WebSession:
     # earlier line its recorded cut dropped from the replay. Each id belongs
     # to a note in held_notes.
     unlogged_notes: set[int] = field(default_factory=set, repr=False, compare=False)
+    # Why the claimed turn was cancelled (cancel_turn), None if it wasn't. A
+    # cancel can land after the session is claimed but before the turn exists
+    # (begin_turn, then agent.chat()): start_turn applies it then.
+    cancel_reason: str | None = field(default=None, repr=False, compare=False)
 
     def begin_turn(self) -> bool:
         """Claim the session for a turn; False if one is already running."""
@@ -1207,7 +1222,49 @@ class WebSession:
             if self.busy:
                 return False
             self.busy = True
+            self.cancel_reason = None
             return True
+
+    def start_turn(self, start):
+        """Start the claimed turn: `start()` calls agent.chat / continue_chat,
+        which begins the turn right then (a fresh cancel token) and returns its
+        events for a worker to iterate. A cancel sent since the claim
+        (cancel_turn) is applied to it, so a Stop pressed right after Send
+        sticks. If `start()` raises, the events raise it, so the stream ends
+        with an Error as when the worker started the turn itself."""
+        try:
+            events = start()
+        except Exception as exc:  # noqa: BLE001 — reported on the stream
+            def _failed(exc: Exception = exc):
+                raise exc
+                yield  # a generator, so the worker raises it while iterating
+
+            return _failed()
+        with self.turn_lock:
+            reason = self.cancel_reason
+        if reason is not None:
+            cancel = getattr(self.agent, "cancel", None)
+            if callable(cancel):
+                cancel(reason)
+        return events
+
+    def cancel_turn(self, reason: str) -> bool:
+        """Cancel the running turn (`Agent.cancel`: it ends with
+        Done("interrupted") and the worker frees the session) and deny every
+        permission question it is waiting on, which a cancel can't interrupt
+        on its own. False when no turn is running."""
+        with self.turn_lock:
+            if not self.busy:
+                return False
+            self.cancel_reason = reason
+            cancel = getattr(self.agent, "cancel", None)
+            if callable(cancel):
+                cancel(reason)
+            waiting = tuple(self.pending.values())
+        for pending in waiting:
+            pending.approved = False
+            pending.event.set()
+        return True
 
     def end_turn(self) -> None:
         with self.turn_lock:
@@ -1281,9 +1338,7 @@ def _stream_turn(sess: WebSession, run, enqueue) -> None:
     closing: dict | None = None
     try:
         for event in run():
-            payload = {"kind": _event_kind(event)}
-            if is_dataclass(event):
-                payload.update(asdict(event))
+            payload = _event_payload(event)
             if isinstance(event, (Done, Error)):
                 closing = payload
                 break
@@ -1309,6 +1364,22 @@ def _stream_turn(sess: WebSession, run, enqueue) -> None:
         enqueue(None)  # sentinel — must always run or the stream never closes
 
 
+def _turn_cancelled(sess: WebSession) -> bool:
+    """Whether the turn a permission question asked on this thread belongs to
+    was cancelled: that of the tool call running here (a subagent asks on its
+    parent's tool thread) or of one it runs inside, or the session's own."""
+    from evi.tools.base import active_context
+
+    ctx = active_context()
+    while ctx is not None:
+        token = getattr(ctx, "cancel_token", None)
+        if token is not None and token.is_set():
+            return True
+        ctx = getattr(ctx, "parent", None)
+    token = getattr(sess.agent, "cancel_token", None)
+    return isinstance(token, threading.Event) and token.is_set()
+
+
 def _make_permission_callback(bucket: "dict[str, WebSession]", session_id: str,
                               enqueue, timeout_s: float):
     """Build a permission_callback that bridges worker thread → SSE client.
@@ -1321,19 +1392,30 @@ def _make_permission_callback(bucket: "dict[str, WebSession]", session_id: str,
 
     `bucket` is captured here (in the request task) so the worker-thread
     lookup resolves the right user's session without the ContextVar.
+
+    Once the turn is cancelled (POST /api/session/{id}/cancel) nothing more
+    is asked: a question already waiting is denied by WebSession.cancel_turn,
+    and one asked after it (a second subagent that waited its turn to ask)
+    is denied here without being posted. The arguments shown are redacted
+    (`evi.redact`).
     """
     def callback(tool_name: str, args_json: str, category: str) -> bool:
         decision_id = secrets.token_hex(8)
         sess = bucket.get(session_id)
-        if sess is None:
+        if sess is None or _turn_cancelled(sess):
             return False
         pending = PendingDecision(event=threading.Event())
         sess.pending[decision_id] = pending
+        # Checked again once registered: a cancel_turn from here on denies it,
+        # and one that came in between saw nothing to deny.
+        if _turn_cancelled(sess):
+            sess.pending.pop(decision_id, None)
+            return False
         enqueue({
             "kind": "PermissionRequest",
             "decision_id": decision_id,
             "tool_name": tool_name,
-            "args": args_json,
+            "args": Redactor().args(args_json),
             "category": category,
             "timeout_s": timeout_s,
         })
@@ -1689,12 +1771,27 @@ def _event_kind(event: Event) -> str:
     return type(event).__name__
 
 
-def _serialize(event: Event) -> str:
-    """Render an agent Event as a JSON line for SSE."""
+def _event_payload(event: Event) -> dict[str, Any]:
+    """An agent Event as the JSON object an SSE stream sends. A tool call's
+    arguments and a tool's output (and its citations) are redacted
+    (`evi.redact`, one Redactor per event): this is a display, while the
+    agent's history keeps what the tool returned."""
     payload: dict[str, Any] = {"kind": _event_kind(event)}
     if is_dataclass(event):
         payload.update(asdict(event))
-    return json.dumps(payload)
+    if isinstance(event, ToolCall):
+        payload["arguments"] = Redactor().args(payload.get("arguments"))
+    elif isinstance(event, ToolResult):
+        red = Redactor()
+        payload["output"] = red(payload.get("output"))
+        if payload.get("citations"):
+            payload["citations"] = red.obj(payload["citations"])
+    return payload
+
+
+def _serialize(event: Event) -> str:
+    """Render an agent Event as a JSON line for SSE."""
+    return json.dumps(_event_payload(event))
 
 
 # ---- slash commands (server-side) ---------------------------------------
@@ -4558,6 +4655,9 @@ def create_app() -> FastAPI:
         with sess.turn_lock:
             history = list(sess.agent.history)
             held = [dict(n) for n in sess.held_notes]
+        # Tool calls and results redraw redacted, as the stream showed them
+        # (_event_payload); the agent's history keeps the real values.
+        red = Redactor()
         cleaned: list[dict] = []
         for i in range(max(0, since), len(history)):
             msg = history[i]
@@ -4567,11 +4667,14 @@ def create_app() -> FastAPI:
                     part.get("text", "") for part in content
                     if isinstance(part, dict) and part.get("type") == "text"
                 )
+            if msg.get("role") == "tool" and isinstance(content, str):
+                content = red(content)
+            tool_calls = msg.get("tool_calls")
             entry: dict = {
                 "index": i,
                 "role": msg.get("role"),
                 "content": content,
-                "tool_calls": msg.get("tool_calls"),
+                "tool_calls": red.tool_calls(tool_calls) if tool_calls else tool_calls,
                 "name": msg.get("name"),
             }
             kind = _history_kind(history, i)
@@ -4710,11 +4813,18 @@ def create_app() -> FastAPI:
         sess.agent.permission_callback = _make_permission_callback(
             _my_sessions(), session_id, enqueue, timeout_s,
         )
+        # The turn starts here, in the request, so a Stop sent before the
+        # worker gets going still ends it (WebSession.start_turn).
+        try:
+            events = sess.start_turn(sess.agent.continue_chat)
+        except BaseException:
+            sess.end_turn()
+            raise
 
         # A follow-up can be steered onto a re-roll too (/api/chat answers 409
         # and the UI queues it), so the re-roll hands leftovers back the same way.
         threading.Thread(
-            target=_stream_turn, args=(sess, sess.agent.continue_chat, enqueue), daemon=True,
+            target=_stream_turn, args=(sess, lambda: events, enqueue), daemon=True,
         ).start()
 
         async def stream() -> AsyncIterator[dict[str, str]]:
@@ -4743,6 +4853,28 @@ def create_app() -> FastAPI:
         if queued is None:
             return {"queued": False, "reason": "not busy"}
         return {"queued": queued, "pending": sess.agent.pending_steering()}
+
+    @app.post("/api/session/{session_id}/cancel")
+    def session_cancel(session_id: str) -> dict[str, Any]:
+        """Stop the turn running in one of the caller's own live sessions (the
+        UI's Stop button; the web side of REPL Ctrl+C). The turn ends with
+        Done("interrupted") on its stream: a reply being streamed keeps its
+        text, marked as cut off; running commands have their process trees
+        killed; calls that never ran are answered "(cancelled)"; a permission
+        question waiting on the browser is denied. Answers once the session
+        is free again (normally well under a second; at most CANCEL_GRACE
+        after the cancel while tools that ignore it are left behind), so the
+        caller can send its next message at once. {"cancelled": false} when
+        no turn is running."""
+        sess = _my_sessions().get(session_id)
+        if sess is None:
+            raise HTTPException(404, "no such live session")
+        if not sess.cancel_turn("the user stopped it from the web UI"):
+            return {"cancelled": False, "reason": "not busy", "busy": False}
+        deadline = time.monotonic() + CANCEL_GRACE + 1.0
+        while sess.busy and time.monotonic() < deadline:
+            time.sleep(CANCEL_POLL / 2)
+        return {"cancelled": True, "busy": sess.busy}
 
     @app.post("/api/chat")
     async def chat(req: ChatRequest, request: Request) -> EventSourceResponse:
@@ -4814,8 +4946,11 @@ def create_app() -> FastAPI:
             _my_sessions(), req.session_id, enqueue, timeout_s,
         )
 
-        def run() -> Any:
-            return sess.agent.chat(
+        # The turn starts here, in the request, not on the worker: a Stop sent
+        # right after Send (POST /api/session/{id}/cancel) then has a turn to
+        # end, however late the worker runs (WebSession.start_turn).
+        try:
+            events = sess.start_turn(lambda: sess.agent.chat(
                 message,
                 images=req.images,
                 prediction=req.prediction,
@@ -4823,9 +4958,14 @@ def create_app() -> FastAPI:
                 logit_bias=req.logit_bias,
                 audio=req.audio,
                 response_format=response_format,
-            )
+            ))
+        except BaseException:
+            sess.end_turn()
+            raise
 
-        threading.Thread(target=_stream_turn, args=(sess, run, enqueue), daemon=True).start()
+        threading.Thread(
+            target=_stream_turn, args=(sess, lambda: events, enqueue), daemon=True,
+        ).start()
 
         async def stream() -> AsyncIterator[dict[str, str]]:
             while True:

@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import atexit
 import os
+import signal
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -208,12 +211,144 @@ def _global_options(
     otel.init_telemetry()
 
 
+class _PromptInterrupted(Exception):
+    """Ctrl+C at a permission question asked on the REPL's own thread during a
+    turn (`_ReplCtrlC`): the turn is cancelled and the question answered no."""
+
+
+# Whether a permission question is waiting for the user on the REPL's (main)
+# thread right now, so Ctrl+C can also end that wait (`_ReplCtrlC`). One asked
+# on another thread (a subagent's, on its parent's tool thread) never sets it:
+# the signal handler runs on the main thread and can't raise into that one.
+_PROMPT_OPEN = [False]
+# How often a question asked off the main thread checks for a cancel.
+_PROMPT_POLL = 0.1
+# The Ctrl+C handler of the REPL turn running now (`_ReplCtrlC`), while it is
+# installed: a question asked on the REPL's own thread belongs to that turn.
+_REPL_TURN: list[_ReplCtrlC | None] = [None]
+
+
+def _permission_answer(prompt: str) -> str:
+    """`console.input(prompt)` for a permission question. "" (no) when Ctrl+C
+    cancels the REPL turn while the question is open, or already has: a read
+    started after the Ctrl+C is one it can no longer end."""
+    if threading.current_thread() is not threading.main_thread():
+        return _permission_answer_off_main(prompt)
+    try:
+        _PROMPT_OPEN[0] = True
+        # Checked once the question counts as open: a Ctrl+C from here on
+        # raises into it, one before it has cancelled the turn.
+        if _question_cancelled():
+            return ""
+        return console.input(prompt)
+    except _PromptInterrupted:
+        console.print()
+        return ""
+    finally:
+        _PROMPT_OPEN[0] = False
+
+
+def _permission_answer_off_main(prompt: str) -> str:
+    """`_permission_answer` for a question asked on a tool thread: a subagent
+    asks through its parent's callback there. Ctrl+C can't interrupt a read on
+    this thread, so the read runs on a helper thread, and this one stops
+    waiting and answers no ("") once the turn the question belongs to is
+    cancelled (`_question_cancelled`). One whose turn is cancelled already (a
+    second subagent that waited its turn to ask) starts no read at all: it
+    would be left open, competing with the REPL's next prompt."""
+    if _question_cancelled():
+        return ""
+    box: dict[str, object] = {}
+    answered = threading.Event()
+
+    def read() -> None:
+        try:
+            box["answer"] = console.input(prompt)
+        except BaseException as exc:  # noqa: BLE001 — raised again on the asking thread
+            box["error"] = exc
+        finally:
+            answered.set()
+
+    threading.Thread(target=read, name="evi-permission-input", daemon=True).start()
+    while not answered.wait(_PROMPT_POLL):
+        if _question_cancelled():
+            console.print()
+            return ""
+    if "error" in box:
+        raise box["error"]
+    return box["answer"]
+
+
+def _question_cancelled() -> bool:
+    """Whether the turn a permission question asked here belongs to was
+    cancelled: that of the tool call this thread runs (or of one it runs
+    inside, up to the REPL's own turn), or, on the REPL's own thread, the
+    REPL's turn. Never waits: the Ctrl+C handler may be running."""
+    from evi.tools.base import active_context
+
+    ctx = active_context()
+    while ctx is not None:
+        if ctx.cancel_token.is_set():
+            return True
+        ctx = ctx.parent
+    turn = _REPL_TURN[0]
+    return (
+        turn is not None
+        and threading.current_thread() is threading.main_thread()
+        and turn.agent.cancel_token.is_set()
+    )
+
+
+# ---- what the CLI shows of a tool call ---------------------------------------
+# A tool-call display: the arguments and output are redacted (evi.redact)
+# before anything is cut short, and escaped so a `[` in them never reads as
+# Rich markup. The agent's history, which the model works from, keeps the real
+# values.
+
+
+def _shown_args(args: object, limit: int | None = None, red=None) -> str:
+    """A tool call's arguments (its JSON string) as the CLI prints them,
+    cut to `limit` characters (then "…"). `red` is the Redactor of the
+    display they are part of (one is made if not given)."""
+    from rich.markup import escape
+
+    from evi.redact import Redactor
+
+    text = (red or Redactor()).args(args) if isinstance(args, str) else str(args)
+    if limit is not None and len(text) > limit:
+        text = text[:limit] + "…"
+    return escape(text)
+
+
+def _shown_output(output: object, limit: int = 400) -> str:
+    """A tool's output as the CLI previews it: under `limit` characters
+    shown whole, else cut there (then "…")."""
+    from rich.markup import escape
+
+    from evi.redact import redact
+
+    text = redact(output) if isinstance(output, str) else str(output)
+    return escape(text if len(text) < limit else text[:limit] + "…")
+
+
+def _tool_call_line(event: ToolCall) -> str:
+    """`→ tool <name> <arguments>`, redacted."""
+    from rich.markup import escape
+
+    return f"[yellow]→ tool[/yellow] [bold]{escape(str(event.name))}[/bold] {_shown_args(event.arguments)}"
+
+
+def _tool_result_line(event: ToolResult) -> str:
+    """`← result <output preview>`, redacted."""
+    return f"[yellow]← result[/yellow] {_shown_output(event.output)}"
+
+
 def _confirm_session_approval() -> bool:
     """`s` at a permission prompt: approve every tool call for the rest of the
     session (`/auto on`), but only after an explicit y. hard_deny, protected
     paths and the destructive guard still apply under it. Anything but y
     turns nothing on, and the call(s) asked about are denied."""
-    answer = console.input(
+    answer = _permission_answer(
         "  allow EVERY tool call for the rest of this session (like /auto on)? y/N: "
     ).strip().lower()
     if answer not in ("y", "yes"):
@@ -231,14 +366,17 @@ def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
     """Ask the user whether to allow a tool call. Default-deny on empty input.
     y / a approve this call only (as `a` approves the listed calls in the batch
     prompt); s approves every call for the rest of the session, after a y/N
-    confirmation."""
-    preview = args if len(args) <= 200 else args[:200] + "…"
+    confirmation. Nothing is asked (no) once the turn is cancelled."""
+    if _question_cancelled():
+        return False
+    from rich.markup import escape
+
     console.print(
         f"\n[yellow]permission:[/yellow] "
-        f"[bold]{name}[/bold] [dim]({category})[/dim] "
-        f"args={preview}"
+        f"[bold]{escape(str(name))}[/bold] [dim]({escape(str(category))})[/dim] "
+        f"args={_shown_args(args, 200)}"
     )
-    answer = console.input(
+    answer = _permission_answer(
         "  approve? [bold]y[/bold]/a (this call) / n / s (allow all this session): "
     ).strip().lower()
     if answer in ("s", "session"):
@@ -253,15 +391,22 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
     a decision (pre-approved ones never reach here). The user can approve
     all of these calls (a), deny all, pick specific 1-based indices, or
     allow every call for the rest of the session (s, after a y/N
-    confirmation).
+    confirmation). Nothing is asked (all no) once the turn is cancelled.
     """
+    if _question_cancelled():
+        return [False] * len(calls)
+    from rich.markup import escape
+
+    from evi.redact import Redactor
+
     console.print(f"\n[yellow]permission:[/yellow] {len(calls)} tool calls requested")
+    red = Redactor()  # one per prompt
     for i, (name, args, category) in enumerate(calls, 1):
-        preview = args if len(args) <= 160 else args[:160] + "…"
         console.print(
-            f"  [bold]{i}.[/bold] [bold]{name}[/bold] [dim]({category})[/dim] args={preview}"
+            f"  [bold]{i}.[/bold] [bold]{escape(str(name))}[/bold] "
+            f"[dim]({escape(str(category))})[/dim] args={_shown_args(args, 160, red)}"
         )
-    answer = console.input(
+    answer = _permission_answer(
         "  approve? [bold]a[/bold]ll (these calls) / [bold]n[/bold]one / "
         "indices (e.g. 1,3) / [bold]s[/bold] (allow all this session): "
     ).strip().lower()
@@ -1215,9 +1360,65 @@ def _dispatch_slash(
     return expanded
 
 
+# A second Ctrl+C within this many seconds of the first quits the REPL.
+_CTRL_C_QUIT_WINDOW = 2.0
+
+
+class _ReplCtrlC:
+    """Ctrl+C while a REPL turn runs. The first press cancels the turn
+    (`Agent.cancel`): it ends with Done("interrupted") and the REPL is back
+    at its prompt with the session intact. If a permission question is open
+    it is answered no (`_permission_answer`): one on the REPL's thread by
+    raising _PromptInterrupted into its read, one on a tool thread (a
+    subagent's) by that thread seeing the cancel. No question is asked after
+    it (`_question_cancelled`). A second press within _CTRL_C_QUIT_WINDOW
+    seconds raises KeyboardInterrupt, which quits.
+
+    Installed for one turn (a ``with`` block) and only on the main thread,
+    where Python runs signal handlers. The handler only sets the agent's
+    cancel token; the turn's own threads do the stopping."""
+
+    def __init__(self, agent: Agent) -> None:
+        self.agent = agent
+        self.pressed_at: float | None = None
+        self._previous: object = None
+        self._installed = False
+
+    def __enter__(self) -> "_ReplCtrlC":
+        try:
+            self._previous = signal.signal(signal.SIGINT, self._on_sigint)
+            self._installed = True
+            _REPL_TURN[0] = self
+        except ValueError:  # not the main thread: Ctrl+C keeps its default
+            pass
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._installed:
+            _REPL_TURN[0] = None
+            previous = signal.default_int_handler if self._previous is None else self._previous
+            signal.signal(signal.SIGINT, previous)
+            self._installed = False
+
+    def _on_sigint(self, _signum: int, _frame: object) -> None:
+        now = time.monotonic()
+        if self.pressed_at is not None and now - self.pressed_at <= _CTRL_C_QUIT_WINDOW:
+            raise KeyboardInterrupt
+        self.pressed_at = now
+        self.agent.cancel("the user pressed Ctrl+C")
+        if _PROMPT_OPEN[0]:
+            raise _PromptInterrupted
+
+
 def _run_repl(agent: Agent) -> None:
     """Drive the chat REPL against an existing Agent. Shared by `chat` and
     `sessions resume` so resumed sessions get the same UX."""
+    # Read the secrets redaction knows of first: once EVI_INTERACTIVE is set,
+    # evi.attest won't read the director key in this process, and it is to be
+    # redacted from the tool-call displays and transcripts all the same.
+    from evi import redact
+
+    redact.prime()
     # Mark the session interactive so the ask_user tool may prompt (it stays a
     # no-op in web / headless / print mode, which never set this).
     os.environ["EVI_INTERACTIVE"] = "1"
@@ -1340,80 +1541,95 @@ def _run_repl(agent: Agent) -> None:
         if pending_audio:
             agent._pending_audio = []  # type: ignore[attr-defined]
         in_thinking = False
-        for event in agent.chat(
+        events = agent.chat(
             user_msg,
             images=pending_images or None,
             response_format=pending_response_format,
             tool_choice=pending_tool_choice,
             prediction=pending_prediction,
             audio=pending_audio or None,
-        ):
-            if isinstance(event, ThinkingDelta):
-                if not in_thinking:
-                    console.print("[dim italic]", end="")
-                    in_thinking = True
-                console.print(event.text, end="", soft_wrap=True, highlight=False, style="dim italic")
-                continue
-            if in_thinking:
-                console.print("[/dim italic]", end="")
-                in_thinking = False
-            if isinstance(event, TextDelta):
-                text_acc.append(event.text)
-                console.print(event.text, end="", soft_wrap=True, highlight=False)
-                if speaker is not None:
-                    speaker.feed(event.text)
-            elif isinstance(event, ToolCall):
-                console.print()
-                console.print(f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}")
-            elif isinstance(event, ToolProgress):
-                console.print(
-                    f"[dim]… {', '.join(event.names)} running ({event.elapsed:.0f}s)[/dim]"
-                )
-            elif isinstance(event, ToolResult):
-                preview = event.output if len(event.output) < 400 else event.output[:400] + "…"
-                console.print(f"[yellow]← result[/yellow] {preview}")
-                console.print("[bold magenta]evi ›[/bold magenta] ", end="")
-                text_acc = []
-            elif isinstance(event, UsageStats):
-                console.print(
-                    f"\n[dim]tokens: prompt={event.prompt_tokens} · "
-                    f"completion={event.completion_tokens} · "
-                    f"total={event.total_tokens}[/dim]"
-                )
-            elif isinstance(event, Guardrail):
-                style = "red" if event.blocked else "yellow"
-                console.print(f"\n[{style}]⚠ guardrail:[/{style}] {event.message}")
-            elif isinstance(event, LogProbs):
-                import math
+        )
+        try:
+            # Ctrl+C cancels the turn (a second one quits): _ReplCtrlC.
+            with _ReplCtrlC(agent):
+                for event in events:
+                    if isinstance(event, ThinkingDelta):
+                        if not in_thinking:
+                            console.print("[dim italic]", end="")
+                            in_thinking = True
+                        console.print(event.text, end="", soft_wrap=True, highlight=False, style="dim italic")
+                        continue
+                    if in_thinking:
+                        console.print("[/dim italic]", end="")
+                        in_thinking = False
+                    if isinstance(event, TextDelta):
+                        text_acc.append(event.text)
+                        console.print(event.text, end="", soft_wrap=True, highlight=False)
+                        if speaker is not None:
+                            speaker.feed(event.text)
+                    elif isinstance(event, ToolCall):
+                        console.print()
+                        console.print(_tool_call_line(event))
+                    elif isinstance(event, ToolProgress):
+                        console.print(
+                            f"[dim]… {', '.join(event.names)} running ({event.elapsed:.0f}s)[/dim]"
+                        )
+                    elif isinstance(event, ToolResult):
+                        console.print(_tool_result_line(event))
+                        console.print("[bold magenta]evi ›[/bold magenta] ", end="")
+                        text_acc = []
+                    elif isinstance(event, UsageStats):
+                        console.print(
+                            f"\n[dim]tokens: prompt={event.prompt_tokens} · "
+                            f"completion={event.completion_tokens} · "
+                            f"total={event.total_tokens}[/dim]"
+                        )
+                    elif isinstance(event, Guardrail):
+                        style = "red" if event.blocked else "yellow"
+                        console.print(f"\n[{style}]⚠ guardrail:[/{style}] {event.message}")
+                    elif isinstance(event, LogProbs):
+                        import math
 
-                # exp(avg logprob) ≈ average per-token probability.
-                conf = math.exp(event.avg_logprob) * 100
-                color = "green" if conf >= 70 else ("yellow" if conf >= 40 else "red")
-                console.print(
-                    f"[dim]confidence: [{color}]{conf:.0f}%[/{color}] avg · "
-                    f"{event.low_count} low-confidence token(s) "
-                    f"(< {event.low_threshold})[/dim]"
-                )
-            elif isinstance(event, Error):
-                console.print(f"\n[red]error:[/red] {event.message}")
-            elif isinstance(event, Done):
-                if speaker is not None:
-                    speaker.flush()
-                if text_acc:
-                    console.print()
-                    md = Markdown("".join(text_acc))
-                    console.print(md)
-                else:
-                    console.print()
-                # Ping when a turn finishes (off unless [notify] enabled) — lets
-                # you walk away from a long local turn. Best-effort, never raises.
-                try:
-                    from evi import notify as _notify
+                        # exp(avg logprob) ≈ average per-token probability.
+                        conf = math.exp(event.avg_logprob) * 100
+                        color = "green" if conf >= 70 else ("yellow" if conf >= 40 else "red")
+                        console.print(
+                            f"[dim]confidence: [{color}]{conf:.0f}%[/{color}] avg · "
+                            f"{event.low_count} low-confidence token(s) "
+                            f"(< {event.low_threshold})[/dim]"
+                        )
+                    elif isinstance(event, Error):
+                        console.print(f"\n[red]error:[/red] {event.message}")
+                    elif isinstance(event, Done):
+                        if speaker is not None:
+                            speaker.flush()
+                        if text_acc:
+                            console.print()
+                            md = Markdown("".join(text_acc))
+                            console.print(md)
+                        else:
+                            console.print()
+                        if event.reason == "interrupted":
+                            console.print("[yellow]interrupted[/yellow]")
+                            break
+                        # Ping when a turn finishes (off unless [notify] enabled) — lets
+                        # you walk away from a long local turn. Best-effort, never raises.
+                        try:
+                            from evi import notify as _notify
 
-                    _notify.notify_if_enabled("eVi", "Turn complete")
-                except Exception:
-                    pass
-                break
+                            _notify.notify_if_enabled("eVi", "Turn complete")
+                        except Exception:
+                            pass
+                        break
+        except KeyboardInterrupt:
+            events.close()  # stops what the turn still runs
+            console.print("\n[dim]bye.[/dim]")
+            return
+        except _PromptInterrupted:
+            # Ctrl+C meant for a question that had just closed escaped the
+            # turn. It cancelled the turn all the same; the session goes on.
+            events.close()
+            console.print("\n[yellow]interrupted[/yellow]")
         console.print()
 
 
@@ -2459,16 +2675,10 @@ def review(
         elif isinstance(event, ToolCall):
             if not json_out:
                 console.print()
-                console.print(
-                    f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}"
-                )
+                console.print(_tool_call_line(event))
         elif isinstance(event, ToolResult):
             if not json_out:
-                preview = (
-                    event.output if len(event.output) < 400
-                    else event.output[:400] + "…"
-                )
-                console.print(f"[yellow]← result[/yellow] {preview}")
+                console.print(_tool_result_line(event))
         elif isinstance(event, UsageStats):
             if not json_out:
                 console.print(
@@ -2785,16 +2995,9 @@ def voice_loop(
                             speaker.feed(event.text)
                     elif isinstance(event, ToolCall):
                         console.print()
-                        console.print(
-                            f"[yellow]→ tool[/yellow] [bold]{event.name}[/bold] "
-                            f"{event.arguments}"
-                        )
+                        console.print(_tool_call_line(event))
                     elif isinstance(event, ToolResult):
-                        preview = (
-                            event.output if len(event.output) < 400
-                            else event.output[:400] + "…"
-                        )
-                        console.print(f"[yellow]← result[/yellow] {preview}")
+                        console.print(_tool_result_line(event))
                         console.print("[bold magenta]evi ›[/bold magenta] ", end="")
                         text_acc = []
                     elif isinstance(event, Error):
@@ -3492,14 +3695,14 @@ def _print_turn(agent: Agent, prompt: str) -> None:
         if isinstance(event, TextDelta):
             console.print(event.text, end="", soft_wrap=True, highlight=False)
         elif isinstance(event, ToolCall):
-            console.print(f"\n[yellow]→ tool[/yellow] [bold]{event.name}[/bold] {event.arguments}")
+            console.print()
+            console.print(_tool_call_line(event))
         elif isinstance(event, ToolProgress):
             console.print(
                 f"[dim]… {', '.join(event.names)} running ({event.elapsed:.0f}s)[/dim]"
             )
         elif isinstance(event, ToolResult):
-            preview = event.output if len(event.output) < 400 else event.output[:400] + "…"
-            console.print(f"[yellow]← result[/yellow] {preview}")
+            console.print(_tool_result_line(event))
         elif isinstance(event, Error):
             console.print(f"\n[red]error:[/red] {event.message}")
         elif isinstance(event, Done):
@@ -4388,14 +4591,24 @@ def workflow_run(
     json_out: bool = typer.Option(False, "--json", help="Print {step: output} as JSON."),
 ) -> None:
     """Run a workflow — each step is its own headless agent; parallel blocks run
-    concurrently (tools auto-approved, since runs are unattended)."""
+    concurrently (tools auto-approved, since runs are unattended). Like `evi
+    run`, it is an unattended entry point: a delegate CLI-agent backend is
+    refused unless [llm] allow_cli_agent_unattended, and the steps' commands
+    get no *_KEY / *_TOKEN / *_SECRET environment variables."""
     from evi import workflows
     from evi.headless import run_headless
+    from evi.llm.cli_agent import CliAgentUnattended, check_unattended, unattended
     from evi.modes import mode_tools
 
     try:
         w = workflows.load_workflow(name)
     except workflows.WorkflowError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    settings = Config.load()
+    try:
+        check_unattended(settings, "workflow")
+    except CliAgentUnattended as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
@@ -4408,14 +4621,17 @@ def workflow_run(
         variables[k.strip()] = v
 
     def run_step(prompt: str, step) -> str:
-        agent = _build_agent()
-        if step.mode:
-            agent.tools = {t.name: t for t in mode_tools(step.mode)}
-        agent.enable_auto_all()  # workflows are unattended
-        if not json_out:
-            tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
-            console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
-        res = run_headless(agent, prompt)
+        # Per step: a parallel block runs steps on threads of their own, and
+        # the marker is per context (proc.runs_unattended reads it).
+        with unattended("workflow", settings):
+            agent = _build_agent()
+            if step.mode:
+                agent.tools = {t.name: t for t in mode_tools(step.mode)}
+            agent.enable_auto_all()  # workflows are unattended
+            if not json_out:
+                tag = " [magenta](parallel)[/magenta]" if step.parallel else ""
+                console.print(f"\n[bold cyan]> {step.id}[/bold cyan]{tag}")
+            res = run_headless(agent, prompt)
         out = workflows.step_output(res)  # an Error mid-reply is a failed step
         if not json_out:
             console.print(out)
@@ -4458,20 +4674,28 @@ def run(
     """Headless: run a single prompt non-interactively and print the result.
 
     text → the final answer on stdout. json → {text, tools, usage, error,
-    policy}. Nothing prompts (so a scripted run never blocks): without --yes,
-    tools outside your auto-approve list follow [auto] unattended_policy —
-    denied by default. Protected paths (writes, and reads of secrets such as
-    .env that no allow rule covers) and the destructive-command guard deny
-    even with --yes. A delegate CLI-agent backend is refused unless [llm]
-    allow_cli_agent_unattended. Reads the prompt from stdin if omitted:
-    `echo "summarise README.md" | evi run -m code -y`."""
+    policy, stop_reason}. Nothing prompts (so a scripted run never blocks):
+    without --yes, tools outside your auto-approve list follow [auto]
+    unattended_policy — denied by default. Protected paths (writes, and reads
+    of secrets such as .env that no allow rule covers) and the
+    destructive-command guard deny even with --yes. A delegate CLI-agent
+    backend is refused unless [llm] allow_cli_agent_unattended. Tool outputs
+    in the json are redacted. Reads the prompt from stdin if omitted:
+    `echo "summarise README.md" | evi run -m code -y`.
+
+    Ctrl+C / SIGINT cancels the turn (its commands' process trees are killed)
+    and still reports a result: stop_reason "interrupted" and exit code 130,
+    whatever the format, with whatever text streamed before it."""
     import sys as _sys
 
     from evi import headless as _hl
     from evi.llm.agent import make_unattended
     from evi.llm.cli_agent import CliAgentUnattended, unattended
 
-    text = (prompt if prompt is not None else _sys.stdin.read()).strip()
+    try:
+        text = (prompt if prompt is not None else _sys.stdin.read()).strip()
+    except KeyboardInterrupt:
+        _report_interrupted_run(_hl.HeadlessResult(stop_reason="interrupted"), format)
     if not text:
         console.print("[red]no prompt given[/red]")
         raise typer.Exit(2)
@@ -4499,10 +4723,17 @@ def run(
             # ask follows the unattended policy instead of blocking on a prompt
             # no one can answer.
             make_unattended(agent)
-            res = _hl.run_headless(agent, text, response_format=response_format)
+            # Ctrl+C cancels the turn and comes back as its result.
+            res = _hl.run_headless(agent, text, response_format=response_format,
+                                   cancel_on_sigint=True)
     except CliAgentUnattended as exc:
         print(f"error: {exc}", file=_sys.stderr)
         raise typer.Exit(1)
+    except KeyboardInterrupt:
+        # Before the turn started (building the agent, starting MCP servers).
+        res = _hl.HeadlessResult(stop_reason="interrupted")
+    if res.interrupted:
+        _report_interrupted_run(res, format)
     if format == "json":
         print(_hl.to_json(res))
         return
@@ -4510,6 +4741,28 @@ def run(
         print(f"error: {res.error}", file=_sys.stderr)
         raise typer.Exit(1)
     print(res.text)
+
+
+# `evi run`'s exit code when Ctrl+C / SIGINT stopped it (128 + SIGINT).
+_INTERRUPTED_EXIT = 130
+
+
+def _report_interrupted_run(res, format: str) -> None:
+    """Print the result of an `evi run` that Ctrl+C / SIGINT cancelled and
+    exit with _INTERRUPTED_EXIT: the json result (stop_reason
+    "interrupted"), or the text that streamed before it plus a note on
+    stderr."""
+    import sys as _sys
+
+    from evi import headless as _hl
+
+    if format == "json":
+        print(_hl.to_json(res))
+    else:
+        if res.text:
+            print(res.text)
+        print("interrupted: the run was cancelled (Ctrl+C / SIGINT)", file=_sys.stderr)
+    raise typer.Exit(_INTERRUPTED_EXIT)
 
 
 @app.command()
