@@ -14,8 +14,8 @@ small model can clear. Knobs collapse it for the weakest models
 (``breadth=1, rounds=0`` ≈ ``evi run`` plus a synthesis pass).
 
 The core is **model-free**: :func:`run_ultracode` takes an injected
-``run_one(system_prompt, task, mode) -> text`` callable, exactly like
-:func:`evi.evals.make_runners` / :func:`evi.workflows.run_workflow`. The CLI,
+``run_one(system_prompt, task, mode) -> text`` callable, as
+:func:`evi.workflows.run_workflow` takes its ``run_step``. The CLI,
 REPL, and web each build their own via :func:`make_runner`, so the pipeline is
 unit-testable without a backend.
 """
@@ -238,7 +238,7 @@ def run_ultracode(
     return UltraResult(task=task, answer=answer, stages=stages, config=cfg)
 
 
-# --- the headless wiring (one home, mirrors evals.make_runners) -------------
+# --- the headless wiring (one home) ---------------------------------------------
 
 
 def make_runner(

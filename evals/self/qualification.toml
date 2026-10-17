@@ -104,8 +104,8 @@ fake = [
 
 # edit_file reads a file with newline translation today, so an edit turns a
 # CRLF file into LF. Expected to fail until the edit-recovery work lands: it
-# reports, but never fails the run (--skip-tag edit-recovery hides it, and
-# also excuses it from a --baseline gate).
+# reports, but never fails the run (--skip-tag edit-recovery hides it; a
+# --baseline still holds it, as missing, unless the run is --partial).
 [[case]]
 name = "crlf-edit"
 prompt = """In notes.txt, change "second line" to "2nd line". Keep the file's Windows (CRLF) \

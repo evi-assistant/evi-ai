@@ -189,7 +189,8 @@ def _security_headers(path: str, headers: Any) -> None:
 class _SecurityHeadersMiddleware:
     """Pure ASGI, so streamed (SSE) responses pass through untouched. Added
     last in create_app, so it wraps everything — refusals from the auth
-    middleware get the headers too."""
+    middleware get the headers too — except the 500 for an unhandled
+    exception, which _internal_error gives them."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -208,6 +209,19 @@ class _SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+async def _internal_error(request: Request, exc: Exception) -> Any:
+    """The answer to an exception no route caught: Starlette's own plain 500,
+    with the headers above. Starlette sends it from ServerErrorMiddleware,
+    which sits outside every middleware create_app adds, so
+    _SecurityHeadersMiddleware never sees that response. The exception still
+    propagates after it, for the server to log."""
+    from starlette.responses import PlainTextResponse
+
+    response = PlainTextResponse("Internal Server Error", status_code=500)
+    _security_headers(request.scope.get("path") or "/", response.headers)
+    return response
 
 
 # ---- request / session shapes -------------------------------------------
@@ -3934,12 +3948,16 @@ def create_app() -> FastAPI:
     def evals_list() -> dict[str, Any]:
         """List eval suites with their cases, and the latest report of each
         (suite, model) under <eVi home>/evals/reports (read-only; no model
-        calls)."""
+        calls). A suite's `file` (its file name, without .toml) is what POST
+        /api/evals/run takes, as `evi eval run` does: its `name` may differ.
+        A `shadowed` one (a self.toml: `self` means a repository's
+        evals/self) can't be run by that name."""
         from evi import evals
 
         return {
             "suites": [
-                {"name": s.name, "description": s.description,
+                {"name": s.name, "file": s.path.stem if s.path is not None else s.name,
+                 "shadowed": evals.shadowed(s), "description": s.description,
                  "cases": [_case_summary(c) for c in s.cases]}
                 for s in evals.list_suites()
             ],
@@ -3948,11 +3966,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/evals/run")
     def evals_run(req: dict[str, Any]) -> dict[str, Any]:
-        """Run an eval suite server-side and return the report. This calls the
-        model once per case (plus once per judged case), so it blocks until the
-        whole suite finishes — fine for the small local suites evals are meant
-        to be. The text-only engine (`evals.run_eval`): a case asserting what
-        the run did fails here and needs `evi eval run`."""
+        """Run one of your eval suites (~/.evi/evals; `name` is its file
+        name, GET /api/evals' `file`) as `evi eval run` does
+        (`evals.run_suite`): each case in a throwaway workspace under the
+        implementer policy, behavioral assertions, fixtures and repo
+        worktrees (of a trusted repository only) included, on the configured
+        [llm] backend and model (`evals.configured_context`; the fake backend
+        is never offered here). Keeps the report as the CLI does
+        (`evals.write_report`) and returns it (`evals.REPORT_SCHEMA`).
+
+        A plain def: FastAPI runs it on a worker thread, so the event loop
+        keeps serving while the suite runs (many model calls); like the
+        recipe and ultracode runs, it is not cancelled when the browser goes
+        away. No user hooks (the engine builds bare agents): a hook that
+        vetoes or rewrites a call would make the scores depend on this
+        machine."""
         from evi import evals
 
         if not isinstance(req, dict):
@@ -3960,29 +3988,32 @@ def create_app() -> FastAPI:
         name = str(req.get("name") or "").strip()
         if not name:
             raise HTTPException(400, "expected {name}")
+        if str(req.get("backend") or "").strip():
+            raise HTTPException(400, "evals run here on the configured [llm] backend; "
+                                     "`evi eval run --backend` runs another")
+        if evals.is_self_name(name):
+            raise HTTPException(400, "`self` names a repository's evals/self suites, which "
+                                     "only `evi eval run self` runs (in that repository)")
         try:
             suite = evals.load_suite(name)
         except evals.EvalError as exc:
             raise HTTPException(404, str(exc))
-
-        def agent_factory():
-            from evi.sdk.builder import build_agent
-
-            # Single-user eval runner; project/hooks/guardrails stay off to match
-            # the previous inline construction (client/tools/memory/skills only).
-            # No user hooks here, unlike the other runners: a hook that vetoes or
-            # rewrites a call would make eval scores depend on this machine.
-            return build_agent(
-                config=Config.load(),
-                enable_project=False,
-                enable_hooks=False,
-                enable_guardrails=False,
-            )
-
-        run_one, judge_fn = evals.make_runners(
-            agent_factory, default_mode=str(req.get("mode") or "")
-        )
-        return evals.run_eval(suite, run_one, judge_fn=judge_fn)
+        cfg = Config.load()
+        with _unattended_run(evals.ENTRY, cfg):
+            try:
+                ctx = evals.configured_context(cfg, default_mode=str(req.get("mode") or ""))
+                report = evals.run_suite(suite, ctx)
+            except evals.EvalError as exc:
+                # A backend no policy can hold (a CLI agent): nothing ran.
+                raise HTTPException(409, str(exc)) from None
+        try:
+            evals.write_report(report)
+        except evals.EvalError as exc:
+            raise HTTPException(500, str(exc)) from None
+        except OSError as exc:
+            raise HTTPException(500, f"the suite ran, but its report could not be kept in "
+                                     f"{evals.reports_dir()}: {exc}") from None
+        return report
 
     @app.get("/api/routes")
     def routes_get() -> dict[str, Any]:
@@ -5118,6 +5149,9 @@ def create_app() -> FastAPI:
     # Outermost (added last): every response, refusals included, gets nosniff,
     # the page its CSP and no-framing headers, uploads and images the sandbox.
     app.add_middleware(_SecurityHeadersMiddleware)
+    # The 500 for an unhandled exception is sent from outside it: the same
+    # headers go on that one here.
+    app.add_exception_handler(Exception, _internal_error)
     return app
 
 

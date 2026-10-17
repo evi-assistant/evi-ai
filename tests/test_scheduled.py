@@ -143,41 +143,59 @@ def test_kind_defaults_to_prompt_for_old_files() -> None:
 
 
 def _canned_report(passed, total):
-    return {
-        "name": "smoke", "total": total, "passed": passed,
-        "pass_rate": passed / total,
-        "cases": [
-            {"name": f"c{i}", "passed": i < passed, "failures": ([] if i < passed else ["x"]),
-             "output": ""}
-            for i in range(total)
-        ],
-    }
+    """A run_suite report (evals.REPORT_SCHEMA) where `passed` of `total`
+    cases passed."""
+    from evi import evals
+    from evi.evals import EvalCase, RunOutcome
+
+    rows = [evals.case_row(EvalCase(name=f"c{i}", prompt="p"),
+                           [RunOutcome(i < passed, [] if i < passed else ["x"])])
+            for i in range(total)]
+    return evals.summarize({
+        "schema_version": 1, "kind": evals.REPORT_KIND, "suite": "smoke", "model": "m",
+        "backend": "b", "n": None, "evi_version": "0", "started_at": "2026-10-17T00:00:00Z",
+        "finished_at": "2026-10-17T00:01:00Z", "duration_s": 60.0,
+        "hardware": {"gpu": "none", "vram_gb": None, "cpu": "t", "ram_gb": None, "os": "t"},
+        "baseline": None, "cases": rows})
 
 
-def test_execute_eval_all_pass(stubbed_runtime, tmp_path, monkeypatch) -> None:
+def _stub_eval_engine(monkeypatch, report) -> list:
+    """Stub the engine scheduled evals run (evals.run_suite) and where it keeps
+    the report; returns the EvalContexts it was run with."""
     from evi import evals
     from evi.evals import EvalSuite
 
+    ran: list = []
     monkeypatch.setattr(evals, "load_suite", lambda name, root=None: EvalSuite(name="smoke"))
-    monkeypatch.setattr(evals, "run_eval", lambda s, r, judge_fn=None: _canned_report(2, 2))
+    monkeypatch.setattr(evals, "find_repo", lambda start=None: None)
+    monkeypatch.setattr(evals, "run_suite", lambda s, ctx, **kw: ran.append(ctx) or report)
+    monkeypatch.setattr(evals, "write_report", lambda r, root=None: (Path("r.json"),
+                                                                     Path("r.html")))
+    return ran
+
+
+def test_execute_eval_all_pass(stubbed_runtime, tmp_path, monkeypatch) -> None:
+    ran = _stub_eval_engine(monkeypatch, _canned_report(2, 2))
     store = TaskStore(root=tmp_path / "store")
     task = store.add(name="nightly", cron="0 3 * * *", prompt="smoke", kind="eval")
 
     body = Path(scheduler_mod._execute(task, store)).read_text("utf-8")
-    assert "scheduled eval" in body and "PASS" in body and "2/2" in body
+    assert "scheduled eval" in body and "[PASS] c0" in body and "2/2" in body
+    # The implementer policy the engine holds each case to, not allow-all.
+    assert "# policy: implementer" in body and "allow-all" not in body
+    assert "# report: r.json" in body
     assert store.get(task.id).last_status == "ok (2/2)"
+    [ctx] = ran
+    assert not ctx.fake  # the configured backend, never the fake one
 
 
 def test_execute_eval_failure_status(stubbed_runtime, tmp_path, monkeypatch) -> None:
-    from evi import evals
-    from evi.evals import EvalSuite
-
-    monkeypatch.setattr(evals, "load_suite", lambda name, root=None: EvalSuite(name="smoke"))
-    monkeypatch.setattr(evals, "run_eval", lambda s, r, judge_fn=None: _canned_report(1, 2))
+    _stub_eval_engine(monkeypatch, _canned_report(1, 2))
     store = TaskStore(root=tmp_path / "store")
     task = store.add(name="nightly", cron="0 3 * * *", prompt="smoke", kind="eval")
 
-    Path(scheduler_mod._execute(task, store))
+    body = Path(scheduler_mod._execute(task, store)).read_text("utf-8")
+    assert "[FAIL] c1" in body and "    run 1: x" in body
     assert store.get(task.id).last_status == "fail (1/2)"
 
 

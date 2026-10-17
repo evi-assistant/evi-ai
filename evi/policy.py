@@ -8,9 +8,10 @@ the narrow middle: what an implementer needs to change code and prove it works
 in the one folder it was given, and nothing else.
 
 Selected by ``evi run --policy implementer`` (``--scope GLOB`` adds the task's
-``files_in_scope``) and by ``evi task start`` (`evi.tasks.run_task`), both
-through `implementer_policy`. Set as ``Agent.policy``, it replaces the permission
-flow: every tool call is allowed or denied, never asked about, whatever
+``files_in_scope``, ``--confine`` holds writes to it) and by ``evi task start``
+(`evi.tasks.run_task`, always confined), both through `implementer_policy`
+(see **Scope** below for the difference). Set as ``Agent.policy``, it
+replaces the permission flow: every tool call is allowed or denied, never asked about, whatever
 ``[auto] mode``, ``unattended_policy`` or ``/auto on`` say. ``[auto]
 hard_deny``, ``deny`` rules and the director's ground (`evi.permissions`)
 still deny first; an ``allow`` rule never widens the policy. The destructive
@@ -29,7 +30,8 @@ What the policy allows (`Policy.check`), failing closed on anything else:
   climb out of it. A secret
   (``.env``, a key; `evi.permissions.protected_read`) is never read.
 - **Writing** inside the root with ``write_file``, ``edit_file`` and
-  ``apply_patch``, except protected files (below).
+  ``apply_patch``, except protected files (below); under a confined policy
+  only the task's ``files_in_scope`` (**Scope**, below).
 - **Shell lines** (``run_command``, ``monitor`` kind=command) whose every
   segment (`evi.shellsplit`) is allowlisted (`SHELL_RULES`): ``pytest``,
   ``ruff check|format``, ``python``/``python3``/``py`` (any path) ``-m
@@ -65,7 +67,9 @@ What the policy allows (`Policy.check`), failing closed on anything else:
   program are refused outright: pytest's ``--junitxml``, ``--basetemp``,
   ``--pastebin``, ``-o``/``--override-ini`` and the other report files
   (`_PYTEST_REFUSED`), ruff's ``-o``/``--output-file`` and ``--cache-dir``,
-  cargo's ``--config`` and ``-Z``, and any npm option before ``--`` but
+  for both any ``@file`` word (they read more arguments from that file,
+  which the check never sees: ``pytest @args.txt`` could hold
+  ``--basetemp``), cargo's ``--config`` and ``-Z``, and any npm option before ``--`` but
   ``--silent`` / ``--if-present`` (an npm option sets npm config, such as
   its script shell). But for read-only git, no argument may name a protected
   file the task can't write: ruff rewrites the files it is given (``format``,
@@ -94,6 +98,42 @@ the protected list): ``.evi/tasks/**``, the eval gate's reference
 start-up files (`evi.permissions.SECRET_PROTECTED_PATHS`) and every other
 ``[auto] protected_paths`` entry the user configured.
 
+**Scope.** What ``files_in_scope`` means depends on how the policy was built
+(`implementer_policy`'s ``confine``):
+
+- *Unconfined* (``evi run --policy implementer --scope GLOB``, the default):
+  the scope only grants protected files, as above; any other file in the
+  root may be written.
+- *Confined* (``confine=True``: ``evi task start`` through
+  `evi.tasks.run_task`, and ``evi run --policy implementer --confine``):
+  every write must also match a ``files_in_scope`` entry (`in_scope`: the
+  file's own path or a folder it is in, taken literally, so ``pages/[id].tsx``
+  covers itself; else the entry as an fnmatch glob over the whole
+  repo-relative ``/`` path, so ``*`` crosses folders too and ``evi/*.py``
+  covers ``evi/apps/x.py``, while a ``**/`` also matches no folder, as in a
+  .gitignore; ``.`` is the whole folder; case-insensitive on Windows). That
+  holds for ``write_file``, ``edit_file`` and every path an ``apply_patch``
+  call names, for an output redirect in a command line, and for the files a
+  command rewrites (`_rewritten`): ``ruff format`` (but ``--check`` /
+  ``--diff``) and ``ruff check`` with any option not known to rewrite
+  nothing: ``--fix``, ``--unsafe-fixes``, ``--fix-only``, ``--add-noqa``,
+  ``--add-ignore``, a ``--config`` (an inline ``fix = true``, or a file that
+  sets it; but the fixes with ``--diff``), or one a newer ruff adds (it fails
+  closed), also as ``python -m ruff``. Such a
+  command naming a folder (``ruff format .``),
+  or no file at all (it then rewrites the folder it runs in), is denied:
+  name the files instead; so is ``cargo check|test|clippy --fix`` (it
+  rewrites the whole crate). A denial names the task's scope and tells the
+  model to list the file as a concern in its hand-off. A broad entry still
+  grants no protected file, and an empty ``files_in_scope`` lets a confined
+  run change nothing (``evi task start`` refuses such a task). Reads, and
+  every other command, are as unconfined: tests and linters run on any file.
+  What a command writes anyway (a ``fix = true`` setting in the folder's own
+  ruff config, a test's own output files) is the residual risk the
+  backstop catches: `evi.tasks.run_task` records the branch's changed files
+  outside the scope (``out_of_scope``), and ``evi task verify`` refuses to
+  sign over them without the director's reason.
+
 **Relative paths** resolve against the folder the tool itself uses (`Policy.check`'s
 ``workdir``; default `evi.workdir.get_cwd()`: the session's working folder,
 else the process's), never against the root, so a link in a subfolder the
@@ -105,9 +145,9 @@ loads with ``-p``): the shell allowlist is a guardrail against obvious
 network and destructive commands, not a sandbox, and such code can still
 reach the network or write outside the root (that is why no command runs in
 an untrusted folder). The argument check reads the words, not the tool's mind:
-a folder argument covers what is in it (``ruff format .`` may rewrite a
-protected ``.py`` file under ``.evi/``), and a tool's own cache or temporary
-files land where its configuration in the folder says. The environment scrub
+a folder argument covers what is in it (unconfined, ``ruff format .`` may
+rewrite a protected ``.py`` file under ``.evi/``), and a tool's own cache or
+temporary files land where its configuration in the folder says. The environment scrub
 (no ``*_KEY`` / ``*_TOKEN`` / ``*_SECRET`` variables for an unattended run,
 `evi.proc.scrubbed_env`) limits what it can take; the worktree (``evi run
 --worktree``) is the blast radius.
@@ -116,6 +156,7 @@ files land where its configuration in the folder says. The environment scrub
 from __future__ import annotations
 
 import fnmatch
+import itertools
 import json
 import os
 import re
@@ -190,6 +231,37 @@ _CARGO_VALUED = "pjF"
 # The npm options allowed before `--`: any other sets npm config (its
 # script shell, a node preload, the registry).
 _NPM_FLAGS = frozenset({"-s", "--silent", "--if-present"})
+# ruff check's options known to rewrite no file it is given. Any other
+# (--fix, --unsafe-fixes, --fix-only, --add-noqa, --add-ignore, a --config
+# that may say `fix = true`, an option a newer ruff adds) makes it count as
+# rewriting the files it names: it fails closed. With --diff, the fix options
+# (_RUFF_DIFFED) write a diff to stdout instead. Then ruff's options that
+# take a value as the next word (that word is no file it rewrites). An option
+# taking a value that is missing here makes its value count as a file, which
+# a confined policy then holds to the scope: it fails closed too (spell it
+# --name=value).
+_RUFF_CHECK_READS = frozenset({
+    "--no-fix", "--no-unsafe-fixes", "--no-fix-only", "--show-fixes", "--no-show-fixes",
+    "--ignore-noqa", "--statistics", "--show-files", "--show-settings", "--output-format",
+    "--target-version", "--line-length", "--dummy-variable-rgx", "--extension", "--preview",
+    "--no-preview", "--select", "--ignore", "--extend-select", "--extend-ignore",
+    "--per-file-ignores", "--extend-per-file-ignores", "--fixable", "--unfixable",
+    "--extend-fixable", "--extend-unfixable", "--exclude", "--extend-exclude",
+    "--respect-gitignore", "--no-respect-gitignore", "--force-exclude", "--no-force-exclude",
+    "--stdin-filename", "--no-cache", "--exit-zero", "--exit-non-zero-on-fix", "--isolated",
+    "--color", "--watch", "--verbose", "--quiet", "--silent", "--help",
+    "-n", "-e", "-w", "-v", "-q", "-s", "-h",
+})
+_RUFF_DIFFED = frozenset({"--diff", "--fix", "--unsafe-fixes", "--fix-only", "--config"})
+_RUFF_VALUED = frozenset({
+    "--config", "--select", "--ignore", "--extend-select", "--extend-ignore",
+    "--per-file-ignores", "--extend-per-file-ignores", "--exclude", "--extend-exclude",
+    "--fixable", "--unfixable", "--extend-fixable", "--extend-unfixable", "--target-version",
+    "--line-length", "--dummy-variable-rgx", "--output-format", "--output-file", "-o",
+    "--cache-dir", "--stdin-filename", "--extension", "--range", "--color",
+})
+# How many files_in_scope entries a confined denial lists.
+_SCOPE_SHOWN = 10
 _PYTHON = re.compile(r"(?:python(?:3(?:\.\d+)?)?|py)\Z")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _SEPARATORS = re.compile(r"[\\/]")
@@ -273,6 +345,56 @@ def scope_names(entry: str, rel: str) -> bool:
     return fnmatch.fnmatchcase(r_name, e_name)
 
 
+def in_scope(entries: Iterable[str], rel: str) -> bool:
+    """True if the repo-relative file `rel` matches a files_in_scope entry
+    (what a confined policy may write, and what `evi.tasks.out_of_scope`
+    leaves out): the entry as `rel` itself or a folder it is in, taken
+    literally (``pages/[id].tsx`` covers itself, ``tests/fixtures`` covers
+    ``tests/fixtures/a.json``); else as an fnmatch glob over the whole
+    ``/``-separated path or over a folder `rel` is in (``*`` matches across
+    folders too: ``evi/*.py`` covers ``evi/apps/x.py``; a ``**/`` also
+    matches no folder, `_glob_forms`: ``**/*.py`` covers ``calc.py``). The
+    entry ``.`` is the whole folder. Compared as `_key` has them:
+    case-insensitive on Windows."""
+    key = _key(rel)
+    if not key:
+        return False
+    for entry in entries or ():
+        norm = _norm_entry(entry)
+        if norm == ".":
+            return True  # the run's whole folder
+        e = _key(norm)
+        if not e:
+            continue
+        if key == e or key.startswith(e + "/"):
+            return True
+        if any(fnmatch.fnmatchcase(key, form) or fnmatch.fnmatchcase(key, form + "/*")
+               for form in _glob_forms(e)):
+            return True
+    return False
+
+
+# The most `**/` in one entry `_glob_forms` takes out one at a time (each
+# doubles the forms); past it, all of them at once or none.
+_GLOB_FORMS_MAX = 4
+# A `**/` at the start of a glob or after a `/`.
+_ANY_FOLDERS = re.compile(r"(?:^|(?<=/))\*\*/")
+
+
+def _glob_forms(pattern: str) -> set[str]:
+    """`pattern` and, for each ``**/`` in it (at its start or after a
+    ``/``), the form without it as well: fnmatch's ``**/`` needs at least
+    one folder, a .gitignore's matches none too (``tests/**/test_*.py``
+    covers ``tests/test_x.py``)."""
+    parts = _ANY_FOLDERS.split(pattern)
+    if len(parts) == 1:
+        return {pattern}
+    if len(parts) - 1 > _GLOB_FORMS_MAX:
+        return {pattern, "".join(parts)}
+    return {parts[0] + "".join(k + p for k, p in zip(keep, parts[1:]))
+            for keep in itertools.product(("**/", ""), repeat=len(parts) - 1)}
+
+
 # ---- paths -------------------------------------------------------------------
 
 
@@ -325,7 +447,10 @@ class Policy:
     - root: the run's folder (resolved); reads and writes stay inside it.
     - write_roots: where writes may go (the root).
     - extra_writable: the task's files_in_scope (validated, repo-relative
-      globs); they matter for protected files only (`scope_names`).
+      globs); unconfined they matter for protected files only
+      (`scope_names`).
+    - confine: writes stay inside extra_writable too (`in_scope`; the
+      module doc's **Scope**): what a task run uses.
     - shell_allow: exact argv commands allowed besides `SHELL_RULES` (the
       project's check commands, `evi.checks.allowlist`); words after one
       must meet the `SHELL_RULES` entry for its program.
@@ -347,6 +472,7 @@ class Policy:
     deny_effects: frozenset[str] = field(default_factory=lambda: frozenset({"network"}))
     guard: bool = True
     trusted: bool = False
+    confine: bool = False
 
     # -- building ----------------------------------------------------------
 
@@ -358,12 +484,36 @@ class Policy:
 
     def describe(self) -> str:
         """One line on what the policy allows, for a denial message."""
+        editing = (f"reading files in {self.root} and editing those its files_in_scope names"
+                   if self.confine else f"reading and editing files in {self.root}")
         if self.trusted:
-            return (f"the {self.name} policy allows reading and editing files in {self.root}, "
-                    "running tests, linters and read-only git commands there, and nothing else")
-        return (f"the {self.name} policy allows reading and editing files in {self.root} and "
-                "reading its git history with the git_* tools, and nothing else (no commands: "
-                "the folder is not trusted)")
+            return (f"the {self.name} policy allows {editing}, running tests, linters and "
+                    "read-only git commands there, and nothing else")
+        return (f"the {self.name} policy allows {editing} and reading its git history with "
+                "the git_* tools, and nothing else (no commands: the folder is not trusted)")
+
+    def scope_text(self) -> str:
+        """The task's files_in_scope as a denial lists it (at most
+        `_SCOPE_SHOWN` entries)."""
+        scope = list(self.extra_writable)
+        if not scope:
+            return "the task names no files_in_scope, so it may change no file"
+        shown = ", ".join(scope[:_SCOPE_SHOWN])
+        more = len(scope) - _SCOPE_SHOWN
+        return f"files_in_scope: {shown}" + (f" and {more} more" if more > 0 else "")
+
+    def scope_reason(self, value: str, p: Path) -> str | None:
+        """Why a confined policy refuses to let a call write `p` (resolved;
+        `value` as the call names it), or None when files_in_scope covers it
+        (`in_scope`) or the policy isn't confined. What to do comes first,
+        so a report's capped reason keeps it."""
+        if not self.confine:
+            return None
+        rel = p.relative_to(self.root).as_posix() if _inside(p, (self.root,)) else ""
+        if rel and in_scope(self.extra_writable, rel):
+            return None
+        return (f"{value!r} is not in the task's files_in_scope: change only those files, and "
+                f"list this one as a concern in your hand-off instead ({self.scope_text()})")
 
     def untrusted_reason(self, what: str) -> str:
         """Why `what` (a command line, check_file's linter) can't run in
@@ -430,7 +580,7 @@ class Policy:
             # looks up in the process's folder first.
             return _deny(self.untrusted_reason("check_file's linter"))
         if name in WRITE_TOOLS:
-            return self._check_writes(path_args, base, protected_paths)
+            return self._check_writes(path_args, base, protected_paths, scoped=True)
         return self._check_reads(name, data, path_args, base, protected_paths)
 
     def _exec_dir(self, name: str, data: dict, base: Path) -> Path | None:
@@ -470,7 +620,11 @@ class Policy:
         return out
 
     def _check_writes(self, path_args: list[str], base: Path,
-                      protected_paths: Iterable[str]) -> Verdict:
+                      protected_paths: Iterable[str], *, scoped: bool = False) -> Verdict:
+        """Whether every one of `path_args` (relative to `base`) may be
+        written: inside the root, no protected file the scope doesn't grant,
+        and with `scoped` (a write tool's own paths) inside files_in_scope
+        when the policy is confined (`scope_reason`)."""
         if not path_args:
             return _deny("a write with no path argument can't be checked")
         never = self._never_patterns(protected_paths)
@@ -490,6 +644,9 @@ class Policy:
                 if not rel or not any(scope_names(e, rel) for e in self.extra_writable):
                     return _deny(f"{value!r} is a protected file the task's files_in_scope "
                                  "doesn't name")
+            why = self.scope_reason(value, p) if scoped else None
+            if why:
+                return _deny(why)
         return ALLOW
 
     def check_command(
@@ -524,6 +681,9 @@ class Policy:
                 return _deny(reason)
         if not permissions._redirects_inside(sp, self.root, str(run_in)):
             return _deny("a redirect in the line targets a file outside the run's folder")
+        reason = self._redirect_scope_reason(sp, run_in)
+        if reason:
+            return _deny(reason)
         written = permissions.protected_write(
             "run_command", "shell", {"command": command, "cwd": str(run_in)},
             list(protected_paths) + list(HARD_PROTECTED), workdir=run_in, path_args=[],
@@ -532,6 +692,55 @@ class Policy:
         if written is not None:
             return _deny(f"the line writes the protected path {written!r}")
         return ALLOW
+
+    def _redirect_scope_reason(self, sp: shellsplit.Split, run_in: Path) -> str:
+        """Why a confined policy refuses the line's output redirects (each
+        writes the file it names, which must be in files_in_scope), or ""."""
+        if not self.confine:
+            return ""
+        for r in sp.redirects:
+            if (">" not in r.op or not r.text or r.dynamic
+                    or r.text.lower() in permissions._NULL_SINKS):
+                continue
+            p = _resolve(r.text, run_in)
+            if p is None:
+                return f"{r.text!r}: where this redirect leads can't be told"
+            why = self.scope_reason(r.text, p)
+            if why:
+                return f"the line writes {r.text!r} (a redirect): {why}"
+        return ""
+
+    def _rewrite_reason(self, words: Sequence[str], run_in: Path) -> str | None:
+        """Why a confined policy refuses the command `words`, which rewrites
+        the files it names (`_rewritten`), or None: each must be a file in
+        files_in_scope, never a folder, and it must name one."""
+        if not self.confine:
+            return None
+        files = _rewritten(words)
+        if files is None:
+            return None
+        if files == [_CRATE]:
+            return ("cargo --fix rewrites files across the whole crate, so the task's "
+                    "files_in_scope can't hold it: fix them with edit_file instead "
+                    f"({self.scope_text()})")
+        if not files:
+            return ("it rewrites the files it is given and names none, so it would rewrite "
+                    "every file in the folder it runs in: name the files instead "
+                    f"({self.scope_text()})")
+        for value in files:
+            if any(c in value for c in _WILDCARDS):
+                return (f"it rewrites every file {value!r} matches: name the files instead "
+                        f"({self.scope_text()})")
+            p = _resolve(value, run_in)
+            if p is None:
+                return f"where its argument {value!r} leads can't be told"
+            if p.is_dir():
+                return (f"it rewrites every file in {value!r}, a folder: name the files instead "
+                        f"({self.scope_text()})")
+            why = self.scope_reason(value, p)
+            if why:
+                return f"it rewrites {value!r}: {why}"
+        return None
 
     def _segment_reason(self, seg: shellsplit.Segment, dialect: str, run_in: Path,
                         protected_paths: Iterable[str]) -> str:
@@ -549,9 +758,10 @@ class Policy:
     def _words_reason(self, words: Sequence[str], run_in: Path,
                       protected_paths: Iterable[str]) -> str | None:
         """None if the command `words` is allowed: a `shell_allow` prefix or
-        a `SHELL_RULES` entry, its arguments inside the root, and, but for
-        read-only git, no argument naming a protected file the task can't
-        write (`_may_write_args`). Else why not."""
+        a `SHELL_RULES` entry, its arguments inside the root, but for
+        read-only git no argument naming a protected file the task can't
+        write (`_may_write_args`), and, confined, the files it rewrites in
+        files_in_scope (`_rewrite_reason`). Else why not."""
         n = self._prefix_len(words)
         why = _builtin_reason(words, self.root, run_in)
         if n and why is not None and n == len(words):
@@ -573,6 +783,8 @@ class Policy:
                 verdict = self._check_writes(values, run_in, protected_paths)
                 if not verdict.allowed:
                     why = f"it may write what its arguments name, and {verdict.reason}"
+        if why is None:
+            why = self._rewrite_reason(words, run_in)
         return why
 
     def _prefix_len(self, words: Sequence[str]) -> int:
@@ -674,9 +886,16 @@ def _refused_option(args: Sequence[str], refused: Sequence[str], valued: str = "
 
 def _tool_reason(tool: str, args: Sequence[str], root: Path, run_in: Path,
                  refused: Sequence[str] = (), valued: str = "",
-                 abbrev: bool = False) -> str | None:
+                 abbrev: bool = False, argfiles: bool = False) -> str | None:
     """None if an allowlisted tool's `args` use none of its `refused`
-    options and stay inside the root (`_args_outside`), else why not."""
+    options and stay inside the root (`_args_outside`), else why not. With
+    `argfiles` (pytest, ruff: each reads more arguments from the file an
+    ``@file`` word names, wherever the word is) no word may start with
+    ``@``: what the file holds would get past this check."""
+    bad = next((a for a in args if a.startswith("@")), None) if argfiles else None
+    if bad is not None:
+        return (f"{tool} {bad} is not allowed: {tool} reads more arguments from that file, "
+                "which the policy can't check (name the options and files directly)")
     bad = _refused_option(args, refused, valued, abbrev)
     if bad is not None:
         return f"{tool} {bad} is not allowed (it writes a file of its choosing, reaches the " \
@@ -705,17 +924,18 @@ def _builtin_reason(words: Sequence[str], root: Path, run_in: Path) -> str | Non
     rest = list(words[1:])
     bare = _SEPARATORS.search(prog) is None
     if base == "pytest" and bare:
-        return _tool_reason("pytest", rest, root, run_in, _PYTEST_REFUSED, _PYTEST_VALUED)
+        return _tool_reason("pytest", rest, root, run_in, _PYTEST_REFUSED, _PYTEST_VALUED,
+                            argfiles=True)
     if base == "ruff" and bare:
         if rest[:1] not in (["check"], ["format"]):
             return "only ruff check / ruff format"
-        return _tool_reason("ruff", rest[1:], root, run_in, _RUFF_REFUSED)
+        return _tool_reason("ruff", rest[1:], root, run_in, _RUFF_REFUSED, argfiles=True)
     if _PYTHON.match(base):
         if rest[:2] == ["-m", "pytest"]:
             return _tool_reason("pytest", rest[2:], root, run_in, _PYTEST_REFUSED,
-                                _PYTEST_VALUED)
+                                _PYTEST_VALUED, argfiles=True)
         if rest[:2] == ["-m", "ruff"] and rest[2:3] in (["check"], ["format"]):
-            return _tool_reason("ruff", rest[3:], root, run_in, _RUFF_REFUSED)
+            return _tool_reason("ruff", rest[3:], root, run_in, _RUFF_REFUSED, argfiles=True)
         return "python runs only -m pytest or -m ruff check|format"
     if base == "npm" and bare:
         if rest[:1] == ["test"] or rest[:2] == ["run", "test"]:
@@ -736,6 +956,69 @@ def _may_write_args(words: Sequence[str]) -> bool:
     allowed command but a read-only git one (ruff rewrites the files it is
     given, a test binary takes ``--logfile``, a check command its own)."""
     return bool(words) and shellsplit._base(words[0]) != "git"
+
+
+# What `_rewritten` answers for a command that rewrites a whole cargo crate.
+_CRATE = "<the crate>"
+
+
+def _rewritten(words: Sequence[str]) -> list[str] | None:
+    """The files the command `words` rewrites, as it names them ([] when it
+    names none: ruff then rewrites the folder it runs in; [`_CRATE`] for
+    ``cargo check|test|clippy --fix``), or None when it rewrites no file it
+    is given. The rewriting commands: ``ruff format`` (but ``--check`` /
+    ``--diff``) and ``ruff check`` with any option outside
+    `_RUFF_CHECK_READS` (``--fix``, ``--add-noqa``, ``--add-ignore``, a
+    ``--config``: its inline setting or file may say ``fix = true``; one a
+    newer ruff adds; a one-letter one counts inside a cluster, ``-nq``; with
+    ``--diff``, the fix options of `_RUFF_DIFFED` rewrite nothing), also as
+    ``python -m ruff`` or a check command's full path (judged by the
+    program's name). The words after an option in `_RUFF_VALUED` are its
+    value, and ``-`` (stdin, written to stdout) no file."""
+    if not words:
+        return None
+    base = shellsplit._base(words[0]).removesuffix(".cmd").removesuffix(".bat")
+    rest = list(words[1:])
+    if _PYTHON.match(base) and rest[:2] == ["-m", "ruff"]:
+        base, rest = "ruff", rest[2:]
+    if base == "cargo":
+        args = rest[:rest.index("--")] if "--" in rest else rest
+        fixes = any(len(n) >= 4 and "--fix".startswith(n)  # cargo takes --fi for --fix
+                    for n in (a.partition("=")[0] for a in args))
+        return [_CRATE] if fixes and rest[:1] in (["check"], ["test"], ["clippy"]) else None
+    if base != "ruff" or rest[:1] not in (["check"], ["format"]):
+        return None
+    sub, args = rest[0], rest[1:]
+    flags: set[str] = set()
+    files: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            files += args[i + 1:]
+            break
+        if a.startswith("-") and a != "-":
+            name = a.partition("=")[0]
+            if name.startswith("--"):
+                flags.add(name)
+            else:  # one-letter options, clustered or not (-nq)
+                flags.update(f"-{c}" for c in name[1:])
+            if "=" not in a and name in _RUFF_VALUED:
+                i += 1  # the option's value
+        else:
+            files.append(a)
+        i += 1
+    if sub == "format":
+        if flags.intersection(("--check", "--diff")):
+            return None
+    elif flags <= (_RUFF_CHECK_READS | _RUFF_DIFFED if "--diff" in flags
+                   else _RUFF_CHECK_READS):
+        return None
+    if "-" in files:
+        files = [f for f in files if f != "-"]
+        if not files:
+            return None  # stdin in, stdout out
+    return files
 
 
 def _git_reason(rest: list[str], root: Path, run_in: Path) -> str | None:
@@ -807,30 +1090,37 @@ def implementer_policy(
     checks: Iterable[Any] = (),
     *,
     trusted: bool | None = None,
+    confine: bool = False,
 ) -> Policy:
     """The ``implementer`` policy for a run in `root` (the worktree, else the
     repository's top folder): writes confined to it, protected files only as
     `files_in_scope` names them (`scope_names`), and `checks` (argv lists,
     or `evi.checks.Check` objects) allowed as exact commands on top of
     `SHELL_RULES`. `trusted`: whether `root` is a trusted folder, so commands
-    may run at all (default: `folder_trusted`). Raises PolicyError for
-    a bad scope entry (`validate_scope`)."""
+    may run at all (default: `folder_trusted`). `confine`: writes must also
+    be in `files_in_scope` (`in_scope`; the module doc's **Scope**), as
+    `evi.tasks.run_task` builds it; else the scope only grants protected
+    files (``evi run --policy implementer --scope`` without ``--confine``).
+    Raises PolicyError for a bad scope entry (`validate_scope`)."""
     folder = Path(root).expanduser().resolve()
     scope = validate_scope(files_in_scope)
     commands = [tuple(getattr(c, "argv", c)) for c in checks or ()]
     ok = folder_trusted(folder) if trusted is None else bool(trusted)
-    return Policy(IMPLEMENTER, folder, (folder,), scope, trusted=ok).with_commands(commands)
+    return Policy(IMPLEMENTER, folder, (folder,), scope, trusted=ok,
+                  confine=bool(confine)).with_commands(commands)
 
 
-# Every named policy: name -> constructor(root, files_in_scope, checks, *, trusted).
+# Every named policy: name -> constructor(root, files_in_scope, checks, *, trusted, confine).
 POLICIES = {IMPLEMENTER: implementer_policy}
 
 
 def build(name: str, root: str | Path, files_in_scope: Iterable[str] = (),
-          checks: Iterable[Any] = (), *, trusted: bool | None = None) -> Policy:
+          checks: Iterable[Any] = (), *, trusted: bool | None = None,
+          confine: bool = False) -> Policy:
     """The policy called `name`; PolicyError when there is none (or a scope
-    entry is bad). `trusted` as `implementer_policy` takes it."""
+    entry is bad). `trusted` and `confine` as `implementer_policy` takes
+    them."""
     key = str(name or "").strip().lower()
     if key not in POLICIES:
         raise PolicyError(f"unknown policy {name!r} (choose: {' | '.join(POLICIES)})")
-    return POLICIES[key](root, files_in_scope, checks, trusted=trusted)
+    return POLICIES[key](root, files_in_scope, checks, trusted=trusted, confine=confine)

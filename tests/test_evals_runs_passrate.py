@@ -166,7 +166,8 @@ def test_apply_baseline_fails_a_case_below_baseline_minus_tolerance():
     assert report["failed"] == 1 and not evals.report_ok(report)
     assert report["baseline"] == {
         "path": "baseline.json", "tolerance": 0.1, "model": None, "backend": None,
-        "regressed": ["a"], "missing": [], "excluded": [], "mismatch": None}
+        "regressed": ["a"], "missing": [], "excluded": [], "partial": False,
+        "mismatch": None}
     assert evals.schema_errors(report, evals.REPORT_SCHEMA) == []
 
 
@@ -190,17 +191,30 @@ def test_a_baseline_case_that_did_not_run_fails_the_gate():
     assert evals.schema_errors(report, evals.REPORT_SCHEMA) == []
 
 
-def test_only_a_case_left_out_on_purpose_is_excused_from_the_baseline():
+def test_a_case_a_tag_filter_left_out_is_excused_only_in_a_partial_run():
+    """A baseline holds the whole suite: a baseline case a --tag / --skip-tag
+    filter left out (`excluded`) counts as missing, so tagging a failing case
+    with a routinely skipped tag can't get it past the gate. Only a partial
+    run (`evi eval run --partial`) excuses it, listed under excluded."""
     baseline = {"cases": {"kept": 1.0, "tagged-out": 1.0, "gone": 1.0}}
     report = _report({"kept": 1.0})
     report["cases"][0]["passed"] = True
     evals.apply_baseline(report, baseline, excluded={"tagged-out", "not-in-baseline"})
+    assert report["baseline"]["missing"] == ["tagged-out", "gone"]
+    assert report["baseline"]["excluded"] == [] and report["baseline"]["partial"] is False
+    assert not evals.report_ok(report)
+    report = _report({"kept": 1.0})
+    report["cases"][0]["passed"] = True
+    evals.apply_baseline(report, baseline, excluded={"tagged-out", "not-in-baseline"},
+                         partial=True)
     assert report["baseline"]["excluded"] == ["tagged-out"]
     assert report["baseline"]["missing"] == ["gone"] and not evals.report_ok(report)
     report = _report({"kept": 1.0})
     report["cases"][0]["passed"] = True
-    evals.apply_baseline(report, baseline, excluded={"tagged-out", "gone"})
-    assert evals.report_ok(report)
+    evals.apply_baseline(report, baseline, excluded={"tagged-out", "gone"}, partial=True)
+    assert evals.report_ok(report) and report["baseline"]["partial"] is True
+    html = evals.render_html(report)
+    assert "left out by a tag filter (a partial run): gone, tagged-out" in html
 
 
 def test_an_expected_failure_that_fell_below_the_baseline_fails_the_gate():
@@ -264,6 +278,60 @@ def test_write_report_keeps_json_and_a_static_html_page(home, tmp_path):
     assert second != path and second.exists()
     latest = evals.latest_reports()
     assert [(r["suite"], r["model"]) for r in latest] == [("s", "qwen/7b:q4")]
+
+
+def test_reports_that_finish_in_the_same_second_are_all_kept(home):
+    """The web Run button and a scheduled eval task (one process) can finish
+    the same suite on the same model in one second: each report gets a file
+    of its own (none overwritten, no shared temp file), LF endings."""
+    import threading
+
+    report = _report({"a": 1.0})
+    for _trial in range(10):
+        go = threading.Barrier(6)
+        paths: list = []
+        errors: list = []
+
+        def write():
+            go.wait()
+            try:
+                paths.append(evals.write_report(report))
+            except Exception as exc:  # noqa: BLE001 — the test reports it
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert errors == []
+        assert len({p for p, _page in paths}) == 6
+        for path, page in paths:
+            assert json.loads(path.read_text(encoding="utf-8")) == report
+            assert page.is_file() and b"\r" not in path.read_bytes()
+    folder = home / "evals" / "reports" / "s"
+    assert len(list(folder.glob("*.json"))) == 60 and not list(folder.glob("*.tmp"))
+
+
+def test_a_suite_run_often_does_not_push_other_suites_out_of_the_latest(home, monkeypatch):
+    """`latest_reports` reads a bounded number of reports per suite: a
+    scheduled suite that keeps a report every run never hides another
+    suite's latest one (GET /api/evals, the Evals panel)."""
+    monkeypatch.setattr(evals, "_MAX_REPORT_FILES", 5)
+    root = home / "evals" / "reports"
+
+    def keep(suite: str, stamp: str) -> None:
+        (root / suite).mkdir(parents=True, exist_ok=True)
+        (root / suite / f"{stamp}-m.json").write_text(json.dumps(
+            {"kind": evals.REPORT_KIND, "suite": suite, "model": "m", "backend": "b",
+             "finished_at": stamp, "cases": []}), encoding="utf-8")
+
+    keep("other", "20261001T000000Z")
+    for day in range(10, 20):
+        keep("drift", f"202610{day}T000000Z")
+    latest = {r["suite"]: r for r in evals.latest_reports()}
+    assert set(latest) == {"drift", "other"}
+    assert latest["drift"]["finished_at"] == "20261019T000000Z"
 
 
 def test_write_report_refuses_a_report_off_its_schema(home):

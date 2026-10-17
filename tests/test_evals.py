@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from evi import evals
-from evi.evals import EvalCase, EvalSuite
+from evi.evals import EvalCase
 
 
 # ---- loading -------------------------------------------------------------
@@ -67,100 +67,73 @@ def test_check_no_assertions_passes():
     assert evals.check_case(EvalCase(name="c", prompt="p"), "anything")[0] is True
 
 
-# ---- run -----------------------------------------------------------------
+# ---- LLM-as-judge (evaluate: the judge and the answer assertions) ----------
 
 
-def test_run_eval_report():
-    suite = EvalSuite(name="s", cases=[
-        EvalCase(name="a", prompt="p", contains=["4"]),
-        EvalCase(name="b", prompt="p", contains=["nope"]),
-    ])
-    report = evals.run_eval(suite, run_one=lambda case: "the answer is 4")
-    assert report["total"] == 2 and report["passed"] == 1
-    assert report["pass_rate"] == 0.5
-    by = {c["name"]: c for c in report["cases"]}
-    assert by["a"]["passed"] and not by["b"]["passed"]
-    assert by["b"]["failures"]
-
-
-# ---- LLM-as-judge --------------------------------------------------------
-
-
-def test_judge_pass():
-    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="is friendly")])
-    report = evals.run_eval(
-        suite, run_one=lambda c: "hi friend!", judge_fn=lambda c, o: (True, "friendly")
-    )
-    assert report["passed"] == 1
-
-
-def test_judge_fail_reason():
-    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="is friendly")])
-    report = evals.run_eval(
-        suite, run_one=lambda c: "go away", judge_fn=lambda c, o: (False, "rude")
-    )
-    assert report["passed"] == 0
-    assert any("judge: rude" in f for f in report["cases"][0]["failures"])
-
-
-def test_judge_without_grader_fails():
-    suite = EvalSuite(name="s", cases=[EvalCase(name="j", prompt="p", judge="x")])
-    report = evals.run_eval(suite, run_one=lambda c: "out")  # no judge_fn
-    assert report["passed"] == 0 and report["cases"][0]["failures"]
-
-
-def test_judge_and_deterministic_both_required():
-    # deterministic check fails even though judge passes -> case fails
-    suite = EvalSuite(name="s", cases=[
-        EvalCase(name="j", prompt="p", contains=["MISSING"], judge="ok"),
-    ])
-    report = evals.run_eval(
-        suite, run_one=lambda c: "text", judge_fn=lambda c, o: (True, "ok")
-    )
-    assert report["passed"] == 0
-
-
-# ---- make_runners (shared by CLI `evi eval run` + web POST /api/evals/run) --
-
-
-def test_make_runners_run_one_and_judge(monkeypatch):
+def _evaluate(tmp_path, output: str, grader=None, **case_kw) -> list[str]:
+    """`evals.evaluate` (with `grader` as the judge) on a finished run that
+    answered `output` and did nothing else (no tool call, file or command)."""
     from evi.headless import HeadlessResult
+
+    case = EvalCase(name="j", prompt="p", **case_kw)
+    res = HeadlessResult(text=output, stop_reason="done", files_changed=[])
+    return evals.evaluate(case, res, tmp_path, None, judge=grader)
+
+
+def test_judge_pass(tmp_path):
+    assert _evaluate(tmp_path, "hi friend!", lambda c, o: (True, "friendly"),
+                     judge="is friendly") == []
+
+
+def test_judge_fail_reason(tmp_path):
+    fails = _evaluate(tmp_path, "go away", lambda c, o: (False, "rude"), judge="is friendly")
+    assert fails == ["judge: rude"]
+
+
+def test_judge_without_grader_fails(tmp_path):
+    assert _evaluate(tmp_path, "out", judge="x") == ["judge rubric set but no grader available"]
+
+
+def test_judge_and_deterministic_both_required(tmp_path):
+    # deterministic check fails even though judge passes -> case fails
+    fails = _evaluate(tmp_path, "text", lambda c, o: (True, "ok"), contains=["MISSING"],
+                      judge="ok")
+    assert fails == ["missing 'MISSING'"]
+
+
+# ---- make_judge (the `judge` grader `model_judge` builds) ------------------------
+
+
+def test_make_judge_pass(monkeypatch):
+    from evi.headless import HeadlessResult
+
+    seen: list = []
 
     class FakeAgent:
         def __init__(self):
             self.tools = {"x": object()}
-            self.auto = False
-
-        def enable_auto_all(self):
-            self.auto = True
 
     def fake_run_headless(agent, prompt):
-        # The judge prompt carries "RUBRIC:"; answer prompts don't.
-        return HeadlessResult(
-            text=("PASS looks good" if "RUBRIC:" in prompt else "the answer is 4")
-        )
+        seen.append((dict(agent.tools), prompt))
+        return HeadlessResult(text="PASS looks good\nmore")
 
     monkeypatch.setattr("evi.headless.run_headless", fake_run_headless)
+    ok, reason = evals.make_judge(FakeAgent)(EvalCase(name="j", prompt="x", judge="be nice"),
+                                             "hi")
+    assert ok is True and reason == "PASS looks good"
+    # The grader answers from the text alone: no tools, the rubric and the answer.
+    [(tools, prompt)] = seen
+    assert tools == {} and "RUBRIC: be nice" in prompt and prompt.endswith("ANSWER:\nhi")
 
-    run_one, judge_fn = evals.make_runners(FakeAgent)
-    assert run_one(EvalCase(name="c", prompt="2+2?", contains=["4"])) == "the answer is 4"
-    ok, reason = judge_fn(EvalCase(name="j", prompt="x", judge="be nice"), "hi")
-    assert ok is True and "looks good" in reason
 
-
-def test_make_runners_judge_fail(monkeypatch):
+def test_make_judge_fail(monkeypatch):
     from evi.headless import HeadlessResult
 
     class FakeAgent:
-        def __init__(self):
-            self.tools = {}
-
-        def enable_auto_all(self):
-            pass
+        tools: dict = {}
 
     monkeypatch.setattr(
         "evi.headless.run_headless", lambda a, p: HeadlessResult(text="FAIL too terse")
     )
-    _, judge_fn = evals.make_runners(FakeAgent)
-    ok, reason = judge_fn(EvalCase(name="j", prompt="x", judge="r"), "out")
+    ok, reason = evals.make_judge(FakeAgent)(EvalCase(name="j", prompt="x", judge="r"), "out")
     assert ok is False and "too terse" in reason

@@ -24,8 +24,11 @@ Storage
     (``task/<id>``).
 
 Fields (`FIELDS`; every value survives the TOML round trip, none is null)
-    id, title, status, why, acceptance[] (the criteria), files_in_scope[]
-    (globs relative to the repository, `evi.policy.validate_scope`),
+    id, title, status, why, hints (the director's guidance on how to go
+    about it, "" for none; `build_prompt` shows it after why),
+    acceptance[] (the criteria), files_in_scope[]
+    (globs relative to the repository, `evi.policy.validate_scope`; a
+    start may write only these, `evi.policy.in_scope`),
     required_checks[] (command lines split the POSIX way, or argv arrays),
     implementer (a hint: evi-local, evi-frontier, director), created,
     attempts, backend, model, worktree, branch, base (the commit the branch
@@ -34,8 +37,12 @@ Fields (`FIELDS`; every value survives the TOML round trip, none is null)
     (the bundle's hash and numbers, `evi.evidence.summarize`; the bundle
     itself stays under eVi's home), reviewer_notes[] ({at, verdict,
     note}), lease ({holder, expires_at}, empty when unclaimed), last_result
-    ({stop_reason, exit_code, report, summary} of the latest start; the
-    summary is the answer's first line, `printable`) and, on a task the
+    ({stop_reason, exit_code, report, summary, out_of_scope,
+    out_of_scope_more} of the latest start; the summary is the answer's
+    first line, `printable`; out_of_scope the files the branch changed
+    outside files_in_scope, `out_of_scope`, left out when git couldn't
+    tell, and out_of_scope_more how many more there were, left out for
+    none) and, on a task the
     director signed, attestation. Unknown fields are kept. A task file may
     come from anyone (a pulled branch), so its paths are never taken as
     they are: the evidence is read only when it is a bundle eVi wrote
@@ -61,17 +68,26 @@ States (pure functions over a record; `IllegalTransition` for anything else)
 
 Running a task (`run_task`, behind ``evi task start``)
     Only in a trusted repository (`evi.trust`): the implementer policy runs no
-    command in an untrusted one. It claims the task, opens its worktree
+    command in an untrusted one; and only a task with files_in_scope (a run
+    confined to none could change nothing). It claims the task, opens its worktree
     (`evi.worktree.open_isolated`, branch ``task/<id>``, locked while the run
     goes on; a later attempt reuses it, taking over a lock a start on this
     machine left when it died), builds the agent through the
     caller's factory, holds it to the implementer policy
-    (`evi.policy.implementer_policy` with the task's files_in_scope, and its
-    required checks allowed as exact commands) with the verify gate on (the
-    required checks join ``[checks] commands`` for the run), and runs the
-    prompt `build_prompt` makes from the task (`evi.headless.run_headless`).
-    Then it runs the required checks itself in the worktree (`evi.checks`) as
-    ground truth, writes the run report with a ``task`` section to
+    (`evi.policy.implementer_policy` confined to the task's files_in_scope:
+    a write to any other file is denied, with a reason that tells the model
+    to list it as a concern instead; and its required checks allowed as
+    exact commands) with the verify gate on (the required checks join
+    ``[checks] commands`` for the run), and runs the prompt `build_prompt`
+    makes from the task (`evi.headless.run_headless`). Then it runs the
+    required checks itself in the worktree (`evi.checks`) as ground truth,
+    lists what the branch changed outside files_in_scope anyway (a test's
+    output, a ruff ``fix`` setting: `out_of_scope`, but for untracked files
+    in a cache folder such as ``__pycache__``; at most
+    ``_OUT_OF_SCOPE_LISTED`` paths and the count of the rest,
+    ``out_of_scope_more``, recorded in the report's task section and
+    last_result; ``evi task verify`` refuses to sign over it without the
+    director's reason), writes the run report with a ``task`` section to
     ``<eVi home>/tasks/<repo key>/<id>/<attempt>/report.json``
     (`report_path`), and records the worktree, branch, attempt, backend,
     model and result in the task. A delegate CLI-agent backend is refused,
@@ -116,22 +132,22 @@ BRANCH_PREFIX = "task/"
 LEASE_MINUTES = 240
 # Every field a task has, in the order a task file lists them.
 FIELDS = (
-    "id", "title", "status", "why", "acceptance", "files_in_scope", "required_checks",
-    "implementer", "created", "attempts", "backend", "model", "worktree", "branch",
-    "base", "evidence", "evidence_summary", "reviewer_notes", "lease", "last_result",
-    "attestation",
+    "id", "title", "status", "why", "hints", "acceptance", "files_in_scope",
+    "required_checks", "implementer", "created", "attempts", "backend", "model", "worktree",
+    "branch", "base", "evidence", "evidence_summary", "reviewer_notes", "lease",
+    "last_result", "attestation",
 )
 # What a new task starts with besides id, title and created.
 _DEFAULTS: dict[str, Any] = {
-    "status": "open", "why": "", "acceptance": [], "files_in_scope": [],
+    "status": "open", "why": "", "hints": "", "acceptance": [], "files_in_scope": [],
     "required_checks": [], "implementer": "", "attempts": 0, "backend": "", "model": "",
     "worktree": "", "branch": "", "base": "", "evidence": "", "reviewer_notes": [],
     "lease": {},
 }
 # A task file `evi task new --from` copies: what the director files. The rest
 # is run bookkeeping, which a new task starts without.
-SPEC_FIELDS = ("id", "title", "why", "acceptance", "files_in_scope", "required_checks",
-               "implementer")
+SPEC_FIELDS = ("id", "title", "why", "hints", "acceptance", "files_in_scope",
+               "required_checks", "implementer")
 _BOOKKEEPING = frozenset(FIELDS) - set(SPEC_FIELDS)
 ATTESTATION = "attestation"
 # What `evi task start` calls itself as an unattended entry point.
@@ -145,6 +161,11 @@ _DEVICE_NAMES = frozenset(
 _TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _LOCK_TIMEOUT = 15.0
 _SUMMARY_CHARS = 300
+# The most out_of_scope paths a start records (the task file is tracked): the
+# rest are counted in last_result's out_of_scope_more.
+_OUT_OF_SCOPE_LISTED = 200
+# The most out-of-scope paths a message or a reviewer note names (`paths_text`).
+_OUT_OF_SCOPE_SHOWN = 10
 # C0 controls but tab and newline, DEL and C1 controls: what `printable` drops.
 _UNPRINTABLE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 # Waits between tries while Windows refuses to replace (or open) a task file
@@ -291,6 +312,19 @@ def _text_list(value: Any, what: str) -> list[str]:
     return [str(v) for v in value]
 
 
+def hints_text(value: Any) -> str:
+    """A task's hints as stored: a string as it is, or a list of strings
+    (``evi task new --hint`` is repeatable, a ``--from`` file may list them)
+    one per line. TaskError for anything else."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value):
+        return "\n".join(v.strip() for v in value if v.strip())
+    raise TaskError("hints must be a string or a list of strings")
+
+
 def _ordered(record: Mapping[str, Any]) -> dict[str, Any]:
     """`record` with the known fields first, in `FIELDS` order."""
     out = {k: record[k] for k in FIELDS if k in record}
@@ -381,13 +415,16 @@ def new_task(
     files_in_scope: Sequence[str] = (),
     required_checks: Sequence[Any] = (),
     implementer: str = "",
+    hints: str | Sequence[str] = "",
     extra: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
     """A new open task (an empty `task_id`: `TaskQueue.create` gives it the
-    next T<n>). `extra`: more fields to keep (run bookkeeping and an
-    attestation in it are dropped). TaskError for a bad id, an empty title,
-    a scope entry outside the repository or a check that doesn't parse."""
+    next T<n>). `hints`: how to go about it (a string, or strings joined one
+    per line, `hints_text`). `extra`: more fields to keep (run bookkeeping
+    and an attestation in it are dropped). TaskError for a bad id, an empty
+    title, a scope entry outside the repository, a check that doesn't parse
+    or hints that are no text."""
     title = str(title or "").strip()
     if not title:
         raise TaskError("a task needs a title")
@@ -401,6 +438,7 @@ def new_task(
     record.update({
         "id": validate_id(task_id) if task_id else "", "title": title, **_DEFAULTS,
         "why": str(why or "").strip(),
+        "hints": hints_text(hints),
         "acceptance": _text_list(acceptance, "acceptance"),
         "files_in_scope": _text_list(files_in_scope, "files_in_scope"),
         "required_checks": [list(c) if isinstance(c, (list, tuple)) else c
@@ -525,11 +563,15 @@ def finish(
     report: str = "",
     summary: str = "",
     fields: Mapping[str, Any] | None = None,
+    out_of_scope: Sequence[str] | None = None,
+    out_of_scope_more: int = 0,
 ) -> dict[str, Any]:
     """The end of a start `holder` claimed the task for: implemented when
     `implemented` (the run was done and the required checks passed), else
     back to open. Either way the attempt is counted and its result recorded
-    (`last_result`), with `fields` (worktree, branch, backend, model ...)."""
+    (`last_result`, with `out_of_scope` unless it is None: git couldn't
+    tell, and `out_of_scope_more`, how many paths it leaves out, unless 0),
+    with `fields` (worktree, branch, backend, model ...)."""
     _holding(record, holder)
     out = _without_attestation(record)
     out.update({k: v for k, v in (fields or {}).items() if v is not None})
@@ -542,6 +584,10 @@ def finish(
     out["lease"] = {}
     out["last_result"] = {"stop_reason": str(stop_reason), "exit_code": int(exit_code),
                           "report": str(report or ""), "summary": str(summary or "")}
+    if out_of_scope is not None:
+        out["last_result"]["out_of_scope"] = [str(p) for p in out_of_scope]
+        if out_of_scope_more:
+            out["last_result"]["out_of_scope_more"] = int(out_of_scope_more)
     return _ordered(out)
 
 
@@ -601,6 +647,34 @@ def for_verdict(
     out = _without_attestation(record)
     out["reviewer_notes"] = _note(record, verdict, note, now)
     return _ordered(out)
+
+
+def allow_out_of_scope(
+    record: Mapping[str, Any], files: Sequence[str], reason: str,
+    now: _dt.datetime | None = None,
+) -> dict[str, Any]:
+    """`record` (the body `for_verdict` made) with the director's `reason`
+    for signing although the branch changed `files` outside files_in_scope
+    in its reviewer notes (verdict ``out_of_scope_allowed``; the files as
+    `paths_text` names them, the task file being tracked), so the
+    attestation signs it too. TaskError for an empty reason."""
+    reason = str(reason or "").strip()
+    if not reason:
+        raise TaskError("--allow-out-of-scope needs a reason")
+    out = _without_attestation(record)
+    out["reviewer_notes"] = _note(
+        record, "out_of_scope_allowed",
+        f"{reason} (changed outside files_in_scope: {paths_text(files)})", now)
+    return _ordered(out)
+
+
+def paths_text(paths: Sequence[str], more: int = 0) -> str:
+    """`paths` as a message or a note names them: the first
+    `_OUT_OF_SCOPE_SHOWN`, joined with commas, then how many more there are
+    (counting `more` paths not in the list)."""
+    shown = ", ".join(map(str, paths[:_OUT_OF_SCOPE_SHOWN]))
+    rest = max(len(paths) - _OUT_OF_SCOPE_SHOWN, 0) + max(int(more or 0), 0)
+    return shown + (f" and {rest} more" if rest else "")
 
 
 # ---- the queue -----------------------------------------------------------------------
@@ -855,22 +929,97 @@ def report_path(root: str | os.PathLike[str], task_id: str, attempt: int) -> Pat
     return task_home(root, task_id) / str(int(attempt)) / "report.json"
 
 
+def _git_names(worktree: str | os.PathLike[str], args: Sequence[str]) -> list[str]:
+    """The NUL-separated paths `git <args>` prints in `worktree`
+    (`evi.gitsafe`); TaskError when git can't answer."""
+    import subprocess
+
+    from evi import gitsafe
+
+    try:
+        proc = gitsafe.run_git(list(args), cwd=worktree, timeout=60)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise TaskError(f"git {args[0]} could not run in {worktree}: {exc}") from exc
+    if proc.returncode != 0:
+        raise TaskError(f"git {args[0]} failed in {worktree}: "
+                        f"{(proc.stderr or proc.stdout or '').strip()[:200]}")
+    return [p for p in proc.stdout.split("\0") if p]
+
+
+def changed_files(worktree: str | os.PathLike[str], base: str, *,
+                  caches: bool = True) -> list[str]:
+    """The repository-relative files the branch checked out in `worktree`
+    changed against `base`, committed or not: ``git diff --name-only
+    base...HEAD`` plus ``git status --porcelain`` there (untracked files one
+    by one, ignored ones left out; a rename as both its names), sorted.
+    Without `caches`, an untracked file in a cache or dependency folder
+    (``__pycache__``, ``.pytest_cache``: `evi.checks`' skipped parts, as a
+    run's own tests leave them in a repository that doesn't ignore them) is
+    left out too. TaskError when git can't tell (or there is no base)."""
+    from evi import checks, gitsafe
+
+    base = str(base or "").strip()
+    if not base:
+        raise TaskError("the task has no base to compare its branch with")
+    try:
+        revs = gitsafe.rev_args(f"{base}...HEAD", what="base")
+    except gitsafe.UnsafeRefError as exc:
+        raise TaskError(str(exc)) from exc
+    names = set(_git_names(worktree, ["diff", "--name-only", "-z", "--no-renames",
+                                      "--no-ext-diff", "--ignore-submodules=none", *revs, "--"]))
+    status = _git_names(worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all",
+                                   "--ignore-submodules=none", "--no-renames"])
+    i = 0
+    while i < len(status):
+        entry = status[i]
+        if caches or entry[:2] != "??" or not checks._SKIP_PARTS.intersection(
+                entry[3:].split("/")):
+            names.add(entry[3:])
+        if entry[:1] in ("R", "C"):  # a rename's old name follows (should --no-renames slip)
+            i += 1
+            if i < len(status):
+                names.add(status[i])
+        i += 1
+    return sorted(n for n in names if n)
+
+
+def out_of_scope(worktree: str | os.PathLike[str], base: str, scope: Sequence[str], *,
+                 caches: bool = True) -> list[str]:
+    """The files the branch in `worktree` changed against `base` (committed
+    or not, `changed_files`, `caches` as it takes them) that no `scope`
+    entry covers (`evi.policy.in_scope`): what a run changed outside its
+    files_in_scope, whatever wrote it. TaskError when git can't tell."""
+    from evi import policy
+
+    return [p for p in changed_files(worktree, base, caches=caches)
+            if not policy.in_scope(scope, p)]
+
+
 def build_prompt(record: Mapping[str, Any], worktree: str | os.PathLike[str]) -> str:
-    """What the implementer is asked: the task's title, why, acceptance
-    criteria, files in scope and required checks, and the EVI.md contract."""
+    """What the implementer is asked: the task's title, why, the director's
+    hints ("How to approach it"), acceptance criteria, files in scope and
+    required checks, and the EVI.md contract."""
     task_id = record.get("id")
     parts = [f"Implement task {task_id} in this repository: {record.get('title') or ''}".strip()]
     why = str(record.get("why") or "").strip()
     if why:
         parts.append(f"Why:\n{why}")
+    hints = record.get("hints")
+    hints = hints.strip() if isinstance(hints, str) else ""
+    if hints:
+        parts.append(f"How to approach it:\n{hints}")
     criteria = [str(c) for c in record.get("acceptance") or []]
     if criteria:
         parts.append("Acceptance criteria (each must be met, and shown by a test or a check):\n"
                      + "\n".join(f"{n}. {c}" for n, c in enumerate(criteria, 1)))
     scope = [str(s) for s in record.get("files_in_scope") or []]
     if scope:
-        parts.append("Files in scope (change only these; anything else goes in your hand-off "
-                     "as a concern):\n" + "\n".join(f"- {s}" for s in scope))
+        parts.append("Files in scope (change only these: a write to any other file is refused; "
+                     "anything else goes in your hand-off as a concern):\n"
+                     + "\n".join(f"- {s}" for s in scope))
+    else:
+        parts.append("Files in scope: none (the task names no files_in_scope, so every write is "
+                     "refused): put what you would change in your hand-off as a concern.")
     checks = record.get("required_checks") or []
     if checks:
         from evi.checks import display
@@ -969,7 +1118,7 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
     trusted = policy.folder_trusted(wt.path)
     allowed = [*argvs, *checks.allowlist(wt.path, config, trusted)]
     agent.policy = policy.implementer_policy(wt.path, files_in_scope=scope, checks=allowed,
-                                             trusted=trusted)
+                                             trusted=trusted, confine=True)
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> Path | None:
@@ -1017,7 +1166,8 @@ def run_task(
     does.
 
     TaskError (nothing ran, and the task is as it was) for an untrusted
-    repository, a bad task, someone else's live lease, a worktree that can't
+    repository, a bad task or one without files_in_scope (the confined run
+    could change nothing), someone else's live lease, a worktree that can't
     be opened, or a backend the policy can't hold. Any other failure,
     building the agent included, is the run's (stop_reason "error"): the
     task goes back to open with the attempt counted."""
@@ -1037,6 +1187,12 @@ def run_task(
     record = queue.read(task_id)
     argvs = required_argvs(record)
     scope = scope_of(record)
+    if not scope:
+        # Confined to no file, the run could change nothing (and leave no
+        # work to verify): refused before it claims anything.
+        raise TaskError(f"task {record['id']} names no files_in_scope, and a start may change "
+                        "only the files they cover: give it some (files_in_scope in its task "
+                        "file, `evi task new --scope`) first")
     branch = branch_for(str(record["id"]))
 
     before: dict[str, Any] = {}
@@ -1126,6 +1282,20 @@ def run_task(
         attempt = int(claimed.get("attempts") or 0) + 1
         run = TaskRun(record=claimed, result=res, report_path=None, exit_code=exit_code,
                       implemented=implemented, stop_reason=stop_reason, checks=runs, worktree=wt)
+        # The backstop for what the policy can't see: a test's output, a ruff
+        # fix setting (not the caches the run's own tests leave untracked).
+        # Recorded, never fatal; `evi task verify` checks again, strictly.
+        outside: list[str] | None
+        more: int | None = None
+        try:
+            outside = out_of_scope(wt.path, start_base, scope, caches=False)
+        except TaskError as exc:
+            outside = None
+            run.note = printable(f"what the branch changed outside files_in_scope can't be "
+                                 f"told: {exc}")
+        if outside is not None:
+            more = max(len(outside) - _OUT_OF_SCOPE_LISTED, 0)
+            outside = outside[:_OUT_OF_SCOPE_LISTED]
         report = {
             **res.to_dict(),
             "task": {
@@ -1134,6 +1304,8 @@ def run_task(
                 "outcome": "implemented" if implemented else "open",
                 "stop_reason": stop_reason, "exit_code": exit_code,
                 "required_checks": [r.record() for r in runs],
+                "files_in_scope": list(scope), "out_of_scope": outside,
+                "out_of_scope_more": more,
             },
         }
         run.report_path = _write_report(report_path(queue.root, str(claimed["id"]), attempt),
@@ -1143,7 +1315,8 @@ def run_task(
             try:
                 evidence_at = evidence(run)
             except Exception as exc:  # noqa: BLE001 — evidence never loses the run
-                run.note = printable(f"evidence was not collected: {type(exc).__name__}: {exc}")
+                run.note = "; ".join(filter(None, [run.note, printable(
+                    f"evidence was not collected: {type(exc).__name__}: {exc}")]))
                 # An earlier attempt's bundle is not this attempt's evidence.
                 evidence_at = {"evidence": "", "evidence_summary": {}}
         fields: dict[str, Any] = {
@@ -1160,7 +1333,8 @@ def run_task(
             run.record = queue.update(task_id, lambda r: finish(
                 r, holder=holder, implemented=implemented, stop_reason=stop_reason,
                 exit_code=exit_code, report=str(run.report_path or ""),
-                summary=_summary(res, stop_reason, runs), fields=fields))
+                summary=_summary(res, stop_reason, runs), fields=fields, out_of_scope=outside,
+                out_of_scope_more=more or 0))
         except (TaskError, OSError, ValueError) as exc:  # never lose the run to a write
             run.recorded = False
             run.note = (f"the outcome was not recorded: {exc}"

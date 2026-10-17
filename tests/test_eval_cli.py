@@ -292,18 +292,30 @@ def test_editing_the_suite_does_not_get_past_the_baseline(home, tmp_path, monkey
     assert res.exit_code == 1 and "below baseline" in res.stdout
 
 
-def test_a_case_left_out_by_skip_tag_is_not_held_to_the_baseline(home, tmp_path, monkeypatch):
+def test_a_case_left_out_by_skip_tag_is_held_to_the_baseline_unless_partial(home, tmp_path,
+                                                                             monkeypatch):
+    """A baseline holds the whole suite: tagging a baselined case with a
+    routinely skipped tag must not get it past the gate. --partial runs a
+    subset against the baseline: the cases the filter left out are listed
+    under baseline.excluded, with a warning, and don't fail the run."""
     monkeypatch.setattr("evi.attest.agent_parent", lambda *a, **k: None)
     repo = _mini_repo(tmp_path, TWO)
     assert _cli("eval", "baseline", "record", "--backend", "fake", "--runs", "1",
                 "--repo", str(repo), "--quantization", "Q4").exit_code == 0
     base = repo / "evals" / "self" / "baseline.json"
     res, report = _gate(repo, base, "--skip-tag", "slow")
-    assert res.exit_code == 0, res.output
-    assert report["baseline"]["excluded"] == ["beta"] and report["baseline"]["missing"] == []
+    assert res.exit_code == 1, res.output
+    assert report["baseline"]["missing"] == ["beta"] and report["baseline"]["excluded"] == []
+    assert "count as missing: beta" in res.stderr and "--partial" in res.stderr
     res = _cli("eval", "run", "self", "--backend", "fake", "--repo", str(repo),
                "--baseline", str(base), "--skip-tag", "slow")
-    assert res.exit_code == 0 and "left out by --tag / --skip-tag): beta" in res.stdout
+    assert res.exit_code == 1 and "left out by --tag / --skip-tag: beta" in res.stdout
+    res, report = _gate(repo, base, "--skip-tag", "slow", "--partial")
+    assert res.exit_code == 0, res.output
+    assert report["baseline"]["excluded"] == ["beta"] and report["baseline"]["missing"] == []
+    assert report["baseline"]["partial"] is True
+    assert ("warning: --partial: not held to the baseline (left out by --tag / --skip-tag): "
+            "beta") in res.stderr
 
 
 def test_a_fake_run_cannot_be_held_to_a_real_models_baseline(home, tmp_path):

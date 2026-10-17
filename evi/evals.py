@@ -106,24 +106,25 @@ script-free ``.html`` rendering; failure reasons are redacted
 (`evi.redact`). `compare` diffs two reports (or a report against a
 baseline); `apply_baseline` fails a case whose pass rate fell below a
 baseline's minus a tolerance, also an expected_fail one, and fails the
-report for a baseline case that didn't run (skipped, or no longer in the
-suite) unless the caller left it out on purpose (``--tag`` /
-``--skip-tag``): dropping or renaming a case must not get past the gate.
+report for a baseline case that didn't run (skipped, no longer in the
+suite, or left out by a ``--tag`` / ``--skip-tag`` filter): dropping,
+renaming or tagging away a case must not get past the gate. Only a run
+the caller marks partial (``evi eval run --partial``) excuses the cases a
+filter left out, and lists them under the report's ``baseline.excluded``.
 
 **Baseline.** ``evals/self/baseline.json`` (`BASELINE_SCHEMA`: model,
 quantization, hardware, N and each case's pass rate on the reference model)
 is the entry gate for prompt, repair and catalog changes. Only the
 director's ``evi eval baseline record`` writes it (it refuses where an eVi
-agent may have started it, `evi.attest.agent_parent`), and no agent may:
-it is in `evi.policy.HARD_PROTECTED` and
-`evi.permissions.WRITE_PROTECTED_PATHS`.
+agent may have started it, `evi.attest.agent_parent`, and refuses tag
+filters: a baseline is the whole suite), and no agent may: it is in
+`evi.policy.HARD_PROTECTED` and `evi.permissions.WRITE_PROTECTED_PATHS`.
 
-`run_eval` / `make_runners` are the text-only engine of before (a
-``run_one(case) -> text`` callable, which runs with every tool approved in
-the process's folder): a case that needs the harness (a behavioral
-assertion, `files`, `fixture` or ``workspace = "repo"``) fails there without
-being run, since a text can't show what the run did and its prompt was
-written for a throwaway workspace.
+**One engine.** ``evi eval run``, the web Evals panel's Run button
+(``POST /api/evals/run``) and scheduled eval tasks (`evi.scheduler`) all run
+`run_suite` and keep the report with `write_report`, so they give one
+verdict; the web and the scheduler run on the configured [llm] backend and
+model (`configured_context`), never the fake one.
 """
 
 from __future__ import annotations
@@ -177,7 +178,8 @@ _FAILED_STOPS = ("error", "interrupted")
 # and how many failing runs a row lists.
 _MAX_REASON = 600
 _MAX_LISTED_RUNS = 10
-# Reports `latest_reports` reads at most, and the biggest it parses.
+# Reports `latest_reports` reads at most per suite (so one suite run often,
+# a scheduled one, can't push the others out), and the biggest it parses.
 _MAX_REPORT_FILES = 500
 _MAX_REPORT_BYTES = 8 * 1024 * 1024
 _PYTHON = re.compile(r"(?:python(?:3(?:\.\d+)?)?|py)\Z")
@@ -256,21 +258,6 @@ class EvalCase:
     # The folder of the suite file the case came from (`fixture` is relative
     # to it); None for a case built in code.
     base_dir: Path | None = None
-
-    def behavioral(self) -> bool:
-        """Whether the case asserts anything a text answer can't show."""
-        return bool(
-            self.expect_tools or self.forbid_tools or self.tool_order or self.tool_args
-            or self.stop_reason or self.command_succeeds or self.file_contains
-            or self.diff_touches_only is not None
-        )
-
-    def needs_harness(self) -> bool:
-        """Whether only `run_suite` may run the case: it asserts what the run
-        did, or its prompt was written for a throwaway workspace (`files`,
-        `fixture`, ``workspace = "repo"``)."""
-        return bool(self.behavioral() or self.files or self.fixture
-                    or self.workspace == "repo")
 
 
 @dataclass
@@ -709,11 +696,12 @@ def resolve_suite(name: str, *, root: Path | None = None,
     return load_suite(name, root)
 
 
-# ---- the text-only engine (before the run report) -----------------------------
+# ---- answer assertions and the judge ---------------------------------------------
 
 
 def check_case(case: EvalCase, output: str) -> tuple[bool, list[str]]:
-    """Return (passed, failure_reasons) for one case against its output."""
+    """Return (passed, failure_reasons) for one case's answer assertions
+    against the run's final text."""
     fails: list[str] = []
     hay = output.lower() if case.ignore_case else output
 
@@ -738,58 +726,6 @@ def check_case(case: EvalCase, output: str) -> tuple[bool, list[str]]:
     return (not fails, fails)
 
 
-def run_eval(
-    suite: EvalSuite,
-    run_one: Callable[[EvalCase], str],
-    judge_fn: Callable[[EvalCase, str], tuple[bool, str]] | None = None,
-) -> dict[str, Any]:
-    """Run every case through `run_one(case) -> output text`. Returns a report:
-    {name, total, passed, pass_rate, cases: [{name, passed, failures, output}]}.
-
-    A case with a `judge` rubric is additionally graded by `judge_fn(case,
-    output) -> (passed, reason)`; both the deterministic checks and the judge
-    must pass. If a case needs a judge but none is provided, it fails. A
-    case that needs the harness (`EvalCase.needs_harness`: a behavioral
-    assertion, `files`, `fixture`, ``workspace = "repo"``) fails WITHOUT
-    `run_one` being called: a text can't show what the run did, and
-    `run_one` would run a prompt written for a throwaway workspace (wipe a
-    folder, edit a file) in the caller's folder.
-    """
-    results = []
-    passed = 0
-    for case in suite.cases:
-        if case.needs_harness():
-            what = ("asserts what the run did (tools, files, commands)" if case.behavioral()
-                    else "is written for a throwaway workspace (files, fixture, repo)")
-            results.append({"name": case.name, "passed": False, "output": "", "failures": [
-                f"{what}, which only `evi eval run` checks: not run here"]})
-            continue
-        output = run_one(case)
-        ok, failures = check_case(case, output)
-        if case.judge:
-            if judge_fn is None:
-                ok = False
-                failures.append("judge rubric set but no grader available")
-            else:
-                jok, reason = judge_fn(case, output)
-                if not jok:
-                    ok = False
-                    failures.append(f"judge: {reason}")
-        if ok:
-            passed += 1
-        results.append(
-            {"name": case.name, "passed": ok, "failures": failures, "output": output}
-        )
-    total = len(suite.cases)
-    return {
-        "name": suite.name,
-        "total": total,
-        "passed": passed,
-        "pass_rate": (passed / total) if total else 0.0,
-        "cases": results,
-    }
-
-
 def _judge_prompt(case: EvalCase, output: str) -> str:
     return (
         "Grade the ANSWER against the RUBRIC. Reply with exactly PASS or FAIL "
@@ -812,35 +748,6 @@ def make_judge(agent_factory: Callable[[], Any]) -> Callable[[EvalCase, str], tu
         return first.strip().upper().startswith("PASS"), (first[:200] or "no judge output")
 
     return judge_fn
-
-
-def make_runners(
-    agent_factory: Callable[[], Any],
-    *,
-    default_mode: str = "",
-) -> tuple[Callable[[EvalCase], str], Callable[[EvalCase, str], tuple[bool, str]]]:
-    """Build the ``(run_one, judge_fn)`` pair that :func:`run_eval` expects.
-
-    ``agent_factory()`` must return a fresh Agent (one per call — cases must not
-    share conversation state). The text-only engine of before the run report:
-    `run_one` approves every tool and runs in the process's folder, so
-    `run_eval` never hands it a case that needs the harness. `evi eval run`
-    uses `run_suite`; the web ``POST /api/evals/run`` and scheduled eval
-    tasks (`evi.scheduler`) still use this engine.
-    """
-    from evi.headless import run_headless
-    from evi.modes import mode_tools
-
-    def run_one(case: EvalCase) -> str:
-        agent = agent_factory()
-        m = case.mode or default_mode
-        if m:
-            agent.tools = {t.name: t for t in mode_tools(m)}
-        agent.enable_auto_all()
-        res = run_headless(agent, case.prompt)
-        return res.text or (f"ERROR: {res.error}" if res.error else "")
-
-    return run_one, make_judge(agent_factory)
 
 
 # ---- workspaces --------------------------------------------------------------------
@@ -1584,29 +1491,61 @@ def schema_errors(doc: Any, schema: Mapping[str, Any]) -> list[str]:
 
 
 def _write_text(path: Path, text: str) -> None:
+    """`text` into `path` through a temp file of this call's own beside it
+    (two writers never share one), then os.replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{os.urandom(8).hex()}.tmp")
+    fh = open(tmp, "x", encoding="utf-8", newline="\n")
+    try:
+        with fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_new(folder: Path, stem: str, text: str) -> Path:
+    """`text` as a new ``<stem>.json`` in `folder` (``<stem>-2.json``, ...
+    when the name is taken), created exclusively: two reports of one suite
+    and model that finish in the same second (the web Run button and a
+    scheduled task, in one process) never pick the same name."""
+    folder.mkdir(parents=True, exist_ok=True)
+    k = 1
+    while True:
+        path = folder / (f"{stem}.json" if k == 1 else f"{stem}-{k}.json")
+        try:
+            fh = open(path, "x", encoding="utf-8", newline="\n")
+        except FileExistsError:
+            k += 1
+            continue
+        try:
+            with fh:
+                fh.write(text)
+        except BaseException:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        return path
 
 
 def write_report(report: dict[str, Any], root: Path | None = None) -> tuple[Path, Path]:
     """Keep `report` as ``<eVi home>/evals/reports/<suite>/<UTC time>-<model>.json``
-    and its ``.html`` rendering; returns both paths. EvalError when the
-    report doesn't match `REPORT_SCHEMA` (nothing is written)."""
+    (a ``-2``, ``-3``, ... suffix when the name is taken) and its ``.html``
+    rendering; returns both paths. EvalError when the report doesn't match
+    `REPORT_SCHEMA` (nothing is written)."""
     bad = schema_errors(report, REPORT_SCHEMA)
     if bad:
         raise EvalError(f"the eval report does not match its schema: {bad[0][:300]}")
     folder = reports_dir(root) / fs_slug(report["suite"])
     stamp = str(report["finished_at"]).replace("-", "").replace(":", "")
     stem = f"{stamp}-{fs_slug(report['model'])}"
-    path = folder / f"{stem}.json"
-    k = 2
-    while path.exists():
-        path = folder / f"{stem}-{k}.json"
-        k += 1
-    _write_text(path, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    path = _write_new(folder, stem, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     page = path.with_suffix(".html")
     _write_text(page, render_html(report))
     return path, page
@@ -1614,6 +1553,18 @@ def write_report(report: dict[str, Any], root: Path | None = None) -> tuple[Path
 
 def _pct(rate: Any) -> str:
     return "skipped" if rate is None else f"{round(float(rate) * 100)}%"
+
+
+def verdict(row: Mapping[str, Any]) -> str:
+    """A report row's verdict as reports and logs show it: BELOW BASELINE,
+    SKIP, PASS, XPASS (an expected failure that passed), XFAIL or FAIL."""
+    if (row.get("baseline") or {}).get("regressed"):
+        return "BELOW BASELINE"
+    if row.get("skipped"):
+        return "SKIP"
+    if row.get("passed"):
+        return "XPASS" if row.get("expected_fail") else "PASS"
+    return "XFAIL" if row.get("expected_fail") else "FAIL"
 
 
 def render_html(report: Mapping[str, Any]) -> str:
@@ -1624,20 +1575,13 @@ def render_html(report: Mapping[str, Any]) -> str:
             f"({_pct(report.get('pass_rate'))}), {report.get('skipped')} skipped")
     rows = []
     for r in report.get("cases") or []:
-        if (r.get("baseline") or {}).get("regressed"):
-            verdict = "BELOW BASELINE"
-        elif r.get("skipped"):
-            verdict = "SKIP"
-        elif r.get("passed"):
-            verdict = "XPASS" if r.get("expected_fail") else "PASS"
-        else:
-            verdict = "XFAIL" if r.get("expected_fail") else "FAIL"
+        mark = verdict(r)
         why = "\n".join([*([r["skip_reason"]] if r.get("skip_reason") else []),
                          *(r.get("failures") or [])])
         if r.get("verify_skipped"):
             why += f"\n(verify gate skipped in {r['verify_skipped']} run(s))"
         rows.append(
-            f"<tr><td>{e(verdict)}</td><td>{e(str(r.get('name')))}</td>"
+            f"<tr><td>{e(mark)}</td><td>{e(str(r.get('name')))}</td>"
             f"<td>{e(str(r.get('passes')))}/{e(str(r.get('runs')))}</td>"
             f"<td>{e(_pct(r.get('pass_rate')))}</td><td>{e(_pct(r.get('threshold')))}</td>"
             f"<td>{e(str(r.get('mean_turns')))}</td><td><pre>{e(why)}</pre></td></tr>")
@@ -1654,7 +1598,7 @@ def render_html(report: Mapping[str, Any]) -> str:
         bits = [f"held to the baseline {base.get('path')} ({base.get('model')}, tolerance "
                 f"{base.get('tolerance')})"]
         for key, label in (("regressed", "below it"), ("missing", "not in this run"),
-                           ("excluded", "left out on purpose")):
+                           ("excluded", "left out by a tag filter (a partial run)")):
             if base.get(key):
                 bits.append(f"{label}: {', '.join(map(str, base[key]))}")
         if base.get("mismatch"):
@@ -1709,7 +1653,9 @@ def latest_reports(root: Path | None = None) -> list[dict[str, Any]]:
     rates), by suite, model, then backend. The backend is part of the key: a
     fake run labelled with a real model's id (``--backend fake --model M``,
     `evi models recommend --verify --backend fake`) never stands in for that
-    model's real results."""
+    model's real results. It reads at most the newest `_MAX_REPORT_FILES`
+    of each suite's folder, so a suite run often (a scheduled one) never
+    pushes another suite's latest report out."""
     folder = reports_dir(root)
     if not folder.is_dir():
         return []
@@ -1722,9 +1668,12 @@ def latest_reports(root: Path | None = None) -> list[dict[str, Any]]:
             mtime = 0
         return p.name.split("-", 1)[0], mtime
 
-    files = sorted(folder.glob("*/*.json"), key=newest_first, reverse=True)
+    files: list[Path] = []
+    for sub in sorted(p for p in folder.iterdir() if p.is_dir()):
+        files += sorted(sub.glob("*.json"), key=newest_first, reverse=True)[:_MAX_REPORT_FILES]
+    files.sort(key=newest_first, reverse=True)
     seen: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for p in files[:_MAX_REPORT_FILES]:
+    for p in files:
         try:
             data = read_json(p)
         except EvalError:
@@ -1785,20 +1734,22 @@ def compare(a: Mapping[str, Any], b: Mapping[str, Any],
 
 def apply_baseline(report: dict[str, Any], baseline: Mapping[str, Any],
                    tolerance: float = 0.1, path: str | None = None,
-                   excluded: Iterable[str] = ()) -> dict[str, Any]:
+                   excluded: Iterable[str] = (), partial: bool = False) -> dict[str, Any]:
     """Hold `report` to `baseline`, as `compare` would: a case below the
     baseline's pass rate minus `tolerance` fails (also an expected_fail
     one: the baseline already holds what it reached), and so does a
     baseline case that didn't run, skipped (its row's ``baseline`` says so)
-    or missing from the report (``baseline.missing``: deleted or renamed),
-    unless it is in `excluded` (left out on purpose: ``--tag`` /
-    ``--skip-tag``). `report_ok` is then False. The report's ``baseline``
-    names the file, the cases that regressed, went missing or were left
-    out, and how the run differs from the baseline's model and backend
-    (``mismatch``). Recounts the totals."""
+    or missing from the report (``baseline.missing``: deleted, renamed, or
+    in `excluded`, the cases a ``--tag`` / ``--skip-tag`` filter left out:
+    a baseline holds the whole suite). Only a `partial` run (``evi eval run
+    --partial``) excuses the `excluded` cases, listed under
+    ``baseline.excluded`` instead. `report_ok` is then False. The report's
+    ``baseline`` names the file, the cases that regressed, went missing or
+    were left out, whether the run was partial, and how it differs from the
+    baseline's model and backend (``mismatch``). Recounts the totals."""
     rates = rates_of(baseline)
     rows = {r.get("name"): r for r in report.get("cases") or []}
-    left_out = set(excluded or ())
+    left_out = set(excluded or ()) if partial else set()
     regressed: list[str] = []
     missing: list[str] = []
     for name, floor in rates.items():
@@ -1831,7 +1782,7 @@ def apply_baseline(report: dict[str, Any], baseline: Mapping[str, Any],
     report["baseline"] = {
         "path": path, "tolerance": tolerance, "model": baseline.get("model"),
         "backend": baseline.get("backend"), "regressed": regressed, "missing": missing,
-        "excluded": sorted(left_out.intersection(rates)),
+        "excluded": sorted(left_out.intersection(rates)), "partial": bool(partial),
         "mismatch": "; ".join(mismatch) or None,
     }
     return summarize(report)
@@ -1939,6 +1890,33 @@ def model_judge(config_loader: Callable[[], Any] | None = None, *, backend: Any 
         return _bare_agent(cfg, backend=backend, model=model or None, tools=[])
 
     return make_judge(factory)
+
+
+def configured_context(config: Any = None, *, default_mode: str = "",
+                       repo: Path | None = None) -> EvalContext:
+    """The EvalContext of a run on the configured [llm] backend and model,
+    as ``evi eval run`` builds it with no --backend / --model: what the web
+    Evals panel's Run button (``POST /api/evals/run``) and scheduled eval
+    tasks (`evi.scheduler`) run `run_suite` with, so all three give one
+    verdict. `config` (default `Config.load()`) names the backend and model
+    the report shows; each run builds its agent from a fresh `Config.load()`,
+    as the CLI's do. `repo` (default: the git repository of the process's
+    folder, as the CLI without --repo) is what a ``workspace = "repo"`` case
+    gets a worktree of, and only when it is trusted (`skip_reason`). Never
+    the fake backend: EvalError when [llm] names it (it replays scripts and
+    is only ``evi eval run --backend fake``'s)."""
+    from evi.config import Config
+
+    cfg = config if config is not None else Config.load()
+    backend = str(cfg.llm.backend or "").strip()
+    if backend.lower() == FAKE_BACKEND:
+        raise EvalError(f"[llm] backend = {backend!r} is not a backend: the fake backend "
+                        "replays eval scripts and only `evi eval run --backend fake` runs it")
+    return EvalContext(
+        make_agent=model_agent_factory(), backend=backend, model=str(cfg.llm.model or ""),
+        judge=model_judge(), repo=repo if repo is not None else find_repo(),
+        default_mode=str(default_mode or "").strip(),
+    )
 
 
 def filter_cases(suite: EvalSuite, tags: Iterable[str] = (),

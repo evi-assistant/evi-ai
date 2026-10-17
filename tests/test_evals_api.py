@@ -1,4 +1,5 @@
-"""Web API for the evals panel — GET /api/evals (browse) + POST /api/evals/run."""
+"""Web API for the evals panel — GET /api/evals (browse) + POST /api/evals/run (a
+suite on the engine `evi eval run` uses)."""
 
 from __future__ import annotations
 
@@ -56,15 +57,30 @@ def test_run_requires_name(client):
     assert client.post("/api/evals/run", json={}).status_code == 400
 
 
-def test_run_returns_report(client, home, monkeypatch):
+def test_run_returns_report(client, home, monkeypatch, tmp_path):
+    """The Run button's route runs the suite on the engine `evi eval run`
+    uses (here the configured model is a scripted client) and returns the
+    report it keeps (tests/test_evals_engine_unify.py has the rest)."""
+    import json
+
+    from evi import evals
+    from evi.evals_fake import ScriptedClient
+
     _seed_suite(home / "evals", "s",
                 'name = "s"\n[[case]]\nname = "a"\nprompt = "p"\ncontains = ["x"]\n')
-    canned = {"name": "s", "total": 1, "passed": 1, "pass_rate": 1.0,
-              "cases": [{"name": "a", "passed": True, "failures": [], "output": "x"}]}
-    # Avoid invoking the model: stub the orchestrator the endpoint calls.
-    monkeypatch.setattr("evi.evals.run_eval", lambda *a, **k: canned)
+    monkeypatch.setattr("evi.llm.client.make_client",
+                        lambda settings: ScriptedClient([{"text": "x"}]))
+    monkeypatch.setattr(evals, "hardware_summary", lambda **kw: {
+        "gpu": "none", "vram_gb": None, "cpu": "test", "ram_gb": None, "os": "test"})
+    monkeypatch.chdir(tmp_path)
     r = client.post("/api/evals/run", json={"name": "s"})
-    assert r.status_code == 200 and r.json() == canned
+    assert r.status_code == 200, r.text
+    report = r.json()
+    assert evals.schema_errors(report, evals.REPORT_SCHEMA) == []
+    assert report["kind"] == "eval-report" and report["suite"] == "s"
+    assert [(c["name"], c["passed"]) for c in report["cases"]] == [("a", True)]
+    [kept] = sorted((home / "evals" / "reports" / "s").glob("*.json"))
+    assert json.loads(kept.read_text(encoding="utf-8")) == report
 
 
 def test_list_shows_the_latest_report_per_suite_and_model(client, home):

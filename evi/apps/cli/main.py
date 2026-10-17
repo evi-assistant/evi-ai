@@ -769,6 +769,28 @@ def _handle_effort(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRes
     return "continue"
 
 
+def _add_to_history(agent: Agent, *messages: dict) -> None:
+    """Append text messages the REPL adds outside a turn (a `!cmd`'s output,
+    an /ultra exchange) to the history, each logged to the transcript as
+    Agent.chat logs its own (and the web server its notes, _log_note): a
+    resume rebuilds the history from the transcript, and a compaction's
+    `kept` counts logged messages, so one left out would shift both.
+    Without a transcript there is nothing to write; a disk error never
+    fails the REPL."""
+    from evi.transcripts import transcript_message
+
+    for message in messages:
+        agent.history.append(message)
+        store = getattr(agent, "transcripts", None)
+        line = transcript_message(message)
+        if store is None or line is None:
+            continue
+        try:
+            store.write_message(agent.session_id, line["role"], line["content"])
+        except OSError:
+            pass
+
+
 def _handle_ultra(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
     """`/ultra <task>` runs THIS turn through the ultracode pipeline; `/ultra`
     with no args toggles session-wide auto-ultracode."""
@@ -784,8 +806,8 @@ def _handle_ultra(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResu
     res = _run_ultracode_cli(task)
     console.print()
     console.print(res.answer, markup=False, highlight=False)
-    agent.history.append({"role": "user", "content": task})
-    agent.history.append({"role": "assistant", "content": res.answer})
+    _add_to_history(agent, {"role": "user", "content": task},
+                    {"role": "assistant", "content": res.answer})
     return "continue"
 
 
@@ -1332,7 +1354,7 @@ def _run_bang_command(agent: Agent, command: str) -> None:
     console.print(f"[dim](exit {proc.returncode})[/dim]")
     # Fold into history so the model can reference it next turn.
     capped = out if len(out) <= 4000 else out[:4000] + "\n…(truncated)"
-    agent.history.append({
+    _add_to_history(agent, {
         "role": "user",
         "content": f"[ran shell command: `{command}` → exit {proc.returncode}]\n{capped}",
     })
@@ -1522,8 +1544,8 @@ def _run_repl(agent: Agent) -> None:
             res = _run_ultracode_cli(user_msg)
             console.print()
             console.print(res.answer, markup=False, highlight=False)
-            agent.history.append({"role": "user", "content": user_msg})
-            agent.history.append({"role": "assistant", "content": res.answer})
+            _add_to_history(agent, {"role": "user", "content": user_msg},
+                            {"role": "assistant", "content": res.answer})
             continue
 
         console.print("[bold magenta]evi ›[/bold magenta] ", end="")
@@ -4063,6 +4085,12 @@ def eval_run(
     tag: list[str] = typer.Option([], "--tag", help="Only cases with this tag (repeatable)."),
     skip_tag: list[str] = typer.Option([], "--skip-tag",
                                        help="Leave out cases with this tag (repeatable)."),
+    partial: bool = typer.Option(
+        False, "--partial",
+        help="With --baseline: hold only the cases that ran to it; the baseline cases "
+             "--tag / --skip-tag left out are listed as excluded (with a warning) instead "
+             "of failing the run.",
+    ),
     repo: str = typer.Option("", "--repo", help="The repository `self` means (default: the "
                                                 "one you are in)."),
 ) -> None:
@@ -4073,12 +4101,14 @@ def eval_run(
     (and .html). Exit 0 when every case that ran passed (an expected_fail case
     never fails it; a skipped one is reported), 1 otherwise, 2 for a usage
     error (an unknown suite, backend or format, an untrusted repository's
-    `self`, a --backend fake run against a real model's baseline).
+    `self`, a --backend fake run against a real model's baseline, --partial
+    without --baseline).
 
     With --baseline, a case below the baseline's pass rate minus --tolerance
     fails (an expected_fail one too), and so does a baseline case that didn't
-    run (skipped, or gone from the suite) unless --tag / --skip-tag left it
-    out."""
+    run: skipped, gone from the suite, or left out by --tag / --skip-tag (a
+    baseline holds the whole suite). --partial excuses only the cases a tag
+    filter left out: the report lists them under baseline.excluded."""
     import json as _json
 
     from rich.markup import escape
@@ -4088,11 +4118,14 @@ def eval_run(
     fmt = "json" if json_out else format.strip().lower()
     if fmt not in ("text", "json"):
         _eval_fail(f"unknown --format {format!r} (text | json)")
+    if partial and not baseline.strip():
+        _eval_fail("--partial only applies with --baseline")
     whole = _eval_suite(name, repo)
     suite = evals.filter_cases(whole, tag, skip_tag)
     if not suite.cases:
         _eval_fail("no case left to run after --tag / --skip-tag")
-    # Left out on purpose: the baseline doesn't hold the run to them.
+    # Left out by a tag filter: the baseline still holds the run to them
+    # (they count as missing) unless the run is --partial.
     excluded = {c.name for c in whole.cases} - {c.name for c in suite.cases}
     base = None
     if baseline.strip():
@@ -4109,22 +4142,31 @@ def eval_run(
                            repo=repo, show_rows=fmt == "text")
     if base is not None:
         evals.apply_baseline(report, base, tolerance, path=str(Path(baseline).expanduser()),
-                             excluded=excluded)
+                             excluded=excluded, partial=partial)
         held = report["baseline"]
+        filtered = [n for n in held["missing"] if n in excluded]
+        gone = [n for n in held["missing"] if n not in excluded]
         if fmt == "text":
             for row in report["cases"]:
                 if (row.get("baseline") or {}).get("regressed"):
                     console.print(f"  [red]below baseline[/red] [bold]{escape(row['name'])}"
                                   f"[/bold] [dim]{escape(row['failures'][-1])}[/dim]",
                                   soft_wrap=True)
-            if held["missing"]:
+            if gone:
                 console.print("  [red]below baseline[/red] not in this run (deleted or "
-                              f"renamed?): {escape(', '.join(held['missing']))}",
+                              f"renamed?): {escape(', '.join(gone))}", soft_wrap=True)
+            if filtered:
+                console.print("  [red]below baseline[/red] left out by --tag / --skip-tag: "
+                              f"{escape(', '.join(filtered))} [dim](a baseline holds the "
+                              "whole suite; --partial runs a subset against it)[/dim]",
                               soft_wrap=True)
-            if held["excluded"]:
-                console.print("  [dim]not held to the baseline (left out by --tag / "
-                              f"--skip-tag): {escape(', '.join(held['excluded']))}[/dim]",
-                              soft_wrap=True)
+        elif filtered:
+            print("baseline cases left out by --tag / --skip-tag count as missing: "
+                  f"{', '.join(filtered)} (--partial runs a subset against the baseline)",
+                  file=sys.stderr)
+        if held["excluded"]:
+            print("warning: --partial: not held to the baseline (left out by --tag / "
+                  f"--skip-tag): {', '.join(held['excluded'])}", file=sys.stderr)
         if held["mismatch"]:
             print(f"warning: this run differs from the baseline: {held['mismatch']}",
                   file=sys.stderr)
@@ -4210,9 +4252,15 @@ def eval_baseline_record(
     out: str = typer.Option("", "--out", help="Where to write it (default: the repository's "
                                               "evals/self/baseline.json)."),
     repo: str = typer.Option("", "--repo", help="The repository `self` means."),
+    # Accepted only to be refused with the reason (a baseline is the whole
+    # suite), not as Click's bare "no such option".
+    tag: list[str] = typer.Option([], "--tag", hidden=True),
+    skip_tag: list[str] = typer.Option([], "--skip-tag", hidden=True),
 ) -> None:
     """Run the suite N times per case on the reference model and record the
     pass rates as the baseline (model, quantization, hardware, N, per case).
+    A baseline is the whole suite: --tag / --skip-tag are refused, and so is
+    `self/<file>` (one file of evals/self) without --out.
 
     Director tooling: refused (exit 2, nothing written) where an eVi agent
     may have started this process (evi.attest.agent_parent), as `evi task
@@ -4226,9 +4274,18 @@ def eval_baseline_record(
     if why:
         _eval_fail(f"refusing to record an eval baseline: {why}. Only the director, from "
                    "their own shell, may.")
+    if tag or skip_tag:
+        _eval_fail("a baseline is the whole suite, so `evi eval baseline record` takes no "
+                   "--tag / --skip-tag (hold a subset to it with `evi eval run --baseline "
+                   "... --tag ... --partial`)")
     suite = _eval_suite(suite_name, repo)
     if out.strip():
         target = Path(out).expanduser()
+    elif suite.source == evals.SELF and suite.name != evals.SELF:
+        # self/<file>: one file's cases would replace the whole suite's.
+        _eval_fail(f"a baseline is the whole suite, so {suite.name} (one file of evals/self) "
+                   f"isn't recorded as evals/self/{evals.BASELINE_NAME}: record `self`, or "
+                   "pass --out")
     elif suite.source == evals.SELF and suite.repo is not None:
         target = evals.self_dir(suite.repo) / evals.BASELINE_NAME
     else:
@@ -5153,6 +5210,11 @@ def run(
              "(repeatable); only an entry naming a protected file (e.g. "
              ".github/workflows/ci.yml) lets the run edit it.",
     ),
+    confine: bool = typer.Option(
+        False, "--confine",
+        help="With --policy: the run may write only the files its --scope entries cover "
+             "(as `evi task start` runs); without it --scope only grants protected files.",
+    ),
     evidence: str = typer.Option(
         "", "--evidence",
         help="Write an evidence bundle to this folder after the run, whatever its "
@@ -5190,7 +5252,11 @@ def run(
     linters and read-only git commands there (only in a trusted folder:
     each can run its code; a note on stderr says when they can't), and
     nothing else: no network, MCP, run_python, memory or
-    subagents. --policy with --yes, an unknown
+    subagents. With --confine it may write only the files a --scope entry
+    covers (a glob over the path, or a folder; none without --scope), and a
+    ruff format / ruff check --fix only on such files it names, as `evi
+    task start` runs a task. --policy with --yes, --scope or --confine
+    without --policy, an unknown
     policy, or a --scope entry that is absolute or climbs out with '..' is a
     usage error (2). Without --worktree a note on stderr recommends it. Once
     the turn changed files, the project checks (evi/checks.py: ruff, the
@@ -5250,7 +5316,7 @@ def run(
         _run_usage_error("--resume and --continue can't be used together")
     if base.strip() and not worktree.strip():
         _run_usage_error("--base needs --worktree")
-    policy_name, scope_entries = _run_policy_args(policy, scope, yes)
+    policy_name, scope_entries = _run_policy_args(policy, scope, yes, confine)
     evidence_dir = _run_evidence_dir(evidence)
     evidence_start: dict = {}  # the run's folder and the commit it started from
     _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
@@ -5337,6 +5403,7 @@ def run(
                 if policy_name:
                     # Every call is allowed or denied by the policy from here.
                     agent.policy = _run_policy(policy_name, scope_entries, settings,
+                                               confine=confine,
                                                isolated=iso is not None)
                 if session is not None:
                     agent.session_id = session[0]  # this run appends to it
@@ -5447,11 +5514,13 @@ def _run_write_evidence(out: Path, start: dict, res) -> None:
     print(f"evidence: {bundle.path} ({bundle.hash})", file=sys.stderr)
 
 
-def _run_policy_args(policy: str, scope: list[str] | None, yes: bool) -> tuple[str, tuple]:
-    """`evi run --policy` / `--scope`, checked before anything runs: the
-    policy's name ("" for none) and the validated files_in_scope. An unknown
-    policy, --policy with --yes, --scope without --policy, or a scope entry
-    that is absolute or climbs out ('..') is a usage error (exit 2)."""
+def _run_policy_args(policy: str, scope: list[str] | None, yes: bool,
+                     confine: bool = False) -> tuple[str, tuple]:
+    """`evi run --policy` / `--scope` / `--confine`, checked before anything
+    runs: the policy's name ("" for none) and the validated files_in_scope.
+    An unknown policy, --policy with --yes, --scope or --confine without
+    --policy, or a scope entry that is absolute or climbs out ('..') is a
+    usage error (exit 2)."""
     from evi import policy as _policy
 
     name = (policy or "").strip().lower()
@@ -5459,6 +5528,8 @@ def _run_policy_args(policy: str, scope: list[str] | None, yes: bool) -> tuple[s
     if not name:
         if entries:
             _run_usage_error("--scope needs --policy")
+        if confine:
+            _run_usage_error("--confine needs --policy")
         return "", ()
     if name not in _policy.POLICIES:
         _run_usage_error(
@@ -5473,13 +5544,15 @@ def _run_policy_args(policy: str, scope: list[str] | None, yes: bool) -> tuple[s
         _run_usage_error(f"--scope: {exc}")
 
 
-def _run_policy(name: str, scope: tuple, settings, *, isolated: bool):
+def _run_policy(name: str, scope: tuple, settings, *, isolated: bool, confine: bool = False):
     """The named policy (evi.policy) for this run. Its folder is the process's
     folder (the worktree with --worktree, else --cwd's or this one) or its
     git top; the project's check commands (evi.checks.allowlist, in a
-    trusted folder) join its shell allowlist. In an untrusted folder it runs
+    trusted folder) join its shell allowlist; `confine` (--confine) holds
+    its writes to `scope`. In an untrusted folder it runs
     no commands (each can run the folder's code), and a note on stderr says
-    so. Without --worktree, a note on stderr recommends one."""
+    so. Without --worktree, a note on stderr recommends one; --confine
+    without --scope, that the run may change no file."""
     from evi import checks as _checks
     from evi import policy as _policy
     from evi.project import git_toplevel
@@ -5494,8 +5567,11 @@ def _run_policy(name: str, scope: tuple, settings, *, isolated: bool):
         print(f"note: {root} is not a trusted folder, so --policy {name} runs no commands "
               "there (tests, linters and git can run the folder's own code); `evi trust` it "
               "to allow them", file=sys.stderr)
+    if confine and not scope:
+        print(f"note: --confine without --scope: --policy {name} lets the run change no file",
+              file=sys.stderr)
     return _policy.build(name, root, scope, _checks.allowlist(root, settings, trusted),
-                         trusted=trusted)
+                         trusted=trusted, confine=confine)
 
 
 def _print_verify_line(event) -> None:
@@ -5578,6 +5654,28 @@ def _console_on_stderr():
 def _print_line(line: str) -> None:
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
+
+
+def _print_answer(text: str) -> None:
+    """A run's answer on stdout (`evi run`, `evi task start`). What stdout
+    can't encode, a lone surrogate (a model's broken emoji) or a character
+    its code page lacks, goes out escaped (``\\ud83d``): raised after the
+    run, UnicodeEncodeError would lose the answer and the run's exit code.
+    The text is checked here, strictly, not left to the stream: a
+    surrogateescape stdout (UTF-8 mode, a POSIX C locale) raises for no
+    U+DC80-U+DCFF and writes it as a raw, invalid byte."""
+    import codecs
+
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        codecs.lookup(enc)
+    except LookupError:  # not a codec Python knows: hold the text to UTF-8
+        enc = "utf-8"
+    try:
+        text.encode(enc)
+    except UnicodeEncodeError:
+        text = text.encode(enc, "backslashreplace").decode(enc, "replace")
+    print(text)
 
 
 def _run_usage_error(message: str) -> NoReturn:
@@ -5671,7 +5769,7 @@ def _finish_run(res, format: str, stream) -> NoReturn:
         _print_line(stream.dumps(_hl.result_payload(res)))
     else:
         if res.text and res.stop_reason != "error":
-            print(res.text)
+            _print_answer(res.text)
         note = _run_stop_note(res)
         if note:
             print(note, file=sys.stderr)
@@ -5847,6 +5945,8 @@ def _print_task(record: dict, label: str, path: Path) -> None:
     line("status", label)
     if record.get("why"):
         line("why", record["why"])
+    if record.get("hints"):
+        line("hints", record["hints"])
     for name, key in (("acceptance", "acceptance"), ("files in scope", "files_in_scope"),
                       ("required checks", "required_checks")):
         items = record.get(key) or []
@@ -5875,6 +5975,15 @@ def _print_task(record: dict, label: str, path: Path) -> None:
                             f"{last.get('summary') or ''}")
         if last.get("report"):
             line("report", last["report"])
+        outside = last.get("out_of_scope")
+        if isinstance(outside, list):
+            # What the branch changed outside files_in_scope (evi.tasks.out_of_scope),
+            # and how many paths past the recorded ones.
+            more = last.get("out_of_scope_more")
+            more = more if isinstance(more, int) and not isinstance(more, bool) and more > 0 else 0
+            listed = ", ".join(map(str, outside)) + (f" and {more} more" if more else "")
+            line("out of scope", (listed + " (`evi task verify` refuses without "
+                                  "--allow-out-of-scope REASON)") if outside else "none")
     if record.get("evidence"):
         line("evidence", record["evidence"])
     summary = record.get("evidence_summary")
@@ -5911,10 +6020,16 @@ def _evidence_summary_text(summary: dict) -> str:
 def task_new(
     title: str = typer.Option("", "--title", help="What the task is, in one line."),
     why: str = typer.Option("", "--why", help="Why: the bug or the need."),
+    hint: list[str] = typer.Option(
+        [], "--hint",
+        help="How to approach it: guidance for the implementer, shown after Why in its "
+             "prompt (repeatable: one line each)."),
     acceptance: list[str] = typer.Option(
         [], "--acceptance", help="An acceptance criterion (repeatable)."),
     scope: list[str] = typer.Option(
-        [], "--scope", help="A files_in_scope glob, relative to the repository (repeatable)."),
+        [], "--scope",
+        help="A files_in_scope glob, relative to the repository (repeatable): the only files "
+             "a start may write."),
     check: list[str] = typer.Option(
         [], "--check",
         help="A required check: a command line, split the POSIX way (use / in paths; "
@@ -5930,7 +6045,10 @@ def task_new(
     """File a new task in the repository's queue.
 
     It goes to .evi/tasks/<id>.toml in the main checkout (commit it to share
-    it) and starts open."""
+    it) and starts open. A --from file may give any of the flags' fields
+    (hints as a string or a list of strings). A start may write only the
+    files --scope covers, so `evi task start` refuses a task without one (a
+    note on stderr says so)."""
     from evi import tasks as _tasks
 
     queue = _task_queue()
@@ -5946,6 +6064,7 @@ def task_new(
             task_id.strip() or str(spec.get("id") or "").strip(),
             title=title or str(spec.get("title") or ""),
             why=why or str(spec.get("why") or ""),
+            hints=list(hint) or spec.get("hints") or "",
             acceptance=list(acceptance) or spec.get("acceptance") or [],
             files_in_scope=list(scope) or spec.get("files_in_scope") or [],
             required_checks=list(check) or spec.get("required_checks") or [],
@@ -5956,6 +6075,9 @@ def task_new(
     console.print(_tasks.printable(f"filed task {written['id']}: {written['title']} "
                                    f"({queue.path(written['id'])})"),
                   soft_wrap=True, highlight=False, markup=False)
+    if not written.get("files_in_scope"):
+        print("note: no --scope: `evi task start` holds a run to files_in_scope, so it refuses "
+              "this task until its task file names some", file=sys.stderr)
 
 
 @task_app.command("list")
@@ -6138,10 +6260,12 @@ def task_start(
     """Claim a task and run it in its own worktree.
 
     The worktree is branch task/<id> under <repo>/.worktrees/; the run goes
-    under the implementer policy with the task's files_in_scope and the
-    verify gate on, and eVi runs the task's required checks itself
-    afterwards. Only in a trusted repository (`evi trust`). The task ends
-    implemented (exit 0) when the run finished and every required check
+    under the implementer policy, confined to the task's files_in_scope (a
+    write to any other file is denied; a task without any is refused), with
+    the verify gate on, and eVi runs the task's required checks itself
+    afterwards; what the branch changed outside files_in_scope anyway is
+    recorded (`evi task show`). Only in a trusted repository (`evi trust`).
+    The task ends implemented (exit 0) when the run finished and every required check
     passed, else open again with the attempt counted (the exit code says
     why, as `evi run`'s: 5 for a failed check). The run report goes to
     <eVi home>/tasks/. Nothing is merged or committed.
@@ -6249,12 +6373,7 @@ def task_start(
         os.chdir(previous)
     res = run.result
     if res.text and run.stop_reason != "error":
-        try:
-            print(res.text)
-        except UnicodeEncodeError:  # a lone surrogate in the answer: escape it
-            out = sys.stdout
-            enc = getattr(out, "encoding", None) or "utf-8"
-            print(res.text.encode(enc, "backslashreplace").decode(enc, "replace"), file=out)
+        _print_answer(res.text)  # a lone surrogate in the answer goes out escaped
     if res.worktree:
         print(summary_line(res.worktree), file=sys.stderr)
     for check in run.checks:
@@ -6335,6 +6454,10 @@ def task_verify(
         help="Why to sign although the review gate reports blocking findings (recorded in "
              "the attestation and the reviewer notes)."),
     rounds: int = typer.Option(1, "--rounds", min=0, help="Review rounds the task took."),
+    allow_out_of_scope: str = typer.Option(
+        "", "--allow-out-of-scope", metavar="REASON",
+        help="Sign although the branch changed files outside the task's files_in_scope: "
+             "why (recorded in the reviewer notes, so it is signed)."),
     yes: bool = typer.Option(False, "--yes", help="Don't ask for confirmation (the director's "
                                                   "own shell only)."),
 ) -> None:
@@ -6345,7 +6468,11 @@ def task_verify(
     must be committed on the branch. The base must be an ancestor of the
     branch's head and not the head itself, and the evidence bundle the task
     names (evi/evidence.py) must be one eVi wrote and unchanged since it was
-    collected; its hash is signed. Refused, with nothing written, from
+    collected; its hash is signed. The branch may change only files its
+    files_in_scope covers (evi.tasks.out_of_scope, against the base, as
+    `evi task start` records it): else it is refused (exit 2) unless
+    --allow-out-of-scope REASON says why, and that reason joins the
+    reviewer notes before signing. Refused, with nothing written, from
     any process an eVi agent may have started."""
     from evi import attest, review
     from evi import tasks as _tasks
@@ -6386,6 +6513,21 @@ def task_verify(
                                    f"commit the work on {branch} first, so the attestation "
                                    "covers it")
         base = _task_review_base(base, head, branch, queue.root)
+        # The scope backstop, on the branch being signed (the worktree is
+        # clean): not the list the run recorded, which the tracked task file
+        # carries and the director may have dealt with since.
+        outside = _tasks.out_of_scope(folder, base, _tasks.scope_of(record))
+        if outside and not allow_out_of_scope.strip():
+            raise _tasks.TaskError(
+                f"task {task_id}: {branch} changed files outside its files_in_scope "
+                f"({_tasks.paths_text(outside)}): undo them on the branch, or pass "
+                "--allow-out-of-scope REASON to sign anyway (the reason joins the reviewer "
+                "notes, signed)")
+        if outside:
+            body = _tasks.allow_out_of_scope(body, outside, allow_out_of_scope)
+        elif allow_out_of_scope.strip():
+            print("note: the branch changed nothing outside files_in_scope; "
+                  "--allow-out-of-scope is not recorded", file=sys.stderr)
         bundle = _tasks.evidence_path(record, queue.root)
         evidence = attest.evidence_hash(bundle)
         summary = record.get("evidence_summary")

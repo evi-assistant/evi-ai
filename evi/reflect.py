@@ -7,7 +7,7 @@ look back over the whole conversation and extract the *corrections* and
 moment ("no, always use X", "we don't do Y here"). Those become memories so the
 next session starts smarter.
 
-The LLM call is injected (`run_one(prompt) -> text`, like `evals.make_runners`)
+The LLM call is injected (`run_one(prompt) -> text`, as ultracode injects its own)
 so this module stays model-agnostic and unit-testable. Off by default — invoked
 explicitly via `evi reflect` (or wired into a `session_end` hook).
 """

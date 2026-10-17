@@ -4496,7 +4496,12 @@ resetBtn.addEventListener('click', async () => {
           ' <span class="dim" style="font-size:12px">' + s.cases.length + ' case' +
           (s.cases.length === 1 ? '' : 's') + '</span>' +
           (s.description ? '<div class="dim" style="font-size:12px">' + esc(s.description) + '</div>' : '') +
-          '</div><button class="set-action-btn" data-run="' + esc(s.name) + '">Run</button></div>';
+          (s.shadowed ? '<div class="dim eval-shadowed" style="font-size:12px">Shadowed: ' +
+            '<code>self</code> names a repository&#39;s evals/self suites, so this self.toml ' +
+            'cannot run under that name. Rename the file to run it.</div>' : '') +
+          // The suite's file name (as `evi eval run` takes it): its TOML name may differ.
+          '</div><button class="set-action-btn" data-run="' + esc(s.file || s.name) + '"' +
+          (s.shadowed ? ' disabled' : '') + '>Run</button></div>';
         let cases = '<div style="margin-top:8px">';
         for (const c of s.cases) {
           cases += '<div class="eval-case" data-case="' + esc(c.name) + '" ' +
@@ -4524,10 +4529,24 @@ resetBtn.addEventListener('click', async () => {
         const card = t.closest('.eval-suite');
         const statusEl = card.querySelector('.eval-status');
         t.disabled = true;
-        statusEl.textContent = 'Running ' + runName + '… (this calls the model per case)';
+        // POST /api/evals/run answers when the whole suite is done (each case
+        // in a throwaway workspace under the implementer policy, on the
+        // configured model), so a spinner shows meanwhile. Everything the
+        // report says goes in as textContent.
+        statusEl.textContent = '';
+        const spin = document.createElement('span');
+        spin.className = 'eval-spin';
+        spin.style.cssText = 'display:inline-block;width:11px;height:11px;margin-right:6px;' +
+          'vertical-align:-1px;border-radius:50%;border:2px solid var(--border,#3a4350);' +
+          'border-top-color:var(--accent,#4aa3df);animation:work-spin .8s linear infinite';
+        const runText = document.createElement('span');
+        runText.textContent = 'Running ' + runName + '… (each case in a throwaway workspace, ' +
+          'on the configured model)';
+        statusEl.append(spin, runText);
         statusEl.style.color = 'var(--dim)';
-        // reset marks
+        // reset marks, and the last run's data-verdict (a run that errors sets none)
         card.querySelectorAll('.eval-case').forEach(el => {
+          el.removeAttribute('data-verdict');
           el.querySelector('.eval-mark').textContent = '○';
           el.querySelector('.eval-mark').style.color = 'var(--dim)';
           el.querySelector('.eval-fail').textContent = '';
@@ -4537,23 +4556,37 @@ resetBtn.addEventListener('click', async () => {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: runName }),
           });
-          const rep = await r.json();
-          if (!r.ok) { statusEl.textContent = 'Error: ' + (rep.detail || 'failed'); statusEl.style.color = '#e05252'; t.disabled = false; return; }
+          const rep = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            statusEl.textContent = 'Error: ' + (typeof rep.detail === 'string' ? rep.detail : 'failed');
+            statusEl.style.color = '#e05252';
+            return;
+          }
           const byName = {};
           (rep.cases || []).forEach(c => { byName[c.name] = c; });
           card.querySelectorAll('.eval-case').forEach(el => {
             const c = byName[el.getAttribute('data-case')];
             if (!c) return;
             const mark = el.querySelector('.eval-mark');
+            const fail = el.querySelector('.eval-fail');
+            el.setAttribute('data-verdict', c.skipped ? 'skip' : c.passed ? 'pass'
+              : (c.expected_fail ? 'xfail' : 'fail'));
             mark.textContent = c.skipped ? '–' : (c.passed ? '✓' : '✗');
-            mark.style.color = c.skipped ? 'var(--dim)' : (c.passed ? '#4caf50' : '#e05252');
-            if (c.skipped) el.querySelector('.eval-fail').textContent = c.skip_reason || 'skipped';
-            else if (!c.passed && c.failures) el.querySelector('.eval-fail').textContent = c.failures.join('; ');
+            mark.style.color = c.skipped ? 'var(--dim)' : c.passed ? '#4caf50'
+              : (c.expected_fail ? '#e0a800' : '#e05252');
+            const runs = c.runs > 1 ? c.passes + '/' + c.runs + ' runs · ' : '';
+            if (c.skipped) fail.textContent = 'skipped: ' + (c.skip_reason || '');
+            else if (!c.passed) fail.textContent = runs + (c.expected_fail ? 'expected to fail · ' : '') +
+              (c.failures || []).join('; ');
+            else fail.textContent = '';
           });
           const pct = Math.round((rep.pass_rate || 0) * 100);
-          statusEl.textContent = rep.passed + '/' + rep.total + ' passed (' + pct + '%)' +
-            (rep.skipped ? ', ' + rep.skipped + ' skipped' : '');
-          statusEl.style.color = rep.passed === rep.total ? '#4caf50' : '#e0a800';
+          const bits = [rep.passed + '/' + rep.ran + ' passed (' + pct + '%)'];
+          if (rep.expected_failures) bits.push(rep.expected_failures + ' expected to fail');
+          if (rep.skipped) bits.push(rep.skipped + ' skipped');
+          statusEl.textContent = (rep.ran ? '' : 'No case ran · ') + bits.join(', ') + ' — ' +
+            (rep.model || '') + ' (' + (rep.backend || '') + ')';
+          statusEl.style.color = !rep.ran ? '#e0a800' : (rep.failed ? '#e05252' : '#4caf50');
           refreshResults();
         } catch (e) {
           statusEl.textContent = 'Error: ' + e; statusEl.style.color = '#e05252';

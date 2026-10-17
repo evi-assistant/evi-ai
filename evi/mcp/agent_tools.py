@@ -16,7 +16,7 @@ to itself. This module is the only MCP tool that steers a turn
 (``run_steer``).
 
 Tools (`TOOL_NAMES`; every result is JSON text, a failure ``ERROR: ...``)
-    task_create(title, why?, acceptance[]?, files_in_scope[]?,
+    task_create(title, why?, hints?, acceptance[]?, files_in_scope[]?,
     required_checks[]?, implementer?, id?) -> the task as filed (open).
     task_list(status?) -> [{id, title, status, label, ...}] and
     task_show(id) -> {task, label, path}: ``label`` is the status as the
@@ -323,6 +323,7 @@ class AgentRuns:
             str(args.get("id") or "").strip(),
             title=str(args.get("title") or ""),
             why=str(args.get("why") or ""),
+            hints=args.get("hints") or "",
             acceptance=args.get("acceptance") or [],
             files_in_scope=args.get("files_in_scope") or [],
             required_checks=args.get("required_checks") or [],
@@ -868,9 +869,13 @@ def tool_specs() -> list[dict[str, Any]]:
              "starts open. Returns the task as filed.",
              {"title": {"type": "string", "description": "What the task is, in one line."},
               "why": {"type": "string", "description": "Why: the bug or the need."},
+              "hints": {"type": "string", "description": (
+                  "How to approach it: your guidance for the implementer (where to look, what "
+                  "to reuse, what to avoid), shown after Why in its prompt.")},
               "acceptance": {**_STRS, "description": "The acceptance criteria."},
-              "files_in_scope": {**_STRS, "description": "Globs relative to the repository "
-                                                         "the run may write."},
+              "files_in_scope": {**_STRS, "description": (
+                  "Globs relative to the repository: the only files the run may write "
+                  "(task_start refuses a task without them).")},
               "required_checks": {"type": "array", "description": (
                   "Commands that prove the work: a command line (split the POSIX way) or an "
                   "argv array. eVi runs each in the task's worktree; the task is implemented "

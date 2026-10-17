@@ -657,8 +657,8 @@ def test_web_hooks_editor_save_applies_to_open_session(web, home, tmp_path, fake
 
 def _stub_runner(monkeypatch, runner: str, ran: list) -> tuple[str, str, dict]:
     """Stub everything the `runner` route loads or calls around build_agent, so
-    the only real step is the agent build; `ran` gets each built agent."""
-    import evi.evals as evals_mod
+    the only real step is the agent build (the eval engine runs for real:
+    `_stub_eval_suite`); `ran` gets each built agent."""
     import evi.headless as headless_mod
     import evi.recipes as recipes_mod
     import evi.routines as routines_mod
@@ -689,11 +689,34 @@ def _stub_runner(monkeypatch, runner: str, ran: list) -> tuple[str, str, dict]:
                             SimpleNamespace(answer="", stages=[], config=cfg))
         return "post", "/api/dispatch/ultracode", {"task": "t"}
     assert runner == "eval"
-    monkeypatch.setattr(evals_mod, "load_suite", lambda name: SimpleNamespace(name=name))
-    monkeypatch.setattr(evals_mod, "make_runners", lambda factory, default_mode="":
-                        (ran.append(factory()), None))
-    monkeypatch.setattr(evals_mod, "run_eval", lambda suite, run_one, judge_fn=None: {})
+    _stub_eval_suite(monkeypatch, ran)
     return "post", "/api/evals/run", {"name": "e"}
+
+
+def _stub_eval_suite(monkeypatch, ran: list) -> None:
+    """The eval engine (evals.run_suite) runs for real, with a one-case suite
+    of yours and the model run stubbed: a fixture workspace, the engine's
+    agent build, the implementer policy, the report; `ran` gets each agent."""
+    import evi.evals as evals_mod
+    import evi.headless as headless_mod
+    from evi.headless import HeadlessResult
+
+    monkeypatch.setattr(evals_mod, "load_suite", lambda name, root=None: evals_mod.EvalSuite(
+        name=name, cases=[evals_mod.EvalCase(name="c", prompt="p", contains=["ok"])]))
+    monkeypatch.setattr(evals_mod, "hardware_summary", lambda **kw: {
+        "gpu": "none", "vram_gb": None, "cpu": "test", "ram_gb": None, "os": "test"})
+    monkeypatch.setattr(headless_mod, "run_headless", lambda agent, *a, **k:
+                        ran.append(agent) or HeadlessResult(text="ok", stop_reason="done"))
+
+
+def _hooks_toml_with_a_veto(home: Path) -> None:
+    """A user hooks.toml with one hook, so an agent that loads the user's
+    hooks has a registry, not None."""
+    (home / "hooks.toml").write_text(
+        '[[before_tool_call]]\nname = "no-writes"\nmatch = "write_file"\n'
+        f"command = {json.dumps(_veto_writes().command)}\nveto_on_nonzero = true\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.parametrize("runner", ["workflow", "recipe", "routine", "ultracode"])
@@ -707,11 +730,38 @@ def test_server_runs_apply_the_shared_hooks(web, home, monkeypatch, fake_llm, ru
 
 
 def test_eval_runs_skip_user_hooks(web, home, monkeypatch, fake_llm):
-    """Scores must not depend on this machine's hooks."""
+    """Scores must not depend on this machine's hooks: the web Run button's
+    agents (the eval engine's own build, through the real build_agent) get
+    none, though hooks.toml has one, and the server doesn't add the shared
+    registry as it does for the runs above."""
+    _hooks_toml_with_a_veto(home)
+    assert _real_build_agent(fake_llm([]))(enable_hooks=True).hooks is not None
     ran: list = []
     method, url, body = _stub_runner(monkeypatch, "eval", ran)
-    http = web(lambda **_: _agent(fake_llm([]), []))
-    assert getattr(http, method)(url, json=body).status_code == 200
+    http = web(_real_build_agent(fake_llm([])))
+    r = getattr(http, method)(url, json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["passed"] == 1
+    assert ran and all(a.hooks is None for a in ran)
+
+
+def test_scheduled_eval_runs_skip_user_hooks(home, monkeypatch, fake_llm):
+    """A scheduled eval task builds its agents as the Run button does (the
+    same engine): no user hooks, though hooks.toml has one."""
+    import evi.scheduler as scheduler_mod
+    import evi.sdk.builder as builder_mod
+    from evi.scheduled import TaskStore
+
+    _hooks_toml_with_a_veto(home)
+    ran: list = []
+    _stub_eval_suite(monkeypatch, ran)
+    monkeypatch.setattr(builder_mod, "build_agent", _real_build_agent(fake_llm([])))
+    monkeypatch.setattr(scheduler_mod, "SCHEDULED_LOG_DIR", home)
+    monkeypatch.setattr(scheduler_mod, "ensure_dirs", lambda: None)
+    store = TaskStore(root=home / "tasks")
+    task = store.add(name="nightly", cron="0 3 * * *", prompt="e", kind="eval")
+    log = Path(scheduler_mod._execute(task, store)).read_text(encoding="utf-8")
+    assert store.get(task.id).last_status == "ok (1/1)", log
     assert ran and all(a.hooks is None for a in ran)
 
 

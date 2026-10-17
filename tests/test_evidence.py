@@ -257,7 +257,8 @@ def test_a_task_run_leaves_a_bundle_whose_report_validates_and_junit_matches_pyt
 def test_a_bundle_that_cant_be_collected_never_loses_the_run(repo, monkeypatch, fake_llm):
     """The run is recorded all the same, the note says why, and an earlier
     attempt's bundle is no longer named as this attempt's evidence."""
-    res = _cli("task", "new", "--title", "Make x two", "--check", shlex.join(PYTEST))
+    res = _cli("task", "new", "--title", "Make x two", "--scope", "calc.py",
+               "--check", shlex.join(PYTEST))
     assert res.exit_code == 0, res.output
     earlier = evidence.task_bundle_path(repo, "T1", 1)
     earlier.mkdir(parents=True)
@@ -684,7 +685,8 @@ def test_a_run_that_stopped_before_its_checks_gets_none_run(repo, monkeypatch, t
 
     marker = tmp_path / "ran.txt"
     check = [PY, "-c", f"open({str(marker)!r}, 'w').write('x')"]
-    res = _cli("task", "new", "--title", "Make x two", "--check", shlex.join(check))
+    res = _cli("task", "new", "--title", "Make x two", "--scope", "calc.py",
+               "--check", shlex.join(check))
     assert res.exit_code == 0, res.output
 
     def build(*_a, **_k):
@@ -728,7 +730,8 @@ def test_ctrl_c_during_a_starts_evidence_stops_its_checks(repo, monkeypatch, fak
     (the run is recorded all the same), and Ctrl+C is as it was after."""
     import signal
 
-    res = _cli("task", "new", "--title", "Make x two", "--check", shlex.join(PYTEST))
+    res = _cli("task", "new", "--title", "Make x two", "--scope", "calc.py",
+               "--check", shlex.join(PYTEST))
     assert res.exit_code == 0, res.output
     seen: dict = {}
 

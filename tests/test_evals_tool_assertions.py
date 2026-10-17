@@ -403,41 +403,6 @@ def test_two_cases_with_one_name_are_an_error(tmp_path):
                          'prompt = "q"\n')
 
 
-def test_the_text_engine_fails_a_harness_case_without_running_it():
-    """run_eval (the text-only engine the web Run button and the scheduler
-    still use) runs `run_one` with every tool approved in the process's
-    folder. A case written for the harness (a behavioral assertion, files,
-    a fixture, a repo worktree) fails there and is never handed to
-    `run_one`: its prompt (wipe a folder, edit a file) must not run in the
-    server's folder."""
-    suite = evals.EvalSuite(name="s", cases=[
-        EvalCase(name="b", prompt="p", forbid_tools=["run_command"]),
-        EvalCase(name="files", prompt="wipe data/", files={"data/x": "y"}),
-        EvalCase(name="fixture", prompt="p", fixture="fixtures/x"),
-        EvalCase(name="repo", prompt="p", workspace="repo"),
-        EvalCase(name="t", prompt="p", contains=["ok"], runs=3, tags=["x"]),
-    ])
-    ran: list[str] = []
-    report = evals.run_eval(suite, run_one=lambda case: ran.append(case.name) or "ok")
-    assert ran == ["t"]
-    by = {c["name"]: c for c in report["cases"]}
-    for name in ("b", "files", "fixture", "repo"):
-        assert not by[name]["passed"]
-        assert "only `evi eval run` checks: not run here" in by[name]["failures"][0]
-    assert by["t"]["passed"] and report["passed"] == 1
-
-
-def test_the_starter_suite_never_reaches_run_one_in_the_text_engine():
-    """Every case of the qualification suite needs the harness."""
-    suite = evals.load_suite_file(ROOT / "evals" / "self" / "qualification.toml")
-    assert all(case.needs_harness() for case in suite.cases)
-
-    def run_one(case):
-        raise AssertionError(f"{case.name} ran outside the harness")
-
-    assert evals.run_eval(suite, run_one)["passed"] == 0
-
-
 # ---- the starter suite's own cases (evals/self/qualification.toml) ------------------------
 
 
