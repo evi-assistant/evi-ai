@@ -2048,12 +2048,11 @@ def create_app() -> FastAPI:
             return (None, None)
         return (base / "transcripts", base / "memory")
 
-    # User/plugin slash commands are a customization too — in safe mode point the
-    # store at a fresh empty dir (mirrors the CLI REPL's handling).
+    # User/plugin slash commands are a customization too (mirrors the CLI REPL).
     if safemode.enabled():
-        import tempfile
+        from evi.commands import safe_mode_store
 
-        cmd_store = CommandStore(root=Path(tempfile.mkdtemp(prefix="evi-safe-")))
+        cmd_store = safe_mode_store()
     else:
         cmd_store = CommandStore()  # rescans the dir per call, safe to share
 

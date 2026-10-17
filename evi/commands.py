@@ -107,6 +107,16 @@ class SlashCommandEntry:
     model: str = ""
 
 
+def safe_mode_store() -> "CommandStore":
+    """The store safe mode uses: ``commands/`` inside a fresh private temp
+    folder, so no user or plugin command loads. Not the temp folder itself:
+    the store scans its root's parent for ``plugins/``, and the system temp
+    folder's ``plugins/`` (``/tmp/plugins``) is anyone's to create."""
+    import tempfile
+
+    return CommandStore(root=Path(tempfile.mkdtemp(prefix="evi-safe-")) / "commands")
+
+
 class CommandStore:
     """Loader for ``~/.evi/commands/**/*.md``. Stateless; every call rescans."""
 

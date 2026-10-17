@@ -12,7 +12,6 @@ import atexit
 import os
 import signal
 import sys
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -1431,9 +1430,10 @@ def _run_repl(agent: Agent) -> None:
     # no-op in web / headless / print mode, which never set this).
     os.environ["EVI_INTERACTIVE"] = "1"
     safe = _safe_mode()
-    # In safe mode, user/plugin slash commands are a customization too — point the
-    # store at a fresh empty temp dir (its parent has no plugins/ either).
-    cmd_store = CommandStore(root=tempfile.mkdtemp(prefix="evi-safe-")) if safe else CommandStore()
+    # In safe mode, user/plugin slash commands are a customization too.
+    from evi.commands import safe_mode_store
+
+    cmd_store = safe_mode_store() if safe else CommandStore()
     from evi.repl_input import ReplInput
 
     repl_in = ReplInput(agent)
