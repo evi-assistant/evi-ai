@@ -174,7 +174,7 @@ dev = [
     # new ruff expanding its DEFAULTS can no longer turn CI red on untouched
     # code (that's what 0.16 did — +703 findings, mostly import sorting). With
     # the rules named in config the ceiling can track majors safely.
-    "ruff>=0.4,<0.17",
+    "ruff>=0.4,<0.18",
 ]
 
 [project.scripts]
