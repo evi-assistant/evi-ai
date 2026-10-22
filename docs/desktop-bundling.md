@@ -168,6 +168,37 @@ winget install Microsoft.VisualStudio.2022.BuildTools --accept-package-agreement
 `npx tauri info` reports exactly what's present/missing — use it to confirm
 before building.
 
+### Without the MSVC Build Tools: the GNU toolchain and WebView2Loader.dll
+
+On a box where the Build Tools can't be installed, Rust's GNU toolchain
+(`x86_64-pc-windows-gnu`, with a MinGW-w64 linker on PATH) builds the app
+too. One difference matters for installers: an MSVC build links the WebView2
+loader into `evi-desktop.exe`, while a GNU build loads `WebView2Loader.dll`
+at startup. tauri-build copies the DLL next to the exe in `target/`, so the
+build-folder exe runs, but the bundler doesn't pack it, and an installed app
+then stops with *"WebView2Loader.dll was not found"*.
+
+`scripts/build-desktop.ps1` / `.sh` handle it: they run
+`scripts/stage_webview2_loader.py`, which (for a `*-windows-gnu` target only;
+it prints nothing for MSVC) copies Microsoft's signed loader from the locked
+`webview2-com-sys` crate to `src-tauri/binaries/WebView2Loader.dll` and
+prints the overlay that bundles it next to the exe,
+`src-tauri/tauri.webview2-gnu.conf.json`. When you call `tauri build`
+yourself, add it:
+
+```
+python scripts/stage_webview2_loader.py   # prints the overlay on a GNU toolchain
+cd desktop
+npm run tauri build -- --config src-tauri/tauri.standalone.conf.json --config src-tauri/tauri.webview2-gnu.conf.json
+```
+
+A GNU release build without that overlay prints a `cargo:warning` from
+`build.rs`. The frozen sidecar has a related gap on a machine without the
+Visual C++ runtime: PyInstaller can only bundle the `MSVCP140.dll` that
+PyMuPDF needs if the build machine has it, so freeze the sidecar where the
+runtime is installed (CI's runners have it), or run the sidecar's
+`--check`, which reports `fitz` failing when it's missing.
+
 ## Verification status
 
 - **0.22.0 — verified end-to-end on Windows (2026-06-06).** Switched to

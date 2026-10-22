@@ -16,10 +16,16 @@ echo ">> [1/2] freezing the sidecar (PyInstaller)"
 bash "$root/scripts/build-sidecar.sh"
 
 echo ">> [2/2] bundling the Tauri app (standalone config)"
+# A Windows GNU-toolchain build loads WebView2Loader.dll at runtime: stage it
+# and bundle it next to the exe. Prints nothing elsewhere (MSVC, macOS, Linux).
+py="python3"; command -v "$py" >/dev/null 2>&1 || py="python"
+extra=()
+overlay="$("$py" "$root/scripts/stage_webview2_loader.py")"
+if [ -n "$overlay" ]; then extra=(--config "$overlay"); fi
 cd "$root/desktop"
 # A non-zero exit here is usually the optional updater-signing step (needs the
 # CI-only TAURI_SIGNING_PRIVATE_KEY); the installers are still produced.
-npm run tauri build -- --config src-tauri/tauri.standalone.conf.json \
+npm run tauri build -- --config src-tauri/tauri.standalone.conf.json ${extra[@]+"${extra[@]}"} \
     || echo ">> tauri exited non-zero — likely the optional updater-signing step; check the bundle dir."
 
 echo ">> done. Installers under: $root/desktop/src-tauri/target/release/bundle/"

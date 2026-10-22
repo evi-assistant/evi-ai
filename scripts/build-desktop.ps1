@@ -16,12 +16,19 @@ Write-Host ">> [1/2] freezing the sidecar (PyInstaller)"
 & "$here\build-sidecar.ps1"
 
 Write-Host ">> [2/2] bundling the Tauri app (standalone config)"
+# A GNU-toolchain build (no MSVC Build Tools) loads WebView2Loader.dll at
+# runtime: stage it and bundle it next to the exe. Prints nothing for MSVC.
+$py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
+$extra = @()
+$overlay = & $py "$here\stage_webview2_loader.py"
+if ($LASTEXITCODE -ne 0) { throw "staging WebView2Loader.dll failed (see above)" }
+if ($overlay) { $extra = @("--config", $overlay) }
 Push-Location "$root\desktop"
 try {
     # Native exe; a non-zero exit here is usually the optional updater-signing
     # step (needs the CI-only TAURI_SIGNING_PRIVATE_KEY). The installers are
     # still produced, so we report rather than abort.
-    npm run tauri build -- --config src-tauri\tauri.standalone.conf.json
+    npm run tauri build -- --config src-tauri\tauri.standalone.conf.json @extra
     if ($LASTEXITCODE -ne 0) {
         Write-Host ">> tauri exited $LASTEXITCODE - likely the optional updater-signing step; check the bundle dir below."
     }

@@ -1265,6 +1265,15 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **Desktop installers built with Rust's GNU toolchain start.** On Windows the
+  GNU toolchain (used where the MSVC Build Tools can't be installed) makes
+  `evi-desktop.exe` load `WebView2Loader.dll` at startup, and the bundler
+  didn't pack it, so the installed app stopped with "WebView2Loader.dll was
+  not found". `scripts/build-desktop.*` now stage Microsoft's loader from the
+  locked `webview2-com-sys` crate (`scripts/stage_webview2_loader.py`) and
+  bundle it next to the exe (`tauri.webview2-gnu.conf.json`); MSVC builds,
+  CI's included, are unchanged, and a GNU release build without the overlay
+  warns.
 - **A workflow step whose reply broke off with an error is reported as
   failed.** A stream cut mid-reply kept its partial text, and `evi workflow
   run` and the web Workflows panel passed that half answer on to the next step
