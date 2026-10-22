@@ -18,7 +18,7 @@ Write-Host ">> [1/2] freezing the sidecar (PyInstaller)"
 Write-Host ">> [2/2] bundling the Tauri app (standalone config)"
 # A GNU-toolchain build (no MSVC Build Tools) loads WebView2Loader.dll at
 # runtime: stage it and bundle it next to the exe. Prints nothing for MSVC.
-$py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
+$py = if ($env:EVI_PYTHON) { $env:EVI_PYTHON } elseif (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 $extra = @()
 $overlay = & $py "$here\stage_webview2_loader.py"
 if ($LASTEXITCODE -ne 0) { throw "staging WebView2Loader.dll failed (see above)" }
@@ -38,5 +38,6 @@ finally {
 }
 
 Write-Host ">> done. Installers:"
-Get-ChildItem -Recurse "$root\desktop\src-tauri\target\release\bundle" -Include *.msi, *.exe -ErrorAction SilentlyContinue |
+$target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "$root\desktop\src-tauri\target" }
+Get-ChildItem -Recurse "$target\release\bundle" -Include *.msi, *.exe -ErrorAction SilentlyContinue |
     ForEach-Object { Write-Host "   $($_.FullName)" }

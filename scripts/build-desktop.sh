@@ -18,7 +18,7 @@ bash "$root/scripts/build-sidecar.sh"
 echo ">> [2/2] bundling the Tauri app (standalone config)"
 # A Windows GNU-toolchain build loads WebView2Loader.dll at runtime: stage it
 # and bundle it next to the exe. Prints nothing elsewhere (MSVC, macOS, Linux).
-py="python3"; command -v "$py" >/dev/null 2>&1 || py="python"
+py="${EVI_PYTHON:-python3}"; command -v "$py" >/dev/null 2>&1 || py="python"
 extra=()
 overlay="$("$py" "$root/scripts/stage_webview2_loader.py")"
 if [ -n "$overlay" ]; then extra=(--config "$overlay"); fi
