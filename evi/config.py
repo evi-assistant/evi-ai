@@ -643,6 +643,53 @@ class EvidenceSettings:
 
 
 @dataclass
+class CompanionSettings:
+    """The Companion (evi/companion/): a proactive, read-only watcher that
+    checks the sources you connect, keeps a feed, sends a morning brief and
+    pings you only when something needs you. Off by default.
+
+    It runs only when `enabled` is true in your own config.toml: a
+    repository's .evi.toml can't set any of [companion] (evi/project.py), and
+    an active profile can switch it off but not on. A check-in may call only
+    the read-only `sources`: "calendar" (calendar_today / _week / _search /
+    _next), "memory" (recall, list_memories, recall_by_tag), one of those
+    tool names, or an MCP tool named explicitly as "mcp:<server>:<tool>"
+    (evi.policy.watcher_policy denies every other call). `allowed_actions`
+    names the tools a proposal may use; empty (the default) means
+    suggest-only. A proposal runs only when you approve it, and never one
+    that pays, transfers, trades or deletes, whatever this list says.
+
+    Timing: a check-in every `check_every_hours`, the brief daily at
+    `brief_at` (local "HH:MM"). Speaking up: only items at or above
+    `notify_min_priority` (low | medium | high | urgent), outside
+    `quiet_hours` ("HH:MM-HH:MM", local; "" for none; "urgent" waits too
+    unless `quiet_hours_urgent`), at most `max_notifications_per_day`;
+    an item already seen (its dedupe key) within `dedupe_days` is dropped.
+    Notifications use [notify]'s desktop / sound / url channels and, with
+    `telegram` on and a paired Telegram channel, a text to `telegram_chat`
+    (a paired user id; empty: the one paired user, if there is exactly one).
+    `backend` (a backends.json name) and `model` pick the model a check-in
+    uses (empty: [llm]'s); `max_turns` caps its model round trips."""
+
+    enabled: bool = False
+    check_every_hours: int = 3
+    brief_at: str = "07:30"
+    quiet_hours: str = "22:00-07:00"
+    quiet_hours_urgent: bool = False
+    notify_min_priority: str = "high"
+    max_notifications_per_day: int = 6
+    dedupe_days: int = 7
+    sources: list[str] = field(default_factory=lambda: ["calendar", "memory"])
+    allowed_actions: list[str] = field(default_factory=list)
+    proposal_ttl_minutes: int = 1440
+    max_turns: int = 8
+    telegram: bool = False
+    telegram_chat: str = ""
+    backend: str = ""
+    model: str = ""
+
+
+@dataclass
 class RuntimeSettings:
     """Managed llama.cpp runtime. Normally eVi downloads + supervises its own
     `llama-server` under ~/.evi/runtime. Set `server_path` to point eVi at an
@@ -678,6 +725,7 @@ class Config:
     hooks: HookSettings = field(default_factory=HookSettings)
     tasks: TaskSettings = field(default_factory=TaskSettings)
     evidence: EvidenceSettings = field(default_factory=EvidenceSettings)
+    companion: CompanionSettings = field(default_factory=CompanionSettings)
 
     @classmethod
     def load(cls) -> "Config":

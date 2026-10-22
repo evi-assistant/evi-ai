@@ -356,6 +356,36 @@ def status(cfg: Config | None = None) -> dict[str, Any]:
     }
 
 
+def owner_chat(cfg: Config | None = None, chat: str = "") -> str | None:
+    """The chat an outbound note to the owner goes to: `chat` when it is a
+    paired user (a private chat's id is its user's id), else the one paired
+    user when there is exactly one; None when the channel is off, has no
+    token, or no single owner can be told."""
+    cfg = cfg or Config.load()
+    if not cfg.channels.telegram_enabled or not cfg.channels.telegram_token.strip():
+        return None
+    paired = [str(u.get("user_id")) for u in pairing.paired_users(CHANNEL)]
+    want = str(chat or "").strip()
+    if want:
+        return want if want in paired else None
+    return paired[0] if len(paired) == 1 else None
+
+
+def send_to_owner(text: str, cfg: Config | None = None, chat: str = "") -> bool:
+    """Send `text` (plain text, outbound only: no reply is read) to the
+    owner's chat (`owner_chat`). Returns whether it was sent; never raises."""
+    try:
+        cfg = cfg or Config.load()
+        target = owner_chat(cfg, chat)
+        if target is None:
+            return False
+        telegram_api.send_message(cfg.channels.telegram_token.strip(), target, text)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a note that can't go out is not fatal
+        logger.warning("telegram: outbound note failed: %s", exc)
+        return False
+
+
 def wait_for_stop() -> None:
     """Block the caller until interrupted — for `evi channel serve`."""
     try:

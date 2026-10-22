@@ -1,4 +1,6 @@
-"""Named policies for unattended task runs: v0 has one, ``implementer``.
+"""Named policies for unattended runs: ``implementer`` for task runs, and
+``watcher`` for the Companion's check-ins (`watcher_policy`, at the end of
+this module: only the configured read-only sources, nothing else).
 
 An unattended run (``evi run``, a delegated task) has nobody to approve a
 tool call, so without a policy everything outside ``[auto] auto_approve`` is
@@ -1111,6 +1113,8 @@ def implementer_policy(
 
 
 # Every named policy: name -> constructor(root, files_in_scope, checks, *, trusted, confine).
+# The watcher policy is not one of them: only the Companion builds it
+# (`watcher_policy`, from [companion] sources), never `evi run --policy`.
 POLICIES = {IMPLEMENTER: implementer_policy}
 
 
@@ -1124,3 +1128,121 @@ def build(name: str, root: str | Path, files_in_scope: Iterable[str] = (),
     if key not in POLICIES:
         raise PolicyError(f"unknown policy {name!r} (choose: {' | '.join(POLICIES)})")
     return POLICIES[key](root, files_in_scope, checks, trusted=trusted, confine=confine)
+
+
+# ---- the watcher policy (the Companion's check-ins) --------------------------
+
+WATCHER = "watcher"
+
+# The built-in tools a watcher may call, with the category each must have:
+# reads of the owner's own sources that write nothing and run nothing. A
+# source group in [companion] sources stands for its tools.
+WATCHER_SOURCE_TOOLS: dict[str, str] = {
+    "calendar_today": "calendar", "calendar_week": "calendar",
+    "calendar_search": "calendar", "calendar_next": "calendar",
+    "recall": "memory", "list_memories": "memory", "recall_by_tag": "memory",
+}
+WATCHER_SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
+    "calendar": ("calendar_today", "calendar_week", "calendar_search", "calendar_next"),
+    "memory": ("recall", "list_memories", "recall_by_tag"),
+}
+# An MCP source: "mcp:<server>:<tool>", the tool eVi registers as
+# "<server>.<tool>" (evi.mcp.manager).
+_MCP_SOURCE = re.compile(r"mcp:([A-Za-z0-9_.-]{1,64}):([^:\s]{1,128})\Z")
+
+
+def watcher_sources(entries: Iterable[str]) -> dict[str, str]:
+    """[companion] `sources` as the tools they allow: tool name -> the
+    category it must have. An entry is a group (`WATCHER_SOURCE_GROUPS`), a
+    tool of `WATCHER_SOURCE_TOOLS`, or ``mcp:<server>:<tool>`` (the MCP tool
+    ``<server>.<tool>``, category "mcp"). Raises PolicyError for anything
+    else: a write, shell or network tool can't be made a source."""
+    out: dict[str, str] = {}
+    for raw in entries or ():
+        entry = str(raw or "").strip()
+        if not entry:
+            continue
+        key = entry.lower()
+        if key in WATCHER_SOURCE_GROUPS:
+            for name in WATCHER_SOURCE_GROUPS[key]:
+                out[name] = WATCHER_SOURCE_TOOLS[name]
+            continue
+        if key in WATCHER_SOURCE_TOOLS:
+            out[key] = WATCHER_SOURCE_TOOLS[key]
+            continue
+        m = _MCP_SOURCE.match(entry)
+        if m is not None:
+            out[f"{m.group(1)}.{m.group(2)}"] = "mcp"
+            continue
+        raise PolicyError(
+            f"{entry!r} is not a watcher source (choose: "
+            f"{' | '.join([*WATCHER_SOURCE_GROUPS, *WATCHER_SOURCE_TOOLS])} | "
+            "mcp:<server>:<tool>)")
+    return out
+
+
+@dataclass(frozen=True)
+class WatcherPolicy:
+    """The ``watcher`` policy: a Companion check-in (evi/companion/) may call
+    the read-only source tools in `tools` ((name, category) pairs; a tool of
+    another category under one of these names is unknown) and nothing else:
+    no shell, code, file reads or writes, web, memory writes, subagents,
+    scheduling or unlisted MCP tools. Set as ``Agent.policy`` it decides
+    every call, after ``[auto] hard_deny``, deny rules and the director's
+    ground (`evi.llm.agent.Agent._policy_verdict`).
+
+    - root: the Companion's folder. No command or check runs there:
+      `trusted` is always False and `allows_argv` denies."""
+
+    name: str
+    root: Path
+    tools: tuple[tuple[str, str], ...] = ()
+    trusted: bool = False
+
+    def describe(self) -> str:
+        """One line on what the policy allows, for a denial message."""
+        names = ", ".join(n for n, _ in self.tools) or "none"
+        return (f"the {self.name} policy allows only the configured read-only sources "
+                f"({names}), and nothing else")
+
+    def check(
+        self,
+        tool: Any,
+        args_json: str | dict,
+        *,
+        workdir: str | Path | None = None,
+        protected_paths: Iterable[str] | None = None,
+        dialect: str | None = None,
+    ) -> Verdict:
+        """Whether this policy allows `tool` (a Tool, or any object with
+        ``name`` and ``category``) to run with `args_json`. The keyword
+        arguments are `Policy.check`'s; a watcher needs none of them."""
+        name = str(getattr(tool, "name", "") or "")
+        category = str(getattr(tool, "category", "") or "")
+        try:
+            data = json.loads(args_json) if isinstance(args_json, str) else dict(args_json)
+        except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+            return _deny(f"{name}: its arguments don't parse")
+        if not isinstance(data, dict):
+            return _deny(f"{name}: its arguments are not an object")
+        expected = dict(self.tools).get(name)
+        if expected is None or expected != category:
+            return _deny(f"{name} is not a source the {self.name} policy allows (it only "
+                         "reads the configured sources: no shell, code, files, web, memory "
+                         "writes, subagents or other tools)")
+        if permissions.classify_call(name, category, data) == "shell":
+            return _deny(f"{name}: the {self.name} policy runs no command line")
+        return ALLOW
+
+    def allows_argv(self, argv: Sequence[str], *, run_in: Path | None = None,
+                    protected_paths: Iterable[str] | None = None) -> Verdict:
+        """A watcher runs no command, a check included."""
+        return _deny(f"the {self.name} policy runs no commands")
+
+
+def watcher_policy(sources: Iterable[str], root: str | Path) -> WatcherPolicy:
+    """The ``watcher`` policy for [companion] `sources` (`watcher_sources`),
+    with `root` the Companion's folder. Raises PolicyError for an entry that
+    is no source."""
+    tools = tuple(sorted(watcher_sources(sources).items()))
+    return WatcherPolicy(WATCHER, Path(root).expanduser().resolve(), tools)

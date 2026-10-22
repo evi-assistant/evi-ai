@@ -18,6 +18,14 @@ An eval task (``kind = "eval"``) runs one of your suites as ``evi eval run``
 does (`evi.evals.run_suite`: each case in a throwaway workspace under the
 implementer policy, which its log header names) and keeps the report.
 
+The Companion (evi/companion/) needs no task: with ``[companion] enabled =
+true`` in your config.toml the scheduler adds two built-in jobs of its own
+(`companion_jobs`, re-read at every `reload`): ``companion-check-in`` every
+15 minutes, which runs a check-in once ``check_every_hours`` have passed
+since the last (and a brief missed at its time), and ``companion-brief``
+daily at ``brief_at``. Both are no-ops unless due, so a reload (every minute
+under `evi scheduler`) never shifts them. Off (or in safe mode): no jobs.
+
 The scheduler is independent of the chat UI — running `evi scheduler` (CLI
 daemon mode) is enough to fire jobs. When the FastAPI app is up it also
 starts the scheduler in its lifespan context, so a single `evi web` process
@@ -31,8 +39,9 @@ get a clear error there instead of an ImportError at top of the module.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from evi.config import SCHEDULED_LOG_DIR, Config, ensure_dirs
 from evi.llm.agent import (
@@ -120,6 +129,22 @@ class Scheduler:
 
     def _sync_jobs(self) -> None:
         assert self._bg is not None
+        for job in companion_jobs():
+            try:
+                trigger = self._BgCronTrigger.from_crontab(job.cron)
+            except Exception as exc:
+                logger.warning("companion job %s has invalid cron %r: %s", job.id, job.cron, exc)
+                continue
+            self._bg.add_job(
+                job.func,
+                trigger=trigger,
+                id=job.id,
+                name=job.name,
+                replace_existing=True,
+                misfire_grace_time=300,
+                coalesce=True,
+                max_instances=1,
+            )
         for task in self.store.list():
             if not task.enabled:
                 continue
@@ -143,6 +168,69 @@ class Scheduler:
                 replace_existing=True,
                 misfire_grace_time=300,
             )
+
+
+# --- the Companion's built-in jobs ----------------------------------------
+
+
+@dataclass(frozen=True)
+class CompanionJob:
+    """A built-in scheduler job of the Companion."""
+
+    id: str
+    name: str
+    cron: str
+    func: Callable[[], Any]
+
+
+# How often the check-in job looks whether a check-in (or a missed brief) is due.
+COMPANION_TICK_CRON = "*/15 * * * *"
+
+
+def companion_jobs(config: Config | None = None) -> list[CompanionJob]:
+    """The Companion's jobs for `config` (default: loaded now): none unless
+    ``[companion] enabled`` is true in the user layer (evi.companion.engine.
+    user_enabled) and safe mode is off; never raises."""
+    try:
+        from evi import safemode
+        from evi.companion import engine
+
+        if safemode.enabled():
+            return []
+        cfg = config if config is not None else Config.load()
+        s = engine.settings(cfg)
+        if not s.enabled:
+            return []
+        hour, minute = s.brief_at
+    except Exception as exc:  # noqa: BLE001 — a bad config means no companion jobs
+        logger.warning("companion jobs not scheduled: %s", exc)
+        return []
+    return [
+        CompanionJob("companion-check-in", "Companion check-in", COMPANION_TICK_CRON,
+                     _companion_tick),
+        CompanionJob("companion-brief", "Companion morning brief", f"{minute} {hour} * * *",
+                     _companion_brief),
+    ]
+
+
+def _companion_tick() -> None:
+    """The check-in job: a check-in when due (evi.companion.engine.Companion.tick)."""
+    try:
+        from evi.companion.engine import Companion
+
+        Companion().tick()
+    except Exception as exc:  # noqa: BLE001 — a job must not take the scheduler down
+        logger.warning("companion check-in job failed: %s", exc)
+
+
+def _companion_brief() -> None:
+    """The brief job: the morning brief, once a day."""
+    try:
+        from evi.companion.engine import Companion
+
+        Companion().brief()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("companion brief job failed: %s", exc)
 
 
 # --- job execution -------------------------------------------------------

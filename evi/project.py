@@ -333,7 +333,8 @@ def apply_project_config(
 # switch the user's guardrails off while chat kept working. Every other
 # section — statusline, runtime, web, federation, channels, notify,
 # telemetry, plugins, desktop, google, microsoft, obsidian, comfy, voice,
-# models, ultracode — is ignored outright.
+# models, ultracode, companion (a repo must never switch on or widen the
+# proactive watcher: its sources, actions, backend) — is ignored outright.
 _PROJECT_ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "llm": frozenset({
         "model", "embed_model", "embed_dimensions",

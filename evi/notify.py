@@ -20,27 +20,30 @@ SSE event, so this module is the CLI/headless path.
 
 from __future__ import annotations
 
+import base64
 import json
 import platform
 import shutil
 import subprocess
 
 
-def _play_sound() -> None:
+def _play_sound() -> bool:
+    """Beep; whether a player ran."""
     sysname = platform.system()
     try:
         if sysname == "Windows":
             import winsound
 
             winsound.MessageBeep(winsound.MB_OK)
-            return
+            return True
         if sysname == "Darwin":
             if shutil.which("afplay"):
                 subprocess.run(
                     ["afplay", "/System/Library/Sounds/Glass.aiff"],
                     timeout=5, capture_output=True,
                 )
-            return
+                return True
+            return False
         # Linux / other: try a couple of common players + sound files.
         candidates = [
             ["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"],
@@ -49,9 +52,10 @@ def _play_sound() -> None:
         for cmd in candidates:
             if shutil.which(cmd[0]):
                 subprocess.run(cmd, timeout=5, capture_output=True)
-                return
+                return True
     except Exception:
-        return  # never let a beep break the turn
+        return False  # never let a beep break the turn
+    return False
 
 
 # The toast text reaches AppleScript as `argv` of a fixed `run` handler, never
@@ -72,24 +76,39 @@ def _osascript_toast_argv(title: str, body: str) -> list[str]:
     return ["osascript", *_OSASCRIPT_TOAST, "--", title, body]
 
 
-def _desktop_toast(title: str, body: str) -> None:
+def _desktop_toast(title: str, body: str) -> bool:
+    """Show a toast; whether one was shown (never on Windows, see above)."""
     sysname = platform.system()
     try:
         if sysname == "Darwin" and shutil.which("osascript"):
             subprocess.run(
                 _osascript_toast_argv(title, body), timeout=5, capture_output=True,
             )
-        elif sysname == "Linux" and shutil.which("notify-send"):
+            return True
+        if sysname == "Linux" and shutil.which("notify-send"):
             # "--" so a title/body starting with "-" is text, not an option.
             subprocess.run(["notify-send", "--", title, body], timeout=5, capture_output=True)
+            return True
         # Windows visual toast: handled by the desktop/web UI, not here.
     except Exception:
-        return
+        return False
+    return False
 
 
-def _post_url(url: str, title: str, body: str) -> None:
+def _header_text(text: str) -> str:
+    """`text` as an HTTP header value: one line, and RFC 2047 encoded when it
+    isn't plain ASCII (http.client sends headers as latin-1, so an em dash or
+    an emoji would fail the whole request; ntfy decodes the encoded form)."""
+    line = " ".join(str(text or "").split())
+    if line.isascii():
+        return line
+    return "=?UTF-8?B?" + base64.b64encode(line.encode("utf-8")).decode("ascii") + "?="
+
+
+def _post_url(url: str, title: str, body: str) -> bool:
     """POST to an ntfy topic / webhook. ntfy reads the body as the message and a
-    `Title` header; a generic webhook also gets a JSON body."""
+    `Title` header; a generic webhook also gets a JSON body. Whether it was
+    taken (a 2xx answer)."""
     import urllib.request
 
     try:
@@ -98,16 +117,17 @@ def _post_url(url: str, title: str, body: str) -> None:
             data=body.encode("utf-8"),
             method="POST",
             headers={
-                "Title": title,
+                "Title": _header_text(title),
                 "Content-Type": "text/plain; charset=utf-8",
                 "User-Agent": "evi-notify",
                 # JSON mirror in a header-free way: ntfy ignores it, webhooks can read the body.
                 "X-Evi-Payload": json.dumps({"title": title, "body": body})[:512],
             },
         )
-        urllib.request.urlopen(req, timeout=10).close()  # noqa: S310 (user-configured)
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 (user-configured)
+            return 200 <= int(getattr(resp, "status", 200) or 200) < 300
     except Exception:
-        return  # best-effort
+        return False  # best-effort
 
 
 def notify(
@@ -117,14 +137,17 @@ def notify(
     sound: bool = True,
     desktop: bool = True,
     url: str = "",
-) -> None:
-    """Fire a notification through every enabled channel. Never raises."""
-    if sound:
-        _play_sound()
-    if desktop:
-        _desktop_toast(title, body)
-    if url:
-        _post_url(url, title, body)
+) -> list[str]:
+    """Fire a notification through every enabled channel. Never raises.
+    Returns the channels that delivered ("sound", "desktop", "url")."""
+    done: list[str] = []
+    if sound and _play_sound():
+        done.append("sound")
+    if desktop and _desktop_toast(title, body):
+        done.append("desktop")
+    if url and _post_url(url, title, body):
+        done.append("url")
+    return done
 
 
 def notify_if_enabled(title: str, body: str, *, config=None) -> bool:
