@@ -710,17 +710,44 @@ def test_a_cancel_stops_evis_own_run_of_the_checks(repo, tmp_path):
     import time
 
     marker = tmp_path / "second.txt"
+    began = tmp_path / "first-started.txt"
     token = threading.Event()
-    threading.Timer(1.0, token.set).start()
-    started = time.monotonic()
+
+    # Cancel once the first check is running (a fixed timer raced collect's own
+    # git and transcript steps on a loaded machine: the token could be set
+    # before any check started, which is a different case, tested below).
+    def cancel_when_running():
+        deadline = time.monotonic() + 120
+        while not began.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        token.set()
+
+    threading.Thread(target=cancel_when_running, daemon=True).start()
+    first_check = (f"import pathlib, time; pathlib.Path({str(began)!r}).write_text('on'); "
+                   "time.sleep(60)")
     bundle = evidence.collect(
         evidence.run_bundle_path(repo), folder=repo, base="HEAD", repo=repo, cancel_token=token,
-        checks=[[PY, "-c", "import time; time.sleep(60)"],
+        checks=[[PY, "-c", first_check],
                 [PY, "-c", f"open({str(marker)!r}, 'w').write('x')"]])
-    assert time.monotonic() - started < 30
+    assert began.exists()
     [first] = bundle.report["checks"]
     assert first["note"] == "cancelled" and not first["ok"] and not marker.exists()
-    assert bundle.report["checks_skipped"].startswith("cancelled")
+    assert first["duration_ms"] < 30000  # stopped, not run out
+    assert bundle.report["checks_skipped"] == "cancelled: eVi stopped running the checks after 1 of 2"
+    _validate(bundle.report)
+
+
+def test_a_cancel_before_the_checks_runs_none_of_them(repo, tmp_path):
+    import threading
+
+    marker = tmp_path / "ran.txt"
+    token = threading.Event()
+    token.set()
+    bundle = evidence.collect(
+        evidence.run_bundle_path(repo), folder=repo, base="HEAD", repo=repo, cancel_token=token,
+        checks=[[PY, "-c", f"open({str(marker)!r}, 'w').write('x')"]])
+    assert bundle.report["checks"] == [] and not marker.exists()
+    assert bundle.report["checks_skipped"] == "cancelled: eVi stopped running the checks after 0 of 1"
     _validate(bundle.report)
 
 

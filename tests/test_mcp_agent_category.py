@@ -550,13 +550,16 @@ def test_cancel_during_the_required_checks_stops_them_and_ends_interrupted(
     assert final["cancel_reason"] == "stop now"
 
 
-def test_max_run_minutes_stops_a_run_in_its_required_checks(repo, make_runs, fake_llm, tmp_path,
-                                                            monkeypatch):
-    # The limit is read when the run starts: 6 seconds, well into the check.
-    monkeypatch.setattr(agent_tools.AgentRuns, "_limit", lambda self: (6.0, "6 seconds"))
+def test_max_run_minutes_stops_a_run_in_its_required_checks(repo, make_runs, fake_llm, tmp_path):
+    # Once the required check has started, the run goes past the limit. (A
+    # short real limit raced the turn and worktree setup on a loaded machine:
+    # it could fire before the check began.)
     runs, run_id, _ = _start_slow(repo, make_runs, fake_llm, tmp_path)
-    final = _assert_stopped_in_its_checks(runs, run_id, repo, time.monotonic())
-    assert final["cancel_reason"] == "the run went past 6 seconds"
+    began = time.monotonic()
+    with runs._cond:  # the run has gone past [tasks] max_run_minutes (60) by now
+        runs._runs[run_id].started_mono -= 3600
+    final = _assert_stopped_in_its_checks(runs, run_id, repo, began)
+    assert final["cancel_reason"] == "the run went past [tasks] max_run_minutes (60)"
 
 
 def test_closing_stops_a_run_in_its_required_checks(repo, make_runs, fake_llm, tmp_path):
