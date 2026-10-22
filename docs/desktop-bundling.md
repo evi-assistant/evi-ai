@@ -94,9 +94,11 @@ producing a `dist/evi-server/` **folder** (`evi-server[.exe]` +
 > shipping a folder instead of one file — handled transparently by
 > `bundle.resources` (below).
 
-> **Scope — the "practical" tier.** The sidecar bundles **web + pdf +
-> index** Python deps, so chat, tools, image-gen, the web UI, PDF reading,
-> and semantic search all work with no Python on the target machine.
+> **Scope — the "practical" tier.** The sidecar bundles **web + web-tools +
+> pdf + index + scheduler** Python deps, so chat, tools, image-gen, the web UI,
+> PDF reading, semantic search, scheduled tasks and the
+> [Companion](features/companion.md) all work with no Python on the target
+> machine (`evi-server --check` fails if APScheduler is missing).
 > Deliberately left out (opt-in via a system Python, to keep the binary
 > ~150–250 MB and dodge native-dep pain): **STT** (`faster-whisper` +
 > PortAudio) and **computer-use** (`pyautogui`). A couple of models still

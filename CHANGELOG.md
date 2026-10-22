@@ -1296,6 +1296,12 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **Scheduled tasks and the Companion run in the desktop app.** The frozen
+  sidecar was built without the `scheduler` extra, so the app's server never
+  started its scheduler: scheduled tasks, and now the Companion's check-ins and
+  morning brief, silently never ran there (the Companion's status says
+  `scheduler: false`). `build-sidecar.*` now install and collect APScheduler,
+  and `evi-server --check` fails a build without it.
 - **A sidecar frozen without the Visual C++ Redistributable reads PDFs.**
   PyInstaller bundles `MSVCP140.dll` (which PyMuPDF needs) only when the build
   machine has it, so a sidecar frozen elsewhere failed to load PDF support on

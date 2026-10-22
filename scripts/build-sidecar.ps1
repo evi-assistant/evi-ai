@@ -16,7 +16,8 @@ $root = (Resolve-Path "$here\..").Path
 # the isolated venv once with: py -3.13 -m venv .venv-build
 $py = if ($env:EVI_PYTHON) { $env:EVI_PYTHON } elseif (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 
-# Practical tier: bundle web + web-tools + pdf + index. STT + computer-use stay
+# Practical tier: bundle web + web-tools + pdf + index + scheduler (scheduled
+# tasks and the Companion run in the app's lifespan). STT + computer-use stay
 # opt-in via a system Python. OCR works via a bundled tesseract binary.
 # NOTE: `web` (fastapi/uvicorn — the server) and `web-tools` (ddgs/beautifulsoup4
 # — web_search/web_fetch) are DISTINCT extras; both are needed or web search
@@ -28,7 +29,7 @@ Write-Host ">> ensuring practical extras are installed in the build venv"
 # bundler and is useless in a cross-OS bundle anyway). The SDK falls back to the
 # system `claude` on PATH when its bundled copy is absent, which is what
 # `claude_agent` needs regardless.
-& $py -m pip install -q -e "$root[web,web-tools,pdf,index,claude-agent]"
+& $py -m pip install -q -e "$root[web,web-tools,pdf,index,scheduler,claude-agent]"
 
 # --onedir (NOT --onefile): a folder with evi-server.exe + _internal/. It
 # launches near-instantly (no per-launch self-extraction), at the cost of
@@ -50,6 +51,8 @@ Write-Host ">> PyInstaller build (--onedir; web + web-tools + pdf + index)"
     --collect-all soupsieve `
     --collect-submodules claude_agent_sdk `
     --collect-submodules mcp `
+    --collect-submodules apscheduler `
+    --copy-metadata apscheduler `
     --add-data "$root\docs;docs" `
     --hidden-import fitz `
     --hidden-import python_multipart `

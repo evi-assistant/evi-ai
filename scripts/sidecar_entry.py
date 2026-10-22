@@ -53,6 +53,11 @@ def _selfcheck() -> int:
         "uvicorn http protocol": "uvicorn.protocols.http.auto",
         "uvicorn websockets protocol": "uvicorn.protocols.websockets.auto",
         "uvicorn lifespan": "uvicorn.lifespan.on",
+        # The scheduler (scheduled tasks and the Companion's check-ins and
+        # brief) starts in the server's lifespan only if APScheduler loads;
+        # without it the desktop app silently never ran a scheduled job.
+        "apscheduler (scheduled tasks / Companion)": "apscheduler.schedulers.background",
+        "apscheduler cron trigger": "apscheduler.triggers.cron",
     }
     failed = []
     for label, mod in checks.items():

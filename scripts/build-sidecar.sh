@@ -37,7 +37,7 @@ echo ">> ensuring practical extras are installed in the build venv"
 # and is useless in a cross-OS bundle anyway). The SDK falls back to the system
 # `claude` on PATH when its bundled copy is absent, which is what `claude_agent`
 # needs regardless.
-"$py" -m pip install -q -e "$root[web,web-tools,pdf,index,claude-agent]"
+"$py" -m pip install -q -e "$root[web,web-tools,pdf,index,scheduler,claude-agent]"
 
 # --onedir (NOT --onefile): a folder with the evi-server binary + _internal/.
 # It launches near-instantly (no per-launch self-extraction). Tauri bundles
@@ -59,6 +59,8 @@ echo ">> PyInstaller build (--onedir; web + pdf + index)"
     --collect-all soupsieve \
     --collect-submodules claude_agent_sdk \
     --collect-submodules mcp \
+    --collect-submodules apscheduler \
+    --copy-metadata apscheduler \
     --add-data "$root/docs:docs" \
     --hidden-import fitz \
     --hidden-import python_multipart \
