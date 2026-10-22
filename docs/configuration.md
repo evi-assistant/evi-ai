@@ -561,9 +561,10 @@ shell command (the check commands above aside), listener or file path —
 `[llm]` `backend`, `base_url`, `api_key`, `api`, `responses_tools` — and the
 whole `[statusline]`, `[runtime]`, `[web]`, `[federation]`, `[channels]`,
 `[notify]`, `[telemetry]`, `[plugins]`, `[desktop]`, `[google]`,
-`[microsoft]`, `[obsidian]`, `[comfy]`, `[voice]`, `[models]`, `[ultracode]`
-and `[hooks]` sections, plus any unknown key. Put those in `config.toml` or a
-profile.
+`[microsoft]`, `[obsidian]`, `[comfy]`, `[voice]`, `[models]`, `[ultracode]`,
+`[hooks]` and `[companion]` sections (a repository can never switch on or
+widen the [Companion](features/companion.md)), plus any unknown key. Put those
+in `config.toml` or a profile.
 
 ```toml
 # <repo>/.evi.toml
@@ -884,6 +885,45 @@ value is a multi-key sequence. Terminal essentials (`c-c`, `c-d`, `tab`,
 `enter`) are reserved and silently ignored, and an unknown key name is skipped
 without breaking the others.
 
+## The Companion — `[companion]` in `config.toml`
+
+```toml
+[companion]
+enabled = false                    # opt-in; only your own config.toml can switch it on
+sources = ["calendar", "memory"]   # what a check-in may read (read-only tools)
+allowed_actions = []               # tools a proposal may use; empty: suggest-only
+check_every_hours = 3
+brief_at = "07:30"                 # local HH:MM
+quiet_hours = "22:00-07:00"        # local HH:MM-HH:MM; "" for none
+quiet_hours_urgent = false         # true: an urgent item may ping during quiet hours
+notify_min_priority = "high"       # low | medium | high | urgent
+max_notifications_per_day = 6
+dedupe_days = 7
+proposal_ttl_minutes = 1440
+max_turns = 8                      # model round trips per check-in
+telegram = false                   # also text the paired Telegram owner (outbound only)
+telegram_chat = ""                 # a paired user id; empty: the one paired user
+backend = ""                       # a backends.json name for check-ins; empty: [llm]'s
+model = ""
+```
+
+The [Companion](features/companion.md) is a proactive, read-only watcher:
+check-ins every `check_every_hours`, a brief at `brief_at`, notifications only
+for items at or above `notify_min_priority`, outside `quiet_hours` and under
+`max_notifications_per_day`, and actions only from `allowed_actions`, each
+run once when you approve it. `sources` entries: `calendar`, `memory`, one of
+their tool names, or `mcp:<server>:<tool>`. A value that doesn't parse falls
+back to its default (a bad `quiet_hours` is logged).
+
+Only the `enabled = true` in your own `config.toml` switches it on: a profile
+can switch it off but not on, and a repository's `.evi.toml` can't set any of
+`[companion]`. `evi companion on` / `off` and the web app's switch write that
+line of `config.toml` only; a change saved in the web app updates the running
+server's scheduler jobs at once. Whatever `allowed_actions` says, a shell
+line, `run_python`, subagents, money-moving or deleting tools, destructive
+commands, protected paths and relative paths are never proposed (see
+[What is always refused](features/companion.md#what-is-always-refused)).
+
 ## Voice / TTS — `[voice]` in `config.toml`
 
 ```toml
@@ -1078,9 +1118,10 @@ subagents a user's chat starts; notes those tools saved to the shared
 `~/.evi/memory/` before this release stay there. Drop a user from the
 file to revoke access. Skills and installed plugins stay shared, but the routes
 that act on the host (settings, hooks, plugins, channels, peers, the runtime,
-MCP, backends, checkpoints and rewind, and host-level runs) are owner-only:
-they need `[web] auth_token` (or the launch token), and a login gets 403. A
-login named `owner` can't sign in, since that name is the owner's workspace.
+MCP, backends, checkpoints and rewind, the Companion, and host-level runs) are
+owner-only: they need `[web] auth_token` (or the launch token), and a login
+gets 403. A login named `owner` can't sign in, since that name is the owner's
+workspace.
 
 `<name>` is the login's name with every character outside `A-Z a-z 0-9 _ . -`
 replaced by `_`, and leading and trailing `.`, `_` and `-` stripped (`user` if

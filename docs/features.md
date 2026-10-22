@@ -336,6 +336,19 @@ recall-only by default (`memory_mode`).
 `evi channel status|approve|revoke|serve`.
 [Guide](features/channels.md).
 
+**The Companion** — a Duet-style proactive watcher, opt-in and safe-scoped.
+With `[companion] enabled = true` in your own config.toml (`evi companion on`
+or Settings → Companion), the scheduler runs a check-in every few hours and a
+morning brief: it reads only the sources you list (calendar, memory, a named
+`mcp:<server>:<tool>`), treats what it reads as untrusted, keeps a feed and
+pings you only above a priority threshold, outside quiet hours and under a
+daily cap (held items go out later). It changes nothing on its own: a
+proposed action (a tool from `allowed_actions`; never a shell line, code,
+money or deletion) runs once, exactly as shown, when you approve it; Telegram
+messages go out only.
+`evi companion status|on|off|check|brief|feed|proposals|approve|reject|instructions`,
+`/api/companion/*`. [Guide](features/companion.md).
+
 ## Structured output & evals
 
 **Structured outputs** — JSON-Schema-constrained replies: REPL `/schema <file>`,

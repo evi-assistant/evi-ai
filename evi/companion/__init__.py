@@ -29,7 +29,9 @@ defaults to this moment, local time):
   it wasn't notified), and proposal_id or proposal_refused.
 - ``proposals(state=None) -> list[dict]``: proposals (id, tool, args,
   args_hash, summary, state, created_at, expires_at, ...), only those in
-  `state` when given.
+  `state` when given: an engine state (`engine.PROPOSAL_STATES`), or
+  "approved" (running, executed or failed) or "done" (executed);
+  ``PROPOSAL_FILTERS`` lists them all.
 - ``approve(id) -> dict`` / ``reject(id) -> dict``: decide a pending
   proposal (KeyError: no such id; ProposalError: it can't be). For the
   owner's own callers only: never wire either to a remote channel.
@@ -37,6 +39,8 @@ defaults to this moment, local time):
   owner's steering file, instructions.md. Owner-only callers.
 - ``set_enabled(on) -> None``: switch the Companion on or off in the USER
   config layer (config.toml) only.
+- ``printable(value) -> str``: text with its control and format characters
+  escaped, for a terminal (`evi companion`).
 """
 
 from __future__ import annotations
@@ -44,14 +48,45 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from evi.companion.engine import CheckIn, Companion, ProposalError, Settings, settings
+from evi.companion.engine import (
+    PROPOSAL_STATES,
+    CheckIn,
+    Companion,
+    ProposalError,
+    Settings,
+    settings,
+)
 from evi.companion.store import CompanionBusy, CompanionStore
 
 __all__ = [
-    "CheckIn", "Companion", "CompanionBusy", "CompanionStore", "ProposalError", "Settings",
-    "approve", "brief", "check_in", "feed", "proposals", "read_instructions", "reject",
-    "set_enabled", "settings", "status", "write_instructions",
+    "CheckIn", "Companion", "CompanionBusy", "CompanionStore", "PROPOSAL_FILTERS",
+    "ProposalError", "Settings", "approve", "brief", "check_in", "feed", "printable", "proposals", "read_instructions",
+    "reject", "set_enabled", "settings", "status", "write_instructions",
 ]
+
+# Unicode categories a terminal must not get raw: controls (escape sequences,
+# CR, backspace), format characters (bidi overrides, zero-width), surrogates,
+# private-use and unassigned code points, line and paragraph separators.
+_UNSHOWN = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
+def printable(value: Any) -> str:
+    """`value` as text that shows as it is in a terminal: every control or
+    format character (an escape sequence, CR, a bidi override) becomes its
+    ``\\x..`` / ``\\u....`` escape, so feed text (the model's and the
+    sources') can't move the cursor, repaint the screen or reorder what is
+    shown, and an escaped character is still seen. Tab and newline stay."""
+    import unicodedata
+
+    out = []
+    for ch in str(value):
+        if ch in "\n\t" or unicodedata.category(ch) not in _UNSHOWN:
+            out.append(ch)
+        else:
+            code = ord(ch)
+            out.append(f"\\x{code:02x}" if code < 0x100 else
+                       f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}")
+    return "".join(out)
 
 
 def _engine() -> Companion:
@@ -74,7 +109,15 @@ def feed(limit: int = 50, since: float | datetime | None = None) -> list[dict[st
     return _engine().feed(limit, since)
 
 
+# Filter names besides the engine's states: every proposal the owner approved
+# (whatever came of it), and the ones that ran.
+_STATE_ALIASES = {"approved": ("running", "executed", "failed"), "done": ("executed",)}
+PROPOSAL_FILTERS = PROPOSAL_STATES + tuple(_STATE_ALIASES)
+
+
 def proposals(state: str | None = None) -> list[dict[str, Any]]:
+    if state in _STATE_ALIASES:
+        return [p for p in _engine().proposals() if p.get("state") in _STATE_ALIASES[state]]
     return _engine().proposals(state)
 
 

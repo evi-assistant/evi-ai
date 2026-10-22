@@ -683,6 +683,9 @@ _OWNER_ONLY_ROUTES: tuple[tuple[frozenset[str] | None, str], ...] = (
     # config and default memory, like the runs above. Peers send the owner's token.
     (None, "/api/federate"),
     (None, "/a2a"),
+    # The Companion watches the owner's own sources and runs approved actions
+    # on the host (one store under eVi's home, not per user).
+    (None, "/api/companion"),
 )
 # Reads every login needs (the chat UI polls it before each send).
 _OWNER_ONLY_EXEMPT = frozenset({("GET", "/api/backend/status"), ("HEAD", "/api/backend/status")})
@@ -1948,6 +1951,10 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
 
 # ---- app factory --------------------------------------------------------
 
+# How often the lifespan scheduler re-reads [companion] (`evi companion on`, a
+# hand edit of config.toml): the same minute `evi scheduler` reloads at.
+_COMPANION_RESYNC_S = 60.0
+
 
 def create_app() -> FastAPI:
     ensure_dirs()
@@ -2001,6 +2008,14 @@ def create_app() -> FastAPI:
 
                 scheduler_obj = Scheduler()
                 scheduler_obj.start()
+                # The Companion routes and POST /api/config reload its jobs;
+                # a change made elsewhere (the CLI, an editor) is picked up by
+                # the re-sync thread within _COMPANION_RESYNC_S.
+                app.state.evi_scheduler = scheduler_obj
+                companion_jobs_applied["sig"] = _companion_jobs_signature()
+                companion_resync_stop.clear()
+                threading.Thread(target=_companion_resync_loop, args=(_COMPANION_RESYNC_S,),
+                                 name="evi-companion-resync", daemon=True).start()
             except RuntimeError as exc:
                 logger.info("scheduler not started: %s", exc)
                 scheduler_obj = None
@@ -2027,6 +2042,8 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
             if scheduler_obj is not None:
+                companion_resync_stop.set()
+                app.state.evi_scheduler = None
                 scheduler_obj.stop()
             if mcp_manager is not None:
                 mcp_manager.stop()
@@ -2222,7 +2239,8 @@ def create_app() -> FastAPI:
                 return JSONResponse(
                     {"detail": "Only the owner can do this: in multi-user mode, settings, "
                                "hooks, plugins, channels, peers, the runtime, MCP, backends, "
-                               "file checkpoints and host-level runs belong to whoever "
+                               "file checkpoints, the Companion and host-level runs belong "
+                               "to whoever "
                                "holds the [web] auth_token."},
                     status_code=403,
                 )
@@ -2777,6 +2795,224 @@ def create_app() -> FastAPI:
         _tg.stop_active()
         _tg.start_if_configured(Config.load())
         return _tg.status()
+
+    # ---- the Companion (evi/companion/) -------------------------------------
+    # Owner-only (_OWNER_ONLY_ROUTES); the state-changing ones go through the
+    # same Origin / X-Evi-Client / token checks as every other POST and PUT.
+    # Approving runs the stored call, exactly as stored, once (Companion.approve).
+
+    # The check-in this server started (POST /api/companion/check): one at a
+    # time, in a worker thread; its outcome stays here for the status route.
+    companion_run: dict[str, Any] = {"running": False, "started_at": None, "last": None}
+    companion_run_lock = threading.Lock()
+
+    # The Companion jobs the scheduler was last synced with, as (id, cron)
+    # pairs; the re-sync thread reloads when config.toml asks for others.
+    companion_jobs_applied: dict[str, Any] = {"sig": None}
+    companion_resync_stop = threading.Event()
+
+    def _companion_jobs_signature() -> tuple[tuple[str, str], ...]:
+        from evi.scheduler import companion_jobs
+
+        return tuple(sorted((j.id, j.cron) for j in companion_jobs()))
+
+    def _reload_companion_jobs() -> None:
+        """Re-sync this server's scheduler (its Companion jobs come and go
+        with ``[companion] enabled``; `evi.scheduler.companion_jobs`)."""
+        sched = getattr(app.state, "evi_scheduler", None)
+        if sched is None:
+            return
+        try:
+            companion_jobs_applied["sig"] = _companion_jobs_signature()
+            sched.reload()
+        except Exception as exc:  # noqa: BLE001 — the setting is saved either way
+            logger.warning("companion: the scheduler did not reload: %s", exc)
+
+    def _resync_companion_jobs() -> bool:
+        """Reload the scheduler when [companion] now asks for other jobs than
+        it was last synced with: `evi companion on` / `off` or a hand edit of
+        config.toml, which this server is not told about. True if it did."""
+        if getattr(app.state, "evi_scheduler", None) is None:
+            return False
+        try:
+            sig = _companion_jobs_signature()
+        except Exception as exc:  # noqa: BLE001 — try again next time
+            logger.warning("companion: could not read its jobs: %s", exc)
+            return False
+        if sig == companion_jobs_applied["sig"]:
+            return False
+        _reload_companion_jobs()
+        return True
+
+    def _companion_resync_loop(interval: float) -> None:
+        while not companion_resync_stop.wait(interval):
+            _resync_companion_jobs()
+
+    def _companion_status() -> dict[str, Any]:
+        from evi import companion as _companion
+        from evi.companion.store import INSTRUCTIONS_FILE
+
+        st = _companion.status()
+        with companion_run_lock:
+            run = dict(companion_run)
+        st.update(
+            safe_mode=safemode.enabled(),
+            scheduler=getattr(app.state, "evi_scheduler", None) is not None,
+            instructions_path=str(Path(st["root"]) / INSTRUCTIONS_FILE),
+            check_running=run["running"], check_started_at=run["started_at"],
+            last_run=run["last"], now=time.time(),
+        )
+        return st
+
+    @app.get("/api/companion/status")
+    def companion_status() -> dict[str, Any]:
+        """Whether the Companion is on, its sources and actions, the last and
+        next check-in, the last brief, pending proposals, today's
+        notifications; and here: safe mode, whether this server's scheduler
+        runs, the check-in it is running and the last one it ran."""
+        return _companion_status()
+
+    @app.get("/api/companion/feed")
+    def companion_feed(limit: int = 50, since: str = "") -> dict[str, Any]:
+        """The newest `limit` feed items (oldest first), only those after
+        `since` (epoch seconds or an ISO time) when given."""
+        from datetime import datetime as _dt
+
+        from evi import companion as _companion
+        from evi.companion.store import FEED_MAX
+
+        if not 1 <= limit <= FEED_MAX:
+            raise HTTPException(400, f"limit must be 1..{FEED_MAX}")
+        cut: float | None = None
+        if since.strip():
+            try:
+                cut = float(since)
+            except ValueError:
+                try:
+                    cut = _dt.fromisoformat(since.strip()).astimezone().timestamp()
+                except ValueError:
+                    raise HTTPException(400, "since must be epoch seconds or an ISO time")
+        return {"items": _companion.feed(limit, cut)}
+
+    @app.get("/api/companion/proposals")
+    def companion_proposals(state: str = "") -> dict[str, Any]:
+        """Proposals (oldest first; the expired ones marked first), only those
+        in `state` when given; `now` is the server's clock, for countdowns."""
+        from evi import companion as _companion
+
+        if state and state not in _companion.PROPOSAL_FILTERS:
+            raise HTTPException(400, "state must be one of "
+                                     f"{', '.join(_companion.PROPOSAL_FILTERS)}")
+        return {"proposals": _companion.proposals(state or None), "now": time.time()}
+
+    def _decide(proposal_id: str, body: dict[str, Any] | None, approve: bool) -> dict[str, Any]:
+        from evi import companion as _companion
+
+        if body is not None and not isinstance(body, dict):
+            raise HTTPException(400, "expected an object body")
+        want = (body or {}).get("args_hash")
+        try:
+            if want is not None:
+                # The caller names the arguments it showed: anything else is
+                # not what the owner approved.
+                p = next((p for p in _companion.proposals() if p.get("id") == proposal_id),
+                         None)
+                if p is None:
+                    raise KeyError(proposal_id)
+                if want != p.get("args_hash"):
+                    raise _companion.ProposalError(
+                        f"proposal {proposal_id} is not the one shown (its arguments differ)")
+            done = (_companion.approve if approve else _companion.reject)(proposal_id)
+        except KeyError:
+            raise HTTPException(404, f"no proposal {proposal_id}")
+        except _companion.ProposalError as exc:
+            raise HTTPException(409, str(exc))
+        except _companion.CompanionBusy as exc:
+            raise HTTPException(503, str(exc))
+        return {"proposal": {"id": proposal_id, **done}}
+
+    @app.post("/api/companion/proposals/{proposal_id}/approve")
+    def companion_approve(proposal_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run a pending proposal once, exactly as stored. 409 with the
+        reason when it can't (not pending, expired, its arguments changed,
+        no longer allowed, a hook vetoed it, the Companion is off, safe
+        mode); `args_hash`, when sent, must be the one the caller showed."""
+        return _decide(proposal_id, body, approve=True)
+
+    @app.post("/api/companion/proposals/{proposal_id}/reject")
+    def companion_reject(proposal_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Reject a pending proposal (409 when it isn't pending)."""
+        return _decide(proposal_id, body, approve=False)
+
+    @app.post("/api/companion/check")
+    def companion_check() -> JSONResponse:
+        """Start a check-in now in a worker thread (202); 409 while one this
+        server started is running, or with the Companion off. Its outcome
+        shows as `last_run` in GET /api/companion/status."""
+        from evi import companion as _companion
+        from evi.companion import engine as _engine
+
+        if not _engine.settings(Config.load()).enabled:
+            raise HTTPException(409, "the Companion is off: switch it on first")
+        if safemode.enabled():
+            raise HTTPException(409, "safe mode is on: the Companion doesn't run")
+        with companion_run_lock:
+            if companion_run["running"]:
+                raise HTTPException(409, "a check-in is already running")
+            companion_run.update(running=True, started_at=time.time())
+
+        def work() -> None:
+            try:
+                out = _companion.check_in().to_dict()
+            except Exception as exc:  # noqa: BLE001 — reported, never raised
+                out = {"ran": False, "skipped": None, "error": f"{type(exc).__name__}: {exc}"}
+            out["finished_at"] = time.time()
+            with companion_run_lock:
+                companion_run.update(running=False, last=out)
+
+        try:
+            threading.Thread(target=work, name="companion-check-in", daemon=True).start()
+        except Exception:
+            with companion_run_lock:
+                companion_run["running"] = False
+            raise
+        return JSONResponse({"started": True}, status_code=202)
+
+    @app.get("/api/companion/instructions")
+    def companion_instructions_get() -> dict[str, Any]:
+        """instructions.md: the owner's steering (what to watch, what to
+        ignore, how often to speak up)."""
+        from evi import companion as _companion
+        from evi.companion.store import INSTRUCTIONS_MAX
+
+        return {"text": _companion.read_instructions(), "max_chars": INSTRUCTIONS_MAX}
+
+    @app.put("/api/companion/instructions")
+    def companion_instructions_put(body: dict[str, Any]) -> dict[str, Any]:
+        """Replace instructions.md with {text} (audited)."""
+        from evi import companion as _companion
+        from evi.companion.store import INSTRUCTIONS_MAX
+
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str):
+            raise HTTPException(400, "expected {text: <string>}")
+        if len(text) > INSTRUCTIONS_MAX:
+            raise HTTPException(413, f"instructions are limited to {INSTRUCTIONS_MAX} characters")
+        _companion.write_instructions(text)
+        return {"ok": True, "text": _companion.read_instructions()}
+
+    @app.post("/api/companion/enabled")
+    def companion_enabled(body: dict[str, Any]) -> dict[str, Any]:
+        """Switch the Companion on or off ({on: bool}) in config.toml (the
+        user layer), then re-sync this server's scheduler."""
+        from evi import companion as _companion
+
+        on = body.get("on") if isinstance(body, dict) else None
+        if not isinstance(on, bool):
+            raise HTTPException(400, "expected {on: true|false}")
+        _companion.set_enabled(on)
+        _reload_companion_jobs()
+        return _companion_status()
 
     @app.get("/api/runtime/plan")
     def runtime_plan(model_id: str = "") -> dict[str, Any]:
@@ -3734,6 +3970,10 @@ def create_app() -> FastAPI:
         cfg = Config.load()
         touched = _apply_config_patch(cfg, patch)
         cfg.save()
+        if "companion" in touched:
+            # Switched on (or retimed) here, the Companion's jobs must follow
+            # in this server's scheduler, not wait for a restart.
+            _reload_companion_jobs()
 
         for sess in _all_sessions():
             ac = sess.agent.config

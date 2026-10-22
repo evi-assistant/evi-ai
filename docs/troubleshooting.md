@@ -862,6 +862,73 @@ The bundled Python server didn't come up in 20 seconds. Common reasons:
 
 Tail the Tauri stderr to see what `py -3.13 -m uvicorn …` actually did.
 
+## The Companion is quiet, skips check-ins or refuses a proposal
+
+Start with `evi companion status` (or Settings → Companion): it says whether
+the Companion is on, when it last checked in and when the next one is due.
+Every check-in, notification and refusal is also a line in
+`~/.evi/companion/audit.jsonl`. See [the Companion](features/companion.md).
+
+**Nothing runs at all.**
+
+- It is off: `evi companion on`. Only `enabled = true` in your own
+  `config.toml` counts; an active profile can switch it off, and a
+  repository's `.evi.toml` is ignored for `[companion]`.
+- No scheduler runs: start `evi scheduler`, or keep `evi web` / the desktop
+  app open (see [Scheduler / cron tasks aren't
+  firing](#scheduler--cron-tasks-arent-firing)). The panel says so when the
+  server it talks to has none.
+- You just switched it on with `evi companion on` (or edited `config.toml`)
+  while `evi web` or the desktop app was running: that server picks the
+  change up within a minute. The switch in Settings → Companion applies at
+  once.
+- Safe mode is on: nothing of the Companion runs there.
+
+**A check-in was skipped** (`evi companion check` prints why; the panel
+shows it under Check now):
+
+| Says | Meaning | What to do |
+|---|---|---|
+| `unchanged` | Its sources read the same as last time and your instructions didn't change, so no model was asked. | Nothing: that is the saving. Change `instructions.md` or wait for a change. |
+| `busy` | Another check-in or brief was running (`evi scheduler` and `evi web` share one lock). | Try again in a minute. A lock left by a process that died is taken over after two hours. |
+| `no sources` | None of `[companion] sources` is available here: no calendar set up (`evi calendar`), the MCP server isn't running in this process. | Set the source up, or list another. An entry that is no source at all (a write or shell tool) is an error in the check-in's result. |
+| `disabled` | Off, or safe mode. | As above. |
+
+**Items reach the feed but no notification arrives.** Each feed item says why
+it wasn't notified (`not notified: …`):
+
+- `below high`: under `notify_min_priority`. Lower it (`medium`) if you want
+  more pings.
+- `quiet hours`: inside `quiet_hours` (default `22:00-07:00`); it is
+  **held** and goes out at the first check-in or brief after them (up to two
+  days). An urgent item waits too unless `quiet_hours_urgent = true`.
+- `daily limit reached`: `max_notifications_per_day` were sent today; held
+  until tomorrow the same way.
+- A duplicate (same dedupe key within `dedupe_days`) never reaches the feed.
+- Notified but nothing showed: the channels are `[notify]`'s (sound,
+  desktop, `url`; on Windows the desktop toast is the web app's), and
+  Telegram needs `telegram = true` plus a paired owner (`evi channel status`).
+  A failed send is a `notify_failed` line in the audit log.
+
+**A proposal was refused.** The reason is on the feed item (`proposal
+refused`) or, at approval, in the error (`409` in the web app, exit 2 from
+`evi companion approve`):
+
+- `… is not in [companion] allowed_actions`: list the tool, or leave it as a
+  suggestion.
+- `looks like a payment, transfer, trade or deletion tool`, `runs a shell
+  line`, `runs a model, code or the screen`: never proposed, by design.
+- `its path argument … is not absolute`, `the destructive-command guard`,
+  `it writes the protected path …`, `an [auto] hard_deny or deny rule refuses
+  it`, `it would overwrite the existing file …`: the checks in [What is always
+  refused](features/companion.md#what-is-always-refused).
+- `has expired`: older than `proposal_ttl_minutes`; it is not run.
+- `its arguments changed since it was proposed`: `proposals.json` was edited
+  after the proposal was made; it won't run.
+- `BLOCKED BY HOOK …`: one of your `before_tool_call` hooks vetoed it.
+- `refusing to approve …: … an eVi agent started this process`: approve from
+  your own terminal or the web app, not from a shell eVi runs.
+
 ## Scheduler / cron tasks aren't firing
 
 - `apscheduler` not installed: `pip install 'evi-assistant[scheduler]'`.

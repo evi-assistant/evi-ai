@@ -830,6 +830,13 @@ def test_every_owner_only_route_refuses_a_user_login(multi: TestClient) -> None:
         ("POST", "/api/project/trust"), ("POST", "/api/dispatch/workflow/{name}"),
         # Delegated tasks run headless agents on the host's config and memory.
         ("POST", "/api/federate"), ("POST", "/a2a"),
+        # The Companion: the host's one watcher, its feed and approvals.
+        ("GET", "/api/companion/status"), ("GET", "/api/companion/feed"),
+        ("GET", "/api/companion/proposals"), ("POST", "/api/companion/check"),
+        ("POST", "/api/companion/proposals/{proposal_id}/approve"),
+        ("POST", "/api/companion/proposals/{proposal_id}/reject"),
+        ("GET", "/api/companion/instructions"), ("PUT", "/api/companion/instructions"),
+        ("POST", "/api/companion/enabled"),
     ]:
         assert want in checked, want
 
@@ -1009,6 +1016,8 @@ def test_owner_only_classifier() -> None:
     assert not f("POST", "/api/chat") and not f("GET", "/api/configx")
     assert not f("POST", "/api/session/s1/channel")
     assert f("POST", "/api/project/trust") and not f("GET", "/api/project/trust")
+    assert f("GET", "/api/companion/feed") and f("POST", "/api/companion/proposals/x/approve")
+    assert not f("GET", "/api/companionx")
 
 
 # ---- doctor: web access posture ---------------------------------------------

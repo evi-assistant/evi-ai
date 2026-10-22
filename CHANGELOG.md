@@ -811,6 +811,37 @@ All notable user-visible changes to eVi. Format loosely follows
   review-remember` writes its rule there.
 
 ### Added
+- **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
+  The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
+  your sources every few hours, brief you each morning and speak up only when
+  something needs you; eVi had the parts (scheduler, notifications, Telegram,
+  calendar, MCP, memory, default-deny unattended runs) but no loop. With
+  `[companion] enabled = true` in your own config.toml (`evi companion on`,
+  or the switch in Settings → Companion; a repository's `.evi.toml` can't
+  switch it on, a profile can only switch it off) the scheduler in `evi
+  scheduler` or `evi web` runs a check-in every `check_every_hours` and a
+  brief at `brief_at`. A check-in reads only the sources you list
+  (`calendar`, `memory`, or a named `mcp:<server>:<tool>`) under the new
+  read-only `watcher` policy, treats everything it reads as untrusted data,
+  skips the model when nothing changed, and must answer in a strict JSON
+  shape; plain code then dedupes the items, keeps them in a feed and
+  notifies only those at or above `notify_min_priority`, outside
+  `quiet_hours` and under `max_notifications_per_day` (held ones go out
+  later), through `[notify]` and, opt-in, an outbound-only Telegram message.
+  It changes nothing by itself: a proposed action names a tool from
+  `allowed_actions` (empty by default: suggest-only) and runs once, exactly
+  as stored, only when you approve it, after its expiry, argument hash,
+  permission rules and your hooks are checked again; a shell line,
+  `run_python`, subagents, money-moving or deleting tools, destructive
+  commands, protected and relative paths are never proposed. Everything is
+  in a redacted `audit.jsonl`. New: `evi companion
+  status|on|off|check|brief|feed|proposals|approve|reject|instructions`
+  (approve prints the exact call and asks y/N; refused from a process an
+  eVi agent started), the Settings → Companion panel (feed, approval cards
+  with a second-click confirm, instructions editor, Check now) and the
+  owner-only `/api/companion/*` routes. Saving `[companion]` through the web
+  app now re-syncs the running server's scheduler. See
+  docs/features/companion.md.
 - **`evi run` reports what a run did, can stream it as it goes, and can pick
   up a past session.** A script, a CI job or a task loop had the answer and
   little else, so it couldn't tell which tools ran, what changed or why a

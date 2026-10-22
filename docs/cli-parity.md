@@ -24,6 +24,7 @@ Legend: ✅ first-class · ◐ partial / via a related surface · ⌨️ CLI-onl
 | `sessions` | list/resume/fork/handoff | ✅ tabs/history; handoff API | ✅ | resume via `/?session=` |
 | `recipe` | saved multi-turn flows | ✅ settings → Routes & Recipes | ✅ | browse steps + run; also via `routine` webhook |
 | `routine` | webhook → recipe | ◐ `/api/routine/{token}` | ◐ | inbound trigger |
+| `companion` | the proactive watcher: status/on/off/check/brief/feed/proposals/approve/reject/instructions | ✅ settings → Companion | ✅ | switch, Check now, feed, approval cards (two clicks), instructions editor; `brief --force` is CLI-only; the `--since` / `--state` filters and JSON are in the API (`/api/companion/*`), not the panel ([guide](features/companion.md)) |
 | `style` | output styles | ✅ settings (llm.output_style) | ✅ | |
 | `voice` | TTS engine/speak/listen | ✅ settings → Voice; speak toggle | ✅ | |
 | `guardrails` | content filter rules | ✅ settings → Guardrails | ✅ | validated `guardrails.toml` editor + rule summary |

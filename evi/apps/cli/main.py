@@ -10187,6 +10187,447 @@ def scheduler(reload_interval: int = 60) -> None:
         sched.stop()
 
 
+# ---- the Companion (evi/companion/) -------------------------------------------
+# Exit codes: 0 ok, 1 an action failed, 2 usage or refused. Everything the
+# feed, a proposal or the model says is printed through
+# `evi.companion.printable` (no escape sequence reaches the terminal) and
+# escaped as Rich markup.
+
+companion_app = typer.Typer(
+    help="The Companion: an opt-in, read-only watcher that briefs you, speaks up when "
+         "something needs you, and acts only on what you approve.",
+    no_args_is_help=True,
+)
+app.add_typer(companion_app, name="companion")
+
+_COMPANION_FORMATS = ("text", "json")
+
+
+def _companion_fail(message: str, code: int = 2) -> NoReturn:
+    print(f"error: {message}", file=sys.stderr)
+    raise typer.Exit(code)
+
+
+def _companion_format(format: str) -> None:
+    if format not in _COMPANION_FORMATS:
+        _companion_fail(f"unknown --format {format!r} (choose: text | json)")
+
+
+def _companion_owner_only(action: str) -> None:
+    """Approving, rejecting, switching the Companion on or off and rewriting
+    its instructions are the owner's: refused (exit 2, nothing changed) where
+    an eVi agent may have started this process, or a model reading untrusted
+    text could approve its own proposal through a shell tool."""
+    from evi import attest
+
+    why = attest.agent_parent()
+    if why:
+        _companion_fail(f"refusing to {action}: {why}. Do it from your own terminal, or in "
+                        "the web UI's Companion panel.")
+
+
+def _companion_say(text: object, style: str = "") -> None:
+    """One line of feed / proposal text, shown as it is and nothing more: no
+    markup, highlighting or :emoji: codes (it is a source's or the model's)."""
+    from rich.markup import escape
+
+    from evi.companion import printable
+
+    body = escape(printable(text))
+    console.print(f"[{style}]{body}[/{style}]" if style else body, soft_wrap=True,
+                  highlight=False, emoji=False)
+
+
+def _companion_when(ts: object) -> str:
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return "never"
+    from datetime import datetime as _dt
+
+    return _dt.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def _companion_tty() -> bool:
+    """Whether a y/N question reaches the user: a terminal on both ends."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):  # replaced or closed streams
+        return False
+
+
+def _companion_json(data: object) -> None:
+    import json as _json
+
+    # ensure_ascii: every control, format or non-ASCII character is a \u escape.
+    print(_json.dumps(data, indent=2, sort_keys=True, default=str))
+
+
+@companion_app.command("status")
+def companion_status(
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Whether the Companion is on, what it watches and may propose, its last and next
+    check-in, the last brief, pending proposals and today's notifications."""
+    from rich.markup import escape
+
+    from evi import companion, safemode
+
+    _companion_format(format)
+    st = companion.status()
+    st["safe_mode"] = safemode.enabled()
+    if format == "json":
+        _companion_json(st)
+        return
+    on = "[green]on[/green]" if st["enabled"] else "[yellow]off[/yellow]"
+    console.print(f"Companion: {on}" + (" [red](safe mode: nothing runs)[/red]"
+                                        if st["safe_mode"] else ""), highlight=False)
+    show = lambda k, v: console.print(  # noqa: E731
+        f"  [dim]{k:<22}[/dim] {escape(companion.printable(v))}", soft_wrap=True,
+        highlight=False, emoji=False)
+    show("sources", ", ".join(st["sources"]) or "none (check-ins skip)")
+    show("allowed actions", ", ".join(st["allowed_actions"]) or "none (suggest-only)")
+    show("check-in", f"every {st['check_every_hours']} h; brief at {st['brief_at']}")
+    show("last check-in", _companion_when(st["last_check"]))
+    show("next check-in", "-" if not st["enabled"] else _companion_when(st["next_check"])
+         if st["next_check"] is not None else "due now (the scheduler looks every 15 min)")
+    show("last brief", st["brief_day"] or "never")
+    show("pending proposals", st["pending_proposals"])
+    show("notifications today", st["notifications_today"])
+    show("folder", st["root"])
+
+
+def _companion_switch(on: bool) -> None:
+    from rich.markup import escape
+
+    from evi import companion, safemode
+    from evi.companion.store import INSTRUCTIONS_FILE
+
+    _companion_owner_only("switch the Companion " + ("on" if on else "off"))
+    companion.set_enabled(on)
+    st = companion.status()
+    if not on:
+        console.print("[yellow]Companion off.[/yellow] No more check-ins or briefs; the feed "
+                      "and proposals stay (a pending one can't be approved while it is off).",
+                      soft_wrap=True, highlight=False)
+        return
+    if not st["enabled"]:
+        console.print("[yellow]Saved enabled = true in config.toml, but the Companion is "
+                      "still off:[/yellow] the active profile switches it off.",
+                      soft_wrap=True, highlight=False)
+        raise typer.Exit(1)
+    sources = ", ".join(st["sources"]) or "none (add [companion] sources)"
+    actions = ", ".join(st["allowed_actions"]) or "none: it only suggests"
+    console.print("[green]Companion on.[/green]", highlight=False)
+    console.print(f"  It checks in every {st['check_every_hours']} h (skipped when nothing "
+                  f"changed) and sends a brief daily at {st['brief_at']}.", highlight=False)
+    console.print(f"  It reads: {escape(companion.printable(sources))} (read-only).",
+                  soft_wrap=True, highlight=False, emoji=False)
+    console.print(f"  It may propose: {escape(companion.printable(actions))} (each runs only "
+                  "when you approve it).", soft_wrap=True, highlight=False, emoji=False)
+    console.print("  It runs where the scheduler does: `evi scheduler` or `evi web` (the "
+                  "desktop app); one that is already running picks this up within a "
+                  "minute. Check now: `evi companion check`.", soft_wrap=True, highlight=False)
+    path = Path(st["root"]) / INSTRUCTIONS_FILE
+    console.print(f"  Steer it in {escape(str(path))} (`evi companion instructions --edit`).",
+                  soft_wrap=True, highlight=False)
+    if safemode.enabled():
+        console.print("  [red]Safe mode is on: nothing runs until you leave it.[/red]",
+                      highlight=False)
+
+
+@companion_app.command("on")
+def companion_on() -> None:
+    """Switch the Companion on ([companion] enabled = true in your config.toml)."""
+    _companion_switch(True)
+
+
+@companion_app.command("off")
+def companion_off() -> None:
+    """Switch the Companion off (the feed and proposals are kept)."""
+    _companion_switch(False)
+
+
+def _companion_items(items: list) -> None:
+    for i in items:
+        _companion_item(i)
+
+
+def _companion_item(i: dict) -> None:
+    kind = str(i.get("kind") or "?")
+    head = f"{i.get('at') or _companion_when(i.get('ts'))}  {kind}  {i.get('priority') or ''}"
+    _companion_say(head, "dim")
+    _companion_say(f"  {i.get('title') or ''}", "bold")
+    body = str(i.get("body") or "").strip()
+    if body:
+        _companion_say("    " + body.replace("\n", "\n    "))
+    if i.get("why_now"):
+        _companion_say(f"    why now: {i['why_now']}", "dim")
+    if i.get("proposal_id"):
+        _companion_say(f"    proposal {i['proposal_id']}: evi companion proposals", "cyan")
+    refused = i.get("proposal_refused")
+    if isinstance(refused, dict):
+        _companion_say(f"    proposal refused ({refused.get('tool')}): {refused.get('reason')}",
+                       "yellow")
+    if i.get("notified"):
+        _companion_say("    notified", "dim")
+    elif i.get("held"):
+        _companion_say(f"    not notified: {i['held']}", "dim")
+
+
+_COMPANION_SKIPS = {
+    "busy": "another check-in is running",
+    "no sources": "none of its sources is available here",
+    "unchanged": "nothing changed since the last one (no model call)",
+}
+
+
+@companion_app.command("check")
+def companion_check(
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Run a check-in now (then the brief, if it is due): what ran or why it was skipped,
+    and the new items."""
+    from evi import companion, safemode
+
+    _companion_format(format)
+    _proc.mark_agent_process()  # it hosts an agent (evi.proc)
+    res = companion.check_in()
+    if format == "json":
+        _companion_json(res.to_dict())
+    if res.skipped == "disabled":
+        if format != "json":
+            why = "safe mode is on" if safemode.enabled() else "it is off (`evi companion on`)"
+            _companion_fail(f"no check-in: {why}")
+        raise typer.Exit(2)
+    if format == "json":
+        raise typer.Exit(1 if res.error else 0)
+    if res.skipped:
+        _companion_say(f"skipped: {_COMPANION_SKIPS.get(res.skipped, res.skipped)}", "yellow")
+    elif res.ran:
+        _companion_say(f"checked in: {', '.join(res.sources)}", "green")
+    if res.unavailable:
+        _companion_say(f"not available here: {', '.join(res.unavailable)}", "yellow")
+    if res.items:
+        _companion_items(res.items)
+    elif res.ran:
+        _companion_say("nothing new")
+    for d in res.denials:
+        _companion_say(f"denied: {d.get('tool')}: {d.get('reason')}", "yellow")
+    for r in res.refused:
+        _companion_say(f"proposal refused ({r.get('tool')}): {r.get('reason')}", "yellow")
+    for problem in res.dropped:
+        _companion_say(f"dropped: {problem}", "dim")
+    if res.brief:
+        _companion_say("brief:", "dim")
+        _companion_item(res.brief)
+    if res.error:
+        _companion_say(f"error: {res.error}", "red")
+        raise typer.Exit(1)
+
+
+@companion_app.command("brief")
+def companion_brief(
+    force: bool = typer.Option(False, "--force", help="Make one now, due or not."),
+) -> None:
+    """The morning brief, when it is due (or now with --force)."""
+    from evi import companion, safemode
+
+    if not companion.status()["enabled"] or safemode.enabled():
+        _companion_fail("no brief: " + ("safe mode is on" if safemode.enabled()
+                                       else "the Companion is off (`evi companion on`)"))
+    entry = companion.brief(force=force)
+    if entry is None:
+        st = companion.status()
+        _companion_say(f"no brief: not due yet (brief_at {st['brief_at']}), already out today "
+                       f"({st['brief_day'] or 'none'}) or a check-in is running; --force makes "
+                       "one now", "yellow")
+        return
+    _companion_item(entry)
+
+
+@companion_app.command("feed")
+def companion_feed(
+    limit: int = typer.Option(20, "--limit", "-n", min=1, help="How many items (newest)."),
+    since: str = typer.Option("", "--since", help="Only items after this ISO time."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """What the Companion found: the newest items, oldest first."""
+    from datetime import datetime as _dt
+
+    from evi import companion
+
+    _companion_format(format)
+    cut = None
+    if since.strip():
+        try:
+            cut = _dt.fromisoformat(since.strip())
+        except ValueError:
+            _companion_fail(f"--since {since!r} is not an ISO time (e.g. 2026-10-22T08:00)")
+    items = companion.feed(limit, cut)
+    if format == "json":
+        _companion_json(items)
+        return
+    if not items:
+        _companion_say("nothing yet", "dim")
+        return
+    _companion_items(items)
+
+
+@companion_app.command("proposals")
+def companion_proposals(
+    state: str = typer.Option("", "--state", help="Only these: pending | running | executed | "
+                                                  "failed | rejected | expired | refused, or "
+                                                  "approved (running, executed or failed) | "
+                                                  "done (executed)."),
+    format: str = typer.Option("text", "--format", "-f", help="Output format: text | json."),
+) -> None:
+    """Proposed actions and their state (oldest first)."""
+    from evi import companion
+
+    _companion_format(format)
+    if state and state not in companion.PROPOSAL_FILTERS:
+        _companion_fail(f"unknown --state {state!r} "
+                        f"(choose: {' | '.join(companion.PROPOSAL_FILTERS)})")
+    rows = companion.proposals(state or None)
+    if format == "json":
+        _companion_json(rows)
+        return
+    if not rows:
+        _companion_say("no proposals" + (f" {state}" if state else ""), "dim")
+        return
+    now = time.time()
+    for p in rows:
+        when = ""
+        if p.get("state") == "pending":
+            left = max(0, int(float(p.get("expires_at") or 0) - now))
+            when = f" (expires in {left // 3600} h {left % 3600 // 60} min)"
+        _companion_say(f"{p['id']}  {p.get('state')}  {p.get('tool')}{when}", "bold")
+        _companion_say(f"  {p.get('summary') or ''}")
+        if p.get("reason"):
+            _companion_say(f"  why: {p['reason']}", "yellow")
+        if p.get("result"):
+            _companion_say("  result: " + str(p["result"]).replace("\n", "\n    "), "dim")
+
+
+def _companion_pending(proposal_id: str) -> dict:
+    from evi import companion
+
+    p = next((r for r in companion.proposals() if r.get("id") == proposal_id), None)
+    if p is None:
+        _companion_fail(f"no proposal {proposal_id!r} (see `evi companion proposals`)")
+    if p.get("state") != "pending":
+        _companion_fail(f"proposal {proposal_id} is {p.get('state')}, not pending")
+    return p
+
+
+@companion_app.command("approve")
+def companion_approve(
+    proposal_id: str = typer.Argument(..., help="The proposal's id."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask (scripts: you approve "
+                                                        "what this prints)."),
+) -> None:
+    """Run a pending proposal once, exactly as stored. Prints the tool and its arguments
+    first and asks y/N on a terminal (without one, --yes is needed)."""
+    import json as _json
+
+    from evi import companion
+
+    _companion_owner_only(f"approve proposal {proposal_id}")
+    p = _companion_pending(proposal_id)
+    _companion_say(f"proposal {proposal_id}: {p.get('summary') or ''}", "bold")
+    _companion_say(f"tool: {p.get('tool')}")
+    # ensure_ascii: the arguments exactly, any control or non-ASCII character escaped.
+    _companion_say("args: " + _json.dumps(p.get("args"), indent=2, sort_keys=True))
+    if not yes:
+        if not _companion_tty():
+            _companion_fail("not approved: no terminal to ask on; pass --yes to approve what "
+                            "is printed above")
+        if not typer.confirm("Run it?", default=False):
+            _companion_fail("not approved")
+    try:
+        done = companion.approve(proposal_id)
+    except KeyError:
+        _companion_fail(f"no proposal {proposal_id!r}")
+    except companion.ProposalError as exc:
+        _companion_fail(str(exc))
+    except companion.CompanionBusy as exc:
+        _companion_fail(str(exc), 1)
+    failed = done.get("state") != "executed"
+    _companion_say(f"{done.get('state')}:", "red" if failed else "green")
+    _companion_say(str(done.get("result") or "(no output)"))  # redacted by the engine
+    if failed:
+        raise typer.Exit(1)
+
+
+@companion_app.command("reject")
+def companion_reject(
+    proposal_id: str = typer.Argument(..., help="The proposal's id."),
+) -> None:
+    """Reject a pending proposal (it never runs)."""
+    from evi import companion
+
+    _companion_owner_only(f"reject proposal {proposal_id}")
+    p = _companion_pending(proposal_id)
+    _companion_say(f"proposal {proposal_id}: {p.get('tool')}: {p.get('summary') or ''}")
+    try:
+        companion.reject(proposal_id)
+    except KeyError:
+        _companion_fail(f"no proposal {proposal_id!r}")
+    except companion.ProposalError as exc:
+        _companion_fail(str(exc))
+    except companion.CompanionBusy as exc:
+        _companion_fail(str(exc), 1)
+    _companion_say("rejected", "yellow")
+
+
+@companion_app.command("instructions")
+def companion_instructions(
+    edit: bool = typer.Option(False, "--edit", help="Open them in $VISUAL / $EDITOR."),
+    show: bool = typer.Option(False, "--show", help="Print them (the default)."),
+    set_from: Path | None = typer.Option(None, "--set", metavar="FILE",
+                                         help="Replace them with this UTF-8 file's text."),
+) -> None:
+    """Your steering for the Companion (instructions.md): what to watch, what to ignore,
+    how often to speak up. Only you write it; no tool can."""
+    from rich.markup import escape
+
+    from evi import companion
+    from evi.companion.store import INSTRUCTIONS_FILE, INSTRUCTIONS_MAX
+
+    if sum((edit, show, set_from is not None)) > 1:
+        _companion_fail("give one of --edit, --show, --set")
+    path = Path(companion.status()["root"]) / INSTRUCTIONS_FILE
+    if set_from is not None or edit:
+        _companion_owner_only("rewrite the Companion's instructions")
+        if set_from is not None:
+            try:
+                text = set_from.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                _companion_fail(f"can't read {set_from}: {exc}")
+        else:
+            import click
+
+            edited = click.edit(companion.read_instructions(), extension=".md",
+                                require_save=True)
+            if edited is None:
+                _companion_say("unchanged", "dim")
+                return
+            text = edited
+        if len(text) > INSTRUCTIONS_MAX:
+            _companion_fail(f"instructions are limited to {INSTRUCTIONS_MAX} characters "
+                            f"(this is {len(text)})")
+        companion.write_instructions(text)
+        console.print(f"[green]saved[/green] {escape(str(path))}", soft_wrap=True,
+                      highlight=False)
+        return
+    text = companion.read_instructions()
+    if not text.strip():
+        console.print(f"[dim]no instructions yet ({escape(str(path))}); write some with "
+                      "`evi companion instructions --edit`[/dim]", soft_wrap=True,
+                      highlight=False)
+        return
+    _companion_say(text)
+
+
 @app.command("tools")
 def tools_list() -> None:
     """List registered tools and whether they are enabled."""

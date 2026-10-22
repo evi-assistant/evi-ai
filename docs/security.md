@@ -448,6 +448,8 @@ use them, and a users.json login gets 403:
 - file checkpoints and rewind (`/api/checkpoints`, `/api/rewind`). One journal
   records everyone's file writes, so only the owner can list or undo them;
 - folder trust (`POST /api/project/trust`);
+- the [Companion](features/companion.md) (`/api/companion/*`): its feed,
+  proposals and their approval, its instructions and switching it on;
 - host-level runs: workflows, ultracode, recipes and evals. These use the
   host's own config and data directories, outside per-user isolation;
 - delegated tasks from peers and A2A agents (`/api/federate`, `/a2a`), which

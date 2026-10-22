@@ -3369,6 +3369,7 @@ resetBtn.addEventListener('click', async () => {
     { id:'evals', title:'Evals', blurb:'Regression suites — the latest pass rates per model (from evi eval run), and your suites to browse and run.', custom:'evals' },
     { id:'automation', title:'Routes & Recipes', blurb:'Multi-model routing rules and saved multi-turn recipes.', custom:'automation' },
     { id:'channels', title:'Channels', blurb:'Message eVi from your phone via Telegram. Off until you turn it on.', custom:'channels' },
+    { id:'companion', title:'Companion', blurb:'A proactive watcher: it reads only what you connect, briefs you each morning, speaks up when something needs you, and changes nothing until you approve the exact action. Off until you turn it on.', custom:'companion' },
     { id:'peers', title:'Peers', blurb:'eVi-to-eVi federation — delegate tasks to another eVi (e.g. a GPU box).', custom:'peers' },
     { id:'mcp', title:'MCP', blurb:'External MCP servers — extra tools loaded from ~/.evi/mcp.json.', custom:'mcp' },
     { id:'hooks', title:'Hooks', blurb:'Run your own commands or webhooks on tool calls and lifecycle events.', custom:'hooks' },
@@ -3414,7 +3415,7 @@ resetBtn.addEventListener('click', async () => {
   // content — but it turns a wall into four short, scannable lists. Anything not
   // named here falls into "More", so adding a section never silently drops it.
   const NAV_GROUPS = [
-    ['Assistant', ['model', 'tools', 'editing', 'sampling', 'context', 'specialty', 'multiagent']],
+    ['Assistant', ['model', 'tools', 'editing', 'sampling', 'context', 'specialty', 'multiagent', 'companion']],
     ['This computer', ['permissions', 'guardrails', 'voice', 'notifications', 'desktop', 'server']],
     ['Extend', ['integrations', 'channels', 'plugins', 'mcp', 'hooks', 'automation', 'peers', 'ultracode']],
     ['App', ['general', 'statusline', 'stats', 'evals', 'about']],
@@ -3689,6 +3690,7 @@ resetBtn.addEventListener('click', async () => {
     }
     renderSectionAids(sec);
     if (sec.custom === 'channels') return renderChannels();
+    if (sec.custom === 'companion') return renderCompanion();
     if (sec.custom === 'about') return renderAbout();
     if (sec.custom === 'guardrails') return renderGuardrails();
     if (sec.custom === 'plugins') return renderPlugins();
@@ -5437,6 +5439,290 @@ resetBtn.addEventListener('click', async () => {
       }
       btn.disabled = false;
     };
+  }
+
+  // ---- Companion (evi/companion/) --------------------------------------
+  // The owner's view of the Duet-style watcher: on/off, its feed newest-first,
+  // the actions it proposes (each runs only after a second click here, exactly
+  // as shown), and its instructions. Feed and proposal text is the model's or a
+  // source's, untrusted: every string goes in through textContent, never HTML.
+  // Refreshes every 30 s while the section is open (every 2 s while a check-in
+  // this server started is running); the timers stop once it is closed.
+  const CMP_KINDS = { brief: 'brief', alert: 'alert', suggestion: 'suggestion',
+                      working_on: 'working on', needs_you: 'needs you', result: 'result' };
+  const CMP_SKIPS = { busy: 'another check-in was running', 'no sources': 'none of its sources is available',
+                      unchanged: 'nothing changed since the last one (no model call)', disabled: 'it is off' };
+  let cmpTicker = null;
+  // Control and format characters (a bidi override, zero-width, CR) shown as
+  // their \u escape, as evi.companion.printable does for the CLI: an approval
+  // card shows the exact arguments, never a path the browser reorders.
+  // Newline and tab stay (and a CRLF line end is a newline).
+  const CMP_UNSHOWN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu;
+  function cmpVisible(s) {
+    return String(s).replace(/\r\n/g, '\n').replace(CMP_UNSHOWN, c => {
+      const n = c.codePointAt(0);
+      return n > 0xffff ? '\\U' + n.toString(16).padStart(8, '0')
+        : n < 0x100 ? '\\x' + n.toString(16).padStart(2, '0')
+        : '\\u' + n.toString(16).padStart(4, '0');
+    });
+  }
+  function cmpEl(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = cmpVisible(text);
+    return e;
+  }
+  // A proposal's arguments, short values first: a long `content` can't push
+  // the `path` it goes to out of the card's scroll box.
+  function cmpArgs(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return JSON.stringify(args, null, 2);
+    const keys = Object.keys(args).map((k, i) => [k, (JSON.stringify(args[k]) || '').length > 200, i]);
+    keys.sort((a, b) => (a[1] - b[1]) || (a[2] - b[2]));
+    const out = Object.create(null);   // so a "__proto__" argument is shown like any other
+    keys.forEach(([k]) => { out[k] = args[k]; });
+    return JSON.stringify(out, null, 2);
+  }
+  function cmpWhen(ts) {
+    if (typeof ts !== 'number') return 'never';
+    try { return new Date(ts * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
+    catch { return new Date(ts * 1000).toLocaleString(); }
+  }
+  function cmpLeft(sec) {
+    if (sec <= 0) return 'expired';
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+    return 'expires in ' + (h ? h + ' h ' + m + ' min' : m ? m + ' min ' + s + ' s' : s + ' s');
+  }
+  async function cmpCall(url, opts) {
+    let r, d = {};
+    try { r = await fetch(url, opts); } catch (e) { return { ok: false, status: 0, data: { detail: String(e) } }; }
+    try { d = await r.json(); } catch {}
+    return { ok: r.ok, status: r.status, data: d };
+  }
+  const cmpPost = (url, body, method) => cmpCall(url, { method: method || 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+
+  async function renderCompanion() {
+    const box = cmpEl('div', 'cmp'); box.id = 'cmp-panel';
+    const head = cmpEl('div', 'cmp-head'); head.id = 'cmp-head';
+    const props = cmpEl('div'); props.id = 'cmp-proposals';
+    const feed = cmpEl('div'); feed.id = 'cmp-feed';
+    const instr = cmpEl('div', 'cmp-instr'); instr.id = 'cmp-instr';
+    box.append(head, cmpEl('div', 'k cmp-sec', 'Waiting for your approval'), props,
+               cmpEl('div', 'k cmp-sec', 'Feed'), feed,
+               cmpEl('div', 'k cmp-sec', 'Instructions'), instr);
+    contentEl.appendChild(box);
+    head.appendChild(cmpEl('p', 'sec-blurb', 'Loading…'));
+
+    let skew = 0;           // server clock minus ours, for the expiry countdowns
+    let st = null;
+    const done = new Map(); // proposals decided in this panel: id -> {proposal, error}
+    let armedId = null;     // a card whose Approve was clicked once: not redrawn under the user
+
+    function drawHead() {
+      head.replaceChildren();
+      if (!st) { head.appendChild(cmpEl('p', 'cmp-err', 'Couldn’t read the Companion’s status.')); return; }
+      const sw = cmpEl('label', 'cmp-switch');
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = 'cmp-enabled';
+      cb.checked = !!st.enabled;
+      sw.append(cb, cmpEl('b', '', 'Companion'), cmpEl('span', 'cmp-state ' + (st.enabled ? 'on' : 'off'), st.enabled ? 'on' : 'off'));
+      head.appendChild(sw);
+      head.appendChild(cmpEl('p', 'cmp-dim', 'When on, it checks your sources every few hours and ' +
+        'sends a morning brief. It only reads: anything it wants to do waits here until you approve it.'));
+      cb.onchange = async () => {
+        cb.disabled = true;
+        const r = await cmpPost('/api/companion/enabled', { on: cb.checked });
+        if (r.ok) st = r.data; else cb.checked = !cb.checked;
+        drawHead(); refresh();
+      };
+      if (!st.enabled) head.appendChild(cmpEl('p', 'cmp-note', 'Companion is off.'));
+      if (st.safe_mode) head.appendChild(cmpEl('p', 'cmp-err', 'Safe mode is on: the Companion doesn’t run.'));
+      else if (st.enabled && !st.scheduler) {
+        head.appendChild(cmpEl('p', 'cmp-err', 'No scheduler runs in this server, so check-ins ' +
+          'happen only when you press Check now (or run `evi scheduler`).'));
+      }
+      const rows = [
+        ['Reads', (st.sources || []).join(', ') || 'nothing (add [companion] sources)'],
+        ['May propose', (st.allowed_actions || []).join(', ') || 'nothing: it only suggests'],
+        ['Last check-in', cmpWhen(st.last_check)],
+        ['Next check-in', !st.enabled ? '—' : typeof st.next_check === 'number'
+          ? cmpWhen(st.next_check) : 'due now (the scheduler looks every 15 min)'],
+        ['Last brief', st.brief_day || 'never'],
+        ['Notifications today', String(st.notifications_today || 0)],
+      ];
+      const tbl = cmpEl('div', 'cmp-status'); tbl.id = 'cmp-status';
+      rows.forEach(([k, v]) => {
+        const row = cmpEl('div', 'set-about-row');
+        row.append(cmpEl('span', 'k', k), cmpEl('span', '', v));
+        tbl.appendChild(row);
+      });
+      head.appendChild(tbl);
+      const act = cmpEl('div', 'cmp-actions');
+      const chk = cmpEl('button', 'set-action-btn', st.check_running ? 'Checking…' : 'Check now');
+      chk.id = 'cmp-check'; chk.type = 'button';
+      chk.disabled = !st.enabled || !!st.safe_mode || !!st.check_running;
+      chk.onclick = async () => {
+        chk.disabled = true; chk.textContent = 'Checking…';
+        const r = await cmpPost('/api/companion/check');
+        if (!r.ok) { lastOut.textContent = cmpVisible(r.data.detail || ('failed (' + r.status + ')')); lastOut.className = 'cmp-err'; }
+        refresh();
+      };
+      act.appendChild(chk);
+      const lastOut = cmpEl('span', 'cmp-dim'); lastOut.id = 'cmp-last-run';
+      const lr = st.last_run;
+      if (st.check_running) lastOut.textContent = 'A check-in is running…';
+      else if (lr) {
+        lastOut.textContent = cmpVisible(lr.error ? 'Last check-in failed: ' + lr.error
+          : lr.skipped ? 'Last check-in skipped: ' + (CMP_SKIPS[lr.skipped] || lr.skipped)
+          : 'Last check-in: ' + ((lr.items || []).length ? (lr.items.length + ' new item(s)') : 'nothing new'));
+        if (lr.error) lastOut.className = 'cmp-err';
+      }
+      act.appendChild(lastOut);
+      head.appendChild(act);
+    }
+
+    function proposalCard(p, decided) {
+      const card = cmpEl('div', 'cmp-card'); card.dataset.id = p.id;
+      const top = cmpEl('div', 'cmp-card-top');
+      top.append(cmpEl('code', 'cmp-tool', p.tool), cmpEl('span', 'cmp-badge', decided ? p.state : 'proposed'));
+      card.appendChild(top);
+      card.appendChild(cmpEl('div', 'cmp-summary', p.summary || ''));
+      let argsText;
+      try { argsText = cmpArgs(p.args); } catch { argsText = String(p.args); }
+      const pre = cmpEl('pre', 'cmp-args', argsText); card.appendChild(pre);
+      if (decided) {
+        if (p.result !== undefined && p.result !== null) {
+          card.appendChild(cmpEl('div', 'cmp-dim', p.state === 'executed' ? 'Result' : 'Output'));
+          card.appendChild(cmpEl('pre', 'cmp-result', p.result));
+        } else if (p.reason) card.appendChild(cmpEl('div', 'cmp-err', p.reason));
+        return card;
+      }
+      const exp = cmpEl('div', 'cmp-dim cmp-exp'); exp.dataset.exp = String(p.expires_at || 0);
+      exp.textContent = cmpLeft((p.expires_at || 0) - (Date.now() / 1000 + skew));
+      card.appendChild(exp);
+      const err = cmpEl('div', 'cmp-err'); card.appendChild(err);
+      const btns = cmpEl('div', 'cmp-actions');
+      const ok = cmpEl('button', 'set-action-btn cmp-approve', 'Approve'); ok.type = 'button';
+      const no = cmpEl('button', 'set-action-btn cmp-reject', 'Not now'); no.type = 'button';
+      let armed = null;
+      ok.onclick = async () => {
+        if (!armed) {   // the first click only arms it: the second one runs
+          ok.textContent = cmpVisible('Run ' + p.tool + ' now'); ok.classList.add('armed'); armedId = p.id;
+          armed = setTimeout(() => {
+            armed = null; armedId = null; ok.textContent = 'Approve'; ok.classList.remove('armed');
+          }, 8000);
+          return;
+        }
+        clearTimeout(armed); armed = null; armedId = null;
+        ok.disabled = no.disabled = true; ok.textContent = 'Running…';
+        const r = await cmpPost('/api/companion/proposals/' + encodeURIComponent(p.id) + '/approve',
+                                { args_hash: p.args_hash });
+        if (r.ok) done.set(p.id, r.data.proposal);
+        else done.set(p.id, Object.assign({}, p, { state: r.status === 409 ? 'refused' : 'error',
+                                                    reason: r.data.detail || ('failed (' + r.status + ')') }));
+        refresh();
+      };
+      no.onclick = async () => {
+        if (armed) { clearTimeout(armed); armed = null; }
+        if (armedId === p.id) armedId = null;
+        ok.disabled = no.disabled = true;
+        const r = await cmpPost('/api/companion/proposals/' + encodeURIComponent(p.id) + '/reject');
+        if (!r.ok) { err.textContent = cmpVisible(r.data.detail || ('failed (' + r.status + ')')); }
+        else done.set(p.id, r.data.proposal);
+        refresh();
+      };
+      btns.append(ok, no); card.appendChild(btns);
+      return card;
+    }
+
+    function drawProposals(pending) {
+      props.replaceChildren();
+      [...done.values()].reverse().forEach(p => props.appendChild(proposalCard(p, true)));
+      const open = (pending || []).filter(p => !done.has(p.id));
+      open.forEach(p => props.appendChild(proposalCard(p, false)));
+      if (!open.length && !done.size) props.appendChild(cmpEl('p', 'cmp-dim', 'Nothing is waiting for your approval.'));
+    }
+
+    function drawFeed(items) {
+      feed.replaceChildren();
+      if (!items || !items.length) {
+        feed.appendChild(cmpEl('p', 'cmp-dim', st && !st.enabled ? 'Companion is off. Nothing yet.' : 'Nothing yet.'));
+        return;
+      }
+      items.slice().reverse().forEach(i => {   // newest first
+        const row = cmpEl('div', 'cmp-item');
+        const top = cmpEl('div', 'cmp-item-top');
+        const kind = String(i.kind || '');
+        top.append(cmpEl('span', 'cmp-badge k-' + kind.replace(/[^a-z_]/g, ''), CMP_KINDS[kind] || kind),
+                   cmpEl('span', 'cmp-prio p-' + String(i.priority || '').replace(/[^a-z]/g, ''), i.priority || ''),
+                   cmpEl('b', 'cmp-title', i.title || ''),
+                   cmpEl('span', 'cmp-dim cmp-at', cmpWhen(i.ts)));
+        row.appendChild(top);
+        if (i.body) row.appendChild(cmpEl('div', 'cmp-body', i.body));
+        if (i.why_now) row.appendChild(cmpEl('div', 'cmp-dim', 'Why now: ' + i.why_now));
+        if (i.proposal_refused && typeof i.proposal_refused === 'object') {
+          row.appendChild(cmpEl('div', 'cmp-dim', 'Proposed ' + (i.proposal_refused.tool || '?') +
+            ', refused: ' + (i.proposal_refused.reason || '')));
+        }
+        if (i.notified) row.appendChild(cmpEl('div', 'cmp-dim', 'Notified'));
+        else if (i.held) row.appendChild(cmpEl('div', 'cmp-dim', 'Not notified: ' + i.held));
+        feed.appendChild(row);
+      });
+    }
+
+    async function drawInstructions() {
+      instr.replaceChildren();
+      instr.appendChild(cmpEl('p', 'cmp-dim', 'What to watch, what to ignore, how often to speak up. ' +
+        'The Companion reads this; only you write it.'));
+      const ta = document.createElement('textarea'); ta.id = 'cmp-instr-text'; ta.rows = 6;
+      ta.placeholder = 'e.g. Watch my calendar for clashes. Ignore newsletters. Only ping me for things today.';
+      const r = await cmpCall('/api/companion/instructions');
+      if (r.ok) { ta.value = r.data.text || ''; if (r.data.max_chars) ta.maxLength = r.data.max_chars; }
+      const row = cmpEl('div', 'cmp-actions');
+      const save = cmpEl('button', 'set-action-btn', 'Save instructions'); save.id = 'cmp-instr-save'; save.type = 'button';
+      const msg = cmpEl('span', 'cmp-dim'); msg.id = 'cmp-instr-msg';
+      save.onclick = async () => {
+        save.disabled = true; msg.className = 'cmp-dim'; msg.textContent = 'Saving…';
+        const w = await cmpPost('/api/companion/instructions', { text: ta.value }, 'PUT');
+        save.disabled = false;
+        if (w.ok) msg.textContent = 'Saved.';
+        else { msg.className = 'cmp-err'; msg.textContent = cmpVisible(w.data.detail || ('failed (' + w.status + ')')); }
+      };
+      row.append(save, msg);
+      instr.append(ta, row);
+    }
+
+    let busy = false;
+    async function refresh() {
+      if (busy || !box.isConnected) return;
+      busy = true;
+      try {
+        const [s, p, f] = await Promise.all([
+          cmpCall('/api/companion/status'),
+          cmpCall('/api/companion/proposals?state=pending'),
+          cmpCall('/api/companion/feed?limit=100'),
+        ]);
+        st = s.ok ? s.data : null;
+        if (p.ok && typeof p.data.now === 'number') skew = p.data.now - Date.now() / 1000;
+        drawHead();
+        if (!armedId) drawProposals(p.ok ? p.data.proposals : []);
+        drawFeed(f.ok ? f.data.items : []);
+      } finally { busy = false; }
+    }
+
+    await refresh();
+    drawInstructions();
+    if (cmpTicker) clearInterval(cmpTicker);
+    let ticks = 0;
+    cmpTicker = setInterval(() => {
+      if (!box.isConnected || !overlay.classList.contains('shown')) {
+        clearInterval(cmpTicker); cmpTicker = null; return;
+      }
+      ticks++;
+      box.querySelectorAll('.cmp-exp').forEach(e => {
+        e.textContent = cmpLeft(Number(e.dataset.exp) - (Date.now() / 1000 + skew));
+      });
+      if (ticks % 30 === 0 || (st && st.check_running && ticks % 2 === 0)) refresh();
+    }, 1000);
   }
 
   function renderAbout() {

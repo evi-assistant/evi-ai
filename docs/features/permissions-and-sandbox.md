@@ -687,6 +687,31 @@ branch changed outside the scope (`out_of_scope`), and `evi task verify`
 won't sign over them without the director's reason. A plain
 `evi run --confine` has no such check: review its diff.
 
+### Watcher policy
+
+A [Companion](companion.md) check-in runs unattended over text other people
+wrote, so it gets the narrowest policy eVi has, `watcher`
+(`evi.policy.watcher_policy`), whatever `[auto]` says:
+
+1. `[auto] hard_deny`, `deny` rules and [the director's
+   ground](#the-directors-ground) deny first.
+2. Then only the read-only tools of `[companion] sources` are allowed, each
+   under the category it must have (`calendar_*` as `calendar`; `recall`,
+   `list_memories`, `recall_by_tag` as `memory`; an `mcp:<server>:<tool>`
+   entry as that one MCP tool). Every other call is denied, never asked: no
+   shell, code, file reads or writes, web, memory writes, subagents,
+   scheduling or other MCP tools. No command runs, a check included.
+3. The run is unattended with `deny` (nothing asks), its working folder is
+   the Companion's own, it has no project context, skills or memory index,
+   and a delegate CLI-agent backend is refused.
+
+A source entry that is a write, shell or network tool is refused when the
+policy is built, so the check-in doesn't run. The policy covers the check-in
+only: a proposed action runs later, on your approval, as one direct call
+after the checks in [What is always
+refused](companion.md#what-is-always-refused), your hooks, `hard_deny`, deny
+rules and protected paths.
+
 ### What `web_fetch` will fetch
 
 The model picks `web_fetch`'s URL, and the page can redirect anywhere, so

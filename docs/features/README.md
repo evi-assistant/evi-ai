@@ -13,6 +13,7 @@ tokens, the desktop app's LAN token, containers) see
 - [First run](onboarding.md) — what the first-run screen offers, the verified backend switch and its rollback
 - [Managed local runtime](runtime.md) — eVi's own llama.cpp: setup, model catalog, GPU, your own build (`evi runtime`, `evi model`)
 - [Chat channels (Telegram)](channels.md) — message eVi from your phone; pairing, the channel toolset (`evi channel`)
+- [The Companion](companion.md) — the opt-in, read-only proactive watcher: check-ins, the morning brief, the feed, proposals you approve (`evi companion`, Settings → Companion)
 - [Steering a running turn](steering.md) — type while eVi works; applied at the next step
 - [Agents & Orchestration](agents.md) — subagents, `delegate`, parallel research, workflows, dispatch, federation
 - [Task queue](tasks.md) — tasks tracked in the repository, run in a worktree under the implementer policy, verified only by the director's signature (`evi task`, `evi attest`; over MCP with `evi mcp serve --categories agent`)
