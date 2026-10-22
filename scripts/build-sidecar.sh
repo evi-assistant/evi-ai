@@ -71,6 +71,14 @@ echo ">> PyInstaller build (--onedir; web + pdf + index)"
     --specpath "$root/build" \
     "$root/scripts/sidecar_entry.py"
 
+# Windows: carry the VC++ runtime the native modules need even when this
+# machine lacks the redistributable (a no-op elsewhere).
+"$py" "$root/scripts/bundle_vc_runtime.py" "$root/dist/evi-server"
+
+# Gate: the frozen server must import every bundled dep before it's staged.
+exe="$root/dist/evi-server/evi-server"; [ -f "$exe.exe" ] && exe="$exe.exe"
+"$exe" --check || { echo ">> sidecar self-check failed; not staging it" >&2; exit 1; }
+
 # Stage the whole onedir folder for the Tauri resources bundle.
 dst="$root/desktop/src-tauri/binaries/evi-server"
 rm -rf "$dst"

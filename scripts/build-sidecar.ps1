@@ -14,7 +14,7 @@ $root = (Resolve-Path "$here\..").Path
 # sounddevice + av into the "practical tier" sidecar (--collect-submodules evi
 # pulls every evi.tools.* module), ballooning it from ~75 MB to >1 GB. Create
 # the isolated venv once with: py -3.13 -m venv .venv-build
-$py = if (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
+$py = if ($env:EVI_PYTHON) { $env:EVI_PYTHON } elseif (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 
 # Practical tier: bundle web + web-tools + pdf + index. STT + computer-use stay
 # opt-in via a system Python. OCR works via a bundled tesseract binary.
@@ -61,6 +61,16 @@ Write-Host ">> PyInstaller build (--onedir; web + web-tools + pdf + index)"
     --workpath "$root\build\pyinstaller" `
     --specpath "$root\build" `
     "$root\scripts\sidecar_entry.py"
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
+
+# Carry the VC++ runtime PyMuPDF needs even when this machine lacks the
+# redistributable (PyInstaller only bundles what it finds installed).
+& $py "$here\bundle_vc_runtime.py" "$root\dist\evi-server"
+if ($LASTEXITCODE -ne 0) { throw "bundling the VC++ runtime failed (see above)" }
+
+# Gate: the frozen server must import every bundled dep before it's staged.
+& "$root\dist\evi-server\evi-server.exe" --check
+if ($LASTEXITCODE -ne 0) { throw "sidecar self-check failed; not staging it" }
 
 # Stage the whole onedir folder for the Tauri resources bundle.
 $src = "$root\dist\evi-server"

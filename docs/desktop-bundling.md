@@ -193,11 +193,23 @@ npm run tauri build -- --config src-tauri/tauri.standalone.conf.json --config sr
 ```
 
 A GNU release build without that overlay prints a `cargo:warning` from
-`build.rs`. The frozen sidecar has a related gap on a machine without the
-Visual C++ runtime: PyInstaller can only bundle the `MSVCP140.dll` that
-PyMuPDF needs if the build machine has it, so freeze the sidecar where the
-runtime is installed (CI's runners have it), or run the sidecar's
-`--check`, which reports `fitz` failing when it's missing.
+`build.rs`.
+
+### The Visual C++ runtime in the sidecar
+
+PyMuPDF (PDF reading) links `MSVCP140.dll`, `VCRUNTIME140.dll` and
+`VCRUNTIME140_1.dll`, and PyInstaller bundles a DLL only if the build machine
+has it. Python ships the two VCRUNTIME ones; `MSVCP140.dll` comes from the
+Visual C++ Redistributable in System32, which a fresh or locked-down machine
+may not have. `build-sidecar.{ps1,sh}` therefore run
+`scripts/bundle_vc_runtime.py` after PyInstaller: it fills any of the three
+missing from `_internal/` with the newest Microsoft-signed copy it finds, in
+System32, the build Python's folder, or a wheel in the build venv (numpy's
+`numpy.libs/msvcp140-<hash>.dll` is the same DLL under another name), and
+fails the build if there is none (install the redistributable then). The
+scripts then run the frozen `evi-server --check` and refuse to stage a
+sidecar whose bundled dependencies don't all import. `EVI_PYTHON` picks the
+build venv's interpreter in both scripts.
 
 ## Verification status
 

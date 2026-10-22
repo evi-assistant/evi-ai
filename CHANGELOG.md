@@ -1265,6 +1265,14 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **A sidecar frozen without the Visual C++ Redistributable reads PDFs.**
+  PyInstaller bundles `MSVCP140.dll` (which PyMuPDF needs) only when the build
+  machine has it, so a sidecar frozen elsewhere failed to load PDF support on
+  PCs without the redistributable. `build-sidecar.*` now fill any missing VC++
+  runtime DLL from a Microsoft-signed copy (System32, Python's folder, or the
+  one numpy's wheel carries) via `scripts/bundle_vc_runtime.py`, fail when
+  there is none, and stage the sidecar only after its `--check` passes.
+  `build-sidecar.ps1` also takes `EVI_PYTHON`, like the `.sh` script.
 - **Desktop installers built with Rust's GNU toolchain start.** On Windows the
   GNU toolchain (used where the MSVC Build Tools can't be installed) makes
   `evi-desktop.exe` load `WebView2Loader.dll` at startup, and the bundler
