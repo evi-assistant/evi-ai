@@ -1,53 +1,48 @@
-from evi.llm.agent import Agent
-from evi.tools.base import REGISTRY
-from evi.config import Config
-from tests.conftest import llm_call, llm_text
-from evi.tools.repair import unknown_tool_message
+"""A call to a tool there is none of names the close tools, or how to find
+one (evi.tools.repair.unknown_tool_message, used by the agent loop)."""
 
 import evi.tools.fs  # noqa: F401  registers read_file and list_dir
+from evi.config import Config
+from evi.llm.agent import Agent, ToolResult
+from evi.tools.base import REGISTRY
+from evi.tools.repair import unknown_tool_message
+from tests.conftest import llm_call, llm_text
 
-def test_unknown_tool_message():
-    # AC 1: Close match
+
+def test_a_close_name_is_suggested():
     msg = unknown_tool_message('read_fle', ['read_file', 'list_dir', 'write_file'])
     assert msg.startswith("ERROR: unknown tool 'read_fle'")
     assert 'Did you mean: read_file' in msg
 
-    # AC 2: search_tools
+
+def test_with_no_close_name_search_tools_is_pointed_at():
     msg = unknown_tool_message('something_weird', ['search_tools', 'list_dir'])
-    assert 'Use search_tools to find a tool by what it does.' in msg
+    assert msg.endswith('Use search_tools to find a tool by what it does.')
 
-    # AC 3: List tools (small)
-    msg = unknown_tool_message('something_weird', ['tool1', 'tool2'])
-    assert 'The tools are: tool1, tool2' in msg
 
-    # AC 3: List tools (large)
-    tools = [f'tool{i}' for i in range(50)]
-    msg = unknown_tool_message('something_weird', tools)
-    assert 'The tools are:' in msg
-    assert ', ...' in msg
-    # Check that it doesn't list all 50
-    # The message contains "unknown tool", "The tools are", and then up to 40 tool names.
-    # Total occurrences of 'tool' should be 2 + 40 = 42.
-    assert msg.count('tool') <= 42
+def test_with_no_close_name_and_no_search_the_tools_are_listed():
+    msg = unknown_tool_message('something_weird', ['tool2', 'tool1'])
+    assert msg.endswith('The tools are: tool1, tool2')
 
-def test_agent_unknown_tool_repair(fake_llm):
-    # AC 4: Agent run with unknown tool
-    # Setup: Agent with read_file and list_dir. Model calls 'read_fle'.
+
+def test_a_long_tool_list_stops_at_forty():
+    msg = unknown_tool_message('something_weird', [f'tool{i:02}' for i in range(50)])
+    listed = msg.split('The tools are: ')[1]
+    assert listed.endswith(', ...')
+    assert len(listed[:-len(', ...')].split(', ')) == 40
+
+
+def test_with_no_tools_only_the_error_is_given():
+    assert unknown_tool_message('x', []) == "ERROR: unknown tool 'x'"
+
+
+def test_an_agent_run_answers_an_unknown_tool_with_the_close_one(fake_llm):
     agent = Agent(
-        client=fake_llm([
-            llm_call(('read_fle', {'path': 'x'})),
-            llm_text('ok')
-        ]),
+        client=fake_llm([llm_call(('read_fle', {'path': 'x'})), llm_text('ok')]),
         config=Config(),
         transcripts=None,
         unattended_policy='allow',
-        tools=[REGISTRY[n] for n in ('read_file', 'list_dir')]
+        tools=[REGISTRY[n] for n in ('read_file', 'list_dir')],
     )
-
-    results = list(agent.chat('go', max_turns=4))
-
-    # Find the ToolResult for 'read_fle'
-    from evi.llm.agent import ToolResult
-    tool_result = next((r for r in results if isinstance(r, ToolResult) and r.name == 'read_fle'), None)
-    assert tool_result is not None
-    assert "unknown tool 'read_fle'. Did you mean: read_file" in tool_result.output
+    [result] = [e for e in agent.chat('go', max_turns=4) if isinstance(e, ToolResult)]
+    assert "unknown tool 'read_fle'. Did you mean: read_file" in result.output
