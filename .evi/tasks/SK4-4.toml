@@ -1,6 +1,6 @@
 id = "SK4-4"
 title = "agent: tool calls written as <tool_call> or <function=...> text at the start of a reply are run"
-status = "open"
+status = "verified"
 why = "Fourth slice of roadmap item loop-tools-tool-call-repair. Hermes-style models and Qwen2.5 write a call as <tool_call>{json}</tool_call> text, and Qwen3-Coder as <function=NAME><parameter=KEY>VALUE</parameter></function>; eVi recovers only a reply that starts with JSON or a code fence, so these stream to the user as text and nothing runs. The leading-position rule stays: an example call inside prose must never run."
 hints = "All in evi/llm/agent.py. 1) Directly above `def recover_text_tool_calls(` (around line 297; search for it) add exactly this:\n\n_TOOL_CALL_BLOCK = re.compile(r\"<tool_call>(.*?)(?:</tool_call>|\\Z)\", re.S)\n_FUNCTION_BLOCK = re.compile(r\"<function=([^>\\s]+)>(.*?)(?:</function>|\\Z)\", re.S)\n_PARAMETER = re.compile(r\"<parameter=([^>\\s]+)>(.*?)</parameter>\", re.S)\n# What a reply written as tagged tool calls starts with.\nTAGGED_CALL_STARTS = (\"<tool_call>\", \"<function=\")\n\n\ndef _parameter_value(text: str) -> str:\n    \"\"\"A <parameter> body without the one newline the format puts after the\n    opening tag and before the closing one (a file's own last newline stays).\"\"\"\n    if text.startswith(\"\\n\"):\n        text = text[1:]\n    if text.endswith(\"\\n\"):\n        text = text[:-1]\n    return text\n\n\ndef _recover_tagged_calls(text: str, known: set[str]) -> list[dict[str, str]]:\n    \"\"\"Calls a model wrote as tags, when `text` starts with one. Hermes and\n    Qwen2.5 put a JSON call in each <tool_call>...</tool_call>; Qwen3-Coder\n    writes <function=NAME><parameter=KEY>VALUE</parameter></function>, inside\n    <tool_call> or not. Parameter values stay strings (a tool that wants a\n    number gets it converted when the call is prepared). A block cut off\n    before its closing tag still counts. Unknown tools are skipped.\"\"\"\n    if not text.startswith(TAGGED_CALL_STARTS):\n        return []\n    out: list[dict[str, str]] = []\n    for m in _FUNCTION_BLOCK.finditer(text):\n        if m.group(1) in known:\n            params = {k: _parameter_value(v) for k, v in _PARAMETER.findall(m.group(2))}\n            out.append({\"name\": m.group(1), \"arguments\": json.dumps(params)})\n    if out:\n        return out\n    for m in _TOOL_CALL_BLOCK.finditer(text):\n        out.extend(recover_text_tool_calls(m.group(1).strip(), known))\n    return out\n\n2) In recover_text_tool_calls, right after its docstring and before `if not text or \"{\" not in text:`, add:\n\n    tagged = _recover_tagged_calls(text.lstrip(), known)\n    if tagged:\n        return tagged\n\n3) In _maybe_hold (around line 2601; search for `hold_text = head`): `hold_text = head[:1] in (\"`\", \"{\", \"[\")` gets \"<\" added to the tuple (a reply starting with '<' is held until the stream ends, then shown if it was no call).\n4) Around line 2711 (search for `_stripped[:1]`): `if _stripped[:1] in (\"`\", \"{\", \"[\"):` becomes `if _stripped[:1] in (\"`\", \"{\", \"[\") or _stripped.startswith(TAGGED_CALL_STARTS):` (wrap it as ruff wants). Do NOT add '<' there: a reply that starts with other markup must not have JSON later in it run as a call.\nChange nothing else. Tests in a NEW file tests/test_text_tool_calls_tags.py: unit tests of recover_text_tool_calls for each format, and agent tests like tests/test_read_ledger.py (fake_llm fixture; llm_text from tests.conftest; Agent with tools read_file and list_dir, unattended_policy='allow', agent.cwd set to tmp_path), checking ToolResult and TextDelta events."
 acceptance = ["recover_text_tool_calls('<tool_call>\\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \".\"}}\\n</tool_call>', {'list_dir'}) returns one list_dir call with arguments {\"path\": \".\"}; two <tool_call> blocks give two calls; a block missing its closing tag still counts.", "'<tool_call>\\n<function=read_file>\\n<parameter=path>\\nsrc/a.py\\n</parameter>\\n<parameter=offset>\\n5\\n</parameter>\\n</function>\\n</tool_call>' gives read_file with arguments {\"path\": \"src/a.py\", \"offset\": \"5\"}; a bare <function=...> block (no <tool_call>) works too; a multi-line parameter keeps its inner lines and blank lines, losing only the one newline after the opening tag and the one before the closing tag.", "An unknown tool in tags gives no call; text that does not START with <tool_call> or <function= (e.g. 'You could call <tool_call>...</tool_call> yourself.') gives no call.", "In an agent run, a reply that is a <tool_call> list_dir call runs list_dir (its ToolResult lists a file made in tmp_path) and no TextDelta shows the '<tool_call>' text; a reply 'You could call <tool_call>{...}</tool_call> yourself.' runs nothing; a reply '<b>bold</b> answer' still arrives as TextDelta text '<b>bold</b> answer'.", "The existing tests in tests/test_text_tool_calls.py and tests/test_agent.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/llm/agent.py", "tests/test_text_tool_calls_tags.py"]
 required_checks = ["python -m pytest -q tests/test_text_tool_calls_tags.py tests/test_text_tool_calls.py tests/test_agent.py", "python -m ruff check evi/llm/agent.py tests/test_text_tool_calls_tags.py"]
 implementer = "evi-local"
 created = "2026-10-23T22:10:16Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK4-4"
+branch = "task/SK4-4"
+base = "060b5411e5837245e548dfb424e885cb560160c4"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK4-4\\2"
+reviewer_notes = [{at = "2026-10-23T22:35:31Z", verdict = "reopened", note = "Director review (round 1). evi/llm/agent.py is final: do not change it (I tidied your leading-position check; your idea was right, and my criterion 3 was wrong about the function). One thing is missing: criterion 4's AGENT tests. tests/test_text_tool_calls_tags.py has only unit tests. ADD to it (read it first, then edit_file or apply_patch; do not rewrite it with write_file), using tests/test_read_ledger.py as the model for imports and the Agent:\n  import evi.tools.fs  # noqa: F401  registers read_file and list_dir\n  from evi.config import Config\n  from evi.llm.agent import Agent, TextDelta, ToolResult\n  from evi.tools.base import REGISTRY\n  from tests.conftest import llm_text\nAn Agent(client=fake_llm([...]), config=Config(), transcripts=None, unattended_policy=\"allow\", tools=[REGISTRY[n] for n in (\"read_file\", \"list_dir\")]) with agent.cwd = str(tmp_path); events = list(agent.chat(\"go\", max_turns=4)). Three tests:\n  1. tmp_path holds marker.txt; the model's reply is llm_text('<tool_call>\\n{\"name\": \"list_dir\", \"arguments\": {\"path\": \".\"}}\\n</tool_call>') then llm_text(\"done\"): exactly one ToolResult, whose output contains \"marker.txt\", and no TextDelta's text contains \"<tool_call>\".\n  2. The reply llm_text('You could call <tool_call>{\"name\": \"list_dir\", \"arguments\": {}}</tool_call> yourself.') runs nothing: no ToolResult.\n  3. The reply llm_text(\"<b>bold</b> answer\") arrives as text: \"\".join(e.text for e in events if isinstance(e, TextDelta)) == \"<b>bold</b> answer\".\nAlso put two blank lines between the top-level test functions. Run the required checks and quote their last lines."}]
+
+[evidence_summary]
+hash = "sha256:d0b1e04894419d391b98bcc02e4bd0036fb819aa1b05f9023126398e6d8a7b3c"
+files = 2
+insertions = 190
+deletions = 5
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 49
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK4-4\\2\\report.json"
+summary = "I have implemented the support for tagged tool calls (`<tool_call>` and `<function=...>`) as specified in task SK4-4."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK4-4"
+digest = "sha256:3f32445e7c697083067ed6371efa33efcd093a9fd30bd5378dc837e0ede263a6"
+head = "0766631520265cd5b8fe5b5e61debb410baff4ae"
+evidence = "sha256:d0b1e04894419d391b98bcc02e4bd0036fb819aa1b05f9023126398e6d8a7b3c"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T22:41:17Z"
+key = "302b45cb92785c8d"
+sig = "3e7e3c9db4849d2125d50b6b9395d89fd5cf59182be424f2b14b3fea30654b32"
+
+[attestation.review]
+base = "060b5411e5837245e548dfb424e885cb560160c4"
+exit_code = 0
+report_sha256 = "2f621b4f7ab7ecaa825b32cc98188ef7ba082dd8ad342a961715939557d7ffc4"
