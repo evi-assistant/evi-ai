@@ -10,8 +10,9 @@ backend's port-fallback discovery. Deliberately dependency-light and fast:
   answers like an OpenAI `/v1/models` endpoint (200 + a JSON ``data`` list) —
   so an unrelated service squatting on the port (e.g. a dev server returning
   a 404 HTML page) is not mistaken for an LLM backend.
-* `discover_llamacpp_url` scans a small port span (8080..8090 by default) for
-  a real llama.cpp server, so a busy default port doesn't hide it.
+* `discover_llamacpp_url` scans a small port span (8080..8090 by default) and
+  extra ports (e.g. 9931) for a real llama.cpp server, so a busy default port
+  doesn't hide it.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ import urllib.parse
 # llama.cpp's default is 8080; when that's taken people commonly bump to the
 # next free port. Scan the default plus the next ten.
 LLAMACPP_PORT_SPAN = 10
+# llama-server's default moved from 8080 to 9931, and the Llama app listens there.
+LLAMACPP_EXTRA_PORTS = (9931,)
 
 
 def split_host_port(base_url: str) -> tuple[str, int]:
@@ -157,18 +160,21 @@ def discover_llamacpp_url(
     *,
     span: int = LLAMACPP_PORT_SPAN,
     api_key: str | None = None,
+    extra_ports: tuple[int, ...] = LLAMACPP_EXTRA_PORTS,
 ) -> str | None:
     """Find a real llama.cpp server near `base_url`'s port.
 
-    Scans ``port .. port+span`` (e.g. 8080..8090). Returns the first URL that
-    answers like an OpenAI server, or None if none do. Open ports are checked
-    concurrently first, then HTTP-probed in ascending order so the lowest
-    working port wins.
+    Scans ``port .. port+span`` (e.g. 8080..8090) and any ``extra_ports``
+    (e.g. 9931). Returns the first URL that answers like an OpenAI server,
+    or None if none do. Open ports are checked concurrently first, then
+    HTTP-probed in the order they were scanned so the configured span
+    wins over extra ports.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     host, start = split_host_port(base_url)
     ports = [start + i for i in range(span + 1)]
+    ports += [p for p in extra_ports if p not in ports]
 
     with ThreadPoolExecutor(max_workers=len(ports)) as ex:
         open_flags = list(ex.map(lambda p: port_open(host, p), ports))
