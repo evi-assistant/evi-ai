@@ -104,6 +104,40 @@ def test_is_openai_server_false_for_200_without_data_list(monkeypatch):
 
 # --- discover_llamacpp_url -----------------------------------------------
 
+def test_discover_finds_extra_port(monkeypatch):
+    # Only 9931 answers
+    monkeypatch.setattr(pp, "port_open", lambda host, port: port == 9931)
+    monkeypatch.setattr(pp, "is_openai_server", lambda url, **k: True)
+    found = pp.discover_llamacpp_url("http://localhost:8080/v1")
+    assert found == "http://127.0.0.1:9931/v1"
+
+
+def test_discover_span_wins_over_extra(monkeypatch):
+    # Both 8081 and 9931 answer
+    monkeypatch.setattr(pp, "port_open", lambda host, port: port in (8081, 9931))
+    monkeypatch.setattr(pp, "is_openai_server", lambda url, **k: True)
+    found = pp.discover_llamacpp_url("http://localhost:8080/v1")
+    assert found == "http://127.0.0.1:8081/v1"
+
+
+def test_discover_base_url_on_extra_port_probes_once(monkeypatch):
+    seen = []
+    monkeypatch.setattr(pp, "port_open", lambda host, port: seen.append(port) or False)
+    monkeypatch.setattr(pp, "is_openai_server", lambda url, **k: False)
+    pp.discover_llamacpp_url("http://localhost:9931/v1")
+    # span is 9931..9941. 9931 is in span, so extra_ports (9931) is skipped.
+    # Total 11 ports.
+    assert len(seen) == 11
+    assert seen.count(9931) == 1
+
+
+def test_discover_no_extra_ports(monkeypatch):
+    seen = []
+    monkeypatch.setattr(pp, "port_open", lambda host, port: seen.append(port) or False)
+    monkeypatch.setattr(pp, "is_openai_server", lambda url, **k: False)
+    pp.discover_llamacpp_url("http://localhost:8080/v1", extra_ports=())
+    assert sorted(seen) == list(range(8080, 8091))
+
 
 def test_discover_finds_first_valid_port(monkeypatch):
     # 8080 occupied by a non-LLM service, real llama.cpp on 8083.
@@ -135,4 +169,5 @@ def test_discover_scans_span_ports(monkeypatch):
     monkeypatch.setattr(pp, "port_open", lambda host, port: seen.append(port) or False)
     monkeypatch.setattr(pp, "is_openai_server", lambda url, **k: False)
     pp.discover_llamacpp_url("http://localhost:8080/v1", span=10)
-    assert sorted(seen) == list(range(8080, 8091))
+    # 8080..8090 plus 9931
+    assert sorted(seen) == sorted(list(range(8080, 8091)) + [9931])
