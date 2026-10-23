@@ -400,10 +400,18 @@ def _glob_forms(pattern: str) -> set[str]:
 # ---- paths -------------------------------------------------------------------
 
 
-def _resolve(value: str, base: Path) -> Path | None:
+def _resolve(value: str, base: Path, roots: Sequence[Path] = ()) -> Path | None:
     """`value` (relative to `base`) on its real path, or None when where it
     leads can't be told without opening it (a network or opaque device
-    path) or it can't be resolved."""
+    path) or it can't be resolved.
+
+    A network (UNC) path is resolved only when, spelled out and normalized
+    but not yet opened, it lies under one of `roots` that is itself on that
+    network share: the policy's own folders, which eVi chose (a task
+    worktree on a shared checkout), never the model. Any other UNC path is
+    refused before anything connects to its host; the caller still checks
+    the resolved path against the roots, so a link on the share that leads
+    elsewhere is caught."""
     local = permissions._local_spelling(str(value))
     if local is None:
         return None
@@ -412,10 +420,25 @@ def _resolve(value: str, base: Path) -> Path | None:
         if not p.is_absolute():
             p = base / p
         if permissions._is_network_path(p):
-            return None
+            if not _under_network_root(p, roots):
+                return None
         return p.resolve()
     except (OSError, RuntimeError, ValueError):
         return None
+
+
+def _under_network_root(p: Path, roots: Sequence[Path]) -> bool:
+    """Whether `p`, normalized without touching the network, is one of the
+    network-share `roots` or below one."""
+    spelled = os.path.normcase(os.path.normpath(str(p)))
+    for root in roots:
+        r = Path(root)
+        if not permissions._is_network_path(r):
+            continue
+        top = os.path.normcase(os.path.normpath(str(r)))
+        if spelled == top or spelled.startswith(top.rstrip("\\/") + os.sep):
+            return True
+    return False
 
 
 def _inside(p: Path, roots: Sequence[Path]) -> bool:
@@ -585,18 +608,23 @@ class Policy:
             return self._check_writes(path_args, base, protected_paths, scoped=True)
         return self._check_reads(name, data, path_args, base, protected_paths)
 
+    def _roots(self) -> tuple[Path, ...]:
+        """The policy's own folders: a network path under one of them may be
+        resolved (`_resolve`)."""
+        return (self.root, *self.read_roots, *self.write_roots)
+
     def _exec_dir(self, name: str, data: dict, base: Path) -> Path | None:
         """The folder a shell call's line runs in (`permissions.exec_cwd_of`)."""
         cwd = permissions.exec_cwd_of(name, data)
         if cwd is None:
             return None
-        return _resolve(cwd, base) if cwd else _resolve(".", base)
+        return _resolve(cwd, base, self._roots()) if cwd else _resolve(".", base, self._roots())
 
     def _check_reads(self, name: str, data: dict, path_args: list[str], base: Path,
                      protected_paths: Iterable[str]) -> Verdict:
         roots = (self.root, *self.read_roots)
         for value in path_args or ["."]:
-            p = _resolve(value, base)
+            p = _resolve(value, base, self._roots())
             if p is None:
                 return _deny(f"{value!r}: where this path leads can't be told")
             if not _inside(p, roots):
@@ -632,7 +660,7 @@ class Policy:
         never = self._never_patterns(protected_paths)
         roots = self.write_roots or (self.root,)
         for value in path_args:
-            p = _resolve(value, base)
+            p = _resolve(value, base, self._roots())
             if p is None:
                 return _deny(f"{value!r}: where this path leads can't be told")
             if not _inside(p, roots):
@@ -704,7 +732,7 @@ class Policy:
             if (">" not in r.op or not r.text or r.dynamic
                     or r.text.lower() in permissions._NULL_SINKS):
                 continue
-            p = _resolve(r.text, run_in)
+            p = _resolve(r.text, run_in, self._roots())
             if p is None:
                 return f"{r.text!r}: where this redirect leads can't be told"
             why = self.scope_reason(r.text, p)
@@ -733,7 +761,7 @@ class Policy:
             if any(c in value for c in _WILDCARDS):
                 return (f"it rewrites every file {value!r} matches: name the files instead "
                         f"({self.scope_text()})")
-            p = _resolve(value, run_in)
+            p = _resolve(value, run_in, self._roots())
             if p is None:
                 return f"where its argument {value!r} leads can't be told"
             if p.is_dir():
@@ -853,7 +881,7 @@ def _args_outside(args: Sequence[str], root: Path, base: Path) -> str | None:
     """Why `args` reach outside `root` (a value that names a path outside it,
     relative to `base`, the folder the command works in), or None."""
     for value in _arg_values(args):
-        p = _resolve(value, base)
+        p = _resolve(value, base, (root,))
         if p is None:
             return f"where its argument {value!r} leads can't be told"
         if not _inside(p, (root,)):
@@ -1039,7 +1067,7 @@ def _git_reason(rest: list[str], root: Path, run_in: Path) -> str | None:
                     return f"git {name} without a folder"
                 value = rest[i + 1]
                 i += 1
-            target = _resolve(value, here)
+            target = _resolve(value, here, (root,))
             if target is None or not _inside(target, (root,)):
                 return f"git {name} {value} points outside the run's folder"
             if name == "-C":

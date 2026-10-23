@@ -849,3 +849,35 @@ def test_the_verify_gate_takes_the_policys_trust_for_its_root(home, root, tmp_pa
     agent = _agent(fake_llm([]), made, ["write_file"], trusted=True)
     assert agent._folder_trusted(made)
     assert not agent._folder_trusted(tmp_path / "task" / ".." / "elsewhere")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC paths are a Windows thing")
+def test_a_root_on_a_network_share_is_usable_and_other_shares_stay_refused(monkeypatch):
+    # A task worktree on a shared checkout lives at a UNC path. The policy's
+    # own root (chosen by eVi) may be resolved there; any other UNC path is
+    # refused before anything opens it (resolving one connects and
+    # authenticates to its host). Path.resolve is stubbed: no network here.
+    import evi.policy as P
+
+    root = Path(r"\\fileserver\projects\evi\.worktrees\task__T1")
+    resolved: list[str] = []
+
+    def fake_resolve(self, *a, **k):
+        resolved.append(str(self))
+        return self
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    roots = (root,)
+    assert P._resolve("evi/tools/fs.py", root, roots) == root / "evi" / "tools" / "fs.py"
+    assert P._resolve(str(root / "x.py"), root, roots) == root / "x.py"
+    resolved.clear()
+    for outside in (r"\\attacker\share\x.txt",            # another host
+                    r"\\fileserver\C$\Windows\win.ini",   # another share, same host
+                    str(root) + r"evil\x",                # the root as a mere prefix
+                    str(root) + r"\..\..\other\x",        # .. out of the root
+                    r"..\..\pyproject.toml"):
+        assert P._resolve(outside, root, roots) is None, outside
+    assert resolved == []  # none of them was opened
+    # Without the root among `roots`, the share stays refused too.
+    assert P._resolve("evi/tools/fs.py", root, ()) is None
+
