@@ -1,0 +1,20 @@
+id = "SK1-14"
+title = "ignore: a pattern's '*' runs in linear time (no catastrophic backtracking)"
+status = "open"
+why = "evi/ignore.py (SK1-8) turns each '*' into [^/]* and matches with re.fullmatch, so a pattern with many stars backtracks exponentially on a name it almost matches: '*a' * 9 + '*b' takes 4.7 s on 'a' * 40, and the filter runs on every file a search or the index walks. A repository's own .gitignore is untrusted input (any cloned repo), so one line could stall find_files, search_files, list_dir and the index once SK1-8b wires the filter in. Found by the review gate's security lens on SK1-8, measured by the director."
+hints = "Translate the way CPython 3.12's fnmatch does (Lib/fnmatch.py, _translate / _join_translated_parts): split the pattern's regex into the parts between single '*' wildcards; the part before the first star is matched as is; each later part P becomes an atomic group (?>[^/]*?P) (pyproject requires Python >= 3.12, which has atomic groups); a trailing star becomes [^/]*. Keep '**/' as (?:.*/)? and a trailing '/**' as /.* , and keep '?', [abc] and [!abc] as they are.\nCollapse consecutive single stars ('**' that is not '**/' or a trailing '/**') into one first.\nEvery existing test in tests/test_ignore.py must pass unchanged."
+acceptance = ["IgnoreRules(parse_rules('*a' * 9 + '*b')).ignored('a' * 40, False) returns False in under 0.1 s, and ignored('a' * 40 + 'b', False) returns True.", "IgnoreRules(parse_rules('*a' * 30 + '*b')).ignored('a' * 200, False) returns False in under 0.5 s.", "Ordinary patterns still behave as before: '*.log', 'a*b*c', '*.py[cod]', 'docs/*.md', '**/tmp', 'logs/**' (each with a matching and a non-matching path in a new test).", "The existing tests in tests/test_ignore.py pass unchanged."]
+files_in_scope = ["evi/ignore.py", "tests/test_ignore_redos.py"]
+required_checks = ["python -m pytest -q tests/test_ignore.py tests/test_ignore_redos.py", "python -m ruff check evi/ignore.py tests/test_ignore_redos.py"]
+implementer = "evi-local"
+created = "2026-10-23T10:56:17Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
