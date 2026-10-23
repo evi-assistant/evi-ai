@@ -176,3 +176,11 @@ def test_fit_arguments_coercion():
     res, notes = fit_arguments({"junk": 1}, schema, f_kwargs)
     assert "junk" in res
     assert "dropped unknown argument junk" not in notes
+
+
+def test_a_raw_newline_or_tab_inside_a_string_is_read():
+    # Small models often write a file's newlines raw inside a JSON string.
+    raw = '{"path": "a.py", "content": "x = 1\ny = 2\t# z"}'  # a real newline and tab
+    assert parse_arguments(raw, allow_truncated=False) == (
+        {"path": "a.py", "content": "x = 1\ny = 2\t# z"},
+        ["read arguments that were not strict JSON"])

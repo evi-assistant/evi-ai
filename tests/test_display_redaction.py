@@ -49,8 +49,9 @@ def _echo_env() -> Tool:
     return Tool(
         name="echo_env", description="print an environment variable",
         parameters={"type": "object", "properties": {"name": {"type": "string"},
-                                                     "note": {"type": "string"}}},
-        func=lambda name="", note="": f"{name}={os.environ.get(name, '')}",
+                                                     "note": {"type": "string"},
+                                                     "pin": {"type": "integer"}}},
+        func=lambda name="", note="", pin=0: f"{name}={os.environ.get(name, '')}",
     )
 
 

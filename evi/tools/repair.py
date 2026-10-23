@@ -21,11 +21,12 @@ _PYTHON_WORD = {"true": "True", "false": "False", "null": "None"}
 
 
 def loads_tolerant(blob: str) -> Any:
-    """`blob` parsed as JSON, or failing that as the Python-literal forms
+    """`blob` parsed as JSON (raw control characters, such as a newline
+    inside a string, allowed), or failing that as the Python-literal forms
     local models write (single-quoted strings, True/None, and lowercase
     true/false/null beside them). None when nothing parses."""
     try:
-        return json.loads(blob)
+        return json.loads(blob, strict=False)
     except (ValueError, TypeError, RecursionError):
         pass
     try:

@@ -47,6 +47,19 @@ and modification time); otherwise it refuses, shows the file's first lines and
 says to read it or use `edit_file`. Files the model created, wrote or edited
 itself count as read; outside an agent nothing is checked.
 
+Before a call runs, eVi fits its arguments to the tool once (`Tool.prepare`,
+`evi/tools/repair.py`), and the permission check, the policy, hooks and the
+tool all see the result: lenient JSON (single quotes, `True`/`None`, raw
+newlines in strings), values converted to the schema's type where that is
+unambiguous (`"5"` to 5, `"true"` to true, a lone value to a list),
+`file_path`, `filepath`, `filename` and `file` read as `path` and `cmd` as
+`command`, and arguments the tool doesn't take dropped. The tool's result
+then ends with `(eVi repaired this call: ...)`. Arguments cut off
+mid-object are closed only for a read-only tool. A call that can't be used
+is answered with the tool's arguments and an example; an unknown tool with
+the close names (or `search_tools`, or the list of tools). A reply that
+starts with a call written as `<tool_call>` or `<function=...>` text runs it.
+
 ## `code` — code execution and reading (default on)
 
 | Tool             | What it does                                                | Checked as |

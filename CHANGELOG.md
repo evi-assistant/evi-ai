@@ -827,6 +827,22 @@ All notable user-visible changes to eVi. Format loosely follows
   `edit_file`. New files, and files the model itself wrote or edited, need no
   read; `edit_file` and `apply_patch` need none either. Called outside an
   agent (a script calling the tool function), nothing is checked.
+- **eVi repairs the tool calls small models get wrong, and says so.** Each
+  call is fitted to its tool once, before the permission check, the policy,
+  hooks and the tool see it (new `evi/tools/repair.py`, `Tool.prepare`):
+  arguments in single quotes, with Python's `True`/`None` or with raw
+  newlines inside a string are read; a number, boolean or list sent as text
+  (`"offset": "5"`) becomes the type the tool takes; `file_path`/`filename`
+  become `path` and `cmd` becomes `command`; an argument the tool doesn't
+  take is dropped. The result ends with what eVi changed. Arguments cut off
+  mid-object are closed for a read-only tool only, never for one that
+  writes. A call that still can't be used, or lacks a required argument, is
+  answered with how to call the tool (`read_file(path: string, offset?:
+  integer, ...)` and an example) instead of a Python error, and a call to an
+  unknown tool names the close ones ("Did you mean: read_file?"). A reply
+  that starts with a call written as `<tool_call>{...}</tool_call>` (Hermes,
+  Qwen2.5) or `<function=NAME><parameter=KEY>...` (Qwen3-Coder) text runs
+  it; one shown inside prose never runs.
 - **`find_files`, `search_files`, `list_dir` and the index skip what
   `.gitignore` and `.eviignore` ignore.** Build output and generated files no
   longer fill searches or get embedded; `list_dir` says how many entries it

@@ -67,7 +67,7 @@ from evi.tools.base import (
     bind_context,
     unbind_context,
 )
-from evi.tools.repair import unknown_tool_message
+from evi.tools.repair import loads_tolerant as _loads_tolerant, unknown_tool_message
 from evi.history import (
     INTERRUPTED,
     compaction_cut,
@@ -265,33 +265,6 @@ def _find_json_blobs(text: str) -> list[str]:
         else:
             i += 1
     return blobs
-
-
-def _loads_tolerant(blob: str):
-    """Parse a JSON-ish object, tolerating the malformed output local models
-    often emit: single-quoted strings and Python literals. Returns the parsed
-    value or None. (Local models sometimes wrap values in single quotes when the
-    value itself contains a double quote, producing invalid JSON.)"""
-    try:
-        return json.loads(blob)
-    except (ValueError, TypeError):
-        pass
-    import ast
-
-    try:  # handles single-quoted strings + True/False/None
-        return ast.literal_eval(blob)
-    except (ValueError, SyntaxError):
-        pass
-    # Normalize JSON literals to Python, then retry (e.g. lowercase `false`).
-    import re as _re
-
-    norm = _re.sub(r"\bfalse\b", "False", blob)
-    norm = _re.sub(r"\btrue\b", "True", norm)
-    norm = _re.sub(r"\bnull\b", "None", norm)
-    try:
-        return ast.literal_eval(norm)
-    except (ValueError, SyntaxError):
-        return None
 
 
 _TOOL_CALL_BLOCK = re.compile(r"<tool_call>(.*?)(?:</tool_call>|\Z)", re.S)
@@ -2813,18 +2786,24 @@ class Agent:
             # later turn re-sends it and 400s, wedging the chat. OpenAI tolerates
             # null content on a tool-call message; Ollama requires a string.
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": "".join(text_buf)}
+            # Each call's arguments are repaired once, here (Tool.prepare), so
+            # the history, the permission check, the policy, the hooks and the
+            # tool all see the same ones. `prepared` lines up with the calls:
+            # (the notes of each repair, the ERROR that answers a call that
+            # can't be used).
+            prepared: list[tuple[list[str], str | None]] = []
             if tool_buf:
-                assistant_msg["tool_calls"] = [
-                    {
+                assistant_msg["tool_calls"] = []
+                for i, slot in sorted(tool_buf.items()):
+                    arguments, notes, problem = self._prepare_call(
+                        slot["name"], slot["arguments"] or "{}", ready=stream_error is None
+                    )
+                    prepared.append((notes, problem))
+                    assistant_msg["tool_calls"].append({
                         "id": slot["id"] or f"call_{i}",
                         "type": "function",
-                        "function": {
-                            "name": slot["name"],
-                            "arguments": slot["arguments"] or "{}",
-                        },
-                    }
-                    for i, slot in sorted(tool_buf.items())
-                ]
+                        "function": {"name": slot["name"], "arguments": arguments},
+                    })
             # Output guardrails: scan the assistant text before we store /
             # log it. We can't un-stream what already went to the UI, but we
             # clean the stored copy (so it can't poison later turns or the
@@ -2943,6 +2922,10 @@ class Agent:
                     )
                 else:
                     m["blocked"] = None
+            for m, (notes, problem) in zip(calls_meta, prepared):
+                m["repairs"] = notes
+                if m["blocked"] is None and problem is not None:
+                    m["blocked"] = problem
             # 2) Permission for the calls still standing, at once (batched when
             #    possible): a call refused above never prompts. A turn
             #    cancelled by now asks about nothing and runs nothing.
@@ -3004,6 +2987,11 @@ class Agent:
                 fname = m["name"]
                 call = m["call"]
                 out_obj = output or ToolOutput(text="(no output)")
+                if m.get("repairs") and m["blocked"] is None and i not in not_run:
+                    out_obj = ToolOutput(
+                        text=f"{out_obj.text}\n\n(eVi repaired this call: {'; '.join(m['repairs'])}.)",
+                        citations=list(out_obj.citations), extra=dict(out_obj.extra),
+                    )
                 if i not in not_run and repeats.note(fname, m["args"], out_obj.text,
                                                      m.get("tool")):
                     stuck = True
@@ -3639,6 +3627,31 @@ class Agent:
                 msg = veto.stderr.strip() or veto.stdout.strip() or "(no message)"
                 return f"BLOCKED BY HOOK {veto.hook_name!r}: {msg}"
         return None
+
+    def _prepare_call(
+        self, name: str, arguments: str, *, ready: bool = True
+    ) -> tuple[str, list[str], str | None]:
+        """One call's arguments repaired for its tool (`Tool.prepare`) before
+        anything checks or runs them: (arguments, a note per repair, None),
+        or (arguments, [], the ERROR to answer it with) when it can't be used.
+        Such a call keeps its arguments in the history as valid JSON ("{}"
+        when they aren't). A call to no known tool, to a tool without
+        `prepare`, or from a reply that broke off (`ready` False: it never
+        runs) keeps its arguments as they are."""
+        prepare = getattr(self.tools.get(name), "prepare", None)
+        if not ready or not callable(prepare):
+            return arguments, [], None
+        try:
+            fixed, notes, problem = prepare(arguments)
+        except Exception as e:  # noqa: BLE001 — a repair must never break the turn
+            dlog("tool.prepare_failed", {"name": name, "error": repr(e)})
+            return arguments, [], None
+        if problem is not None:
+            return _whole_json_or_empty(arguments), [], problem
+        if notes:
+            dlog("tool.repaired", {"name": name, "before": arguments, "after": fixed,
+                                   "notes": notes})
+        return fixed, notes, None
 
     def _dispatch_pre(self, tool: Tool | None, name: str, args_json: str) -> str | None:
         """Run pre-dispatch gating (permission + before-hooks).
