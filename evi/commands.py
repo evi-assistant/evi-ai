@@ -130,12 +130,11 @@ class CommandStore:
         roots: list[tuple[str, Path]] = []
         if self.root.is_dir():
             roots.append(("", self.root))
-        plugins = self.root.parent / "plugins"
-        if plugins.is_dir():
-            for pd in sorted(plugins.iterdir()):
-                cdir = pd / "commands"
-                if cdir.is_dir() and _NAME_RE.match(pd.name):
-                    roots.append((pd.name + ":", cdir))
+        from evi.plugins import plugin_dirs
+        for pd in plugin_dirs(self.root.parent):
+            cdir = pd / "commands"
+            if cdir.is_dir() and _NAME_RE.match(pd.name):
+                roots.append((pd.name + ":", cdir))
         return roots
 
     def list(self) -> list[SlashCommandEntry]:

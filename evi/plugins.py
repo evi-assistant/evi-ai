@@ -9,7 +9,7 @@ component types, each auto-discovered from a well-known sub-path:
     mcp.json      MCP servers            -> namespaced <plugin>:<name>
     agents.toml   subagent profiles      -> namespaced <plugin>:<name>
 
-Installed plugins live under ``~/.evi/plugins/<name>/``; loaders scan each plugin
+Installed plugins live under ``~/.evi/plugins/<name>/``; loaders scan each enabled plugin
 directory automatically, so install/remove is just managing that directory —
 no copying into the user's own dirs, no clobber.
 
@@ -137,10 +137,11 @@ def _count_hooks(p: Path) -> int:
     if not p.is_file():
         return 0
     try:
+        from evi.hooks import ALL_EVENTS
         data = tomllib.loads(p.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError, ImportError):
         return 0
-    return sum(len(data.get(ev, []) or []) for ev in ("before_tool_call", "after_tool_call"))
+    return sum(len(data.get(ev, []) or []) for ev in ALL_EVENTS)
 
 
 def _count_mcp(p: Path) -> int:
