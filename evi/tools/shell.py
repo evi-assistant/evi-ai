@@ -28,6 +28,7 @@ Safety posture (matches eVi's existing stance):
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from evi import proc, workdir
@@ -36,6 +37,23 @@ from evi.tools.base import ToolContext, tool
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
 _MAX_OUTPUT = 32 * 1024
+# What makes a command line need cmd.exe, or mean something else without it.
+_CMD_SYNTAX = frozenset('&|<>^%()"')
+
+
+def _direct_argv(command: str, folder: Path, env: dict[str, str] | None) -> list[str] | str:
+    """`command` as argv started without cmd.exe, for a folder on a network
+    share: cmd.exe can't run in a UNC folder (it says so and runs in the
+    Windows folder instead), but a program started directly can. Only a
+    program with plain arguments qualifies; a str says why another can't.
+    The program is found as a check's is (`evi.checks.resolve_argv`)."""
+    from evi.checks import resolve_argv
+
+    if any(c in _CMD_SYNTAX for c in command):
+        return (f"{folder} is on a network share, where cmd.exe can't run, so a command "
+                "here must be one program with plain arguments (no quotes, &&, |, <, >, "
+                "%, ^ or parentheses): run each step as its own command")
+    return resolve_argv(command.split(), folder, env if env is not None else dict(os.environ))
 
 
 @tool(
@@ -82,6 +100,16 @@ def run_command(
     except Exception:  # noqa: BLE001
         pass
 
+    env = proc.scrubbed_env() if sandboxed or proc.runs_unattended(ctx) else None
+    if use_shell and os.name == "nt":
+        from evi.permissions import _is_network_path
+
+        if _is_network_path(Path(workdir_path)):
+            direct = _direct_argv(command, Path(workdir_path), env)
+            if isinstance(direct, str):
+                return f"ERROR: {direct}"
+            argv, use_shell = direct, False
+
     try:
         res = proc.run(
             argv,
@@ -89,7 +117,7 @@ def run_command(
             cwd=str(workdir_path),
             timeout=timeout,
             cancel_token=getattr(ctx, "cancel_token", None),
-            env=proc.scrubbed_env() if sandboxed or proc.runs_unattended(ctx) else None,
+            env=env,
         )
     except OSError as exc:
         return f"ERROR: failed to run command: {exc}"
