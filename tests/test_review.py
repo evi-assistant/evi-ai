@@ -86,6 +86,11 @@ def test_a_multi_lens_report_blocks_only_on_blocking_findings() -> None:
                      "1. BLOCKING: the new branch is never tested"):
         assert review_exit_code(_multi(clean, blocking, clean, clean)) == 1, blocking
     assert review_exit_code(_multi(clean, "- BLOCKING: none", clean, clean)) == 0
+    # A reviewer that puts a finding in backticks still marks it.
+    ticked = "`BLOCKING: evi/fs.py:40` drops the lock\n\nBLOCKING: none"
+    assert review_exit_code(_multi(clean, ticked, clean, clean)) == 1
+    hint = "`SUGGESTION: tests/test_doctor_backend.py`: add a timeout case.\n\nBLOCKING: none"
+    assert review_exit_code(_multi(clean, hint, clean, clean)) == 0
 
 
 def test_a_lens_that_did_not_review_blocks() -> None:

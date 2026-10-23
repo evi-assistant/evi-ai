@@ -160,8 +160,8 @@ def parse_verdict(text: str) -> str:
 
 # A multi-lens reviewer starts each finding with one of these (MULTI_REVIEW_
 # SYSTEM_PROMPT); `BLOCKING: none` says it found no blocking defect.
-_BLOCKING_RE = re.compile(r"(?im)^[\s>*_\-\d.)\[]*BLOCKING[*_\]]*\s*:\s*(.*)$")
-_MARKER_RE = re.compile(r"(?im)^[\s>*_\-\d.)\[]*(?:BLOCKING|SUGGESTION)[*_\]]*\s*:")
+_BLOCKING_RE = re.compile(r"(?im)^[\s>*_`\-\d.)\[]*BLOCKING[*_`\]]*\s*:\s*(.*)$")
+_MARKER_RE = re.compile(r"(?im)^[\s>*_`\-\d.)\[]*(?:BLOCKING|SUGGESTION)[*_`\]]*\s*:")
 # What run_subagent returns for a lens that never reviewed.
 _LENS_FAILED = ("ERROR: subagent failed", "(subagent produced no text)")
 
