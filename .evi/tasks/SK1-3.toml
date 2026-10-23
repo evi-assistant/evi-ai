@@ -1,6 +1,6 @@
 id = "SK1-3"
 title = "plugins: disabled plugins contribute no skills or commands; _count_hooks counts every hook event"
-status = "open"
+status = "verified"
 why = "SkillStore._scan_roots (evi/skills.py:77-81) and CommandStore._scan_roots (evi/commands.py:123-127) iterate self.root.parent / 'plugins' directly instead of using plugins.plugin_dirs() (evi/plugins.py:384-404), which skips disabled plugins and folders without plugin.toml. hooks.py:332-334, mcp/servers.py:113 and llm/subagent.py:466 already use plugin_dirs. plugins._count_hooks (plugins.py:135-143) counts only before_tool_call/after_tool_call, while hooks._parse_hook_file loads every event in hooks.ALL_EVENTS (hooks.py:146-151, 306). Probe on HEAD: a plugin disabled with set_enabled(False) still exposed skill 'kit:rev' and command 'kit:go', and a hooks.toml with before_tool_call + session_start + stop entries counted 1."
 hints = "skills.py:70-81: replace the `plugins = self.root.parent / 'plugins'` block with `from evi.plugins import plugin_dirs` (import inside the method) and `for pd in plugin_dirs(self.root.parent):`, keeping the `sdir.is_dir() and _NAME_RE.match(pd.name)` check. Make the same change in commands.py:116-128 with cdir. In plugins.py:135-143, put `from evi.hooks import ALL_EVENTS` inside _count_hooks and sum over ALL_EVENTS instead of the two-name tuple. You may also update the plugins.py docstring line 8. Tests: copy _make_plugin from tests/test_plugins.py:11-21, install with plugins.install(str(src), root=home), and follow test_plugin_skills_exposed (tests/test_plugins.py:112-134) and test_enable_disable_state (42-61)."
 acceptance = ["A plugin disabled with plugins.set_enabled(name, False, root=home) contributes no skills: SkillStore(root=home/'skills').list() has no '<plugin>:' entry and .read('<plugin>:<skill>') raises KeyError. Re-enabling it brings them back.", "The same holds for commands: CommandStore(root=home/'commands').get('<plugin>:<cmd>') is None while the plugin is disabled and is present again after re-enabling.", "A plugin whose plugin.toml has `default_enabled = false` contributes no skills or commands until it is enabled.", "A folder under home/plugins/ without plugin.toml contributes no skills or commands (both loaders now use plugins.plugin_dirs).", "The user's own skills (home/skills) and commands (home/commands) are still listed in every case.", "plugins._count_hooks counts the entries under every event in evi.hooks.ALL_EVENTS. A hooks.toml with one before_tool_call, one session_start, one stop and one user_prompt_submit entry gives list_plugins(root=home)[0].hooks == 4. An unknown table ([[bogus]]) is not counted, and a missing or malformed file still counts 0.", "The existing tests in tests/test_plugins.py, tests/test_skills.py and tests/test_commands.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/skills.py", "evi/commands.py", "evi/plugins.py", "tests/t
 required_checks = ["python -m pytest -q tests/test_plugin_disabled.py tests/test_plugins.py tests/test_skills.py tests/test_commands.py", "python -m ruff check evi/skills.py evi/commands.py evi/plugins.py tests/test_plugin_disabled.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:34Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-3"
+branch = "task/SK1-3"
+base = "d31eef4b7788d5da2e10b1c1b3a3226fd6d5d11f"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-3\\1"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:571fe0dc3f5dbc8344ee7c5f0b77200493c4ba8fcdc55f083ea436cbdf6a938d"
+files = 4
+insertions = 159
+deletions = 15
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 63
+failures = 0
+errors = 0
+skipped = 0
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-3\\1\\report.json"
+summary = "I have implemented task SK1-3."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-3"
+digest = "sha256:16c60e1c00ecf802725818c7363f425b35ef252d0b2ebe65c8cb72d0a8537cbe"
+head = "9c25f5accdaa4dbd596752851a262a5bf5fb938f"
+evidence = "sha256:571fe0dc3f5dbc8344ee7c5f0b77200493c4ba8fcdc55f083ea436cbdf6a938d"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T08:00:48Z"
+key = "302b45cb92785c8d"
+sig = "493bb7a4eaa390d5a5287883f253ee9f83534c07c330f8949ec7771983544514"
+
+[attestation.review]
+base = "d31eef4b7788d5da2e10b1c1b3a3226fd6d5d11f"
+exit_code = 0
+report_sha256 = "de7a24cddd6f6f4eb2555c3d3650d7133fb263cb69efc3cd2aa3221bfe136db7"
