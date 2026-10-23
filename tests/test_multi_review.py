@@ -13,7 +13,8 @@ def test_multi_review_combines_per_lens(monkeypatch):
     captured = {}
 
     def fake_parallel(tasks, *, system_prompt, tool_categories=(), tools=None,
-                      unattended_policy=None):
+                      unattended_policy=None, cwd=None):
+        captured["cwd"] = cwd
         captured["tasks"] = tasks
         captured["system_prompt"] = system_prompt
         captured["cats"] = tool_categories
@@ -46,6 +47,7 @@ def test_multi_review_combines_per_lens(monkeypatch):
     assert {"read_file", "list_dir", "find_files", "search_files"} <= set(captured["tools"])
     assert not {"write_file", "edit_file", "apply_patch"} & set(captured["tools"])
     assert captured["policy"] == "allow"
+    assert captured["cwd"] is None  # the session's folder, as before
 
 
 def test_multi_review_subset_of_lenses(monkeypatch):
@@ -56,3 +58,23 @@ def test_multi_review_subset_of_lenses(monkeypatch):
     report = review.multi_review("d", lenses=["security"])
     assert "## Security" in report
     assert "## Correctness" not in report
+
+
+def test_the_reviewers_read_the_tree_the_diff_is_of(monkeypatch, tmp_path):
+    """The verify gate reviews a task branch in its worktree: the reviewers'
+    tools must read that tree, not the session's folder (the main checkout),
+    or what they look up contradicts the diff."""
+    seen = []
+    monkeypatch.setattr(
+        "evi.llm.subagent.run_subagents_parallel",
+        lambda tasks, *, cwd=None, **_: seen.append(cwd) or [(t, "ok") for t in tasks],
+    )
+    review.multi_review("d", lenses=["tests"], cwd=tmp_path)
+    assert seen == [str(tmp_path)]
+
+    from evi import attest
+
+    monkeypatch.setattr(review, "get_diff", lambda **_: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(review, "load_review_context", lambda _p: "")
+    gate = attest.review_gate("base", cwd=tmp_path)
+    assert gate.exit_code == 0 and seen[-1] == str(tmp_path)

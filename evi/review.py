@@ -279,9 +279,12 @@ def multi_review(
     lenses: list[str] | None = None,
     tool_categories: tuple[str, ...] = ("fs", "git", "index"),
     context: str = "",
+    cwd: str | Path | None = None,
 ) -> str:
     """Run one reviewer per lens in parallel and combine into one report.
     `context` is optional repo-scoped review guidance (BUGBOT.md + rules).
+    `cwd` is the work tree the diff is of: the reviewers' tools read there
+    (default: the session's folder), so what they look up matches the diff.
 
     The diff under review is untrusted text and nobody can approve a call
     mid-review, so each reviewer gets only the READ-ONLY tools of
@@ -312,6 +315,7 @@ def multi_review(
         tools=readonly,
         # Safe to let run: the reviewers hold read-only tools and nothing else.
         unattended_policy="allow",
+        cwd=str(cwd) if cwd else None,
     )
     blocks = [
         f"## {lens.title()}\n\n{findings}"

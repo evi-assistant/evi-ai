@@ -264,8 +264,11 @@ def review_gate(
     diff = review.get_diff(branch=base, cwd=cwd)
     if not diff.strip():
         return ReviewResult(0, base, "(no changes to review)")
-    run = reviewer or review.multi_review
-    report = run(diff, context=review.load_review_context(Path(cwd) if cwd else None))
+    context = review.load_review_context(Path(cwd) if cwd else None)
+    if reviewer is not None:
+        report = reviewer(diff, context=context)
+    else:  # the reviewers read the tree the diff is of, not the session's folder
+        report = review.multi_review(diff, context=context, cwd=cwd)
     return ReviewResult(review.review_exit_code(report), base, report)
 
 
