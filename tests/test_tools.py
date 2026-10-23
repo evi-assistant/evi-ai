@@ -111,7 +111,7 @@ def test_list_dir(tmp_path: Path) -> None:
 
 def test_read_file_offset_and_limit(tmp_path: Path) -> None:
     p = tmp_path / "lines.txt"
-    p.write_text("".join(f"line{i}\n" for i in range(1, 11)), encoding="utf-8")
+    p.write_bytes(b"".join(f"line{i}\n".encode("utf-8") for i in range(1, 11)))
     # lines 3,4,5 (1-based offset, limit 3)
     out = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 3, "limit": 3}))
     assert out == "line3\nline4\nline5\n"
@@ -119,7 +119,7 @@ def test_read_file_offset_and_limit(tmp_path: Path) -> None:
 
 def test_read_file_offset_to_eof(tmp_path: Path) -> None:
     p = tmp_path / "lines.txt"
-    p.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    p.write_bytes(b"a\nb\nc\nd\n")
     out = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 3}))
     assert out == "c\nd\n"
 
@@ -134,7 +134,7 @@ def test_read_file_offset_past_eof_errors(tmp_path: Path) -> None:
 def test_read_file_slice_roundtrips_through_edit(tmp_path: Path) -> None:
     # A slice carries no line-number prefixes, so it can be fed back to edit_file.
     p = tmp_path / "lines.txt"
-    p.write_text("alpha\nbravo\ncharlie\n", encoding="utf-8")
+    p.write_bytes(b"alpha\nbravo\ncharlie\n")
     sliced = REGISTRY["read_file"].call(json.dumps({"path": str(p), "offset": 2, "limit": 1}))
     assert sliced == "bravo\n"
 
