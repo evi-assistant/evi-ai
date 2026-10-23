@@ -35,12 +35,15 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 5. **Run the subset** covering the files you touched:
    `python -m pytest -q -n auto <test files>`,
    `python -m ruff check <files>`, and for UI or `/api`
-   `python -m pytest -q -m e2e --timeout=180 tests/e2e/<file>`.
+   `python -m pytest -q -m e2e --timeout=180 tests/e2e/<file>`. Under
+   `evi task start` run them with `run_command` (`run_python` is refused).
 6. **record_fix** every bug you resolve (symptom, cause, fix).
 7. **Evidence**: exit codes, test counts, diffs. Never "should work".
 8. **Hand-off**: files changed; each acceptance criterion met or not, with
    evidence; commands run and results; concerns as `file:line`; the draft
-   commit message below.
+   commit message below. Name every criterion you did not meet, and every
+   edit that failed and was not redone. Comments in code say why, in one
+   line: never your reasoning while working.
 
 ## Facts are commands
 

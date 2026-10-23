@@ -149,6 +149,17 @@ def _link(link: Path, target: Path) -> None:
 # ---- the shell allowlist -------------------------------------------------------
 
 
+def test_a_refused_run_python_points_at_run_command_for_tests(root):
+    allowed, reason = _check(implementer_policy(root), "run_python", {"code": "print(1)"}, root)
+    assert not allowed and "run tests and linters with run_command instead" in reason
+    assert _cmd(implementer_policy(root), "python -m pytest -q tests/test_x.py", root) == (True, "")
+    # Where no command may run (an untrusted folder), it doesn't suggest one.
+    _, untrusted = _check(implementer_policy(root, trusted=False), "run_python",
+                          {"code": "print(1)"}, root)
+    assert "is not a tool the implementer policy allows" in untrusted
+    assert "run_command" not in untrusted
+
+
 @pytest.mark.parametrize("dialect", ["bash", "cmd"])
 @pytest.mark.parametrize("command", [
     "pytest -q",

@@ -583,8 +583,13 @@ class Policy:
         base = _base(workdir)
         expected = {**READ_TOOLS, **WRITE_TOOLS, **SHELL_TOOLS, **PURE_TOOLS}.get(name)
         if expected is None or expected != category:
+            # A model refused run_python tends to conclude it can't test at all.
+            instead = (": run tests and linters with run_command instead (`python -m pytest "
+                       "<test files>`, `python -m ruff check <files>`)"
+                       if name == "run_python" and self.trusted else "")
             return _deny(f"{name} is not a tool the {self.name} policy allows "
-                         "(no network, MCP, run_python, memory, subagents or other tools)")
+                         "(no network, MCP, run_python, memory, subagents or other tools)"
+                         + instead)
         if name in PURE_TOOLS:
             return ALLOW
         call_category = permissions.classify_call(name, category, data)
