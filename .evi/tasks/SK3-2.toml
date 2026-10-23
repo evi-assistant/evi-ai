@@ -1,20 +1,60 @@
 id = "SK3-2"
 title = "fs: edit_file applies an edit whose only difference is whitespace or indentation, when exactly one place matches"
-status = "open"
+status = "verified"
 why = "Small models often get indentation wrong in old_string (spaces for tabs, the block's own indent dropped, trailing spaces missing), so edit_file misses and the turn is wasted. Second slice of roadmap item loop-tools-edit-recovery (SK3-1 added the miss diagnostics). Applying only on a unique match keeps it from patching the wrong place."
-hints = "Add these helpers to evi/tools/fs.py above edit_file, exactly as written (they were prototyped: they re-indent to the file's depth, map spaces to the file's tabs line by line, refuse an ambiguous block, and ignore trailing spaces):\n\ndef _indent(line: str) -> str:\n    return line[: len(line) - len(line.lstrip())]\n\n\ndef _loose_matches(lines: list[str], old_lines: list[str]) -> list[int]:\n    \"\"\"Start indexes of every window of `lines` equal to `old_lines` with each\n    line stripped of surrounding whitespace.\"\"\"\n    want = [ln.strip() for ln in old_lines]\n    k = len(want)\n    return [i for i in range(len(lines) - k + 1)\n            if [ln.strip() for ln in lines[i:i + k]] == want]\n\n\ndef _reindent(new_lines: list[str], old_lines: list[str], file_lines: list[str]) -> list[str]:\n    \"\"\"`new_lines` indented the way the file indents what old_string matched:\n    a line where new_string keeps old_string's indent takes the file's indent\n    for that line; otherwise an indent old_string used maps to the file's\n    indent on its first such line, and any other indent has old_string's\n    first indent swapped for the file's.\"\"\"\n    pairs = [(o, f) for o, f in zip(old_lines, file_lines) if o.strip() and f.strip()]\n    mapping: dict[str, str] = {}\n    for o, f in pairs:\n        mapping.setdefault(_indent(o), _indent(f))\n    old_pre, file_pre = (_indent(pairs[0][0]), _indent(pairs[0][1])) if pairs else (\"\", \"\")\n    out = []\n    for j, ln in enumerate(new_lines):\n        ind = _indent(ln)\n        if not ln.strip():\n            out.append(ln)\n        elif (j < len(old_lines) and j < len(file_lines) and old_lines[j].strip()\n              and file_lines[j].strip() and _indent(old_lines[j]) == ind):\n            out.append(_indent(file_lines[j]) + ln[len(ind):])\n        elif ind in mapping:\n            out.append(mapping[ind] + ln[len(ind):])\n        elif ln.startswith(old_pre):\n            out.append(file_pre + ln[len(old_pre):])\n        else:\n            out.append(ln)\n    return out\nIn edit_file, in the branch where neither old_n nor old_string is in text, BEFORE the already-applied check: unless replace_all is set, split text and old_n on the file's line ending (eol from _eol_of), and when old_n has at least one non-blank line and _loose_matches gives exactly one window i, build new_text = eol.join(lines[:i] + _reindent(new_n.split(eol), old_lines, lines[i:i + k]) + lines[i + k:]). That edit then goes through the same checkpoint (record_before_write) and write as an exact one; its success message is f\"edited {p}: 1 replacement(s), matched ignoring whitespace at lines {i + 1}-{i + k}\" followed by _post_write(p), as the normal message ends. Restructure the branch so both paths share the checkpoint and write code (for example compute new_text and a message suffix, then fall through).\nTwo or more loose matches, or none, go on to the existing already-applied check and the not-found error with the closest region (SK3-1), unchanged.\nTests in tests/test_edit_recovery.py next to the SK3-1 tests (files with write_bytes, assertions on read_bytes)."
-acceptance = ["File b'def f():\\n    if x:\\n        return 1\\n    return 0\\n': edit_file old 'if x:\\n    return 1' (indent dropped) new 'if x:\\n    return 2' leaves b'def f():\\n    if x:\\n        return 2\\n    return 0\\n', and the message says 'matched ignoring whitespace at lines 2-3'.", "File b'def f():\\n\\tif x:\\n\\t\\treturn 1\\n' (tabs): old '    if x:\\n        return 1' new '    if x:\\n        return 3' leaves b'def f():\\n\\tif x:\\n\\t\\treturn 3\\n'.", "A flattened block: file b'def f():\\n    if x:\\n        return 1\\n', old 'if x:\\nreturn 1' new 'if x:\\nreturn 2' leaves b'def f():\\n    if x:\\n        return 2\\n'.", "File b'a = 1   \\nb = 2\\n' (trailing spaces): old 'a = 1\\nb = 2' new 'a = 10\\nb = 2' leaves b'a = 10\\nb = 2\\n'.", "File b'a:\\n    x = 1\\nb:\\n    x = 1\\n': old '  x = 1' new '  x = 2' (two loose matches) changes nothing and returns the not-found error.", "A CRLF file keeps CRLF after a loose match.", "The existing tests in tests/test_edit_recovery.py, tests/test_tools.py, tests/test_fs_eol.py, tests/test_fs_write_lock.py and tests/test_checkpoints.py pass."]
+hints = "Add these helpers to evi/tools/fs.py above edit_file, exactly as written (they were prototyped: they re-indent to the file's depth, map spaces to the file's tabs line by line, refuse an ambiguous block, and ignore trailing spaces):\n\ndef _indent(line: str) -> str:\n    return line[: len(line) - len(line.lstrip())]\n\n\ndef _loose_matches(lines: list[str], old_lines: list[str]) -> list[int]:\n    \"\"\"Start indexes of every window of `lines` equal to `old_lines` with each\n    line stripped of surrounding whitespace.\"\"\"\n    want = [ln.strip() for ln in old_lines]\n    k = len(want)\n    return [i for i in range(len(lines) - k + 1)\n            if [ln.strip() for ln in lines[i:i + k]] == want]\n\n\ndef _reindent(new_lines: list[str], old_lines: list[str], file_lines: list[str]) -> list[str]:\n    \"\"\"`new_lines` indented the way the file indents what old_string matched:\n    a line where new_string keeps old_string's indent takes the file's indent\n    for that line; otherwise an indent old_string used maps to the file's\n    indent on its first such line, and any other indent has old_string's\n    first indent swapped for the file's.\"\"\"\n    pairs = [(o, f) for o, f in zip(old_lines, file_lines) if o.strip() and f.strip()]\n    mapping: dict[str, str] = {}\n    for o, f in pairs:\n        mapping.setdefault(_indent(o), _indent(f))\n    old_pre, file_pre = (_indent(pairs[0][0]), _indent(pairs[0][1])) if pairs else (\"\", \"\")\n    out = []\n    for j, ln in enumerate(new_lines):\n        ind = _indent(ln)\n        if not ln.strip():\n            out.append(ln)\n        elif (j < len(old_lines) and j < len(file_lines) and old_lines[j].strip()\n              and file_lines[j].strip() and _indent(old_lines[j]) == ind):\n            out.append(_indent(file_lines[j]) + ln[len(ind):])\n        elif ind in mapping:\n            out.append(mapping[ind] + ln[len(ind):])\n        elif ln.startswith(old_pre):\n            out.append(file_pre + ln[len(old_pre):])\n        else:\n            out.append(ln)\n    return out\nAlso add this helper, exactly as written, below _reindent:\n\ndef _loose_block(text: str, old: str, new: str, eol: str) -> tuple[str, str, str] | None:\n    \"\"\"When `old` matches exactly one block of `text` line by line, ignoring\n    each line's surrounding whitespace: (that block as the file has it, `new`\n    re-indented the way the file indents it, a note for the message); else None.\"\"\"\n    lines, old_lines = text.split(eol), old.split(eol)\n    if not any(ln.strip() for ln in old_lines):\n        return None\n    hits = _loose_matches(lines, old_lines)\n    if len(hits) != 1:\n        return None\n    i, k = hits[0], len(old_lines)\n    block = lines[i:i + k]\n    replacement = eol.join(_reindent(new.split(eol), old_lines, block))\n    return eol.join(block), replacement, f\", matched ignoring whitespace at lines {i + 1}-{i + k}\"\n\nThen change edit_file in only three places and leave everything else in it as it is: (1) just before `if old_n in text:` add `note = \"\"`; (2) at the start of the final `else:` branch (where neither old_n nor old_string is in text) add `loose = None if replace_all else _loose_block(text, old_n, new_n, eol)` and `if loose is not None: target_old, target_new, note = loose`, and put that branch's existing code (the already-applied check and the not-found error) under the `else:` of that `if`, unchanged; (3) in the final success message insert {note} right after the replacement count, so it reads f\"edited {p}: {count if replace_all else 1} replacement(s){note}{_post_write(p)}\". A loose match then goes through the same count, checkpoint and write as an exact one. Do not restructure edit_file in any other way.\nTwo or more loose matches, or none, make _loose_block return None, so the existing already-applied check and the not-found error with the closest region (SK3-1) run unchanged.\nTests in tests/test_edit_recovery.py next to the SK3-1 tests (files with write_bytes, assertions on read_bytes)."
+acceptance = ["File b'def f():\\n    if x:\\n        return 1\\n    return 0\\n': edit_file old 'if x:\\n    return 1' (indent dropped) new 'if x:\\n    return 2' leaves b'def f():\\n    if x:\\n        return 2\\n    return 0\\n', and the message says 'matched ignoring whitespace at lines 2-3'.", "File b'def f():\\n\\tif x:\\n\\t\\treturn 1\\n' (tabs): old '    if x:\\n        return 1' new '    if x:\\n        return 3' leaves b'def f():\\n\\tif x:\\n\\t\\treturn 3\\n'.", "A flattened block: file b'def f():\\n    if x:\\n        return 1\\n', old 'if x:\\nreturn 1' new 'if x:\\nreturn 2' leaves b'def f():\\n    if x:\\n        return 2\\n'.", "File b'a = 1   \\nb = 2\\n' (trailing spaces): old 'a = 1\\nb = 2' new 'a = 10\\nb = 2' leaves b'a = 10\\nb = 2\\n'.", "File b'a:\\n    x = 1\\nb:\\n    x = 1\\n': old 'x = 1\\t' (a trailing tab, so it occurs nowhere exactly) new 'x = 2' matches two blocks loosely, so nothing changes and the not-found error is returned.", "A CRLF file keeps CRLF after a loose match.", "The existing tests in tests/test_edit_recovery.py, tests/test_tools.py, tests/test_fs_eol.py, tests/test_fs_write_lock.py and tests/test_checkpoints.py pass."]
 files_in_scope = ["evi/tools/fs.py", "tests/test_edit_recovery.py"]
 required_checks = ["python -m pytest -q tests/test_edit_recovery.py tests/test_tools.py tests/test_fs_eol.py tests/test_fs_write_lock.py tests/test_checkpoints.py", "python -m ruff check evi/tools/fs.py tests/test_edit_recovery.py"]
 implementer = "evi-local"
 created = "2026-10-23T18:46:22Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK3-2"
+branch = "task/SK3-2"
+base = "f5e3c4c8389c7ece4a2d0d73010fa86c01d6f370"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK3-2\\2"
+reviewer_notes = [{at = "2026-10-23T18:51:00Z", verdict = "review", note = "Review of attempt 1 (it stopped as loop_detected after three patches that changed nothing): restructuring edit_file broke it (a loose match set target_old to None, which the next block took for \"not found\", and six tests failed, SK3-1's included). evi/tools/fs.py has been reset to the merged version, so start again from it. The brief now has a simpler design: add the helpers exactly as written, including the new _loose_block, and change edit_file in only the three places the hints name (note = \"\", the loose check at the start of the final else branch, {note} in the success message). Keep your tests/test_edit_recovery.py tests, but the ambiguous case now uses old 'x = 1\\t' (a trailing tab): '  x = 1' occurs exactly inside '    x = 1', so it is an ambiguous exact match (\"appears 2 times\"), not a loose one. Run the required checks with run_command and quote their last lines."}, {at = "2026-10-23T18:55:11Z", verdict = "verified", note = "Director triage, each checked in the code: (1) '_reindent indexes old_lines/file_lines by j and can raise IndexError': the condition tests j < len(old_lines) and j < len(file_lines) first; lines past old_string's length use the indent map (the deeper-new-line case was verified before filing). (2) 'new is not normalized to the file EOL': edit_file passes new_n, which _to_eol already normalized. (3) 'O(N*K) in _loose_matches': runs only after an exact miss, the same order as SK3-1's closest-region search (0.2 s on 10 000 lines). The rest are SUGGESTIONs."}]
+
+[evidence_summary]
+hash = "sha256:1a78faf578fba53ea2ffc373788ada2833615d61ecde4523dd5f74ddd243612a"
+files = 2
+insertions = 124
+deletions = 14
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 65
+failures = 0
+errors = 0
+skipped = 1
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK3-2\\2\\report.json"
+summary = "I have implemented task SK3-2, adding whitespace-insensitive matching to `edit_file`."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK3-2"
+digest = "sha256:9f95f8e6a331a2646bd54c4e5e4a031bd876b9ead25a2b27cab66e03b34ee2aa"
+head = "b1e32c1b437c5b068610eccf88115a60806c5342"
+evidence = "sha256:1a78faf578fba53ea2ffc373788ada2833615d61ecde4523dd5f74ddd243612a"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T18:55:20Z"
+key = "302b45cb92785c8d"
+sig = "f5087cf3d08b7d0779c96fe0af80d78420127dffbb92c9debadd88e1f25fef96"
+
+[attestation.review]
+base = "f5e3c4c8389c7ece4a2d0d73010fa86c01d6f370"
+exit_code = 1
+report_sha256 = "a948c105fde6a3e53d08d509502dfa4248adab2dbb6efa06ad9f9079a3ba1a54"
+override = "Director triage, each checked in the code: (1) '_reindent indexes old_lines/file_lines by j and can raise IndexError': the condition tests j < len(old_lines) and j < len(file_lines) first; lines past old_string's length use the indent map (the deeper-new-line case was verified before filing). (2) 'new is not normalized to the file EOL': edit_file passes new_n, which _to_eol already normalized. (3) 'O(N*K) in _loose_matches': runs only after an exact miss, the same order as SK3-1's closest-region search (0.2 s on 10 000 lines). The rest are SUGGESTIONs."
