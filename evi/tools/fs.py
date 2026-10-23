@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import re
 import difflib
+import shutil
 import threading
+import time
 import weakref
 from pathlib import Path
 
@@ -71,6 +73,42 @@ def clear_read_cache() -> None:
     """Drop the read_file content cache. Used by tests and could be wired to
     a future `/reload`-style invalidation."""
     _READ_CACHE.clear()
+
+
+_REPLACE_TRIES = 5
+
+
+def _atomic_write(p: Path, text: str) -> None:
+    """Write `text` to `p` (its line endings as given) through a temp file in the
+    same folder and os.replace, so a failure never leaves `p` half-written. A
+    symlink is written through to its target; `p`'s mode is kept; a replace
+    refused because another process holds the file open is retried briefly.
+    Where no temp file can be made (a folder we may not write), it writes in
+    place, as before."""
+    target = Path(os.path.realpath(p)) if p.is_symlink() else p
+    tmp = target.with_name(f".{target.name}.{os.getpid()}-{threading.get_ident()}.evi-tmp")
+    try:
+        f = tmp.open("w", encoding="utf-8", newline="")
+    except OSError:
+        target.write_text(text, encoding="utf-8", newline="")
+        return
+    try:
+        with f:
+            f.write(text)
+        try:
+            shutil.copymode(target, tmp)
+        except OSError:
+            pass  # a new file: the folder's default mode
+        for attempt in range(_REPLACE_TRIES):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _post_write(p: Path) -> str:
@@ -242,7 +280,7 @@ def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         # newline="" so we write the content's own line endings verbatim (avoid
         # Windows turning \n into \r\n and flipping a whole file to CRLF).
-        p.write_text(content, encoding="utf-8", newline="")
+        _atomic_write(p, content)
         _READ_CACHE.pop(str(p.resolve()), None)
     return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
@@ -417,7 +455,7 @@ def edit_file(
             record_before_write(p, ctx=ctx)  # tagged with the session + turn
         except Exception:  # noqa: BLE001
             pass
-        p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
+        _atomic_write(p, new_text)  # preserve LF/CRLF
         _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
         return f"edited {p}: {count if replace_all else 1} replacement(s){note}{_post_write(p)}"
 
@@ -494,7 +532,7 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             record_before_write(p, ctx=ctx)  # tagged with the session + turn
         except Exception:  # noqa: BLE001
             pass
-        p.write_text(new_text, encoding="utf-8", newline="")
+        _atomic_write(p, new_text)
         _READ_CACHE.pop(str(p.resolve()), None)
         return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
 
