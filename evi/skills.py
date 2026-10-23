@@ -74,12 +74,11 @@ class SkillStore:
         roots: list[tuple[str, Path]] = []
         if self.root.is_dir():
             roots.append(("", self.root))
-        plugins = self.root.parent / "plugins"
-        if plugins.is_dir():
-            for pd in sorted(plugins.iterdir()):
-                sdir = pd / "skills"
-                if sdir.is_dir() and _NAME_RE.match(pd.name):
-                    roots.append((pd.name + ":", sdir))
+        from evi.plugins import plugin_dirs
+        for pd in plugin_dirs(self.root.parent):
+            sdir = pd / "skills"
+            if sdir.is_dir() and _NAME_RE.match(pd.name):
+                roots.append((pd.name + ":", sdir))
         return roots
 
     def list(self) -> list[SkillEntry]:
