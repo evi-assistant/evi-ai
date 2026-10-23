@@ -1,20 +1,60 @@
 id = "SK1-7"
 title = "vision: downscale and strip EXIF from attached images (Pillow optional, [vision] max_px)"
-status = "open"
-why = "_data_url_for (evi/vision.py:75-82) base64-encodes the raw file bytes. There is no size cap: a 12 MP phone photo is 4-8 MB, or 5-11 MB of base64 in one request, and too big for many local VLM contexts. EXIF (GPS, camera serial) is sent as is, and the orientation tag is ignored. There is no [vision] section in evi/config.py (Config fields at config.py:656-680). Pillow is optional and only in the `computer` extra (pyproject.toml:97-100)."
-hints = "vision.py:75-101. Add `def _downscale(data: bytes, max_px: int) -> bytes | None` (None = send the original). Inside: try `from PIL import Image, ImageOps` except ImportError: return None. Then in try/except Exception -> None: img = Image.open(BytesIO(data)); fmt = img.format (read it BEFORE exif_transpose, which drops it); if fmt not in ('JPEG', 'PNG', 'WEBP'): return None; img = ImageOps.exif_transpose(img); size = _fit_size(*img.size, max_px); if size != img.size: img = img.resize(size, Image.Resampling.LANCZOS); img.info.pop('exif', None); if fmt == 'JPEG' and img.mode not in ('RGB', 'L'): img = img.convert('RGB'); save to a BytesIO with format=fmt (quality=90 for JPEG/WEBP), never passing exif=. _data_url_for keeps its mime logic and uses the downscaled bytes when they are not None. config.py: put VisionSettings after RuntimeSettings (config.py:645-653) and the field after `evidence:` (config.py:680). Nothing else in config.py changes; Config._from_dict picks up new sections automatically. Do not touch evi/llm/agent.py, llm/specialty.py or tools/vision_tool.py: they call build_image_content(text, paths) and get the config default. In the tests, build images with Image.new('RGB', (3000, 2000)); for EXIF use exif = Image.Exif(); exif[0x010F] = 'TestCam'; img.save(p, 'JPEG', exif=exif.tobytes())."
+status = "verified"
+why = "_data_url_for (evi/vision.py:75-82) base64-encodes the raw file bytes. There is no size cap: a 12 MP phone photo is 4-8 MB, or 5-11 MB of base64 in one request, and too big for many local VLM contexts. EXIF (GPS, camera serial) is sent as is, and the orientation tag is ignored. There is no [vision] section in evi/config.py (Config fields at config.py:703-727). Pillow is optional and only in the `computer` extra (pyproject.toml:97-100)."
+hints = "vision.py:75-101. Add `def _downscale(data: bytes, max_px: int) -> bytes | None` (None = send the original). Inside: try `from PIL import Image, ImageOps` except ImportError: return None. Then in try/except Exception -> None: img = Image.open(BytesIO(data)); fmt = img.format (read it BEFORE exif_transpose, which drops it); if fmt not in ('JPEG', 'PNG', 'WEBP'): return None; img = ImageOps.exif_transpose(img); size = _fit_size(*img.size, max_px); if size != img.size: img = img.resize(size, Image.Resampling.LANCZOS); img.info.pop('exif', None); if fmt == 'JPEG' and img.mode not in ('RGB', 'L'): img = img.convert('RGB'); save to a BytesIO with format=fmt (quality=90 for JPEG/WEBP), never passing exif=. _data_url_for keeps its mime logic and uses the downscaled bytes when they are not None. config.py: put VisionSettings after RuntimeSettings (config.py:693-701) and the field after `evidence:` (config.py:727). Nothing else in config.py changes; Config._from_dict picks up new sections automatically. Do not touch evi/llm/agent.py, llm/specialty.py or tools/vision_tool.py: they call build_image_content(text, paths) and get the config default. In the tests, build images with Image.new('RGB', (3000, 2000)); for EXIF use exif = Image.Exif(); exif[0x010F] = 'TestCam'; img.save(p, 'JPEG', exif=exif.tobytes())."
 acceptance = ["evi/config.py has a new `@dataclass class VisionSettings` with `max_px: int = 1568` (docstring: the longest image side sent to a vision model; 0 = never downscale) and `vision: VisionSettings = field(default_factory=VisionSettings)` in Config. Config().vision.max_px == 1568.", "evi/vision.py has a pure helper _fit_size(width, height, max_px) -> tuple[int, int]. It returns the size unchanged when max_px <= 0 or both sides are <= max_px. Otherwise it scales so the longer side == max_px, keeping the aspect ratio, with each side >= 1: (3000, 2000, 1568) -> (1568, 1045); (100, 50, 1568) -> (100, 50); (1000, 1, 100) -> (100, 1); (2000, 3000, 0) -> (2000, 3000).", "_data_url_for(path, max_px=None): when Pillow imports and identifies the file as JPEG, PNG or WEBP, the file is opened, ImageOps.exif_transpose is applied, the image is resized to _fit_size(...) and re-encoded in the same format WITHOUT EXIF. The mime stays that format's. With max_px None, Config.load().vision.max_px is used (any exception -> 1568).", "Without Pillow (simulated with monkeypatch.setitem(sys.modules, 'PIL', None)), when Pillow cannot open the file, or for any other format (GIF, BMP, unknown), the bytes are sent exactly as before. The existing tests/test_vision.py passes unchanged, including its fake-PNG-bytes tests.", "build_image_content(text, image_paths, *, max_px=None) passes max_px through to _data_url_for.", "Pillow tests (behind pytest.importorskip('PIL')): a 3000x2000 JPEG saved with EXIF (tag 0x010F Make) comes back 1568x1045 and len(Image.open(BytesIO(decoded)).getexif()) == 0; a 200x100 PNG keeps its size; max_px=0 keeps a 3000x2000 JPEG's size but still strips the EXIF."]
 files_in_scope = ["evi/vision.py", "evi/config.py", "tests/test_vision_downscale.py"]
 required_checks = ["python -m pytest -q -rs tests/test_vision_downscale.py tests/test_vision.py tests/test_config_persist.py", "python -m ruff check evi/vision.py evi/config.py tests/test_vision_downscale.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:43Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 4
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-7"
+branch = "task/SK1-7"
+base = "a0152f894ba9a9e4b3b58222205176ec5a3e3e07"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-7\\4"
+reviewer_notes = [{at = "2026-10-23T10:41:41Z", verdict = "review", note = "Review of attempt 1: the brief's config.py line numbers were out of date (now corrected: RuntimeSettings is at config.py:693-701, the Config class at 703-727). Your apply_patch failed because its first SEARCH block ended RuntimeSettings' docstring as `path).` and then `\"\"\"` on the next line, but the file has `path).\"\"\"` on one line. To find something in a large file use search_files (for example the pattern `^class RuntimeSettings` in evi/config.py) instead of paging through it with read_file. Keep SEARCH and old_string short and copy them exactly from a fresh read: for VisionSettings, anchor on the two lines `@dataclass` and `class Config:` (they occur once) and put the new dataclass before them."}, {at = "2026-10-23T10:45:00Z", verdict = "reopened", note = "Review of attempt 2: evi/config.py and evi/vision.py are right; do not change them. Change only tests/test_vision_downscale.py. (1) BLOCKING: it imports PIL at the top, so where Pillow is not installed (it is optional: CI's `[dev,web,mcp]` jobs don't have it) the whole file fails to collect. Keep test_fit_size and a without-Pillow test free of PIL, and get Pillow in the others with `Image = pytest.importorskip(\"PIL.Image\")` inside each test (or one helper), as the acceptance criterion says. (2) The without-Pillow criterion is about what is sent: with monkeypatch.setitem(sys.modules, \"PIL\", None), _data_url_for on a file of arbitrary bytes returns exactly \"data:image/png;base64,\" plus base64 of those bytes. Test that. (3) Add the criterion's case that a 200x100 PNG keeps its size through build_image_content. Put two blank lines between top-level functions. Run the required checks with run_command and quote their last lines."}, {at = "2026-10-23T10:47:28Z", verdict = "reopened", note = "Review of attempt 3 (the review gate's performance lens marked this BLOCKING): build_image_content calls _data_url_for for each image, and _data_url_for calls Config.load() each time max_px is None, so a message with several images reads and parses config.toml once per image. In evi/vision.py, in build_image_content, when max_px is None resolve it once before the loop (Config.load().vision.max_px, any exception -> 1568, the same rule) and pass that value to every _data_url_for call; keep _data_url_for's own fallback for direct callers. Add a test in tests/test_vision_downscale.py that monkeypatches evi.config.Config.load with a counting stub (returning an object whose .vision.max_px is 1568) and checks that build_image_content on three image files calls it exactly once. Change nothing else. Run the required checks with run_command and quote their last lines."}, {at = "2026-10-23T10:50:01Z", verdict = "verified", note = "Performance lens BLOCKING is stale: build_image_content now resolves max_px once and passes it to _data_url_for, its only caller (test_build_image_content_config_load_once: Config.load called once for three images; fails without the fix). The remaining Config.load in _data_url_for runs only for a direct caller passing no max_px, and acceptance criterion 3 requires that fallback. Other lenses: BLOCKING none."}]
+
+[evidence_summary]
+hash = "sha256:99ddf1935c0da9cfa260e05ef4732bb9d8c7e0ab21ed0e2af925b7dec00573b6"
+files = 3
+insertions = 222
+deletions = 3
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 27
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-7\\4\\report.json"
+summary = "I have implemented the requested changes for task SK1-7."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-7"
+digest = "sha256:70352c2f908af41ff1c0143341e028c5ccbeba3e3753b566ac04981a253f00e0"
+head = "597dc83adc7f63c85e002076183f5dbb0b3625de"
+evidence = "sha256:99ddf1935c0da9cfa260e05ef4732bb9d8c7e0ab21ed0e2af925b7dec00573b6"
+verdict = "verified"
+rounds = 2
+signer = "director"
+signed_at = "2026-10-23T10:50:08Z"
+key = "302b45cb92785c8d"
+sig = "28ae0cbbd9b722e06609642f53bba643f3f3cd21f84f52b6b68c676cad3ceafc"
+
+[attestation.review]
+base = "a0152f894ba9a9e4b3b58222205176ec5a3e3e07"
+exit_code = 1
+report_sha256 = "b6d014abe5fde915b1ecba9a948bcb3908c717e8424e9883beaa62da19de1a60"
+override = "Performance lens BLOCKING is stale: build_image_content now resolves max_px once and passes it to _data_url_for, its only caller (test_build_image_content_config_load_once: Config.load called once for three images; fails without the fix). The remaining Config.load in _data_url_for runs only for a direct caller passing no max_px, and acceptance criterion 3 requires that fallback. Other lenses: BLOCKING none."
