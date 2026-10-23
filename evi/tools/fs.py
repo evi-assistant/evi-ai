@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from pathlib import Path
 
 from evi import workdir
@@ -30,6 +32,18 @@ _MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024  # skip files larger than 2 MB when gre
 # and the pair is what editors actually bump).
 _READ_CACHE: dict[str, tuple[int, int, ToolOutput]] = {}
 _READ_CACHE_MAX = 128
+
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(p: Path) -> threading.Lock:
+    """Return a per-file lock, case-insensitive on Windows."""
+    key = os.path.normcase(os.path.abspath(p))
+    with _PATH_LOCKS_GUARD:
+        if key not in _PATH_LOCKS:
+            _PATH_LOCKS[key] = threading.Lock()
+        return _PATH_LOCKS[key]
 
 
 def clear_read_cache() -> None:
@@ -195,19 +209,20 @@ def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
 )
 def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
     p = workdir.resolve(path)
-    # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
-    # Best-effort — a checkpoint failure must never block the write itself.
-    try:
-        from evi.checkpoints import record_before_write
+    with _path_lock(p):
+        # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
+        # Best-effort — a checkpoint failure must never block the write itself.
+        try:
+            from evi.checkpoints import record_before_write
 
-        record_before_write(p, ctx=ctx)  # tagged with the session + turn
-    except Exception:  # noqa: BLE001
-        pass
-    p.parent.mkdir(parents=True, exist_ok=True)
-    # newline="" so we write the content's own line endings verbatim (avoid
-    # Windows turning \n into \r\n and flipping a whole file to CRLF).
-    p.write_text(content, encoding="utf-8", newline="")
-    _READ_CACHE.pop(str(p.resolve()), None)
+            record_before_write(p, ctx=ctx)  # tagged with the session + turn
+        except Exception:  # noqa: BLE001
+            pass
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # newline="" so we write the content's own line endings verbatim (avoid
+        # Windows turning \n into \r\n and flipping a whole file to CRLF).
+        p.write_text(content, encoding="utf-8", newline="")
+        _READ_CACHE.pop(str(p.resolve()), None)
     return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
 
@@ -233,47 +248,49 @@ def edit_file(
         return f"ERROR: not a file: {p}"
     if old_string == new_string:
         return "ERROR: old_string and new_string are identical"
-    try:
-        text = _read_keep_eol(p)
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"ERROR: cannot read {p}: {exc}"
 
-    eol = _eol_of(text)
-    old_n, new_n = _to_eol(old_string, eol), _to_eol(new_string, eol)
+    with _path_lock(p):
+        try:
+            text = _read_keep_eol(p)
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"ERROR: cannot read {p}: {exc}"
 
-    if old_n == new_n:
-        return "ERROR: old_string and new_string are identical"
+        eol = _eol_of(text)
+        old_n, new_n = _to_eol(old_string, eol), _to_eol(new_string, eol)
 
-    # Use normalized versions if they match; otherwise fallback to raw strings
-    # (handles mixed-EOL files or explicit EOL requests).
-    if old_n in text:
-        target_old, target_new = old_n, new_n
-    elif old_string in text:
-        target_old, target_new = old_string, new_string
-    else:
-        return f"ERROR: old_string not found in {p}"
+        if old_n == new_n:
+            return "ERROR: old_string and new_string are identical"
 
-    count = text.count(target_old)
-    if count > 1 and not replace_all:
-        return (
-            f"ERROR: old_string appears {count} times in {p}; pass "
-            "replace_all=true or include more surrounding context to make it unique"
+        # Use normalized versions if they match; otherwise fallback to raw strings
+        # (handles mixed-EOL files or explicit EOL requests).
+        if old_n in text:
+            target_old, target_new = old_n, new_n
+        elif old_string in text:
+            target_old, target_new = old_string, new_string
+        else:
+            return f"ERROR: old_string not found in {p}"
+
+        count = text.count(target_old)
+        if count > 1 and not replace_all:
+            return (
+                f"ERROR: old_string appears {count} times in {p}; pass "
+                "replace_all=true or include more surrounding context to make it unique"
+            )
+        new_text = (
+            text.replace(target_old, target_new)
+            if replace_all
+            else text.replace(target_old, target_new, 1)
         )
-    new_text = (
-        text.replace(target_old, target_new)
-        if replace_all
-        else text.replace(target_old, target_new, 1)
-    )
-    # Snapshot for `evi rewind` (best-effort; never block the edit).
-    try:
-        from evi.checkpoints import record_before_write
+        # Snapshot for `evi rewind` (best-effort; never block the edit).
+        try:
+            from evi.checkpoints import record_before_write
 
-        record_before_write(p, ctx=ctx)  # tagged with the session + turn
-    except Exception:  # noqa: BLE001
-        pass
-    p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
-    _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
-    return f"edited {p}: {count if replace_all else 1} replacement(s){_post_write(p)}"
+            record_before_write(p, ctx=ctx)  # tagged with the session + turn
+        except Exception:  # noqa: BLE001
+            pass
+        p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
+        _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
+        return f"edited {p}: {count if replace_all else 1} replacement(s){_post_write(p)}"
 
 
 # Each marker starts its line, so a file whose text holds the markers inside
@@ -310,37 +327,39 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             "ERROR: no SEARCH/REPLACE blocks found — use\n"
             "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"
         )
-    try:
-        text = _read_keep_eol(p)
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"ERROR: cannot read {p}: {exc}"
 
-    eol = _eol_of(text)
-    new_text = text
-    for i, (old, new) in enumerate(blocks, 1):
-        if old == "":
-            return f"ERROR: block {i} has an empty SEARCH section"
-        old_n, new_n = _to_eol(old, eol), _to_eol(new, eol)
-        n = new_text.count(old_n)
-        if n == 0:
-            return f"ERROR: block {i} SEARCH not found in {p}"
-        if n > 1:
-            return (
-                f"ERROR: block {i} SEARCH matches {n} times in {p} — "
-                "add surrounding context to make it unique"
-            )
-        new_text = new_text.replace(old_n, new_n, 1)
-    if new_text == text:
-        return "ERROR: patch made no changes"
-    try:
-        from evi.checkpoints import record_before_write
+    with _path_lock(p):
+        try:
+            text = _read_keep_eol(p)
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"ERROR: cannot read {p}: {exc}"
 
-        record_before_write(p, ctx=ctx)  # tagged with the session + turn
-    except Exception:  # noqa: BLE001
-        pass
-    p.write_text(new_text, encoding="utf-8", newline="")
-    _READ_CACHE.pop(str(p.resolve()), None)
-    return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
+        eol = _eol_of(text)
+        new_text = text
+        for i, (old, new) in enumerate(blocks, 1):
+            if old == "":
+                return f"ERROR: block {i} has an empty SEARCH section"
+            old_n, new_n = _to_eol(old, eol), _to_eol(new, eol)
+            n = new_text.count(old_n)
+            if n == 0:
+                return f"ERROR: block {i} SEARCH not found in {p}"
+            if n > 1:
+                return (
+                    f"ERROR: block {i} SEARCH matches {n} times in {p} — "
+                    "add surrounding context to make it unique"
+                )
+            new_text = new_text.replace(old_n, new_n, 1)
+        if new_text == text:
+            return "ERROR: patch made no changes"
+        try:
+            from evi.checkpoints import record_before_write
+
+            record_before_write(p, ctx=ctx)  # tagged with the session + turn
+        except Exception:  # noqa: BLE001
+            pass
+        p.write_text(new_text, encoding="utf-8", newline="")
+        _READ_CACHE.pop(str(p.resolve()), None)
+        return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
 
 
 @tool(
