@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+from io import BytesIO
 from pathlib import Path
 from typing import Iterable
 
@@ -72,29 +73,88 @@ _IMAGE_MIME_FALLBACK = {
 }
 
 
-def _data_url_for(path: Path) -> str:
+def _fit_size(width: int, height: int, max_px: int) -> tuple[int, int]:
+    """Scale so the longer side == max_px, keeping aspect ratio, each side >= 1."""
+    if max_px <= 0 or (width <= max_px and height <= max_px):
+        return width, height
+    if width >= height:
+        return max_px, max(1, int(height * max_px / width))
+    return max(1, int(width * max_px / height)), max_px
+
+
+def _downscale(data: bytes, max_px: int) -> bytes | None:
+    """Downscale and strip EXIF from image bytes. Returns None if unsupported."""
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return None
+
+    try:
+        img = Image.open(BytesIO(data))
+        fmt = img.format  # Read before exif_transpose
+        if fmt not in ("JPEG", "PNG", "WEBP"):
+            return None
+
+        img = ImageOps.exif_transpose(img)
+        size = _fit_size(*img.size, max_px)
+        if size != img.size:
+            img = img.resize(size, Image.Resampling.LANCZOS)
+
+        img.info.pop("exif", None)
+        if fmt == "JPEG" and img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        out = BytesIO()
+        img.save(out, format=fmt, quality=90 if fmt in ("JPEG", "WEBP") else None)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def _data_url_for(path: Path, max_px: int | None = None) -> str:
     """Read `path` and return a `data:<mime>;base64,<...>` URL."""
     suffix = path.suffix.lower()
     mime, _ = mimetypes.guess_type(path.as_posix())
     if not mime:
         mime = _IMAGE_MIME_FALLBACK.get(suffix, "application/octet-stream")
+
     data = path.read_bytes()
+    if max_px is None:
+        try:
+            from evi.config import Config
+            max_px = Config.load().vision.max_px
+        except Exception:
+            max_px = 1568
+
+    downscaled = _downscale(data, max_px)
+    if downscaled is not None:
+        data = downscaled
+
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
-def build_image_content(text: str, image_paths: Iterable[str | Path]) -> list[dict]:
+def build_image_content(
+    text: str, image_paths: Iterable[str | Path], *, max_px: int | None = None
+) -> list[dict]:
     """Return an OpenAI-style multipart content list for one user message.
 
     Skips paths that don't exist, so a stale upload reference doesn't blow
     up the whole turn. Always returns at least the text part.
     """
+    if max_px is None:
+        try:
+            from evi.config import Config
+            max_px = Config.load().vision.max_px
+        except Exception:
+            max_px = 1568
+
     parts: list[dict] = [{"type": "text", "text": text}]
     for raw in image_paths:
         p = Path(raw).expanduser()
         if not p.is_file():
             continue
         try:
-            url = _data_url_for(p)
+            url = _data_url_for(p, max_px=max_px)
         except OSError:
             continue
         parts.append({"type": "image_url", "image_url": {"url": url}})

@@ -700,6 +700,16 @@ class RuntimeSettings:
 
 
 @dataclass
+class VisionSettings:
+    """Vision settings.
+
+    `max_px`: the longest image side sent to a vision model; 0 = never downscale.
+    """
+
+    max_px: int = 1568
+
+
+@dataclass
 class Config:
     llm: LLMSettings = field(default_factory=LLMSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
@@ -720,6 +730,7 @@ class Config:
     notify: NotifySettings = field(default_factory=NotifySettings)
     desktop: DesktopSettings = field(default_factory=DesktopSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
+    vision: VisionSettings = field(default_factory=VisionSettings)
     channels: ChannelSettings = field(default_factory=ChannelSettings)
     checks: CheckSettings = field(default_factory=CheckSettings)
     hooks: HookSettings = field(default_factory=HookSettings)
