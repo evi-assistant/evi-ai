@@ -29,6 +29,7 @@ from typing import Iterable
 
 from evi.config import INDICES_DIR, LLMSettings
 from evi.embeddings import embed_texts
+from evi.ignore import ignore_filter
 
 
 _TEXT_EXTENSIONS = frozenset({
@@ -116,11 +117,21 @@ def _index_dir(root: Path) -> Path:
 
 
 def _walk_text_files(root: Path) -> Iterable[Path]:
+    skip = ignore_filter(root)
     for dirpath, dirnames, filenames in __import__("os").walk(root):
         # Modify dirnames in place to prune the walk.
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        dirpath_p = Path(dirpath)
+
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SKIP_DIRS
+            and not d.startswith(".")
+            and not skip(dirpath_p / d)
+        ]
         for fname in filenames:
-            p = Path(dirpath) / fname
+            p = dirpath_p / fname
+            if skip(p):
+                continue
             if p.suffix.lower() not in _TEXT_EXTENSIONS:
                 continue
             try:
