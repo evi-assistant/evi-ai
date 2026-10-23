@@ -1,6 +1,6 @@
 id = "SK2-3"
 title = "shell: run_command in a run held to a policy (a task run) defaults to the [checks] timeout, not 60 s"
-status = "open"
+status = "verified"
 why = "run_command's default timeout is 60 s (evi/tools/shell.py _DEFAULT_TIMEOUT, around line 37). In the Phase 1 shakedown the implementer's `python -m pytest ...` hit it again and again (tests/test_eval_cli.py takes about three minutes on the share), and a timed-out run looks like a failure, so the model kept retrying. eVi's own checks give a command [checks] timeout (300 s by default, evi/checks.py settings). A run held to a policy (evi task start, evi run --policy) has no one to wait on, so its commands should get that budget unless the model asks for another."
 hints = "evi/tools/shell.py: change run_command's signature default to `timeout: int = 0` (0 = the default for this run) and update the tool description to say: default 60 s, or the [checks] timeout (300 s by default) in a run held to a policy such as `evi task start`; max 600.\nAdd `def _default_timeout(ctx) -> int`: agent = getattr(ctx, \"agent\", None); if agent is not None and getattr(agent, \"policy\", None) is not None, return int(checks.settings(getattr(agent, \"config\", None)).timeout) (from evi import checks inside the function); else _DEFAULT_TIMEOUT.\nThen `timeout = max(1, min(int(timeout or _default_timeout(ctx)), _MAX_TIMEOUT))`. An explicit timeout from the model still wins.\nTests in tests/test_shell_tool.py: monkeypatch evi.tools.shell.proc.run with a stub that records its timeout= and returns an object with returncode 0, output '', cancelled/timed_out/detached False (types.SimpleNamespace). Build ctx = types.SimpleNamespace(agent=types.SimpleNamespace(policy=object(), config=Config(), permission_callback=None), cancel_token=None)."
 acceptance = ["run_command('echo hi') with no ctx uses timeout 60 (the stub records 60).", "With a ctx whose agent has a policy and a default Config, the stub records 300; with [checks] timeout set to 120 on that Config, 120.", "An explicit timeout=30 is used as given in both cases; a timeout above 600 is cut to 600.", "With a ctx whose agent has no policy (policy=None), the default is 60.", "The existing tests in tests/test_shell_tool.py, tests/test_shell_guard.py and tests/test_implementer_policy.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/tools/shell.py", "tests/test_shell_tool.py"]
 required_checks = ["python -m pytest -q tests/test_shell_tool.py tests/test_shell_guard.py tests/test_implementer_policy.py", "python -m ruff check evi/tools/shell.py tests/test_shell_tool.py"]
 implementer = "evi-local"
 created = "2026-10-23T16:46:36Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK2-3"
+branch = "task/SK2-3"
+base = "ab3bbd253b872a42eb34964855ed68e5f3fcc331"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK2-3\\1"
+reviewer_notes = [{at = "2026-10-23T16:51:23Z", verdict = "verified", note = "Director triage: the correctness lens's BLOCKING finding (timeout=0 falls back to the default) is the design: 0 means 'this run's default' by the brief, the old code did the same (timeout or _DEFAULT_TIMEOUT), and a 0-second timeout has no meaning (the value is clamped to at least 1). The other finding is a SUGGESTION."}]
+
+[evidence_summary]
+hash = "sha256:b178ce94aaf21fa920cb55874a2366a30a53e60a49dd45d7357575ee1b01f50b"
+files = 2
+insertions = 88
+deletions = 3
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 487
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK2-3\\1\\report.json"
+summary = "I have implemented task SK2-3. The `run_command` tool now defaults to the `[checks]` timeout (300s by default) when executed within a run held to a policy (e.g., `evi task start`), while maintaining the 60s default for other contexts."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK2-3"
+digest = "sha256:e6382ede32c0babf7f729e0b64c9bad575af1289c3c255889a15d0d866801bd2"
+head = "af8b0319a9e3e3e9beb3552024bd3968291cc603"
+evidence = "sha256:b178ce94aaf21fa920cb55874a2366a30a53e60a49dd45d7357575ee1b01f50b"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T16:51:29Z"
+key = "302b45cb92785c8d"
+sig = "ff25c8dd314489dabeba9738fb902bfda56a54510bdd6aa32a7e303082d4e142"
+
+[attestation.review]
+base = "ab3bbd253b872a42eb34964855ed68e5f3fcc331"
+exit_code = 1
+report_sha256 = "19eb7939bf9c9c6e6898a8179ffbf4bd19691e9d9fa87cffa6289afdd3c25844"
+override = "Director triage: the correctness lens's BLOCKING finding (timeout=0 falls back to the default) is the design: 0 means 'this run's default' by the brief, the old code did the same (timeout or _DEFAULT_TIMEOUT), and a 0-second timeout has no meaning (the value is clamped to at least 1). The other finding is a SUGGESTION."
