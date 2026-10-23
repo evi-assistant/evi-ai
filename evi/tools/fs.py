@@ -360,15 +360,23 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             if old == "":
                 return f"ERROR: block {i} has an empty SEARCH section"
             old_n, new_n = _to_eol(old, eol), _to_eol(new, eol)
-            n = new_text.count(old_n)
-            if n == 0:
+
+            # Use normalized versions if they match; otherwise fallback to raw strings
+            # (handles mixed-EOL files or explicit EOL requests).
+            if old_n in new_text:
+                target_old, target_new = old_n, new_n
+            elif old in new_text:
+                target_old, target_new = old, new
+            else:
                 return f"ERROR: block {i} SEARCH not found in {p}"
+
+            n = new_text.count(target_old)
             if n > 1:
                 return (
                     f"ERROR: block {i} SEARCH matches {n} times in {p} — "
                     "add surrounding context to make it unique"
                 )
-            new_text = new_text.replace(old_n, new_n, 1)
+            new_text = new_text.replace(target_old, target_new, 1)
         if new_text == text:
             return "ERROR: patch made no changes"
         try:
