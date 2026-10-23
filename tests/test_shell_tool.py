@@ -102,3 +102,17 @@ def test_a_unc_folder_behind_a_mapped_drive_runs_cmd_there_with_full_syntax():
     out = run_command('python -c "import os; print(os.getcwd())" && echo second', cwd=str(here))
     assert out.startswith("exit 0") and "second" in out, out
     assert str(mapped).lower() in out.lower() and "UNC paths are not supported" not in out
+
+
+def test_a_bare_python_is_the_interpreter_the_checks_use(tmp_path):
+    from evi.tools.shell import _with_own_python
+
+    assert _with_own_python("python3 -m pytest -q", tmp_path) == (
+        f'"{sys.executable}" -m pytest -q')
+    assert _with_own_python("pythonista run", tmp_path) == "pythonista run"
+    assert _with_own_python("ruff check .", tmp_path) == "ruff check ."
+    out = run_command('python -c "import sys; print(sys.prefix)"', cwd=str(tmp_path))
+    assert out.splitlines()[-1].strip() == sys.prefix, out
+    here = Path(__file__).resolve().parent  # through a mapped drive here, if any
+    out = run_command('python -c "import sys; print(sys.prefix)"', cwd=str(here))
+    assert out.splitlines()[-1].strip() == sys.prefix, out

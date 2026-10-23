@@ -67,6 +67,20 @@ def _mapped_spelling(folder: Path) -> Path | None:
     return None
 
 
+def _with_own_python(command: str, folder: Path) -> str:
+    """`command` with a leading bare ``python`` / ``python3`` made the
+    interpreter a check uses (`evi.checks.resolve_argv`: the folder's own
+    virtualenv, else eVi's), so `python -m pytest` here runs what the verify
+    gate runs rather than whichever Python the shell finds first."""
+    from evi.checks import resolve_argv
+
+    head, sep, rest = command.partition(" ")
+    if head.lower().removesuffix(".exe") not in ("python", "python3"):
+        return command
+    exe = resolve_argv([head], folder, {"PATH": ""})[0]
+    return command if exe == head else f'"{exe}"{sep}{rest}'
+
+
 def _direct_argv(command: str, folder: Path, env: dict[str, str] | None) -> list[str] | str:
     """`command` as argv started without cmd.exe, for a folder on a network
     share: cmd.exe can't run in a UNC folder (it says so and runs in the
@@ -139,6 +153,8 @@ def run_command(
                 if isinstance(direct, str):
                     return f"ERROR: {direct}"
                 argv, use_shell = direct, False
+    if use_shell:
+        argv = _with_own_python(command, Path(workdir_path))
 
     try:
         res = proc.run(
