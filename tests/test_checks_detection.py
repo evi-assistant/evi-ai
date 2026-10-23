@@ -80,6 +80,32 @@ def test_ruff_on_the_changed_files_and_only_the_targeted_tests(proj):
     assert pytest_.ok_codes == (0, 5)
 
 
+def test_test_detection_beside_module_and_in_tests_subfolder(proj):
+    # 1. Changed calc.py with test_calc.py beside it (at root)
+    (proj / "calc.py").write_text("pass")
+    (proj / "test_calc.py").write_text("pass")
+    (proj / "tests" / "test_calc.py").write_text("pass")
+    targets = checks._test_targets(proj, ["calc.py"])
+    assert targets == ["tests/test_calc.py", "test_calc.py"]
+
+    # 2. Changed pkg/util.py with pkg/test_util.py
+    (proj / "pkg" / "test_util.py").write_text("pass")
+    targets = checks._test_targets(proj, ["pkg/util.py"])
+    assert targets == ["pkg/test_util.py"]
+
+    # 3. Changed pkg/util.py with both pkg/test_util.py and tests/pkg/test_util.py
+    (proj / "tests" / "pkg").mkdir(exist_ok=True)
+    (proj / "tests" / "pkg" / "test_util.py").write_text("pass")
+    targets = checks._test_targets(proj, ["pkg/util.py"])
+    assert targets == ["pkg/test_util.py", "tests/pkg/test_util.py"]
+
+    # 4. Changed conftest.py, __init__.py, __main__.py yield nothing
+    for name in ("conftest.py", "__init__.py", "__main__.py"):
+        (proj / name).write_text("pass")
+        targets = checks._test_targets(proj, [name])
+        assert targets == []
+
+
 def test_a_changed_test_file_is_its_own_target(proj):
     found = detect(proj, Config(), True, ["tests/test_calc.py"])
     assert found[-1].argv[-1] == "tests/test_calc.py"
