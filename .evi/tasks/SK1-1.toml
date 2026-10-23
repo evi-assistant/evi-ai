@@ -1,20 +1,59 @@
 id = "SK1-1"
 title = "fs: edit_file/apply_patch preserve CRLF and accept echoed \\r\\n; read slices keep line endings"
-status = "open"
+status = "verified"
 why = "evi/tools/fs.py:220 reads with p.read_text(encoding='utf-8'). Universal newlines turn CRLF into LF there, and fs.py:243 writes that LF text back with newline='', so any edit_file flips a CRLF file to LF. apply_patch does the same (fs.py:281, 305). _read_whole (fs.py:109-113) returns the raw CRLF text. A model that echoes it sends '\\r\\n' in old_string, which never matches the LF-normalized text, and gets 'old_string not found'. _read_slice (fs.py:146) opens without newline='', so a slice is LF while a whole read is CRLF. Probe on HEAD: b'a = 1\\r\\nb = 2\\r\\n' edited -> b'a = 10\\nb = 2\\n'; an echoed '\\r\\n' old_string -> ERROR not found. Fixture note: .gitattributes:3 `* text=auto eol=lf` would normalize a committed CRLF fixture to LF, so this task builds its CRLF files in tmp_path with write_bytes and adds no repo fixture."
-hints = "In evi/tools/fs.py add three helpers above read_file: _read_keep_eol(p) -> str that does `with p.open('r', encoding='utf-8', newline='') as f: return f.read()` (do NOT use Path.read_text(newline=...): that argument only exists on Python 3.13 and pyproject says >=3.12); _eol_of(text) -> '\\r\\n' if '\\r\\n' in text else '\\n'; _to_eol(s, eol) -> s.replace('\\r\\n', '\\n'), then .replace('\\n', '\\r\\n') only when eol == '\\r\\n'. edit_file (fs.py:207-245): read with _read_keep_eol (keep the same except clause); eol = _eol_of(text); old_n, new_n = _to_eol(old_string, eol), _to_eol(new_string, eol); if old_n == new_n return the existing identical error; if old_n is not in text but old_string is, use old_string/new_string as given (mixed files); count and replace with the chosen pair. apply_patch (fs.py:270-307): same read, and convert each (old, new) block with _to_eol before counting. _read_slice (fs.py:146): add newline='' to p.open(...). Leave write_file alone (it already writes verbatim). New tests/test_fs_eol.py: imitate tests/test_tools.py (REGISTRY['edit_file'].call(json.dumps({...})) after `import evi.tools.fs`) and the _patch helper in tests/test_apply_patch.py. Build files with (tmp_path / 'crlf.py').write_bytes(b'...\\r\\n...') and assert on read_bytes(), never read_text()."
-acceptance = ["edit_file on a CRLF file b'a = 1\\r\\nb = 2\\r\\nc = 3\\r\\n' with old_string 'a = 1\\nb = 2' and new_string 'a = 10\\nb = 20' leaves exactly b'a = 10\\r\\nb = 20\\r\\nc = 3\\r\\n'.", "edit_file on that CRLF file with the echoed old_string 'a = 1\\r\\nb = 2' (new 'a = 9\\r\\nb = 2') succeeds ('1 replacement(s)'); the file then has no bare b'\\n' and no b'\\r\\r\\n'.", "edit_file on an LF file with a CRLF old_string/new_string succeeds, and the file stays LF-only (no b'\\r').", "Mixed-EOL file b'x = 1\\r\\ny = 2\\nz = 3\\n': edit_file old 'y = 2\\nz = 3' -> new 'y = 20\\nz = 30' succeeds and leaves b'x = 1\\r\\ny = 20\\nz = 30\\n' (falls back to the strings as given when the EOL-normalized old_string is not found).", "apply_patch with an LF-formatted SEARCH/REPLACE patch on a CRLF file applies every hunk and keeps every line ending CRLF.", "read_file with offset/limit on a CRLF file returns the lines with their '\\r\\n' endings, the same as a whole-file read.", "old_string and new_string that differ only in line endings return the existing 'old_string and new_string are identical' error and leave the file unchanged.", "The existing tests in tests/test_tools.py, tests/test_apply_patch.py and tests/test_checkpoints.py pass unchanged."]
-files_in_scope = ["evi/tools/fs.py", "tests/test_fs_eol.py"]
-required_checks = ["python -m pytest -q tests/test_fs_eol.py tests/test_tools.py tests/test_apply_patch.py tests/test_checkpoints.py", "python -m ruff check evi/tools/fs.py tests/test_fs_eol.py"]
+hints = "In evi/tools/fs.py add three helpers above read_file: _read_keep_eol(p) -> str that does `with p.open('r', encoding='utf-8', newline='') as f: return f.read()` (do NOT use Path.read_text(newline=...): that argument only exists on Python 3.13 and pyproject says >=3.12); _eol_of(text) -> '\\r\\n' if '\\r\\n' in text else '\\n'; _to_eol(s, eol) -> s.replace('\\r\\n', '\\n'), then .replace('\\n', '\\r\\n') only when eol == '\\r\\n'. edit_file (fs.py:207-245): read with _read_keep_eol (keep the same except clause); eol = _eol_of(text); old_n, new_n = _to_eol(old_string, eol), _to_eol(new_string, eol); if old_n == new_n return the existing identical error; if old_n is not in text but old_string is, use old_string/new_string as given (mixed files); count and replace with the chosen pair. apply_patch (fs.py:270-307): same read, and convert each (old, new) block with _to_eol before counting. _read_slice (fs.py:146): add newline='' to p.open(...). Leave write_file alone (it already writes verbatim). New tests/test_fs_eol.py: imitate tests/test_tools.py (REGISTRY['edit_file'].call(json.dumps({...})) after `import evi.tools.fs`) and the _patch helper in tests/test_apply_patch.py. Build files with (tmp_path / 'crlf.py').write_bytes(b'...\\r\\n...') and assert on read_bytes(), never read_text(). Do not import REGISTRY into evi/tools/fs.py (ruff F401): tests import it from evi.tools.base. Three tests in tests/test_tools.py (test_read_file_offset_and_limit, test_read_file_offset_to_eof, test_read_file_slice_roundtrips_through_edit) create their file with Path.write_text, which writes CRLF on Windows, so once slices keep line endings they see 'bravo\\r\\n'. Change only how those three tests create their file, to write_bytes(b'alpha\\nbravo\\n...') with LF, and leave their assertions as they are."
+acceptance = ["edit_file on a CRLF file b'a = 1\\r\\nb = 2\\r\\nc = 3\\r\\n' with old_string 'a = 1\\nb = 2' and new_string 'a = 10\\nb = 20' leaves exactly b'a = 10\\r\\nb = 20\\r\\nc = 3\\r\\n'.", "edit_file on that CRLF file with the echoed old_string 'a = 1\\r\\nb = 2' (new 'a = 9\\r\\nb = 2') succeeds ('1 replacement(s)'); the file then has no bare b'\\n' and no b'\\r\\r\\n'.", "edit_file on an LF file with a CRLF old_string/new_string succeeds, and the file stays LF-only (no b'\\r').", "Mixed-EOL file b'x = 1\\r\\ny = 2\\nz = 3\\n': edit_file old 'y = 2\\nz = 3' -> new 'y = 20\\nz = 30' succeeds and leaves b'x = 1\\r\\ny = 20\\nz = 30\\n' (falls back to the strings as given when the EOL-normalized old_string is not found).", "apply_patch with an LF-formatted SEARCH/REPLACE patch on a CRLF file applies every hunk and keeps every line ending CRLF.", "read_file with offset/limit on a CRLF file returns the lines with their '\\r\\n' endings, the same as a whole-file read.", "old_string and new_string that differ only in line endings return the existing 'old_string and new_string are identical' error and leave the file unchanged.", "The existing tests in tests/test_tools.py, tests/test_apply_patch.py and tests/test_checkpoints.py pass; in tests/test_tools.py only the file setup of the three slice tests named in the hints changes (LF bytes), and their assertions stay as they are."]
+files_in_scope = ["evi/tools/fs.py", "tests/test_fs_eol.py", "tests/test_tools.py"]
+required_checks = ["python -m pytest -q tests/test_fs_eol.py tests/test_tools.py tests/test_apply_patch.py tests/test_checkpoints.py", "python -m ruff check evi/tools/fs.py tests/test_fs_eol.py tests/test_tools.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:30Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 4
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-1"
+branch = "task/SK1-1"
+base = "758d593e826400db32005343f1645811e400f7f7"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-1\\4"
+reviewer_notes = [{at = "2026-10-23T07:06:53Z", verdict = "review", note = "Review of attempt 3: the changes to evi/tools/fs.py and the file setup in tests/test_tools.py are right; keep them as they are. Change only tests/test_fs_eol.py: (1) test_edit_file_mixed_eol_fallback writes its file twice and has comments thinking aloud ('wait, the prompt says ...'); keep one write_bytes and at most one comment line saying why a mixed file falls back to the strings as given. (2) test_apply_patch_preserves_crlf applies one hunk, but the criterion says every hunk: use a patch with two SEARCH/REPLACE blocks on different lines, assert 'applied 2 hunk(s)' and the exact CRLF bytes. (3) Format it like tests/test_tools.py: two blank lines between top-level functions, and no lines holding only spaces."}]
+
+[evidence_summary]
+hash = "sha256:cd72b033924b5844248ca5250b5081ec83c0ec411643c35564b7a19a00d077f7"
+files = 3
+insertions = 180
+deletions = 12
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 48
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-1\\4\\report.json"
+summary = "I have implemented the requested changes to preserve CRLF line endings in `edit_file`, `apply_patch`, and `read_file` slices."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-1"
+digest = "sha256:0083c5a7650e580d6e8de3756e869d96415c3b16c80fd2b47d3be83b478bb857"
+head = "92385f7c270ffe5058e439ce465e425af128d6bf"
+evidence = "sha256:cd72b033924b5844248ca5250b5081ec83c0ec411643c35564b7a19a00d077f7"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T07:20:06Z"
+key = "302b45cb92785c8d"
+sig = "a36bbc0fd366b88706bfcb44ae6151483dee257e87ac01e8da4cb15209c7ee3f"
+
+[attestation.review]
+base = "758d593e826400db32005343f1645811e400f7f7"
+exit_code = 0
+report_sha256 = "262203839002534c4c21256098d0f36f69c59fe7737c848bed3c33a1b0ef99d2"
