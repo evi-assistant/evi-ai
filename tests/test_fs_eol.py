@@ -132,3 +132,47 @@ def test_edit_file_identical_eol_error(tmp_path: Path) -> None:
 
     assert msg == "ERROR: old_string and new_string are identical"
     assert p.read_bytes() == b"hello\nworld\n"
+
+
+def test_apply_patch_mixed_eol_fallback(tmp_path: Path) -> None:
+    # AC 1: Mixed-EOL file fallback to raw strings when normalized version not found.
+    p = tmp_path / "mixed.txt"
+    p.write_bytes(b"x = 1\r\ny = 2\nz = 3\n")
+
+    patch = (
+        "<<<<<<< SEARCH\n"
+        "y = 2\nz = 3\n"
+        "=======\n"
+        "y = 20\nz = 30\n"
+        ">>>>>>> REPLACE"
+    )
+
+    msg = REGISTRY["apply_patch"].call(json.dumps({
+        "path": str(p),
+        "patch": patch,
+    }))
+
+    assert "applied 1 hunk(s)" in msg
+    assert p.read_bytes() == b"x = 1\r\ny = 20\nz = 30\n"
+
+
+def test_apply_patch_not_found_error(tmp_path: Path) -> None:
+    # AC 3: A SEARCH found neither normalized nor as given still returns 'block N SEARCH not found'.
+    p = tmp_path / "test.txt"
+    p.write_bytes(b"hello\nworld\n")
+
+    patch = (
+        "<<<<<<< SEARCH\n"
+        "missing\n"
+        "=======\n"
+        "found\n"
+        ">>>>>>> REPLACE"
+    )
+
+    msg = REGISTRY["apply_patch"].call(json.dumps({
+        "path": str(p),
+        "patch": patch,
+    }))
+
+    assert "ERROR: block 1 SEARCH not found" in msg
+    assert p.read_bytes() == b"hello\nworld\n"
