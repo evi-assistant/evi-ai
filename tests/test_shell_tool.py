@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -86,3 +87,18 @@ def test_a_command_in_a_unc_folder_runs_there_not_in_the_windows_folder(tmp_path
     assert "UNC paths are not supported" not in out
     assert run_command("python where.py && echo hi", cwd=unc).startswith(
         "ERROR: ") and not (tmp_path / "hi").exists()
+
+
+def test_a_unc_folder_behind_a_mapped_drive_runs_cmd_there_with_full_syntax():
+    from evi.permissions import _is_network_path
+    from evi.tools.shell import _mapped_spelling
+
+    here = Path(__file__).resolve().parent  # resolve() spells a mapped drive as UNC
+    if sys.platform != "win32" or not _is_network_path(here):
+        pytest.skip("needs Windows and this checkout on a mapped network drive")
+    mapped = _mapped_spelling(here)
+    assert mapped is not None and len(mapped.drive) == 2
+    assert os.path.samefile(mapped, here)
+    out = run_command('python -c "import os; print(os.getcwd())" && echo second', cwd=str(here))
+    assert out.startswith("exit 0") and "second" in out, out
+    assert str(mapped).lower() in out.lower() and "UNC paths are not supported" not in out

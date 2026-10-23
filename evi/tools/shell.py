@@ -41,6 +41,32 @@ _MAX_OUTPUT = 32 * 1024
 _CMD_SYNTAX = frozenset('&|<>^%()"')
 
 
+def _mapped_spelling(folder: Path) -> Path | None:
+    """`folder` (a UNC path) through a drive letter mapped to its share, so
+    cmd.exe can run there with its full syntax; None when no letter maps it."""
+    import ctypes
+    import string
+    from ctypes import wintypes
+
+    try:
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_connection = ctypes.WinDLL("mpr").WNetGetConnectionW
+    except (AttributeError, OSError):
+        return None
+    target = os.path.normcase(str(folder))
+    buf = ctypes.create_unicode_buffer(1024)
+    for letter in string.ascii_uppercase:
+        if get_drive_type(f"{letter}:\\") != 4:  # DRIVE_REMOTE
+            continue
+        size = wintypes.DWORD(len(buf))
+        if get_connection(f"{letter}:", buf, ctypes.byref(size)) != 0:
+            continue
+        remote = os.path.normcase(buf.value.rstrip("\\"))
+        if remote and (target == remote or target.startswith(remote + "\\")):
+            return Path(f"{letter}:\\" + str(folder)[len(remote):].lstrip("\\"))
+    return None
+
+
 def _direct_argv(command: str, folder: Path, env: dict[str, str] | None) -> list[str] | str:
     """`command` as argv started without cmd.exe, for a folder on a network
     share: cmd.exe can't run in a UNC folder (it says so and runs in the
@@ -105,10 +131,14 @@ def run_command(
         from evi.permissions import _is_network_path
 
         if _is_network_path(Path(workdir_path)):
-            direct = _direct_argv(command, Path(workdir_path), env)
-            if isinstance(direct, str):
-                return f"ERROR: {direct}"
-            argv, use_shell = direct, False
+            mapped = _mapped_spelling(Path(workdir_path))
+            if mapped is not None and mapped.is_dir():
+                workdir_path = mapped
+            else:
+                direct = _direct_argv(command, Path(workdir_path), env)
+                if isinstance(direct, str):
+                    return f"ERROR: {direct}"
+                argv, use_shell = direct, False
 
     try:
         res = proc.run(
