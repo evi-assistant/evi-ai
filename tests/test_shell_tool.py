@@ -116,3 +116,75 @@ def test_a_bare_python_is_the_interpreter_the_checks_use(tmp_path):
     here = Path(__file__).resolve().parent  # through a mapped drive here, if any
     out = run_command('python -c "import sys; print(sys.prefix)"', cwd=str(here))
     assert out.splitlines()[-1].strip() == sys.prefix, out
+
+
+def test_run_command_timeout_logic(monkeypatch):
+    import types
+    from evi.config import Config
+    from evi import proc
+
+    # Stub for proc.run
+    recorded_timeout = []
+
+    def mock_run(argv, **kwargs):
+        recorded_timeout.append(kwargs.get("timeout"))
+        return types.SimpleNamespace(
+            returncode=0, output="", cancelled=False, timed_out=False, detached=False
+        )
+
+    monkeypatch.setattr(proc, "run", mock_run)
+    # 1. No ctx -> default 60
+    recorded_timeout.clear()
+    run_command("echo hi")
+    assert recorded_timeout == [60]
+
+    # 2. Ctx with policy and default Config -> default 300
+    recorded_timeout.clear()
+    ctx_policy = types.SimpleNamespace(
+        agent=types.SimpleNamespace(
+            policy=object(),
+            config=Config(),
+        ),
+        cancel_token=None,
+    )
+    run_command("echo hi", ctx=ctx_policy)
+    assert recorded_timeout == [300]
+
+    # 2b. Ctx with policy and custom [checks] timeout (120)
+    recorded_timeout.clear()
+    cfg_custom = Config()
+    cfg_custom.checks.timeout = 120
+    ctx_policy_custom = types.SimpleNamespace(
+        agent=types.SimpleNamespace(
+            policy=object(),
+            config=cfg_custom,
+        ),
+        cancel_token=None,
+    )
+    run_command("echo hi", ctx=ctx_policy_custom)
+    assert recorded_timeout == [120]
+
+    # 3. Explicit timeout=30 wins
+    recorded_timeout.clear()
+    run_command("echo hi", timeout=30)
+    assert recorded_timeout == [30]
+    recorded_timeout.clear()
+    run_command("echo hi", timeout=30, ctx=ctx_policy)
+    assert recorded_timeout == [30]
+
+    # 3b. Timeout above 600 cut to 600
+    recorded_timeout.clear()
+    run_command("echo hi", timeout=999)
+    assert recorded_timeout == [600]
+
+    # 4. Ctx with agent but no policy -> default 60
+    recorded_timeout.clear()
+    ctx_no_policy = types.SimpleNamespace(
+        agent=types.SimpleNamespace(
+            policy=None,
+            config=Config(),
+        ),
+        cancel_token=None,
+    )
+    run_command("echo hi", ctx=ctx_no_policy)
+    assert recorded_timeout == [60]
