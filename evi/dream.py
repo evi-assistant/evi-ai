@@ -23,6 +23,7 @@ user applies is recoverable from `~/.evi/memory/.attic/`.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -69,11 +70,18 @@ _DREAM_SYSTEM_PROMPT = (
 
 @dataclass
 class MemorySnapshot:
-    entries: dict[str, str]  # name -> first-line summary
+    entries: dict[str, str]  # name -> sha256 hex digest of file content
 
     @classmethod
     def take(cls, store: MemoryStore) -> "MemorySnapshot":
-        return cls(entries={e.name: e.summary for e in store.list()})
+        entries = {}
+        for e in store.list():
+            try:
+                data = (store.root / f"{e.name}.md").read_bytes()
+            except OSError:
+                data = e.summary.encode("utf-8")
+            entries[e.name] = hashlib.sha256(data).hexdigest()
+        return cls(entries=entries)
 
 
 @dataclass
