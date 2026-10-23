@@ -1,6 +1,6 @@
 id = "SK2-2"
 title = "users: `web-config users add` refuses a login that would share another's data folder; doctor flags existing ones"
-status = "open"
+status = "verified"
 why = "In multi-user web mode each login's data lives in HOME/users/<slug>, where the slug is evi/apps/web/server.py _safe_user(name) case-folded (_login_dir_key, around line 1036): 'bob smith', 'bob_smith' and 'bob/smith' are all users/bob_smith. The server refuses every login of such a collision (_colliding_logins, _authenticate_login), so they would not read each other's data, but nothing stops one being created: evi/users.py add_user (around line 62) only replaces a login with the same name ignoring case, so `evi web-config users add \"bob smith\"` next to bob_smith succeeds silently and then neither can sign in. `evi doctor` (evi/doctor.py _check_web_access, around line 430) flags only owner-reserved names, not collisions."
 hints = "evi/users.py: add `def login_dir_key(name: str) -> str` returning the same value as the server's _login_dir_key: `(re.sub(r\"[^A-Za-z0-9_.-]\", \"_\", name.strip()).strip(\"._-\") or \"user\").casefold()` (a restatement, like doctor's _owner_named restates _reserved_login; don't import the web server here). Add `def colliding_logins(users) -> dict[str, list[str]]` with the same result as server._colliding_logins (copy its logic, using login_dir_key).\nadd_user: after stripping the name, if some existing login has a different name (compare with .lower(), as add_user already does for re-issue) but the same login_dir_key, raise ValueError(f\"{name!r} would share the data folder users/... with the login {other!r}: choose another name\"). `evi web-config users add` already prints a ValueError and exits 1 (evi/apps/cli/main.py web_users_add), so the CLI needs no change.\nevi/doctor.py _check_web_access: inside `if cfg.web.multi_user:` after the owner-reserved check, compute collisions with users.colliding_logins(users); when there are any, append Check(\"multi-user logins\", \"warn\", detail naming each group and saying none of them can sign in until all but one are renamed, fix=tuple of 'evi web-config users remove \"<name>\"' for each colliding login).\nTests in a new tests/test_users_collisions.py. For doctor, copy the doctor_home fixture and _web_checks helper pattern from tests/test_web_hardening.py (around lines 1025-1045: monkeypatch evi.config HOME/CONFIG_PATH, evi.users.USERS_PATH, delenv EVI_WEB_AUTH_TOKEN, chdir)."
 acceptance = ["users.login_dir_key equals evi.apps.web.server._login_dir_key for each of: 'bob smith', 'bob_smith', 'bob/smith', 'Alice', 'alice', '..', 'owner.', ' x '.", "add_user('bob_smith') then add_user('bob smith') raises ValueError naming 'bob_smith', and users.json still holds only bob_smith; add_user('BOB_SMITH') after bob_smith re-issues (same name ignoring case), as before; add_user('alice') next to bob_smith works.", "colliding_logins on [bob smith, bob_smith, alice] gives {'bob smith': ['bob_smith'], 'bob_smith': ['bob smith']}, the same as server._colliding_logins.", "With [web] multi_user = true and auth_token set, a users.json holding 'bob smith' and 'bob_smith' (written directly) makes doctor's _check_web_access return a 'multi-user logins' warn whose fix removes each; with no collision there is no such check.", "The existing tests in tests/test_users.py and tests/test_web_hardening.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/users.py", "evi/doctor.py", "tests/test_users_collisions.
 required_checks = ["python -m pytest -q tests/test_users_collisions.py tests/test_users.py tests/test_web_hardening.py", "python -m ruff check evi/users.py evi/doctor.py tests/test_users_collisions.py"]
 implementer = "evi-local"
 created = "2026-10-23T16:46:28Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK2-2"
+branch = "task/SK2-2"
+base = "ca08d80a4d35c9bf3a0b1ed15833fd92b261f72b"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK2-2\\2"
+reviewer_notes = [{at = "2026-10-23T17:02:39Z", verdict = "reopened", note = "Review of attempt 1: evi/users.py and evi/doctor.py are right; keep the logic. Fix these: (1) test_add_user_collisions writes Path(\"test_users.json\") into the current folder (the repository): use the tmp_path fixture (path=tmp_path / \"users.json\") and drop the try/finally. (2) Acceptance criteria 1 and 3 say \"equals the server's\": in test_login_dir_key compare users.login_dir_key(name) with evi.apps.web.server._login_dir_key(name) for each listed name (no hard-coded results), and in test_colliding_logins also assert the result equals evi.apps.web.server._colliding_logins(users). (3) The doctor tests must not call run_checks() (it runs every check, network probes included): call evi.doctor._check_web_access() with the fixture pattern from tests/test_web_hardening.py around lines 1025-1045 (monkeypatch evi.config HOME and CONFIG_PATH to tmp_path, evi.users.USERS_PATH, monkeypatch.delenv(\"EVI_WEB_AUTH_TOKEN\", raising=False), monkeypatch.chdir(tmp_path)); put auth_token in config.toml instead of setting EVI_WEB_AUTH_TOKEN. (4) In add_user's ValueError name the folder: f\"... the data folder users/{login_dir_key(name)} with the login {u.name!r} ...\", and wrap that line under 100 characters. (5) Two blank lines between top-level functions in the test file. Run the required checks with run_command (pass \"timeout\": 600) and quote their last lines."}, {at = "2026-10-23T17:08:37Z", verdict = "verified", note = "Director triage: the security lens's BLOCKING finding (a login name with double quotes makes the suggested 'evi web-config users remove \"<name>\"' unsafe to paste) is not a vulnerability here: doctor only prints Check.fix for the user to copy (evi/apps/cli/main.py, doctor command), it never runs it; users.json logins are created by the owner on their own machine; and the existing owner-reserved check in the same function builds its fix strings the same way. The other findings are SUGGESTIONs (the mirror tests are what acceptance criteria 1 and 3 ask for)."}]
+
+[evidence_summary]
+hash = "sha256:8cd3065e3f7f6124dfb08e181ad6cc2c852ff9a13063bac91d49ebdb6bd7e2ab"
+files = 3
+insertions = 164
+deletions = 1
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 120
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK2-2\\2\\report.json"
+summary = "I have implemented task SK2-2."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK2-2"
+digest = "sha256:a4bb26466ecde34c9e43bc2eaaed0129d50961249fa9f6f7b637c91f62bf6e56"
+head = "3178902e509884e710cbe066badc63277b1d170f"
+evidence = "sha256:8cd3065e3f7f6124dfb08e181ad6cc2c852ff9a13063bac91d49ebdb6bd7e2ab"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T17:08:44Z"
+key = "302b45cb92785c8d"
+sig = "1c01f7517006fef1f4e655216894d6a128f244cbff48826fa5fc3943e6e12c8d"
+
+[attestation.review]
+base = "ca08d80a4d35c9bf3a0b1ed15833fd92b261f72b"
+exit_code = 1
+report_sha256 = "42b2c134d32f17810894d0908e295fb7265c89d159de051ed351e8c49f8a5cab"
+override = "Director triage: the security lens's BLOCKING finding (a login name with double quotes makes the suggested 'evi web-config users remove \"<name>\"' unsafe to paste) is not a vulnerability here: doctor only prints Check.fix for the user to copy (evi/apps/cli/main.py, doctor command), it never runs it; users.json logins are created by the owner on their own machine; and the existing owner-reserved check in the same function builds its fix strings the same way. The other findings are SUGGESTIONs (the mirror tests are what acceptance criteria 1 and 3 ask for)."
