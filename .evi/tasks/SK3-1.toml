@@ -1,6 +1,6 @@
 id = "SK3-1"
 title = "fs: edit_file says what to do on a miss: already-applied is success, an ambiguous match lists its lines, a missing one shows the closest region"
-status = "open"
+status = "verified"
 why = "Edit misses are the top source of wasted turns for small models (roadmap item loop-tools-edit-recovery; seen throughout the Phase 1 shakedown). evi/tools/fs.py edit_file (around lines 259-320) answers a miss with only 'ERROR: old_string not found in <path>' and an ambiguous match with only a count, so the model re-reads the file or guesses. And a model that re-sends an edit it already made gets an error although the file is already as it wants. This task changes edit_file only (apply_patch follows in a later task)."
 hints = "Add a module-level helper in evi/tools/fs.py, above edit_file, exactly this (it was prototyped: it finds the right lines of a near miss, 0.2 s on a 10 000-line file):\n\ndef _closest_region(text: str, old: str) -> tuple[int, int, float] | None:\n    \"\"\"(first line, last line, similarity), 1-based, of the window of as many\n    lines as `old` that is most like it; None for an empty file or no likeness.\"\"\"\n    lines = text.splitlines()\n    want = old.splitlines() or [old]\n    k = len(want)\n    if not lines:\n        return None\n    sm = difflib.SequenceMatcher(autojunk=False)\n    sm.set_seq2(\"\\n\".join(want))\n    best_r, best_i = 0.0, 0\n    for i in range(max(1, len(lines) - k + 1)):\n        sm.set_seq1(\"\\n\".join(lines[i:i + k]))\n        if sm.real_quick_ratio() <= best_r or sm.quick_ratio() <= best_r:\n            continue\n        r = sm.ratio()\n        if r > best_r:\n            best_r, best_i = r, i\n    return (best_i + 1, min(best_i + k, len(lines)), best_r) if best_r > 0 else None\n\n(import difflib at the top of the module).\nIn edit_file, where it now returns 'ERROR: old_string not found in {p}': (1) first the already-applied case: if new_n (or new_string) is non-blank and occurs in text, return f\"edited {p}: already applied (new_string is in the file, old_string is not); nothing changed\" without writing or checkpointing; (2) else return the not-found error, followed, when _closest_region(text, old_n) gives a similarity of at least 0.5, by a newline, f\"closest match, lines {a}-{b} ({r:.0%} alike):\", and those lines each as f\"{n:>5}| {line}\" (at most 20 lines).\nWhere it now returns 'old_string appears {count} times': also name the lines, e.g. 'old_string appears 3 times in <path> (lines 4, 9, 17); pass replace_all=true or include more surrounding context to make it unique'. A match's line is text.count('\\n', 0, index) + 1; list at most 20 and add ', ...' after that.\nTests in a new tests/test_edit_recovery.py, imitating tests/test_fs_eol.py (REGISTRY['edit_file'].call(json.dumps({...})) after `import evi.tools.fs`; files built with write_bytes in tmp_path)."
 acceptance = ["Re-sending an edit that is already applied (the file has new_string, not old_string) returns a message starting 'edited' that says 'already applied', and the file's bytes are unchanged.", "An old_string found nowhere, with a near miss in the file (e.g. one word changed in a 3-line block), returns an error that still starts 'ERROR: old_string not found', then 'closest match, lines A-B' with the right line numbers and those lines numbered.", "An old_string with no line at least 50% alike returns only the not-found error (no 'closest match').", "An old_string that appears at lines 2, 5 and 9 returns an error naming '(lines 2, 5, 9)' and leaves the file unchanged; replace_all=true still replaces all three.", "A deletion (new_string '') of text that is not in the file is still an error, not 'already applied'.", "The existing tests in tests/test_tools.py, tests/test_fs_eol.py, tests/test_fs_write_lock.py and tests/test_checkpoints.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/tools/fs.py", "tests/test_edit_recovery.py"]
 required_checks = ["python -m pytest -q tests/test_edit_recovery.py tests/test_tools.py tests/test_fs_eol.py tests/test_fs_write_lock.py tests/test_checkpoints.py", "python -m ruff check evi/tools/fs.py tests/test_edit_recovery.py"]
 implementer = "evi-local"
 created = "2026-10-23T17:26:00Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK3-1"
+branch = "task/SK3-1"
+base = "9b7f2b4a28313ebe7ecebccf97735ba5b934cea6"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK3-1\\1"
+reviewer_notes = [{at = "2026-10-23T18:43:30Z", verdict = "verified", note = "Director triage: (1) correctness 'the loop skips the first line': range(max(1, n - k + 1)) starts at index 0, and when old_string has more lines than the file, range(1) still checks index 0 with the whole file as the window (test_the_closest_region_shows_at_most_twenty_lines asserts 'lines 1-40'). (2) performance 'quadratic': O(lines x window) on a miss only, pruned by real_quick_ratio/quick_ratio; measured 0.15 s on evi/tools/fs.py and 0.2 s on a 10 000-line file before the brief was written. The other findings are SUGGESTIONs."}]
+
+[evidence_summary]
+hash = "sha256:ad7574878f9daf4d6a98dde9839f34316f397111897ab4b95f3e852cc9b94973"
+files = 2
+insertions = 160
+deletions = 2
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 59
+failures = 0
+errors = 0
+skipped = 1
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK3-1\\1\\report.json"
+summary = "I have implemented the edit recovery improvements in `edit_file` as specified in task SK3-1."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK3-1"
+digest = "sha256:6213e3a0be4395c62c84b532386c6bbf0581b2ca6d6769f51a03e8508be4b19f"
+head = "1e50d7476e388e9b409206c6ae9b516e581549b9"
+evidence = "sha256:ad7574878f9daf4d6a98dde9839f34316f397111897ab4b95f3e852cc9b94973"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T18:43:49Z"
+key = "302b45cb92785c8d"
+sig = "d1de03d13caf25f225a0bb1e8275450f1cdf7b8fbfe71bf7ca1c5c923780dc08"
+
+[attestation.review]
+base = "9b7f2b4a28313ebe7ecebccf97735ba5b934cea6"
+exit_code = 1
+report_sha256 = "bbe4184a18936707eb9eea9b84a503929251af0f0c6d2acbebf6561ed632612c"
+override = "Director triage: (1) correctness 'the loop skips the first line': range(max(1, n - k + 1)) starts at index 0, and when old_string has more lines than the file, range(1) still checks index 0 with the whole file as the window (test_the_closest_region_shows_at_most_twenty_lines asserts 'lines 1-40'). (2) performance 'quadratic': O(lines x window) on a miss only, pruned by real_quick_ratio/quick_ratio; measured 0.15 s on evi/tools/fs.py and 0.2 s on a 10 000-line file before the brief was written. The other findings are SUGGESTIONs."
