@@ -1,6 +1,6 @@
 id = "SK4-3"
 title = "agent: a call to an unknown tool is answered with the close tool names (did you mean), or how to find one"
-status = "open"
+status = "verified"
 why = "Third slice of roadmap item loop-tools-tool-call-repair. A model that calls 'read_fle' or 'bash' gets only \"ERROR: unknown tool 'read_fle'\" and often repeats it; naming the close tools (or the tools there are) lets it correct itself in one turn."
 hints = "1) evi/tools/repair.py exists (SK4-1/SK4-2): read it, then with edit_file add `import difflib` to its imports, add Iterable to its typing import (`from typing import Any, Callable, Iterable`), and append exactly this function at the end:\n\ndef unknown_tool_message(name: str, known: Iterable[str]) -> str:\n    \"\"\"What to tell a model that called a tool there is none of: the close\n    names, else how to find one (search_tools, when tools load on demand),\n    else the tools there are.\"\"\"\n    names = sorted(set(known))\n    msg = f\"ERROR: unknown tool '{name}'\"\n    close = difflib.get_close_matches(str(name), names, n=3, cutoff=0.6)\n    if close:\n        return f\"{msg}. Did you mean: {', '.join(close)}?\"\n    if \"search_tools\" in names:\n        return f\"{msg}. Use search_tools to find a tool by what it does.\"\n    if names:\n        more = \", ...\" if len(names) > 40 else \"\"\n        return f\"{msg}. The tools are: {', '.join(names[:40])}{more}\"\n    return msg\n\n2) evi/llm/agent.py, three small edits and nothing else: (a) after the block `from evi.tools.base import (...)` (lines 62-69) add the line `from evi.tools.repair import unknown_tool_message`; (b) line 2891, `m[\"blocked\"] = f\"ERROR: unknown tool '{m['name']}'\"`, becomes `m[\"blocked\"] = unknown_tool_message(m[\"name\"], self.tools)`; (c) line 3607, `return f\"ERROR: unknown tool '{name}'\"`, becomes `return unknown_tool_message(name, self.tools)`. Use search_files to find these lines.\n3) Tests in a NEW file tests/test_unknown_tool.py: unit tests of unknown_tool_message, and one agent test: Agent(client=fake_llm([llm_call(('read_fle', {'path': 'x'})), llm_text('ok')]), config=Config(), transcripts=None, unattended_policy='allow', tools=[REGISTRY[n] for n in ('read_file', 'list_dir')]), run agent.chat('go', max_turns=4) to a list, and check the ToolResult's output. See tests/test_read_ledger.py for the imports (fake_llm is a fixture; llm_call and llm_text come from tests.conftest)."
 acceptance = ["unknown_tool_message('read_fle', ['read_file', 'list_dir', 'write_file']) starts \"ERROR: unknown tool 'read_fle'\" and contains 'Did you mean: read_file'.", "With no close name and search_tools among the tools, it says 'Use search_tools to find a tool by what it does.'", "With no close name and no search_tools, it lists the tools ('The tools are: ...'), at most 40 of them followed by ', ...'.", "In an agent run, a call to read_fle gets a tool result containing \"unknown tool 'read_fle'. Did you mean: read_file\".", "The existing tests in tests/test_unattended_policy.py and tests/test_agent.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/tools/repair.py", "evi/llm/agent.py", "tests/test_unknown
 required_checks = ["python -m pytest -q tests/test_unknown_tool.py tests/test_unattended_policy.py tests/test_agent.py", "python -m ruff check evi/tools/repair.py evi/llm/agent.py tests/test_unknown_tool.py"]
 implementer = "evi-local"
 created = "2026-10-23T22:10:13Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK4-3"
+branch = "task/SK4-3"
+base = "2a2ee05defb550a1d79aec94acbd609ebc3f3080"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK4-3\\2"
+reviewer_notes = [{at = "2026-10-23T22:22:37Z", verdict = "review", note = "Director note (attempt 2). evi/tools/repair.py and evi/llm/agent.py are exactly right: do not change them. eVi's own check failed in both rounds: run alone, `python -m pytest -q tests/test_unknown_tool.py` fails test_agent_unknown_tool_repair, because nothing in that file imports evi.tools.fs, so REGISTRY has no read_file and the agent gets no tools (your `if n in REGISTRY` filter hides that). It passed only when other test files ran first. Fix in tests/test_unknown_tool.py only:\n1. Add the import that registers the tools, as tests/test_read_ledger.py does:  import evi.tools.fs  # noqa: F401  registers read_file and list_dir\n2. Build the tools as tools=[REGISTRY[n] for n in ('read_file', 'list_dir')] (no `if n in REGISTRY`).\nThen run `python -m pytest -q tests/test_unknown_tool.py` ALONE and quote its last line. Your hand-off must say whether each required check passed; last time it said \"complete and verified\" while the check had failed."}, {at = "2026-10-23T22:29:03Z", verdict = "reopened", note = "Director: verified at 53d67fe before the intended test touch-up was written; a5510f4 adds it. Re-verifying the new head."}, {at = "2026-10-23T22:29:33Z", verdict = "director", note = "finished by the director on task/SK4-3 after 2 implementer attempt(s)"}]
+
+[evidence_summary]
+hash = "sha256:e18960c8b17bb180cda326fd43acf60269349715dcfb5da93d5ab9722f28699c"
+files = 3
+insertions = 70
+deletions = 3
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 109
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK4-3\\2\\report.json"
+summary = "I have implemented task SK4-3."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK4-3"
+digest = "sha256:8e14448d926b8734248fd184f1358e32883d96eab4f28c81684005fc6b1469df"
+head = "a5510f4ac372b01d70b81d57cfdf361c4cd900b4"
+evidence = "sha256:e18960c8b17bb180cda326fd43acf60269349715dcfb5da93d5ab9722f28699c"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T22:29:47Z"
+key = "302b45cb92785c8d"
+sig = "5ff69cbd63c87757740e5b123ff2403a0e270dd5fec1d6037dbe8f034960ada3"
+
+[attestation.review]
+base = "2a2ee05defb550a1d79aec94acbd609ebc3f3080"
+exit_code = 0
+report_sha256 = "22c0d68881fba997ff18b4319de7852aef698bbfc1bb588a4ea948decbc30ef9"
