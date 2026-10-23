@@ -811,6 +811,12 @@ All notable user-visible changes to eVi. Format loosely follows
   review-remember` writes its rule there.
 
 ### Added
+- **A run that keeps repeating a failing call now stops instead of using up
+  its turns.** When one tool call fails the same way three times (same tool
+  and arguments, same output apart from numbers such as timings) with no
+  successful write in between, the third result tells the model so and the
+  run ends with `stop_reason` `loop_detected` (exit 3). Editing and
+  re-running a failing test never trips it.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when
@@ -1296,6 +1302,28 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **`run_command` runs in the folder you asked for on a network share.**
+  cmd.exe can't start in a UNC folder and quietly ran the command in the
+  Windows folder instead. A folder behind a mapped drive now runs through its
+  drive letter; elsewhere a single program with plain arguments is started
+  directly, and a command that needs cmd.exe is refused with what to do.
+- **`python` in `run_command` and in a task's checks is the Python eVi uses.**
+  A bare `python` could start a different interpreter (on Windows, the base
+  install behind a virtualenv, or whichever is first on PATH), without the
+  project's packages. It is now the folder's own virtualenv, else eVi's.
+- **`evi task start` lets the implementer run its tests.** Task runs had no
+  `run_command` unless `[tools] shell` was on, so the model couldn't run
+  the tests the implementer policy allows; they now get Code mode's tools,
+  and the policy still decides each call.
+- **The verify review gate reviews the right files and blocks only on real
+  defects.** Its reviewers read the main checkout instead of the task's
+  worktree; they now read the worktree. Each finding is marked `BLOCKING:` or
+  `SUGGESTION:`, and only blocking findings, or a reviewer that failed,
+  block a verify; a URL such as `http://localhost:1234` no longer counts as a
+  `file:line` finding.
+- **`apply_patch` can patch a file whose text contains the patch markers.**
+  A marker now counts only at the start of a line, so a string holding
+  `<<<<<<< SEARCH` no longer splits the patch.
 - **A `config.toml` with a mistake in it no longer stops eVi.** A typo or a
   half-finished edit made every start fail (the desktop app crashed at its
   loading screen). eVi now starts on the default settings, the safe baseline,

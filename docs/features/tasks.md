@@ -399,8 +399,12 @@ ground](permissions-and-sandbox.md#the-directors-ground)).
    `evidence_summary` recorded. After a change, `evi evidence collect <id>`
    collects it again.
 7. The review gate runs: `evi review --multi --exit-code` on the diff from
-   that base commit to the branch head, in the worktree. It needs a working
-   backend. Blocking findings print the review on stderr and exit 1, unless
+   that base commit to the branch head, in the worktree (the reviewers' tools
+   read that tree too). It needs a working backend. Each lens marks a finding
+   `BLOCKING:` (the change must not ship with it) or `SUGGESTION:`; the gate
+   blocks on a `BLOCKING:` finding, on a lens that failed or said nothing, and
+   on any `file:line` from a lens that used no marker, never on suggestions.
+   Blocking findings print the review on stderr and exit 1, unless
    `--reason` says why to sign anyway; that reason is recorded in the
    attestation and in the reviewer notes.
 8. You confirm on the terminal: the prompt names the head, the evidence, the
