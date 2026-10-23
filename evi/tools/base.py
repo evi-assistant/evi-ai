@@ -343,6 +343,31 @@ class Tool:
             },
         }
 
+    def prepare(self, arguments: str) -> tuple[str, list[str], str | None]:
+        """One call's arguments as this tool will take them (evi.tools.repair):
+        read leniently (a cut-off object is closed only for a read-only tool),
+        aliases renamed, values coerced to the schema, unknown arguments
+        dropped. Returns (the arguments as JSON, a note per repair, None);
+        arguments that needed no repair come back as the very same text.
+        When they can't be used: (`arguments`, [], an ERROR text naming how
+        to call the tool)."""
+        from evi.tools import repair
+
+        how = repair.usage(self.name, self.parameters)
+        args, notes = repair.parse_arguments(arguments, allow_truncated=bool(self.read_only))
+        if args is None:
+            return arguments, [], (
+                f"ERROR: the arguments to {self.name} are not a JSON object. Call it as {how}"
+            )
+        args, fitted = repair.fit_arguments(args, self.parameters, self.func)
+        missing = repair.missing_required(args, self.func)
+        if missing:
+            return arguments, [], f"ERROR: {self.name} needs {', '.join(missing)}. Call it as {how}"
+        notes += fitted
+        if not notes:
+            return arguments, [], None
+        return json.dumps(args, ensure_ascii=False), notes, None
+
     def call_rich(
         self, arguments: str | dict[str, Any], ctx: ToolContext | None = None
     ) -> ToolOutput:
