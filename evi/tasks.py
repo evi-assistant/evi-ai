@@ -1129,6 +1129,14 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
     make_unattended(agent)
     if hasattr(agent, "auto_all"):
         agent.auto_all = False
+    if isinstance(getattr(agent, "tools", None), dict):
+        # Code mode's tools, as for `evi run --policy implementer --mode code`:
+        # without run_command ([tools] shell is off by default) the model can't
+        # run the tests the policy allows. The policy still decides each call.
+        from evi.modes import mode_tools
+
+        agent.tools = {t.name: t for t in mode_tools("code")}
+        agent.mode = "code"
     cs = getattr(config, "checks", None)
     if cs is not None:
         if str(getattr(cs, "verify", "auto") or "auto").strip().lower() == "off":

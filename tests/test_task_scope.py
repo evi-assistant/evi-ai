@@ -425,6 +425,24 @@ def test_tests_and_the_verify_gate_checks_still_run_on_any_file(root):
 # ---- run_task on the fake LLM -----------------------------------------------------------
 
 
+def test_run_task_offers_run_command_so_the_model_can_run_its_tests(repo, fake_llm):
+    q = tasks.TaskQueue(repo)
+    q.create(tasks.new_task("T1", title="Make x two", files_in_scope=["calc.py"]))
+    client = fake_llm([
+        llm_call(("run_command", {"command": "git status --short"}),
+                 ("run_command", {"command": "curl https://example.com"})),
+        llm_text("Done."),
+    ])
+    # Built with no shell tool, as [tools] shell = false (the default) builds it.
+    agent = Agent(client=client, config=Config.load(), transcripts=None,
+                  tools=[REGISTRY["write_file"]])
+    run = tasks.run_task(q, "T1", lambda _wt: agent, holder="me")
+
+    assert "run_command" in agent.tools and agent.mode == "code"
+    assert [(c["name"], c["status"]) for c in run.result.tool_calls] == [
+        ("run_command", "ok"), ("run_command", "denied")]  # the policy still decides
+
+
 def test_run_task_denies_an_out_of_scope_write_and_tells_the_model_why(repo, fake_llm):
     q = tasks.TaskQueue(repo)
     q.create(tasks.new_task("T1", title="Make x two", why="the answer is two",
