@@ -789,6 +789,23 @@ def test_hints_come_after_why_in_the_prompt():
     assert "How to approach it" not in tasks.build_prompt(old, "/w")
 
 
+def test_a_reopened_tasks_review_notes_reach_the_next_attempt():
+    record = tasks.new_task("T1", title="Fix it", hints="Look at x.", acceptance=["a test"],
+                            files_in_scope=["evi/x.py"])
+    assert "Review notes" not in tasks.build_prompt(record, "/w")
+    record = {**record, "status": "implemented"}
+    record = tasks.reopen(record, note="Drop the stray comment in test_mixed.")
+    record = tasks.reopen({**record, "status": "implemented"}, note="  ")  # no text, no note
+    record["reviewer_notes"].append("an old bare-string note")
+    prompt = tasks.build_prompt(record, "/w")
+    assert ("Review notes from earlier attempts (the director's: address each one; this "
+            "worktree still holds the earlier attempt's changes):\n"
+            "- (reopened) Drop the stray comment in test_mixed.\n"
+            "- an old bare-string note\n\n") in prompt
+    assert prompt.index("How to approach it") < prompt.index("Review notes") \
+        < prompt.index("Acceptance criteria")
+
+
 def test_task_new_takes_hints_from_flags_and_a_file(repo, tmp_path):
     res = _cli("task", "new", "--title", "Make x two", "--scope", "calc.py",
                "--hint", "Change only the constant.", "--hint", "No new files.")

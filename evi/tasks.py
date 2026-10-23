@@ -995,9 +995,25 @@ def out_of_scope(worktree: str | os.PathLike[str], base: str, scope: Sequence[st
             if not policy.in_scope(scope, p)]
 
 
+def _review_notes(record: Mapping[str, Any]) -> list[str]:
+    """The reviewer notes' text, oldest first, each as "(verdict) note"; a
+    note written as a bare string is taken as it is."""
+    out = []
+    for n in record.get("reviewer_notes") or []:
+        if isinstance(n, Mapping):
+            text = str(n.get("note") or "").strip()
+            verdict = str(n.get("verdict") or "").strip()
+            if text:
+                out.append(f"({verdict}) {text}" if verdict else text)
+        elif str(n or "").strip():
+            out.append(str(n).strip())
+    return out
+
+
 def build_prompt(record: Mapping[str, Any], worktree: str | os.PathLike[str]) -> str:
     """What the implementer is asked: the task's title, why, the director's
-    hints ("How to approach it"), acceptance criteria, files in scope and
+    hints ("How to approach it"), the reviewer notes of earlier attempts (a
+    reopened task's rework), acceptance criteria, files in scope and
     required checks, and the EVI.md contract."""
     task_id = record.get("id")
     parts = [f"Implement task {task_id} in this repository: {record.get('title') or ''}".strip()]
@@ -1008,6 +1024,11 @@ def build_prompt(record: Mapping[str, Any], worktree: str | os.PathLike[str]) ->
     hints = hints.strip() if isinstance(hints, str) else ""
     if hints:
         parts.append(f"How to approach it:\n{hints}")
+    notes = _review_notes(record)
+    if notes:
+        parts.append("Review notes from earlier attempts (the director's: address each one; "
+                     "this worktree still holds the earlier attempt's changes):\n"
+                     + "\n".join(f"- {n}" for n in notes))
     criteria = [str(c) for c in record.get("acceptance") or []]
     if criteria:
         parts.append("Acceptance criteria (each must be met, and shown by a test or a check):\n"
