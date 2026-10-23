@@ -811,6 +811,24 @@ All notable user-visible changes to eVi. Format loosely follows
   review-remember` writes its rule there.
 
 ### Added
+- **`find_files`, `search_files`, `list_dir` and the index skip what
+  `.gitignore` and `.eviignore` ignore.** Build output and generated files no
+  longer fill searches or get embedded; `list_dir` says how many entries it
+  hid, and pointing a tool at an ignored file or folder still shows it. The
+  rules are a plain gitignore subset (new `evi/ignore.py`); a malformed line
+  is skipped, and patterns with many wildcards stay fast.
+- **Attached images are downscaled and stripped of EXIF before they go to a
+  vision model.** With Pillow installed, a JPEG, PNG or WEBP is turned upright,
+  its longer side capped at `[vision] max_px` (1568; 0 = never) and re-encoded
+  without camera, time or GPS data. Without Pillow the bytes go as before.
+- **llama.cpp discovery also finds a server on port 9931**, llama-server's new
+  default, after the configured port and the ten after it.
+- **An eval baseline records the sampling it was measured with.** `evi eval
+  baseline record` stores temperature, top_p and context size, and a run at
+  other settings lists each one in the report's mismatch warnings.
+- **`evi task submit --director`** hands a task to review when the director
+  finished its work on the task branch after the implementer's attempts; a
+  signed reviewer note says so.
 - **A run that keeps repeating a failing call now stops instead of using up
   its turns.** When one tool call fails the same way three times (same tool
   and arguments, same output apart from numbers such as timings) with no
@@ -1302,6 +1320,35 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **Editing a CRLF file keeps it CRLF.** `edit_file` and `apply_patch` turned a
+  Windows file's line endings into LF and couldn't find text a model echoed
+  back with `\r\n`; a slice from `read_file` came back LF. All three now keep
+  the file's own line endings (a mixed file is matched as written).
+- **Two parallel edits of one file no longer lose one of them.** `write_file`,
+  `edit_file` and `apply_patch` take a per-file lock, keyed by the real path
+  (a symlink or junction shares it) and dropped once nobody holds it.
+- **A disabled plugin contributes no skills or commands**, and a plugin's hook
+  count includes every hook event, not only the two tool-call ones.
+- **The memory audit after a dream notices a changed body or tags**, not only
+  a changed first line.
+- **`evi doctor` calls a backend reachable only when `/models` answers 2xx.** A
+  404 now warns that `base_url` usually ends in `/v1`, and localhost is
+  probed at 127.0.0.1.
+- **The verify gate runs the tests next to a changed module** (`pkg/test_x.py`
+  or `tests/pkg/test_x.py`), not only `tests/test_x.py`.
+- **CLI help keeps a `[section]` name.** Help such as `evi backend use --help`
+  read "copies it into )": Rich ate every literal `[llm]`, `[auto]` and the
+  like, in twenty commands' help. A test now walks every command.
+- **The web UI's session handoff works.** It looked a multi-user login's
+  session up in the shared folder (404) and never staged the copy `evi sync`
+  carries; it now reads the user's own transcripts and, single-user, stages
+  the copy.
+- **`evi web-config users add` refuses a login that would share another's data
+  folder** (`bob smith` next to `bob_smith`), which locked both out, and
+  `evi doctor` flags any already in `users.json`.
+- **In a task run, `run_command` waits as long as eVi's own checks do**
+  (`[checks] timeout`, 300 s) instead of 60 s, so a slow test file isn't cut
+  off; an interactive session keeps 60 s.
 - **`run_command` runs in the folder you asked for on a network share.**
   cmd.exe can't start in a UNC folder and quietly ran the command in the
   Windows folder instead. A folder behind a mapped drive now runs through its

@@ -30,6 +30,14 @@ login's data folder) declares a `ctx` parameter and receives a `ToolContext`;
 Safety: 256 KB read cap prevents loading huge blobs into context. There's
 no implicit traversal check — combine with a hook for that.
 
+`find_files`, `search_files`, `list_dir` and the project index also skip what
+the repository's `.gitignore` and `.eviignore` ignore (`.eviignore` uses the
+same syntax and can re-include with `!`); `list_dir` ends with a line saying
+how many entries it hid. Pointing a tool at an ignored file or folder still
+reads it: an explicit request wins. `edit_file`, `apply_patch` and slice reads
+keep a file's own line endings (CRLF stays CRLF), and parallel writes to one
+file wait for each other.
+
 ## `code` — code execution and reading (default on)
 
 | Tool             | What it does                                                | Checked as |

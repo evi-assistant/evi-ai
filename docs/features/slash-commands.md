@@ -29,7 +29,7 @@ The full set, from `evi chat` / `evi sessions resume`:
 | `/compact` | Summarise older history into one note to free context. |
 | `/context`, `/ctx` | Show where the context window is being spent (per-bucket breakdown). |
 | `/recent [n]` | List recent sessions (resume via `evi sessions resume`). |
-| `/image <path>` | Attach an image to the next turn (vision/VLM models). |
+| `/image <path>` | Attach an image to the next turn (vision/VLM models). With Pillow installed it is turned upright, scaled to `[vision] max_px` on its longer side (1568; 0 = never) and sent without its EXIF data. |
 | `/effort [low\|medium\|high\|max]` | Set reasoning effort for subsequent turns. |
 | `/fast [on\|off\|<model-id>]` | Toggle fast mode (swap to a smaller model). |
 | `/json <prompt>` | Force JSON-object output for the next turn. |
