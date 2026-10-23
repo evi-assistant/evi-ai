@@ -362,6 +362,103 @@ fn server_log_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// The spawned server's log file (`<eVi home>/logs/desktop-server.log`), as
+/// the loading shim names it. None without an eVi home.
+fn server_log_path() -> Option<PathBuf> {
+    Some(evi_home()?.join("logs").join("desktop-server.log"))
+}
+
+/// The origins the bundled loading shim (`dist-shim/index.html`) is served
+/// from: Tauri's app origin on Windows (http/https) and on macOS/Linux.
+/// Startup details (log path, a server that died) are handed only to these,
+/// never to a server page or a remote URL the window shows.
+const SHIM_ORIGINS: &[&str] = &["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"];
+
+/// JS that runs `body` only on the loading shim's own origin.
+fn shim_only(body: &str) -> String {
+    let origins = serde_json::to_string(SHIM_ORIGINS).unwrap_or_else(|_| "[]".into());
+    format!("(function(){{if({origins}.indexOf(window.location.origin)>=0){{{body}}}}})();")
+}
+
+/// The loading shim's view of the log path: `window.__EVI_LOG__`.
+fn shim_log_script(log: Option<&Path>) -> String {
+    match log {
+        Some(p) => {
+            let path = serde_json::to_string(&p.to_string_lossy()).unwrap_or_else(|_| "\"\"".into());
+            shim_only(&format!("window.__EVI_LOG__={path};"))
+        }
+        None => String::new(),
+    }
+}
+
+/// The last `max_lines` lines of `text`, at most `max_bytes` (cut at a char
+/// boundary from the front), for showing a dead server's last words.
+fn log_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut tail = lines[lines.len().saturating_sub(max_lines)..].join("\n");
+    if tail.len() > max_bytes {
+        let mut cut = tail.len() - max_bytes;
+        while !tail.is_char_boundary(cut) {
+            cut += 1;
+        }
+        tail = tail[cut..].to_string();
+    }
+    tail
+}
+
+/// JS telling the loading shim the server exited before it answered:
+/// `window.__EVI_SERVER_EXIT__ = {code, log, tail}` (JSON-encoded values).
+fn server_exit_script(code: Option<i32>, log: Option<&Path>, tail: &str) -> String {
+    let info = serde_json::json!({
+        "code": code,
+        "log": log.map(|p| p.to_string_lossy().into_owned()),
+        "tail": tail,
+    });
+    shim_only(&format!("window.__EVI_SERVER_EXIT__={info};"))
+}
+
+/// Local mode: until the server answers on `port`, watch its process. If it
+/// exits first (a crash at import, a config it can't read, a missing DLL),
+/// tell the loading shim, so the window says so — with the log's last lines
+/// and where the log is — instead of spinning on "Starting eVi…" forever.
+fn watch_server_start(app: tauri::AppHandle, window: tauri::WebviewWindow, port: u16) {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(600);
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        while Instant::now() < deadline {
+            if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
+                return; // up: the shim takes it from here
+            }
+            let exited = {
+                let state = app.state::<ServerHandle>();
+                let mut guard = state.0.lock().unwrap();
+                match guard.as_mut().map(|c| c.try_wait()) {
+                    Some(Ok(Some(status))) => Some(status.code()),
+                    None => return, // no server to watch (it was stopped)
+                    _ => None,
+                }
+            };
+            if let Some(code) = exited {
+                // Give the log a moment to be flushed by the dead process.
+                thread::sleep(Duration::from_millis(200));
+                let log = server_log_path();
+                let text = log
+                    .as_deref()
+                    .and_then(|p| std::fs::read(p).ok())
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                let script = server_exit_script(code, log.as_deref(), &log_tail(&text, 20, 4000));
+                if let Err(e) = window.eval(&script) {
+                    eprintln!("evi: couldn't tell the window the server stopped: {e}");
+                }
+                eprintln!("evi: the server exited before it answered (code {code:?})");
+                return;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
 /// Configure a child process before spawn: route stdout/stderr to a log
 /// file (so a failed server start is debuggable even with no console), and
 /// on Windows suppress the console window a console-subsystem child would
@@ -1243,13 +1340,19 @@ fn main() {
                     }
                     ok
                 });
-            let init = webview_init_script(local_port, webview_token.as_deref(), &token_origins);
+            let mut init = webview_init_script(local_port, webview_token.as_deref(), &token_origins);
+            if local_port.is_some() {
+                init.push_str(&shim_log_script(server_log_path().as_deref()));
+            }
             if !init.is_empty() {
                 builder = builder.initialization_script(init);
             }
             let window = builder.build()?;
             window.show()?;
             window.set_focus()?;
+            if let Some(port) = local_port {
+                watch_server_start(app.handle().clone(), window.clone(), port);
+            }
 
             // Native menu bar + system tray (eVi 0.2.5). Closing the window
             // hides it to the tray instead of quitting, so the assistant (and
@@ -1917,5 +2020,61 @@ mod external_url_tests {
             Opener::Xdg
         };
         assert_eq!(Opener::host(), want);
+    }
+}
+
+#[cfg(test)]
+mod startup_failure_tests {
+    // A server that dies while starting must not leave the window spinning on
+    // "Starting eVi…": the shell hands the loading shim the exit code, the
+    // log's last lines and the real log path (which follows EVI_HOME) — and
+    // only the shim, never a server page or a remote URL.
+    use super::{log_tail, server_exit_script, shim_log_script, shim_only, SHIM_ORIGINS};
+    use std::path::Path;
+
+    #[test]
+    fn startup_details_go_only_to_the_shim_origins() {
+        let js = shim_only("window.x=1;");
+        for origin in SHIM_ORIGINS {
+            assert!(js.contains(&format!("\"{origin}\"")), "{js}");
+        }
+        assert!(js.contains("indexOf(window.location.origin)>=0"));
+        assert!(!js.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn the_log_path_is_json_encoded() {
+        let path = r#"C:\Users\Tom "Q"\.evi-x\logs\desktop-server.log"#;
+        let js = shim_log_script(Some(Path::new(path)));
+        let encoded = serde_json::to_string(path).unwrap();
+        assert!(js.contains(&format!("window.__EVI_LOG__={encoded};")), "{js}");
+        assert!(!js.contains(path), "the raw path must not appear unescaped: {js}");
+        assert_eq!(shim_log_script(None), "");
+    }
+
+    #[test]
+    fn the_exit_script_carries_code_log_and_tail_as_json() {
+        let js = server_exit_script(Some(1), Some(Path::new("/h/.evi/logs/desktop-server.log")),
+                                    "TypeError: </script><script>alert(1)</script>");
+        assert!(js.contains("window.__EVI_SERVER_EXIT__="), "{js}");
+        assert!(js.contains("\"code\":1"), "{js}");
+        assert!(js.contains("\"log\":\"/h/.evi/logs/desktop-server.log\""), "{js}");
+        // The tail is a JSON string literal (the shim sets it with textContent).
+        assert!(js.contains(r#""tail":"TypeError: </script><script>alert(1)</script>""#), "{js}");
+        let none = server_exit_script(None, None, "");
+        assert!(none.contains("\"code\":null") && none.contains("\"log\":null"), "{none}");
+    }
+
+    #[test]
+    fn the_tail_keeps_the_last_lines_within_the_byte_cap() {
+        let text: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        let tail = log_tail(&text, 3, 10_000);
+        assert_eq!(tail, "line 48\nline 49\nline 50");
+        let capped = log_tail(&text, 50, 12);
+        assert!(capped.len() <= 12 && capped.ends_with("line 50"), "{capped}");
+        // A cut inside a multi-byte character moves forward to a boundary.
+        let wide = log_tail("ééééé", 5, 3);
+        assert!(wide.len() <= 3 && wide.chars().all(|c| c == 'é'), "{wide}");
+        assert_eq!(log_tail("", 20, 4000), "");
     }
 }

@@ -69,3 +69,29 @@ def test_ui_exposed_sections_roundtrip(tmp_path, monkeypatch):
     assert got.llm.seed == 1234
     assert got.tools.tool_search is True
     assert got.auto.block_destructive is False
+
+
+def test_a_config_from_a_newer_evi_loads_and_keeps_its_keys(tmp_path, monkeypatch):
+    # A config.toml written by a newer eVi (a key this version doesn't know in a
+    # known section, a whole unknown section) must load — 1.0.52 crashed at
+    # startup on 1.0.53's
+    # `[llm] allow_cli_agent_unattended`, leaving the desktop app spinning — and
+    # a save from this version must keep what it didn't understand.
+    import tomllib
+
+    _isolate(tmp_path, monkeypatch)
+    (tmp_path / "config.toml").write_text(
+        "[llm]\nmodel = \"m1\"\nfuture_llm_knob = true\n"
+        "[companion]\nenabled = false\nfuture_companion_knob = 3\n"
+        "[future_section]\nx = 1\n",
+        encoding="utf-8")
+    cfg = Config.load()
+    assert cfg.llm.model == "m1"
+    cfg.llm.temperature = 0.33
+    cfg.save()
+    saved = tomllib.loads((tmp_path / "config.toml").read_text(encoding="utf-8"))
+    assert saved["llm"]["future_llm_knob"] is True
+    assert saved["llm"]["temperature"] == 0.33
+    assert saved["companion"]["future_companion_knob"] == 3
+    assert saved["future_section"] == {"x": 1}
+    assert Config.load().llm.temperature == 0.33

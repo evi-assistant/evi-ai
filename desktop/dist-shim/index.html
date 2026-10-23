@@ -23,12 +23,20 @@
       text-align: center; line-height: 1.5; min-height: 2.5em;
     }
     code { color: #cbd5e1; }
+    .failed .ring { display: none; }
+    #tail {
+      display: none; max-width: 640px; max-height: 40vh; overflow: auto; margin: 0;
+      background: #0f172a; color: #cbd5e1; padding: 10px 12px; border-radius: 6px;
+      font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    }
+    .failed #tail { display: block; }
   </style>
 </head>
 <body>
   <div class="ring"></div>
   <div id="msg">Starting eVi…</div>
   <div class="hint" id="hint"></div>
+  <pre id="tail"></pre>
   <script>
     // The Rust shell injects window.__EVI_PORT__ via an initialization
     // script. We poll the local server and redirect once it's accepting
@@ -38,7 +46,42 @@
     var port = window.__EVI_PORT__ || 8000;
     var base = "http://127.0.0.1:" + port + "/";
     var tries = 0;
+    // The shell also injects the real log path (`<eVi home>/logs/...`, so it
+    // follows EVI_HOME) as window.__EVI_LOG__ and, if the server process
+    // exits before it answers, window.__EVI_SERVER_EXIT__ = {code, log, tail}.
+    // Text only: the path and the log's lines go in with textContent.
+    function logPath() {
+      return window.__EVI_LOG__ || "%USERPROFILE%\\.evi\\logs\\desktop-server.log";
+    }
+    function hint(before, after) {
+      var el = document.getElementById("hint");
+      el.textContent = "";
+      el.appendChild(document.createTextNode(before));
+      var code = document.createElement("code");
+      code.textContent = logPath();
+      el.appendChild(code);
+      el.appendChild(document.createTextNode(after || "."));
+    }
+    function showExit(info) {
+      if (document.body.className === "failed") { return; }
+      document.body.className = "failed";
+      document.getElementById("msg").textContent =
+        "eVi's server stopped while starting" +
+        (typeof info.code === "number" ? " (exit code " + info.code + ")." : ".");
+      if (info.log) { window.__EVI_LOG__ = info.log; }
+      hint("Its log is at ", ". The last lines:");
+      document.getElementById("tail").textContent = info.tail || "(the log is empty)";
+    }
+    // Checked on its own quick timer: a poll round can take seconds (a refused
+    // connection to a port nothing listens on is slow on Windows).
+    var exitWatch = setInterval(function () {
+      if (window.__EVI_SERVER_EXIT__) {
+        clearInterval(exitWatch);
+        showExit(window.__EVI_SERVER_EXIT__);
+      }
+    }, 250);
     function poll() {
+      if (window.__EVI_SERVER_EXIT__) { showExit(window.__EVI_SERVER_EXIT__); return; }
       tries++;
       // no-cors: resolves on ANY response (server is up), rejects on a
       // connection error (server not up yet).
@@ -53,10 +96,8 @@
         })
         .catch(function () {
           if (tries === 15) {
-            document.getElementById("hint").innerHTML =
-              "First launch unpacks the bundled Python server, which can take " +
-              "a bit. If this persists, check the logs at " +
-              "<code>%USERPROFILE%\\.evi\\logs\\desktop-server.log</code>.";
+            hint("First launch unpacks the bundled Python server, which can take " +
+                 "a bit. If this persists, check the log at ");
           }
           setTimeout(poll, 600);
         });
