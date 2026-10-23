@@ -726,6 +726,9 @@ class Config:
     tasks: TaskSettings = field(default_factory=TaskSettings)
     evidence: EvidenceSettings = field(default_factory=EvidenceSettings)
     companion: CompanionSettings = field(default_factory=CompanionSettings)
+    # Set by load(): why config.toml couldn't be used (this Config is then the
+    # defaults), else None. Not a setting: never saved.
+    load_error = None
 
     @classmethod
     def load(cls) -> "Config":
@@ -733,8 +736,20 @@ class Config:
             cfg = cls()
             cfg.save()
             return cfg
-        with CONFIG_PATH.open("rb") as f:
-            data = tomllib.load(f)
+        # A config.toml that can't be read or parsed (a typo, a half-finished
+        # edit, bad encoding) doesn't stop eVi: it runs on the stock defaults —
+        # the safe baseline: tools ask, unattended runs are denied, the web
+        # server stays on loopback, no channel runs — with a warning
+        # (`load_error`, `config_error()`), and save() refuses to write over
+        # the file until it is fixed, so nothing in it is lost.
+        load_error: str | None = None
+        try:
+            with CONFIG_PATH.open("rb") as f:
+                data = tomllib.load(f)
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
+            data = {}
+            load_error = f"{type(e).__name__}: {e}"
+            _warn_load_error(load_error)
         # The user layer as written — save() patches the caller's changes
         # into this, never the merged result below.
         user = copy.deepcopy(data)
@@ -771,6 +786,7 @@ class Config:
         _warn_unknown_keys(unknown)
         cfg._user_raw = user
         cfg._snapshot = asdict(cfg)
+        cfg.load_error = load_error
         return cfg
 
     @classmethod
@@ -846,12 +862,20 @@ class Config:
 
     def _user_layer_on_disk(self) -> dict[str, Any]:
         """config.toml as it is now — another surface may have saved since
-        load() — else the copy load() kept."""
+        load() — else (the file is gone) the copy load() kept. A file that is
+        there but can't be read or parsed raises ConfigUnreadable: writing
+        over it would replace whatever the user has in it (a half-finished
+        edit, every setting when load() fell back to the defaults)."""
         try:
             with CONFIG_PATH.open("rb") as f:
                 return tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError):
+        except FileNotFoundError:
             return copy.deepcopy(getattr(self, "_user_raw", None) or {})
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+            raise ConfigUnreadable(
+                f"{CONFIG_PATH} can't be read ({type(e).__name__}: {e}), so the change "
+                "wasn't saved: eVi won't write over it. Fix the file (or move it "
+                "aside to start fresh), then try again.") from e
 
 
 _MISSING: Any = object()
@@ -905,6 +929,37 @@ def _patch_user_layer(
 
 # Unknown config keys already reported (once per process per key set).
 _WARNED_UNKNOWN: set[tuple[str, ...]] = set()
+_WARNED_LOAD: set[str] = set()
+
+
+class ConfigUnreadable(RuntimeError):
+    """config.toml is there but can't be read or parsed; Config.save() refuses
+    to write over it (see Config.load)."""
+
+
+def _warn_load_error(error: str) -> None:
+    """Once per process per error: config.toml couldn't be read, eVi runs on
+    the defaults."""
+    if error in _WARNED_LOAD:
+        return
+    _WARNED_LOAD.add(error)
+    logger.warning(
+        "eVi: %s couldn't be read (%s). Running on the default settings; "
+        "changes won't be saved until the file is fixed.", CONFIG_PATH, error)
+
+
+def config_error() -> str | None:
+    """Why config.toml can't be used right now (it exists but can't be read or
+    parsed), else None. Cheap: parses the small file. For warnings in the CLI
+    and the web UI (`/api/health`'s config_error)."""
+    try:
+        with CONFIG_PATH.open("rb") as f:
+            tomllib.load(f)
+    except FileNotFoundError:
+        return None
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
+        return f"{type(e).__name__}: {e}"
+    return None
 
 
 def _warn_unknown_keys(unknown: list[str]) -> None:

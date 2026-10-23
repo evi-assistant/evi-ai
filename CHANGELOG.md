@@ -1296,6 +1296,17 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **A `config.toml` with a mistake in it no longer stops eVi.** A typo or a
+  half-finished edit made every start fail (the desktop app crashed at its
+  loading screen). eVi now starts on the default settings, the safe baseline,
+  and says why: a red banner in the web and desktop app (`/api/health`
+  `config_ok`, the reason in the owner's `GET /api/config`) and a warning on
+  stderr in the CLI. It won't save over the file until it's fixed, so nothing
+  in it is lost: a settings change answers 409, a CLI command that saves exits 1
+  with one line. This also applies when the file breaks after eVi loaded it.
+- **The desktop app says when its server dies while starting.** Instead of
+  spinning on "Starting eVi…", the window shows the exit code, the log's last
+  lines and the log's real path (it follows `EVI_HOME`).
 - **Scheduled tasks and the Companion run in the desktop app.** The frozen
   sidecar was built without the `scheduler` extra, so the app's server never
   started its scheduler: scheduled tasks, and now the Companion's check-ins and

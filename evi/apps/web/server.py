@@ -51,7 +51,7 @@ from evi import safemode
 from evi.apps.web.ids import SESSION_ID_MAX_LEN, valid_session_id
 from evi.backends import get_backend
 from evi.commands import CommandStore
-from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ensure_dirs
+from evi.config import HOME, IMAGE_DIR, UPLOADS_DIR, Config, ConfigUnreadable, ensure_dirs
 from evi.history import COMPACTION_ACK, is_note, note_message
 from evi.llm.agent import (
     CANCEL_GRACE, CANCEL_POLL, Agent, Done, Error, Event,
@@ -220,6 +220,15 @@ async def _internal_error(request: Request, exc: Exception) -> Any:
     from starlette.responses import PlainTextResponse
 
     response = PlainTextResponse("Internal Server Error", status_code=500)
+    _security_headers(request.scope.get("path") or "/", response.headers)
+    return response
+
+
+async def _config_unreadable(request: Request, exc: Exception) -> Any:
+    """A setting couldn't be saved because config.toml is there but can't be
+    read (Config.save refuses to write over it): 409 with the reason, and the
+    same headers as every other response."""
+    response = JSONResponse({"detail": str(exc)}, status_code=409)
     _security_headers(request.scope.get("path") or "/", response.headers)
     return response
 
@@ -2409,6 +2418,9 @@ def create_app() -> FastAPI:
             # at /.well-known/agent-card.json).
             "capabilities": caps,
             "sessions": sum(len(b) for b in _user_sessions.values()),
+            # False when config.toml can't be read and eVi runs on the
+            # defaults (Config.load); the detail is in GET /api/config.
+            "config_ok": cfg.load_error is None,
         }
 
     @app.get("/.well-known/agent-card.json")
@@ -3936,6 +3948,12 @@ def create_app() -> FastAPI:
         """Full config snapshot for the settings screen (secrets masked)."""
         cfg = Config.load()
         snap = _config_snapshot(cfg)
+        # Why config.toml couldn't be read (the values above are then the
+        # defaults), for the settings-file banner; None when it was fine.
+        import evi.config as _config_mod
+
+        snap["load_error"] = (f"{_config_mod.CONFIG_PATH}: {cfg.load_error}"
+                              if cfg.load_error else None)
         # Per-tool-category install availability (for the "needs setup" badge in
         # Settings → Tools). Only categories whose dependency/binary is missing
         # appear; it's a static probe, distinct from the risk ⚠ and config.
@@ -5392,6 +5410,7 @@ def create_app() -> FastAPI:
     # The 500 for an unhandled exception is sent from outside it: the same
     # headers go on that one here.
     app.add_exception_handler(Exception, _internal_error)
+    app.add_exception_handler(ConfigUnreadable, _config_unreadable)
     return app
 
 

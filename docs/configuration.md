@@ -6,6 +6,12 @@ when you need to change something; nothing else holds machine-wide state.
 
 ## Primary file — `config.toml`
 
+If the file can't be read or parsed, eVi starts on the default settings,
+warns (a banner in the app, a line on stderr in the CLI) and won't save
+over the file until it's fixed ([troubleshooting](troubleshooting.md#your-settings-file-couldnt-be-read--configtoml-couldnt-be-read)).
+Keys it doesn't know (a typo, or a newer eVi's setting) are ignored and
+kept.
+
 ```toml
 [llm]
 backend         = "lmstudio"                  # lmstudio | ollama | llamacpp | openai_compat

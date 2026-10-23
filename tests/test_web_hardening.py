@@ -1448,3 +1448,32 @@ def test_mcp_serve_config_does_not_offer_the_agent_category(
     assert r.status_code == 400 and "evi mcp serve-config" in r.text
     r = client.get("/api/mcp/serve/config", params={"categories": "memory,git"})
     assert r.status_code == 200 and "agent" not in r.json()["categories"]
+
+
+def test_an_unreadable_config_runs_on_defaults_says_so_and_is_never_overwritten(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # config.toml there but unparseable: the app comes up on the defaults,
+    # /api/health (open without signing in) says only that it isn't OK, the
+    # owner's GET /api/config carries why, and a settings change is refused
+    # with a 409 (and the usual headers) instead of writing over the file.
+    import evi.config as config_mod
+
+    monkeypatch.setattr(config_mod, "_WARNED_LOAD", set())
+    client = TestClient(_make_app(monkeypatch, tmp_path, real_config=True), base_url=LOCAL)
+    path = tmp_path / "home" / "config.toml"
+    broken = '[llm\nmodel = "mine"\n'
+    path.write_text(broken, encoding="utf-8")
+    health = client.get("/api/health").json()
+    assert health["ok"] is True and health["config_ok"] is False
+    assert health["model"] == Config().llm.model  # the default
+    detail = client.get("/api/config").json()["load_error"]
+    assert detail.startswith(str(path)) and "TOMLDecodeError" in detail
+    r = client.post("/api/config", json={"llm": {"temperature": 0.3}})
+    assert r.status_code == 409 and "won't write over it" in r.json()["detail"]
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert path.read_text(encoding="utf-8") == broken
+    # Fixed: back to normal.
+    path.write_text('[llm]\nmodel = "mine"\n', encoding="utf-8")
+    assert client.get("/api/health").json()["config_ok"] is True
+    assert client.get("/api/config").json()["load_error"] is None
+    assert client.post("/api/config", json={"llm": {"temperature": 0.3}}).status_code == 200

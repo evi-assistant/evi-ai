@@ -373,3 +373,17 @@ def evi_ollama_url(tmp_path_factory):
         yield base
     finally:
         terminate()
+
+
+@pytest.fixture
+def evi_broken_config(tmp_path_factory):
+    """A real eVi server whose config.toml is there but can't be parsed: it
+    runs on the defaults (Config.load). Yields (base_url, config_path)."""
+    home = tmp_path_factory.mktemp("evi-broken-config")
+    path = home / "config.toml"
+    path.write_text('[llm\nmodel = "mine"\n', encoding="utf-8")
+    base, terminate = _spawn_evi(home)
+    try:
+        yield base, path
+    finally:
+        terminate()

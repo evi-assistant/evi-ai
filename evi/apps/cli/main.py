@@ -193,6 +193,7 @@ def _global_options(
     ),
 ) -> None:
     """Top-level options consumed before any subcommand runs."""
+    _warn_unreadable_config()  # first: before anything loads the config
     if profile:
         # Push into env so downstream Config.load() / subprocess children
         # pick it up uniformly.
@@ -213,6 +214,34 @@ def _global_options(
     # + an endpoint are set and the otel deps are installed).
     from evi import otel
     otel.init_telemetry()
+
+
+def _warn_unreadable_config() -> None:
+    """config.toml exists but can't be parsed: say so once, on stderr, before
+    the command runs (on the defaults; Config.load), and turn the refusal of a
+    save (ConfigUnreadable) into one line instead of a traceback."""
+    from rich.markup import escape
+
+    import evi.config as _config_mod
+    from evi.config import CONFIG_PATH, ConfigUnreadable, config_error
+
+    err_console = Console(stderr=True)
+    error = config_error()
+    if error:
+        _config_mod._WARNED_LOAD.add(error)  # said here; Config.load's log stays quiet
+        err_console.print(
+            f"[yellow]warning:[/yellow] {escape(str(CONFIG_PATH))} couldn't be read "
+            f"({escape(error)}). Running on the default settings; changes won't be "
+            "saved until it's fixed.", highlight=False)
+    previous = sys.excepthook
+
+    def hook(kind, value, tb):
+        if isinstance(value, ConfigUnreadable):
+            err_console.print(f"[red]error:[/red] {escape(str(value))}", highlight=False)
+            return
+        previous(kind, value, tb)
+
+    sys.excepthook = hook
 
 
 class _PromptInterrupted(Exception):

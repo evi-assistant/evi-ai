@@ -759,6 +759,21 @@ typo, or a setting from a newer version. It is ignored but kept in the file,
 and eVi starts normally. Fix the spelling, or leave it if a newer eVi on
 another machine shares the file.
 
+## "Your settings file couldn't be read" / "config.toml couldn't be read"
+
+`config.toml` is there but isn't valid TOML (a typo, a missing `]` or quote,
+a half-finished edit) or can't be read. eVi starts anyway, on its **default
+settings**: the safe baseline (tools ask first, unattended runs are denied, the
+web server stays on this machine, no channel runs). The web and desktop app show
+a red banner with the reason and the line, and the CLI prints a warning.
+
+Your own settings (model, backends, rules, tokens) aren't applied until the
+file is fixed, and eVi **won't save over it**: a change in Settings answers
+"the change wasn't saved" (HTTP 409), `evi …` commands that save print one
+`error:` line and exit 1. Nothing in the file is lost. Fix the line the error
+names (or move the file aside to start fresh), then reload the app or rerun
+the command.
+
 ## Chats compact early (or overflow) after switching models
 
 eVi compacts a conversation at `compact_when_pct` of `[llm] context_size`.
@@ -851,7 +866,11 @@ Confirm what *did* register: `evi mcp list-tools`.
 
 ## Tauri desktop window stays on the loading shim
 
-The bundled Python server didn't come up in 20 seconds. Common reasons:
+If the server process exits while starting, the window says so ("eVi's server
+stopped while starting"), with the exit code, where its log is
+(`<eVi home>/logs/desktop-server.log`, which follows `EVI_HOME`) and the log's
+last lines. If it keeps spinning instead, the server is still starting or
+hung. Common reasons:
 
 - `py -3.13` not on PATH. Override with `EVI_PYTHON=python3.13`.
 - `EVI_REPO_ROOT` couldn't be detected (binary not next to the repo).

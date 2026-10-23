@@ -352,6 +352,36 @@ function refreshHeaderModel() {
 }
 refreshHeaderModel();
 
+// config.toml there but unreadable: eVi runs on the defaults and won't save
+// over the file (Config.load / Config.save). Say so above everything; the
+// detail (the owner's GET /api/config) is added when it can be read. Text only.
+function checkConfigFile() {
+  fetch('/api/health', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    const el = document.getElementById('config-banner');
+    if (!el) return;
+    if (d.config_ok !== false) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.textContent = '';
+    const head = document.createElement('b');
+    head.textContent = "Your settings file couldn't be read.";
+    el.appendChild(head);
+    el.appendChild(document.createTextNode(
+      " eVi is running on its default settings, and changes in Settings won't be saved " +
+      "until config.toml is fixed (or moved aside to start fresh). Then reload."));
+    el.style.display = 'block';
+    fetch('/api/config', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (c) {
+        if (!c || !c.load_error) return;
+        const detail = document.createElement('div');
+        detail.style.marginTop = '6px';
+        const code = document.createElement('code');
+        code.textContent = c.load_error;
+        detail.appendChild(code);
+        el.appendChild(detail);
+      }).catch(function () {});
+  }).catch(function () {});
+}
+checkConfigFile();
+
 // Surface context-window usage. Refresh on connect and after each turn.
 refreshUsage();
 
