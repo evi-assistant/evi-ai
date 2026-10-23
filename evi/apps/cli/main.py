@@ -2859,7 +2859,7 @@ def voice_speak(
     text: str,
     rate: int | None = None,
     engine: str = typer.Option(
-        "", "--engine", help="Override the [voice] engine: system|coqui|f5|piper."
+        "", "--engine", help="Override the \\[voice] engine: system|coqui|f5|piper."
     ),
 ) -> None:
     """Speak `text` aloud via the configured TTS engine."""
@@ -2946,13 +2946,13 @@ def voice_transcribe(
 @voice_app.command("diarize")
 def voice_diarize(
     path: str,
-    model: str = typer.Option("", help="Diarization model id (default [models] diarize / pyannote)."),
+    model: str = typer.Option("", help="Diarization model id (default \\[models] diarize / pyannote)."),
     speakers: int = typer.Option(0, "--speakers", help="Pin the speaker count when known (0 = auto)."),
     hf_token: str = typer.Option("", "--hf-token", help="Hugging Face token (else $HF_TOKEN)."),
 ) -> None:
     """Speaker diarization — print 'who spoke when' for an audio file.
 
-    Needs the [diarize] extra (pyannote.audio) and, for most models, an HF token
+    Needs the \\[diarize] extra (pyannote.audio) and, for most models, an HF token
     with the model's terms accepted. See `evi models specialty set diarize ...`.
     """
     from evi.diarize import DiarizeError, diarize
@@ -3948,7 +3948,7 @@ def _eval_suite(name: str, repo: str):
 def _eval_backend(backend: str, model: str):
     """(make_agent, judge, backend, model, entry) for --backend / --model:
     'fake' replays each case's script, a saved backend's name runs on it,
-    nothing runs on [llm]. Exit 2 for a backend that isn't saved."""
+    nothing runs on \\[llm]. Exit 2 for a backend that isn't saved."""
     from evi import evals
 
     name = backend.strip()
@@ -4099,7 +4099,7 @@ def eval_run(
     backend: str = typer.Option(
         "", "--backend",
         help="'fake' replays each case's fake script (CI: checks the harness and the "
-             "suite, no model); a saved backend (`evi backend list`); default: [llm].",
+             "suite, no model); a saved backend (`evi backend list`); default: \\[llm].",
     ),
     model: str = typer.Option("", "--model", help="Model id for this run."),
     runs: int = typer.Option(0, "--runs", min=0,
@@ -4267,7 +4267,7 @@ def eval_compare(
 def eval_baseline_record(
     suite_name: str = typer.Option("self", "--suite", help="The suite to record (`self`)."),
     runs: int = typer.Option(5, "--runs", min=1, help="Runs per case (N)."),
-    backend: str = typer.Option("", "--backend", help="A saved backend, 'fake', or [llm]."),
+    backend: str = typer.Option("", "--backend", help="A saved backend, 'fake', or \\[llm]."),
     model: str = typer.Option("", "--model", help="The reference model's id."),
     quantization: str = typer.Option(
         "", "--quantization",
@@ -4680,7 +4680,7 @@ def backend_use(
     name: str = typer.Argument(..., help="Registry backend name to make active."),
     model: str = typer.Option("", "--model", help="Also set the active model."),
 ) -> None:
-    """Switch the active backend (copies it into [llm]) and optionally the model."""
+    """Switch the active backend (copies it into \\[llm]) and optionally the model."""
     from evi.backends import registry as reg
     from evi.config import Config
 
@@ -4865,7 +4865,7 @@ def ultracode(
     mode: str = typer.Option("", "--mode", "-m", help="Tool preset for solvers: chat | cowork | code."),
     cheap_fanout: bool = typer.Option(
         False, "--cheap-fanout",
-        help="Run the solver fan-out on [llm] fast_model; keep critic/synth on the main model.",
+        help="Run the solver fan-out on \\[llm] fast_model; keep critic/synth on the main model.",
     ),
     solver_model: str = typer.Option("", "--solver-model", help="Model id for the solve stage (overrides --cheap-fanout)."),
     synth_model: str = typer.Option("", "--synth-model", help="Model id for the synthesize stage."),
@@ -4879,7 +4879,7 @@ def ultracode(
 
     decompose -> parallel solvers (diverse angles) -> adversarial critique ->
     synthesize. More thorough (and more model calls) than a single `evi run`.
-    Tune with [ultracode] in config or the flags here. --cheap-fanout (or
+    Tune with \\[ultracode] in config or the flags here. --cheap-fanout (or
     --solver-model) routes the expensive parallel solvers to a cheaper model.
     """
     res = _run_ultracode_cli(
@@ -5049,12 +5049,12 @@ def workflow_run(
     """Run a workflow — each step is its own headless agent; parallel blocks run
     concurrently (tools auto-approved, since runs are unattended). Like `evi
     run`, it is an unattended entry point: a delegate CLI-agent backend is
-    refused unless [llm] allow_cli_agent_unattended, and the steps' commands
+    refused unless \\[llm] allow_cli_agent_unattended, and the steps' commands
     get no *_KEY / *_TOKEN / *_SECRET environment variables.
 
     A step with isolate = "worktree" (every step, with --worktree) works in
     a worktree of the repository here, branch fix-<workflow>-<step> under
-    <repo>/.worktrees/ forked from [worktree] base_ref (else HEAD), with that
+    <repo>/.worktrees/ forked from \\[worktree] base_ref (else HEAD), with that
     worktree's EVI.md and without the tools that work in eVi's process folder
     (monitor, the git tools, MCP tools); its output ends with where the work
     is. A step whose worktree can't be made fails rather than run
@@ -5225,7 +5225,7 @@ def run(
     base: str = typer.Option(
         "", "--base",
         help="With --worktree: the branch or commit a new branch starts from "
-             "(default: [worktree] base_ref, else HEAD).",
+             "(default: \\[worktree] base_ref, else HEAD).",
     ),
     policy: str = typer.Option(
         "", "--policy",
@@ -5289,16 +5289,16 @@ def run(
     policy, or a --scope entry that is absolute or climbs out with '..' is a
     usage error (2). Without --worktree a note on stderr recommends it. Once
     the turn changed files, the project checks (evi/checks.py: ruff, the
-    targeted tests, [checks] commands) run before it may end, in a trusted
-    folder: a failing round goes back to the model, up to [checks]
+    targeted tests, \\[checks] commands) run before it may end, in a trusted
+    folder: a failing round goes back to the model, up to \\[checks]
     max_rounds, then checks_failed (5). Stop-block and check lines go to
     stderr.
 
     Nothing prompts (so a scripted run never blocks): without --yes, tools
-    outside your auto-approve list follow [auto] unattended_policy — denied
+    outside your auto-approve list follow \\[auto] unattended_policy — denied
     by default. Protected paths (writes, and reads of secrets such as .env
     that no allow rule covers) and the destructive-command guard deny even
-    with --yes. A delegate CLI-agent backend is refused unless [llm]
+    with --yes. A delegate CLI-agent backend is refused unless \\[llm]
     allow_cli_agent_unattended. Tool names, arguments and outputs, and
     errors, in the report and the stream are redacted. Reads the prompt from
     stdin if omitted:
@@ -5637,7 +5637,7 @@ def _verify_line(event) -> str | None:
 def _run_open_worktree(spec: str, base: str):
     """`evi run --worktree`: open the run's worktree (evi.worktree.open_isolated)
     in the repository at the process's folder, forked from `base`, else
-    [worktree] base_ref, else HEAD; it stays locked until the run's release.
+    \\[worktree] base_ref, else HEAD; it stays locked until the run's release.
     Anything git or the name checks refuse is a usage error (exit 2): no run
     happened."""
     from evi import worktree as _wt
@@ -5733,7 +5733,7 @@ def _run_session(resume: str, latest: bool):
 
 def _check_run_backend(entry, settings) -> None:
     """`--backend` picked a delegate CLI-agent backend: refused unattended
-    unless [llm] allow_cli_agent_unattended, as the configured one is."""
+    unless \\[llm] allow_cli_agent_unattended, as the configured one is."""
     from evi.llm.cli_agent import DELEGATE_BACKENDS, CliAgentUnattended, unattended_refusal
 
     kind = str(getattr(entry, "kind", "") or "").strip().lower()
@@ -5825,7 +5825,7 @@ def batch(
     `evi run --format json` prints it (stop_reason, tool_calls, usage, ...;
     files_changed is not tracked, the items share the folder).
     Nothing prompts: as for `evi run`, tools outside your auto-approve list
-    follow [auto] unattended_policy (denied by default) unless --yes.
+    follow \\[auto] unattended_policy (denied by default) unless --yes.
     """
     import sys as _sys
 
@@ -7347,7 +7347,7 @@ def skill_add(
 ) -> None:
     """Install a skill in one line — download (if needed) + import.
 
-    A bare name resolves against the skills index (`[plugins] index_urls` + the
+    A bare name resolves against the skills index (`\\[plugins] index_urls` + the
     local marketplace.json `skills` section, e.g. the evi-skills repo). A git/zip
     URL or local directory is installed directly. References in SKILL.md are
     rewritten to absolute installed paths.
@@ -8051,7 +8051,7 @@ def models_list() -> None:
 
 @models_app.command("active")
 def models_active() -> None:
-    """Print the model currently configured under `[llm] model`."""
+    """Print the model currently configured under `\\[llm] model`."""
     cfg = Config.load()
     console.print(
         f"[bold]{cfg.llm.model}[/bold] [dim]via {cfg.llm.backend} @ {cfg.llm.base_url}[/dim]"
@@ -8091,7 +8091,7 @@ def models_use(
         False, "--fast", help="Set the fast/downshift model (llm.fast_model) instead of the main model."
     ),
 ) -> None:
-    """Set `[llm] model` (or `--fast` → `[llm] fast_model`) to this id and save."""
+    """Set `\\[llm] model` (or `--fast` → `\\[llm] fast_model`) to this id and save."""
     cfg = Config.load()
     backend = get_backend(cfg.llm)
     if backend.model_info(model_id) is None and not typer.confirm(
@@ -8231,7 +8231,7 @@ def models_recommend(
     backend: str = typer.Option(
         "", "--backend",
         help="With --verify: a saved backend (`evi backend list`), or 'fake' (each case's "
-             "script, no model: for CI); default: [llm].",
+             "script, no model: for CI); default: \\[llm].",
     ),
     repo: str = typer.Option("", "--repo", help="With --verify: the repository `self` means."),
 ) -> None:
@@ -8394,7 +8394,7 @@ def _models_recommend_show(hw, rec) -> None:
 
 @models_app.command("backend")
 def models_backend(kind: str | None = typer.Argument(None)) -> None:
-    """Show or change `[llm] backend`. With no argument: print current.
+    """Show or change `\\[llm] backend`. With no argument: print current.
 
     Valid kinds: lmstudio, ollama, llamacpp, openai_compat.
     """
@@ -8461,7 +8461,7 @@ _SPECIALTY_ENDPOINT_TASKS = ("ocr", "vision", "guard")
 
 @specialty_app.command("list")
 def specialty_list() -> None:
-    """Show the configured specialty models ([models])."""
+    """Show the configured specialty models (\\[models])."""
     cfg = Config.load()
     any_set = False
     for task in _SPECIALTY_TASKS:
@@ -8492,7 +8492,7 @@ def specialty_set(
     base_url: str = typer.Option("", "--base-url", help="Separate endpoint for ocr/vision/guard (e.g. a vLLM server)."),
     backend: str = typer.Option("", "--backend", help="Backend kind override for ocr/vision/guard."),
 ) -> None:
-    """Configure a specialty model (writes [models])."""
+    """Configure a specialty model (writes \\[models])."""
     task = task.strip().lower()
     if task not in _SPECIALTY_TASKS:
         console.print(f"[red]unknown task[/red] — pick one of: {', '.join(_SPECIALTY_TASKS)}")
@@ -8538,7 +8538,7 @@ def models_preset(
 ) -> None:
     """Point eVi at an online OpenAI-compatible provider by name.
 
-    With no name, lists the presets. Otherwise sets [llm] backend=openai_compat
+    With no name, lists the presets. Otherwise sets \\[llm] backend=openai_compat
     + the provider base_url/model and, by default, an `env:VARNAME` api_key so
     your key stays in the environment, not in config.toml.
 
@@ -8704,9 +8704,9 @@ def team_run(
     """Spawn teammates to drain the shared list in dependency order.
 
     Teammates run unattended: fs and code calls run if auto-approved, anything
-    else follows [auto] unattended_policy (denied by default). With
+    else follows \\[auto] unattended_policy (denied by default). With
     --worktree each task works in its own worktree of the repository here,
-    forked from [worktree] base_ref (else HEAD), recorded on the task, so
+    forked from \\[worktree] base_ref (else HEAD), recorded on the task, so
     parallel teammates never edit the same checkout, or yours; a task whose
     worktree can't be made fails rather than run unisolated."""
     from evi import teams
@@ -9717,8 +9717,8 @@ def profile_path_cmd(name: str | None = typer.Argument(None)) -> None:
 def profile_add(
     name: str,
     backend: str | None = typer.Option(None, help="lmstudio | ollama | llamacpp | openai_compat"),
-    base_url: str | None = typer.Option(None, help="Override [llm] base_url."),
-    model: str | None = typer.Option(None, help="Override [llm] model."),
+    base_url: str | None = typer.Option(None, help="Override \\[llm] base_url."),
+    model: str | None = typer.Option(None, help="Override \\[llm] model."),
     force: bool = typer.Option(False, "--force", help="Overwrite if it already exists."),
 ) -> None:
     """Create a partial profile under ~/.evi/profiles/<name>.toml."""
@@ -10215,7 +10215,7 @@ def scheduler(reload_interval: int = 60) -> None:
     `evi schedule add/remove/...` are picked up without restarting.
 
     Jobs run unattended: auto-approved tool categories run, anything else
-    follows [auto] unattended_policy (denied by default).
+    follows \\[auto] unattended_policy (denied by default).
     """
     from evi.llm.agent import config_policy_label
     from evi.scheduler import Scheduler
@@ -10393,7 +10393,7 @@ def _companion_switch(on: bool) -> None:
 
 @companion_app.command("on")
 def companion_on() -> None:
-    """Switch the Companion on ([companion] enabled = true in your config.toml)."""
+    """Switch the Companion on (\\[companion] enabled = true in your config.toml)."""
     _companion_switch(True)
 
 
