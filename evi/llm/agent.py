@@ -294,6 +294,44 @@ def _loads_tolerant(blob: str):
         return None
 
 
+_TOOL_CALL_BLOCK = re.compile(r"<tool_call>(.*?)(?:</tool_call>|\Z)", re.S)
+_FUNCTION_BLOCK = re.compile(r"<function=([^>\s]+)>(.*?)(?:</function>|\Z)", re.S)
+_PARAMETER = re.compile(r"<parameter=([^>\s]+)>(.*?)</parameter>", re.S)
+# What a reply written as tagged tool calls starts with.
+TAGGED_CALL_STARTS = ("<tool_call>", "<function=")
+
+
+def _parameter_value(text: str) -> str:
+    """A <parameter> body without the one newline the format puts after the
+    opening tag and before the closing one (a file's own last newline stays)."""
+    if text.startswith("\n"):
+        text = text[1:]
+    if text.endswith("\n"):
+        text = text[:-1]
+    return text
+
+
+def _recover_tagged_calls(text: str, known: set[str]) -> list[dict[str, str]]:
+    """Calls a model wrote as tags, when `text` starts with one. Hermes and
+    Qwen2.5 put a JSON call in each <tool_call>...</tool_call>; Qwen3-Coder
+    writes <function=NAME><parameter=KEY>VALUE</parameter></function>, inside
+    <tool_call> or not. Parameter values stay strings (a tool that wants a
+    number gets it converted when the call is prepared). A block cut off
+    before its closing tag still counts. Unknown tools are skipped."""
+    if not text.startswith(TAGGED_CALL_STARTS):
+        return []
+    out: list[dict[str, str]] = []
+    for m in _FUNCTION_BLOCK.finditer(text):
+        if m.group(1) in known:
+            params = {k: _parameter_value(v) for k, v in _PARAMETER.findall(m.group(2))}
+            out.append({"name": m.group(1), "arguments": json.dumps(params)})
+    if out:
+        return out
+    for m in _TOOL_CALL_BLOCK.finditer(text):
+        out.extend(recover_text_tool_calls(m.group(1).strip(), known))
+    return out
+
+
 def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
     """Recover tool calls that a model emitted as TEXT instead of via the
     structured ``tool_calls`` field — a common local-model (e.g. qwen via
@@ -301,10 +339,16 @@ def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
     ...}`` JSON object (often fenced) as content.
 
     Returns ``[{"name", "arguments"(json str)}, …]`` for blobs whose ``name`` is
-    a known tool. Only the first blob that yields calls is used. Returns ``[]``
-    when nothing matches.
+    a known tool. Only the first blob that yields calls is used. Calls written
+    as tags (``<tool_call>``, ``<function=...>``) are read by
+    `_recover_tagged_calls`. The reply must START with the call (JSON, a code
+    fence or a tag): one shown inside prose is an example and never runs.
+    Returns ``[]`` when nothing matches.
     """
-    if not text or "{" not in text:
+    text = (text or "").lstrip()
+    if text.startswith(TAGGED_CALL_STARTS):
+        return _recover_tagged_calls(text, known)
+    if not text.startswith(("{", "[", "`")):  # a call inside prose is an example
         return []
     for blob in _find_json_blobs(text):
         obj = _loads_tolerant(blob)
@@ -2598,7 +2642,7 @@ class Agent:
                 head = "".join(text_buf).lstrip()
                 if head:
                     hold_decided = True
-                    hold_text = head[:1] in ("`", "{", "[")
+                    hold_text = head[:1] in ("`", "{", "[", "<")
 
             for chunk in self._read_stream(stream, stream_failed, stream_cancelled):
                 # The final chunk in a stream_options.include_usage stream
@@ -2708,7 +2752,10 @@ class Agent:
             # Never from a reply cut off mid-stream.
             if not tool_buf and text_buf and stream_error is None and not cancelled:
                 _stripped = "".join(text_buf).strip()
-                if _stripped[:1] in ("`", "{", "["):
+                if (
+                    _stripped[:1] in ("`", "{", "[")
+                    or _stripped.startswith(TAGGED_CALL_STARTS)
+                ):
                     _recovered = recover_text_tool_calls(_stripped, set(self.tools))
                     if _recovered:
                         for _idx, _rc in enumerate(_recovered):
