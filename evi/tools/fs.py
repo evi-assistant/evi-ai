@@ -247,6 +247,63 @@ def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
     return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
 
+def _indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _loose_matches(lines: list[str], old_lines: list[str]) -> list[int]:
+    """Start indexes of every window of `lines` equal to `old_lines` with each
+    line stripped of surrounding whitespace."""
+    want = [ln.strip() for ln in old_lines]
+    k = len(want)
+    return [i for i in range(len(lines) - k + 1)
+            if [ln.strip() for ln in lines[i:i + k]] == want]
+
+
+def _reindent(new_lines: list[str], old_lines: list[str], file_lines: list[str]) -> list[str]:
+    """`new_lines` indented the way the file indents what old_string matched:
+    a line where new_string keeps old_string's indent takes the file's indent
+    for that line; otherwise an indent old_string used maps to the file's
+    indent on its first such line, and any other indent has old_string's
+    first indent swapped for the file's."""
+    pairs = [(o, f) for o, f in zip(old_lines, file_lines) if o.strip() and f.strip()]
+    mapping: dict[str, str] = {}
+    for o, f in pairs:
+        mapping.setdefault(_indent(o), _indent(f))
+    old_pre, file_pre = (_indent(pairs[0][0]), _indent(pairs[0][1])) if pairs else ("", "")
+    out = []
+    for j, ln in enumerate(new_lines):
+        ind = _indent(ln)
+        if not ln.strip():
+            out.append(ln)
+        elif (j < len(old_lines) and j < len(file_lines) and old_lines[j].strip()
+              and file_lines[j].strip() and _indent(old_lines[j]) == ind):
+            out.append(_indent(file_lines[j]) + ln[len(ind):])
+        elif ind in mapping:
+            out.append(mapping[ind] + ln[len(ind):])
+        elif ln.startswith(old_pre):
+            out.append(file_pre + ln[len(old_pre):])
+        else:
+            out.append(ln)
+    return out
+
+
+def _loose_block(text: str, old: str, new: str, eol: str) -> tuple[str, str, str] | None:
+    """When `old` matches exactly one block of `text` line by line, ignoring
+    each line's surrounding whitespace: (that block as the file has it, `new`
+    re-indented the way the file indents it, a note for the message); else None."""
+    lines, old_lines = text.split(eol), old.split(eol)
+    if not any(ln.strip() for ln in old_lines):
+        return None
+    hits = _loose_matches(lines, old_lines)
+    if len(hits) != 1:
+        return None
+    i, k = hits[0], len(old_lines)
+    block = lines[i:i + k]
+    replacement = eol.join(_reindent(new.split(eol), old_lines, block))
+    return eol.join(block), replacement, f", matched ignoring whitespace at lines {i + 1}-{i + k}"
+
+
 def _closest_region(text: str, old: str) -> tuple[int, int, float] | None:
     """(first line, last line, similarity), 1-based, of the window of as many
     lines as `old` that is most like it; None for an empty file or no likeness."""
@@ -305,24 +362,29 @@ def edit_file(
 
         # Use normalized versions if they match; otherwise fallback to raw strings
         # (handles mixed-EOL files or explicit EOL requests).
+        note = ""
         if old_n in text:
             target_old, target_new = old_n, new_n
         elif old_string in text:
             target_old, target_new = old_string, new_string
         else:
-            # A re-sent edit that is already in the file is not an error (a
-            # blank new_string, e.g. a deletion, says nothing either way).
-            if new_n.strip() and new_n in text:
-                return (f"edited {p}: already applied (new_string is in the file, "
-                        "old_string is not); nothing changed")
-            err = f"ERROR: old_string not found in {p}"
-            region = _closest_region(text, old_n)
-            if region and region[2] >= 0.5:
-                a, b, r = region
-                shown = text.splitlines()[a - 1 : min(b, a + 19)]  # at most 20 lines
-                numbered = "\n".join(f"{n:>5}| {line}" for n, line in enumerate(shown, start=a))
-                err += f"\n\nclosest match, lines {a}-{b} ({r:.0%} alike):\n{numbered}"
-            return err
+            loose = None if replace_all else _loose_block(text, old_n, new_n, eol)
+            if loose is not None:
+                target_old, target_new, note = loose
+            else:
+                # A re-sent edit that is already in the file is not an error (a
+                # blank new_string, e.g. a deletion, says nothing either way).
+                if new_n.strip() and new_n in text:
+                    return (f"edited {p}: already applied (new_string is in the file, "
+                                "old_string is not); nothing changed")
+                err = f"ERROR: old_string not found in {p}"
+                region = _closest_region(text, old_n)
+                if region and region[2] >= 0.5:
+                    a, b, r = region
+                    shown = text.splitlines()[a - 1 : min(b, a + 19)]  # at most 20 lines
+                    numbered = "\n".join(f"{n:>5}| {line}" for n, line in enumerate(shown, start=a))
+                    err += f"\n\nclosest match, lines {a}-{b} ({r:.0%} alike):\n{numbered}"
+                return err
 
         count = text.count(target_old)
         if count > 1 and not replace_all:
@@ -357,7 +419,7 @@ def edit_file(
             pass
         p.write_text(new_text, encoding="utf-8", newline="")  # preserve LF/CRLF
         _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
-        return f"edited {p}: {count if replace_all else 1} replacement(s){_post_write(p)}"
+        return f"edited {p}: {count if replace_all else 1} replacement(s){note}{_post_write(p)}"
 
 
 # Each marker starts its line, so a file whose text holds the markers inside

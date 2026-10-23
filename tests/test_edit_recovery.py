@@ -109,3 +109,51 @@ def test_the_closest_region_shows_at_most_twenty_lines(tmp_path):
     res = edit_file(path=str(p), old_string=old, new_string="x")
     assert "closest match, lines 1-40" in res
     assert "   20| line 20" in res and "   21| line 21" not in res
+
+
+# ---- a whitespace-insensitive unique match (SK3-2) ----
+
+
+def test_loose_match_indent_dropped(tmp_path):
+    p = tmp_path / "test_loose_1.txt"
+    p.write_bytes(b"def f():\n    if x:\n        return 1\n    return 0\n")
+    res = edit_file(str(p), "if x:\n    return 1", "if x:\n    return 2")
+    assert b"def f():\n    if x:\n        return 2\n    return 0\n" == p.read_bytes()
+    assert "matched ignoring whitespace at lines 2-3" in res
+
+
+def test_loose_match_tabs(tmp_path):
+    p = tmp_path / "test_loose_2.txt"
+    p.write_bytes(b"def f():\n\tif x:\n\t\treturn 1\n")
+    edit_file(str(p), "    if x:\n        return 1", "    if x:\n        return 3")
+    assert b"def f():\n\tif x:\n\t\treturn 3\n" == p.read_bytes()
+
+
+def test_loose_match_flattened(tmp_path):
+    p = tmp_path / "test_loose_3.txt"
+    p.write_bytes(b"def f():\n    if x:\n        return 1\n")
+    edit_file(str(p), "if x:\nreturn 1", "if x:\nreturn 2")
+    assert b"def f():\n    if x:\n        return 2\n" == p.read_bytes()
+
+
+def test_loose_match_trailing_spaces(tmp_path):
+    p = tmp_path / "test_loose_4.txt"
+    p.write_bytes(b"a = 1   \nb = 2\n")
+    edit_file(str(p), "a = 1\nb = 2", "a = 10\nb = 2")
+    assert b"a = 10\nb = 2\n" == p.read_bytes()
+
+
+def test_loose_match_ambiguous(tmp_path):
+    p = tmp_path / "test_loose_5.txt"
+    p.write_bytes(b"a:\n    x = 1\nb:\n    x = 1\n")
+    # 'x = 1\t' occurs nowhere exactly, and loosely twice.
+    res = edit_file(str(p), "x = 1\t", "x = 2")
+    assert b"a:\n    x = 1\nb:\n    x = 1\n" == p.read_bytes()
+    assert "ERROR: old_string not found" in res
+
+
+def test_loose_match_crlf(tmp_path):
+    p = tmp_path / "test_loose_6.txt"
+    p.write_bytes(b"def f():\r\n    if x:\r\n        return 1\r\n")
+    edit_file(str(p), "if x:\nreturn 1", "if x:\nreturn 2")
+    assert b"def f():\r\n    if x:\r\n        return 2\r\n" == p.read_bytes()
