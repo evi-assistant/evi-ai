@@ -1,0 +1,20 @@
+id = "SK4-3"
+title = "agent: a call to an unknown tool is answered with the close tool names (did you mean), or how to find one"
+status = "open"
+why = "Third slice of roadmap item loop-tools-tool-call-repair. A model that calls 'read_fle' or 'bash' gets only \"ERROR: unknown tool 'read_fle'\" and often repeats it; naming the close tools (or the tools there are) lets it correct itself in one turn."
+hints = "1) evi/tools/repair.py exists (SK4-1/SK4-2): read it, then with edit_file add `import difflib` to its imports, add Iterable to its typing import (`from typing import Any, Callable, Iterable`), and append exactly this function at the end:\n\ndef unknown_tool_message(name: str, known: Iterable[str]) -> str:\n    \"\"\"What to tell a model that called a tool there is none of: the close\n    names, else how to find one (search_tools, when tools load on demand),\n    else the tools there are.\"\"\"\n    names = sorted(set(known))\n    msg = f\"ERROR: unknown tool '{name}'\"\n    close = difflib.get_close_matches(str(name), names, n=3, cutoff=0.6)\n    if close:\n        return f\"{msg}. Did you mean: {', '.join(close)}?\"\n    if \"search_tools\" in names:\n        return f\"{msg}. Use search_tools to find a tool by what it does.\"\n    if names:\n        more = \", ...\" if len(names) > 40 else \"\"\n        return f\"{msg}. The tools are: {', '.join(names[:40])}{more}\"\n    return msg\n\n2) evi/llm/agent.py, three small edits and nothing else: (a) after the block `from evi.tools.base import (...)` (lines 62-69) add the line `from evi.tools.repair import unknown_tool_message`; (b) line 2891, `m[\"blocked\"] = f\"ERROR: unknown tool '{m['name']}'\"`, becomes `m[\"blocked\"] = unknown_tool_message(m[\"name\"], self.tools)`; (c) line 3607, `return f\"ERROR: unknown tool '{name}'\"`, becomes `return unknown_tool_message(name, self.tools)`. Use search_files to find these lines.\n3) Tests in a NEW file tests/test_unknown_tool.py: unit tests of unknown_tool_message, and one agent test: Agent(client=fake_llm([llm_call(('read_fle', {'path': 'x'})), llm_text('ok')]), config=Config(), transcripts=None, unattended_policy='allow', tools=[REGISTRY[n] for n in ('read_file', 'list_dir')]), run agent.chat('go', max_turns=4) to a list, and check the ToolResult's output. See tests/test_read_ledger.py for the imports (fake_llm is a fixture; llm_call and llm_text come from tests.conftest)."
+acceptance = ["unknown_tool_message('read_fle', ['read_file', 'list_dir', 'write_file']) starts \"ERROR: unknown tool 'read_fle'\" and contains 'Did you mean: read_file'.", "With no close name and search_tools among the tools, it says 'Use search_tools to find a tool by what it does.'", "With no close name and no search_tools, it lists the tools ('The tools are: ...'), at most 40 of them followed by ', ...'.", "In an agent run, a call to read_fle gets a tool result containing \"unknown tool 'read_fle'. Did you mean: read_file\".", "The existing tests in tests/test_unattended_policy.py and tests/test_agent.py pass."]
+files_in_scope = ["evi/tools/repair.py", "evi/llm/agent.py", "tests/test_unknown_tool.py"]
+required_checks = ["python -m pytest -q tests/test_unknown_tool.py tests/test_unattended_policy.py tests/test_agent.py", "python -m ruff check evi/tools/repair.py evi/llm/agent.py tests/test_unknown_tool.py"]
+implementer = "evi-local"
+created = "2026-10-23T22:10:13Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
