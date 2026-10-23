@@ -3443,15 +3443,22 @@ def create_app() -> FastAPI:
         Transcripts are written per-turn, so the on-disk copy is current as of
         the last completed turn; this returns the resume affordances (a
         `/?session=<id>` URL the web UI opens, and the `evi sessions resume`
-        command). `evi sync` the ~/.evi state, then open either on the other
-        device. 404 if the session has no transcript yet (send a turn first,
-        with transcripts enabled).
+        command), reading the signed-in user's own transcripts in multi-user
+        mode. In single-user mode it also stages a copy where `evi sync`
+        carries it (sessions.stage_handoff); sync carries only that shared
+        folder, so a multi-user login's session is not copied there. 404 if
+        the session has no transcript yet (send a turn first, with
+        transcripts enabled).
         """
         from evi import sessions as _sessions
 
+        sid = _require_session_id(session_id)
+        transcripts_root, _ = _user_data_roots()
         # handoff_info looks the id up as `<day dir>/<id>.jsonl`.
         info = _sessions.handoff_info(
-            _require_session_id(session_id), base_url=str(request.base_url)
+            sid,
+            base_url=str(request.base_url),
+            root=transcripts_root,
         )
         if info is None:
             raise HTTPException(
@@ -3459,7 +3466,15 @@ def create_app() -> FastAPI:
                 "session not persisted yet — send a message first "
                 "(tools.transcripts must be on)",
             )
-        return {"ok": True, **info}
+
+        staged = None
+        if transcripts_root is None:
+            try:
+                staged = _sessions.stage_handoff(sid)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(500, f"could not copy the session for sync: {exc}")
+
+        return {"ok": True, **info, "staged": str(staged) if staged else None}
 
     def _dispatch_snapshot_data() -> dict[str, Any]:
         """Build the dispatch dashboard snapshot. Shared by the one-shot GET and
