@@ -275,15 +275,31 @@ def _test_targets(root: Path, changed: list[str]) -> list[str]:
     for p in changed:
         if not p.endswith(".py"):
             continue
-        name = p.rsplit("/", 1)[-1]
+        parts = p.rsplit("/", 1)
+        dir_path = parts[0] if len(parts) > 1 else ""
+        name = parts[-1]
         if name.startswith("test_") or name.endswith("_test.py"):
             candidate = p
-        elif name in ("conftest.py", "__init__.py", "__main__.py"):
+            if (root / candidate).is_file() and candidate not in targets:
+                targets.append(candidate)
             continue
-        else:
-            candidate = f"tests/test_{name}"
-        if (root / candidate).is_file() and candidate not in targets:
-            targets.append(candidate)
+        if name in ("conftest.py", "__init__.py", "__main__.py"):
+            continue
+
+        # Candidates for a module:
+        # 1. tests/test_<name>
+        # 2. <dir>/test_<name>
+        # 3. tests/<dir>/test_<name> (if dir is not empty)
+        stem = name.removesuffix(".py")
+        candidates = [f"tests/test_{stem}.py"]
+        candidates.append(f"{dir_path}/test_{stem}.py" if dir_path else f"test_{stem}.py")
+        if dir_path:
+            candidates.append(f"tests/{dir_path}/test_{stem}.py")
+
+        for cand in candidates:
+            cand = cand.lstrip("/")
+            if (root / cand).is_file() and cand not in targets:
+                targets.append(cand)
     return targets
 
 
