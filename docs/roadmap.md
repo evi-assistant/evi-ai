@@ -9,10 +9,10 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-23):** 1 item shipped in 1.0.53 and 35 more are
+**Status (2026-10-23):** 1 item shipped in 1.0.53 and 36 more are
 done for the next release: all of Phase 0, Phase 1's loop
-infrastructure and Phase 2's edit recovery. Phase 1's two shakedown batches and the eval baseline wait
-on the reference local model; the rest are planned. Each item ships with its own tests and docs, and each release lists
+infrastructure and first shakedown batch (15 tasks, each verified), and
+Phase 2's edit recovery. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -84,7 +84,7 @@ Make delegation routine and safe. The director files a task with acceptance crit
 
 **Why now:** Phases 2-5 contain about 40 delegable items, but delegation needs run reports, worktree isolation, cancel, a scoped policy that lets unattended runs execute tests without yolo, verify gates, an attestation eVi cannot forge, and a task queue. Secret redaction comes first because reports and evidence carry tool arguments and transcripts. The two shakedown batches prove the loop on 16 small verified bugs before any feature depends on it.
 
-Progress: 10 of 12 items shipped or done.
+Progress: 11 of 12 items shipped or done.
 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
@@ -97,8 +97,8 @@ Progress: 10 of 12 items shipped or done.
 | `loop-task-queue` | Repo-tracked task queue with acceptance criteria and a director handoff API | L | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-agent-cancel`, `extensibility-interop-mcp-sdk2-migration`, `loop-implementer-policy`, `loop-director-attestation` | Done (Phase 1 batch 5, unreleased) |
 | `loop-verify-gate` | Verify-before-done: blocking stop hooks and detected project checks | M | director | `fix-loop-state-propagation`, `loop-run-report`, `safety-unattended-default-deny`, `safety-project-trust-gate`, `loop-implementer-policy` | Done (Phase 1 batch 4, unreleased) |
 | `loop-evidence-provenance` | Evidence bundles and provenance trailers | M | evi-frontier | `loop-run-report`, `loop-verify-gate`, `loop-task-queue`, `safety-secret-redaction`, `loop-director-attestation` | Done (Phase 1 batch 5, unreleased) |
-| `loop-eval-gates` | Behavioral evals as regression gates, with a recorded reference model and baseline | M | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-implementer-policy` | Done (Phase 1 batch 6, unreleased); the reference-model baseline is still to be recorded |
-| `loop-shakedown-batch-1` | Loop shakedown batch 1: 8 pure-module fixes through evi-local | M | evi-local | `loop-task-queue`, `loop-evidence-provenance`, `loop-implementer-policy`, `loose-evi-md-implementer-contract` | Planned |
+| `loop-eval-gates` | Behavioral evals as regression gates, with a recorded reference model and baseline | M | evi-frontier | `loop-run-report`, `loop-worktree-isolation`, `loop-implementer-policy` | Done (Phase 1 batch 6, unreleased); baseline recorded on qwen2.5-coder:14b |
+| `loop-shakedown-batch-1` | Loop shakedown batch 1: 8 pure-module fixes through evi-local | M | evi-local | `loop-task-queue`, `loop-evidence-provenance`, `loop-implementer-policy`, `loose-evi-md-implementer-contract` | Done (Phase 1 shakedown, unreleased) |
 | `loop-shakedown-batch-2` | Loop shakedown batch 2: 8 multi-function fixes through evi-local | M | evi-local | `loop-shakedown-batch-1` | Planned |
 
 ## Phase 2 — Context economy and small-model reliability
