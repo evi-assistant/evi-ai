@@ -1,6 +1,6 @@
 id = "SK1-4"
 title = "dream: the memory audit snapshots content hashes, not first lines"
-status = "open"
+status = "verified"
 why = "MemorySnapshot.take (evi/dream.py:70-76) stores only each entry's summary, its first non-empty line (memory.py:60-64, 92-106). diff_snapshots (dream.py:116-124) compares those, so a memory whose body or tags change while the first line stays the same is missing from the dream audit log. Probe on HEAD: 'same first line\\nbody one' -> '...body two' gave diff ([], [], [])."
 hints = "Change only dream.py:70-76 and add `import hashlib`. In take(), for e in store.list(), try data = (store.root / f'{e.name}.md').read_bytes(), and on OSError use data = e.summary.encode('utf-8'). Then entries[e.name] = hashlib.sha256(data).hexdigest(). Update the field comment to say what the value is. Do not touch diff_snapshots, run_dream or the report format. Tests: MemoryStore(root=tmp_path/'memory'). For the end-to-end case, copy the monkeypatches from tests/test_dream.py:69-124 (dream_mod.run_subagent, DREAM_LOG_DIR, ensure_dirs) and pass config=Config()."
 acceptance = ["MemorySnapshot.take(store) maps each memory name to the sha256 hex digest (64 chars) of that entry's whole file (store.root / f'{name}.md').", "Changing only a memory's body (same first line) shows up in diff_snapshots(before, after)[2] (changed).", "Changing only a memory's tags (store.write(name, same_content, tags=['x'])) shows up as changed.", "An unchanged store diffs to ([], [], []), and added and removed still work.", "run_dream end to end, with a stubbed run_subagent that rewrites only the body of an existing memory, lists that name in report.changed and under '## Changed' in the log.", "The existing tests in tests/test_dream.py pass unchanged (they build MemorySnapshot(entries={...}) with arbitrary strings)."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/dream.py", "tests/test_dream_snapshot.py"]
 required_checks = ["python -m pytest -q tests/test_dream_snapshot.py tests/test_dream.py", "python -m ruff check evi/dream.py tests/test_dream_snapshot.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:36Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-4"
+branch = "task/SK1-4"
+base = "9120ba8865b9fbcccc5bcf7e53954043d88efd84"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-4\\1"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:2d93d034d5e2da7b17013f355936dd396759430e30b73f471adb7fccc5c6d569"
+files = 2
+insertions = 121
+deletions = 2
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 10
+failures = 0
+errors = 0
+skipped = 0
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-4\\1\\report.json"
+summary = "I have implemented task SK1-4, updating `MemorySnapshot.take` to use SHA-256 hashes of the full memory files instead of just the first-line summaries. This ensures that changes to the body or tags of a memory are correctly detected during dream audits."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-4"
+digest = "sha256:0d0129185d8bb2646251d8075495081a714b5f5faacd20b732a5934ddaee50b4"
+head = "c5f031f5eeee3e034d50bcf954f42e2898dfd739"
+evidence = "sha256:2d93d034d5e2da7b17013f355936dd396759430e30b73f471adb7fccc5c6d569"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T08:08:13Z"
+key = "302b45cb92785c8d"
+sig = "112da5d925573ac95555563f617002405a8fe36804f316ee9f4a4e934d46a430"
+
+[attestation.review]
+base = "9120ba8865b9fbcccc5bcf7e53954043d88efd84"
+exit_code = 0
+report_sha256 = "33ddf1be273dd78a388ff709aab32f8a8dabe1121a96499e770938b21741230b"
