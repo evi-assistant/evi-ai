@@ -1,20 +1,59 @@
 id = "SK1-12"
 title = "fs: _path_lock keys the real path and does not keep a lock per file forever"
-status = "open"
-why = "SK1-2's per-file lock (evi/tools/fs.py:36-46) keeps one threading.Lock per distinct path in _PATH_LOCKS for the life of the process (the web server's included), and keys it by os.path.normcase(os.path.abspath(p)): two spellings of one file through a symlink or junction get two locks, so their parallel edits can still lose an update. Found by the retro review gate run on SK1-2."
+status = "verified"
+why = "SK1-2's per-file lock (evi/tools/fs.py:37-47) keeps one threading.Lock per distinct path in _PATH_LOCKS for the life of the process (the web server's included), and keys it by os.path.normcase(os.path.abspath(p)): two spellings of one file through a symlink or junction get two locks, so their parallel edits can still lose an update. Found by the retro review gate run on SK1-2."
 hints = "Key by os.path.normcase(os.path.realpath(p)) instead of abspath (realpath of a file that does not exist yet is fine: it resolves what exists).\nMake _PATH_LOCKS a weakref.WeakValueDictionary[str, threading.Lock]. A threading.Lock can't be weakly referenced, so wrap it: a small class _PathLock with __slots__ = ('lock', '__weakref__'), __enter__/__exit__ delegating to self.lock. _path_lock returns that object; the callers' `with _path_lock(p):` stays as it is. Under _PATH_LOCKS_GUARD, get the existing one or create and store a new one, and return it: the caller's reference keeps it alive while it is held.\nTests go in tests/test_fs_write_lock.py, next to the existing ones; keep those passing."
 acceptance = ["Two spellings of one file, one through a symlink (os.symlink; skip with pytest.skip when the platform refuses to create one), get the same lock object from _path_lock.", "After `lock = fs._path_lock(p)` is dropped (del lock; gc.collect()), the key is gone from fs._PATH_LOCKS; while a reference is held it stays and the same object comes back.", "_path_lock(p) still works in `with` and still serialises two threads on one file: the existing lost-update tests in tests/test_fs_write_lock.py pass unchanged.", "The existing tests in tests/test_fs_write_lock.py, tests/test_tools.py, tests/test_apply_patch.py and tests/test_checkpoints.py pass."]
 files_in_scope = ["evi/tools/fs.py", "tests/test_fs_write_lock.py"]
 required_checks = ["python -m pytest -q tests/test_fs_write_lock.py tests/test_tools.py tests/test_apply_patch.py tests/test_checkpoints.py tests/test_fs_eol.py", "python -m ruff check evi/tools/fs.py tests/test_fs_write_lock.py"]
 implementer = "evi-local"
 created = "2026-10-23T08:45:00Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-12"
+branch = "task/SK1-12"
+base = "1988cbb8fb6998892a0aa9307d5e7830645958d6"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-12\\1"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:2117d1b1eec7d2adc378190a02d4082460d4af3c3615121b8ead635dea54ba85"
+files = 2
+insertions = 75
+deletions = 6
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 59
+failures = 0
+errors = 0
+skipped = 1
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-12\\1\\report.json"
+summary = "I have implemented task SK1-12."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-12"
+digest = "sha256:dda1aeb9ce185e55575b33c5d13086eebb0b585b3e0273f7ea3d3f6edc69a391"
+head = "025a98a2677ce3dc1896c8cb35db189c1ed9c56d"
+evidence = "sha256:2117d1b1eec7d2adc378190a02d4082460d4af3c3615121b8ead635dea54ba85"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T16:35:27Z"
+key = "302b45cb92785c8d"
+sig = "6fe676663c3bfa6769562310582240c33882bbb0be959cefb69b40fe17ef28e3"
+
+[attestation.review]
+base = "1988cbb8fb6998892a0aa9307d5e7830645958d6"
+exit_code = 0
+report_sha256 = "278fb14f1664a6c5ffc3c6330258d406f9c6a5fc0fbe73b94def2ebb99ff01e8"
