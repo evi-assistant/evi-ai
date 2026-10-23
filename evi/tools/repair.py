@@ -12,6 +12,10 @@ import json
 import re
 from typing import Any
 
+# A quoted string (kept as it is), or a bare JSON word to spell as Python.
+_JSON_WORD = re.compile(r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(true|false|null)\b""")
+_PYTHON_WORD = {"true": "True", "false": "False", "null": "None"}
+
 
 def loads_tolerant(blob: str) -> Any:
     """`blob` parsed as JSON, or failing that as the Python-literal forms
@@ -25,9 +29,7 @@ def loads_tolerant(blob: str) -> Any:
         return ast.literal_eval(blob)
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
         pass
-    norm = re.sub(r"\bfalse\b", "False", blob)
-    norm = re.sub(r"\btrue\b", "True", norm)
-    norm = re.sub(r"\bnull\b", "None", norm)
+    norm = _JSON_WORD.sub(lambda m: m.group(1) or _PYTHON_WORD[m.group(2)], blob)
     try:
         return ast.literal_eval(norm)
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):

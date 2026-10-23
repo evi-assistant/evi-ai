@@ -1,4 +1,4 @@
-from evi.tools.repair import close_truncated, parse_arguments
+from evi.tools.repair import close_truncated, loads_tolerant, parse_arguments
 
 
 def test_truncated_repair():
@@ -39,3 +39,10 @@ def test_invalid_arguments():
     assert parse_arguments('{"path":', allow_truncated=True) == (None, [])
     assert parse_arguments('not json', allow_truncated=True) == (None, [])
     assert parse_arguments("{'a': {1, 2}}", allow_truncated=True) == (None, [])
+
+
+def test_json_words_inside_strings_are_left_alone():
+    # Only bare true/false/null are respelled; a value that says them keeps its text.
+    assert loads_tolerant("{'a': 'it is true', 'b': false}") == {"a": "it is true", "b": False}
+    assert loads_tolerant("{'a': \"null or 'x'\", 'b': null, 'c': 'don\\'t true'}") == {
+        "a": "null or 'x'", "b": None, "c": "don't true"}
