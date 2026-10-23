@@ -158,17 +158,67 @@ def parse_verdict(text: str) -> str:
     return best
 
 
+# A multi-lens reviewer starts each finding with one of these (MULTI_REVIEW_
+# SYSTEM_PROMPT); `BLOCKING: none` says it found no blocking defect.
+_BLOCKING_RE = re.compile(r"(?im)^[\s>*_\-\d.)\[]*BLOCKING[*_\]]*\s*:\s*(.*)$")
+_MARKER_RE = re.compile(r"(?im)^[\s>*_\-\d.)\[]*(?:BLOCKING|SUGGESTION)[*_\]]*\s*:")
+# What run_subagent returns for a lens that never reviewed.
+_LENS_FAILED = ("ERROR: subagent failed", "(subagent produced no text)")
+
+
+def _lens_sections(text: str) -> list[str]:
+    """A multi-lens report's per-lens bodies (after each ``## <Lens>``),
+    without their ``[trace]`` blocks: those list what the reviewer's tools
+    returned (search hits, file heads), not its findings."""
+    parts = re.split(r"(?m)^## .*$", text)[1:]
+    out = []
+    for body in parts:
+        kept = []
+        in_trace = False
+        for line in body.splitlines():
+            if line.strip() == "[trace]":
+                in_trace = True
+                continue
+            if in_trace and (line.startswith("  - ") or not line.strip()):
+                continue
+            in_trace = False
+            kept.append(line)
+        out.append("\n".join(kept).strip())
+    return out
+
+
+def _lens_blocks(body: str) -> bool:
+    """Whether one lens's findings block: a ``BLOCKING:`` finding (not
+    ``BLOCKING: none``); a lens that failed or said nothing (it didn't
+    review, so it can't approve); or, from a reviewer that used no markers,
+    any ``file:line`` reference (the gate before markers)."""
+    if not body or any(body.startswith(f) for f in _LENS_FAILED):
+        return True
+    for m in _BLOCKING_RE.finditer(body):
+        if not m.group(1).strip().lower().startswith("none"):
+            return True
+    if _MARKER_RE.search(body):
+        return False
+    return bool(_FILE_LINE_RE.search(body))
+
+
 def review_exit_code(text: str) -> int:
     """Map a review report to a process exit code for CI gating (`--exit-code`).
 
-    APPROVE → 0; REQUEST_CHANGES / NEEDS_DISCUSSION → 1. When there's no
-    explicit verdict (e.g. a multi-lens report), gate on whether any concrete
-    `file:line` issue was reported. Mirrors `/ultrareview` used as a gate."""
+    APPROVE → 0; REQUEST_CHANGES / NEEDS_DISCUSSION → 1. A multi-lens report
+    (``## <Lens>`` sections, no verdict) blocks when any lens does
+    (`_lens_blocks`): a ``BLOCKING:`` finding, a lens that failed, or an
+    unmarked ``file:line``; ``SUGGESTION:`` findings alone pass. Anything
+    else without a verdict gates on a ``file:line`` reference. Mirrors
+    `/ultrareview` used as a gate."""
     v = parse_verdict(text)
     if v == "APPROVE":
         return 0
     if v in ("REQUEST_CHANGES", "NEEDS_DISCUSSION"):
         return 1
+    sections = _lens_sections(text)
+    if sections:
+        return 1 if any(_lens_blocks(s) for s in sections) else 0
     return 1 if _FILE_LINE_RE.search(text) else 0
 
 
@@ -251,9 +301,13 @@ MULTI_REVIEW_SYSTEM_PROMPT = (
     "You are a senior engineer reviewing a code diff through ONE specific lens "
     "(given in the task). Stay strictly within that lens. For each issue: the "
     "file + line range (e.g. `foo.py:42-50`), a one-line problem, and a brief "
-    "fix. Skip stylistic nits. If nothing in your lens applies, say so plainly "
-    "— don't invent issues. You have read-only access to the working tree to "
-    "pull surrounding context."
+    "fix. Start each issue's line with `BLOCKING:` when the change must not "
+    "ship with it (wrong results, a crash, a vulnerability, lost data, or new "
+    "behaviour no test exercises at all) and with `SUGGESTION:` for anything "
+    "else (an extra edge-case test, a nicer structure, a minor cost). Skip "
+    "stylistic nits. If nothing in your lens blocks, end with the line "
+    "`BLOCKING: none` — don't invent issues. You have read-only access to the "
+    "working tree to pull surrounding context."
 )
 
 REVIEW_LENSES: dict[str, str] = {

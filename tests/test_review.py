@@ -70,6 +70,48 @@ def test_review_exit_code_falls_back_to_file_line_issues() -> None:
         assert review_exit_code(f"## Tests\n- {issue} is wrong") == 1, issue
 
 
+def _multi(*bodies: str) -> str:
+    lenses = ("Correctness", "Security", "Performance", "Tests")
+    return "# Multi-agent review\n\n" + "\n\n".join(
+        f"## {lens}\n\n{body}" for lens, body in zip(lenses, bodies))
+
+
+def test_a_multi_lens_report_blocks_only_on_blocking_findings() -> None:
+    clean = "No logic bugs found.\n\nBLOCKING: none"
+    suggest = ("SUGGESTION: `tests/test_portprobe.py:104` could also probe from "
+               "http://localhost:1234/v1.\n\nBLOCKING: none")
+    assert review_exit_code(_multi(clean, clean, clean, suggest)) == 0
+    for blocking in ("BLOCKING: `evi/fs.py:40` drops the lock on error",
+                     "- **BLOCKING:** evi/fs.py:40 drops the lock",
+                     "1. BLOCKING: the new branch is never tested"):
+        assert review_exit_code(_multi(clean, blocking, clean, clean)) == 1, blocking
+    assert review_exit_code(_multi(clean, "- BLOCKING: none", clean, clean)) == 0
+
+
+def test_a_lens_that_did_not_review_blocks() -> None:
+    clean = "BLOCKING: none"
+    for failed in ("ERROR: subagent failed: LLM request failed: APITimeoutError",
+                   "(subagent produced no text)", ""):
+        assert review_exit_code(_multi(clean, clean, failed, clean)) == 1, failed
+
+
+def test_an_unmarked_lens_falls_back_to_file_line_and_traces_are_not_findings() -> None:
+    clean = "BLOCKING: none"
+    assert review_exit_code(_multi(clean, "evi/x.py:3 is wrong", clean, clean)) == 1
+    assert review_exit_code(_multi(clean, "No issues found.", clean, clean)) == 0
+    traced = ("No issues found.\n\n[trace]\n  - search_files: CHANGELOG.md:3370: x\n"
+              "  - read_file: tests\\test_backends.py:67 y\n\nBLOCKING: none")
+    assert review_exit_code(_multi(clean, traced, clean, clean)) == 0
+
+
+def test_the_multi_lens_prompt_asks_for_the_markers() -> None:
+    from evi.review import MULTI_REVIEW_SYSTEM_PROMPT
+
+    assert "`BLOCKING:`" in MULTI_REVIEW_SYSTEM_PROMPT
+    assert "`SUGGESTION:`" in MULTI_REVIEW_SYSTEM_PROMPT
+    assert "`BLOCKING: none`" in MULTI_REVIEW_SYSTEM_PROMPT
+
+
 # ----- repo-scoped review context + learned rules (Bugbot-style) -------------
 
 
