@@ -134,6 +134,23 @@ def _read_whole(p: Path) -> ToolOutput | str:
     return output
 
 
+def _read_keep_eol(p: Path) -> str:
+    """Read file as UTF-8 text, preserving line endings (no universal newlines)."""
+    with p.open("r", encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def _eol_of(text: str) -> str:
+    """Detect the dominant line ending in the text."""
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def _to_eol(s: str, eol: str) -> str:
+    """Normalize string to the given line ending."""
+    s = s.replace("\r\n", "\n")
+    return s.replace("\n", eol) if eol == "\r\n" else s
+
+
 def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
     """Return lines [start_line, start_line+limit) (or to EOF when limit<=0).
     Raw content (no line-number prefixes, so the slice round-trips through
@@ -143,7 +160,7 @@ def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
     nbytes = 0
     truncated = False
     try:
-        with p.open("r", encoding="utf-8") as f:
+        with p.open("r", encoding="utf-8", newline="") as f:
             for i, line in enumerate(f, start=1):
                 if i < start_line:
                     continue
@@ -217,21 +234,35 @@ def edit_file(
     if old_string == new_string:
         return "ERROR: old_string and new_string are identical"
     try:
-        text = p.read_text(encoding="utf-8")
+        text = _read_keep_eol(p)
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: cannot read {p}: {exc}"
-    count = text.count(old_string)
-    if count == 0:
+
+    eol = _eol_of(text)
+    old_n, new_n = _to_eol(old_string, eol), _to_eol(new_string, eol)
+
+    if old_n == new_n:
+        return "ERROR: old_string and new_string are identical"
+
+    # Use normalized versions if they match; otherwise fallback to raw strings
+    # (handles mixed-EOL files or explicit EOL requests).
+    if old_n in text:
+        target_old, target_new = old_n, new_n
+    elif old_string in text:
+        target_old, target_new = old_string, new_string
+    else:
         return f"ERROR: old_string not found in {p}"
+
+    count = text.count(target_old)
     if count > 1 and not replace_all:
         return (
             f"ERROR: old_string appears {count} times in {p}; pass "
             "replace_all=true or include more surrounding context to make it unique"
         )
     new_text = (
-        text.replace(old_string, new_string)
+        text.replace(target_old, target_new)
         if replace_all
-        else text.replace(old_string, new_string, 1)
+        else text.replace(target_old, target_new, 1)
     )
     # Snapshot for `evi rewind` (best-effort; never block the edit).
     try:
@@ -278,14 +309,17 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"
         )
     try:
-        text = p.read_text(encoding="utf-8")
+        text = _read_keep_eol(p)
     except (OSError, UnicodeDecodeError) as exc:
         return f"ERROR: cannot read {p}: {exc}"
+
+    eol = _eol_of(text)
     new_text = text
     for i, (old, new) in enumerate(blocks, 1):
         if old == "":
             return f"ERROR: block {i} has an empty SEARCH section"
-        n = new_text.count(old)
+        old_n, new_n = _to_eol(old, eol), _to_eol(new, eol)
+        n = new_text.count(old_n)
         if n == 0:
             return f"ERROR: block {i} SEARCH not found in {p}"
         if n > 1:
@@ -293,7 +327,7 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
                 f"ERROR: block {i} SEARCH matches {n} times in {p} — "
                 "add surrounding context to make it unique"
             )
-        new_text = new_text.replace(old, new, 1)
+        new_text = new_text.replace(old_n, new_n, 1)
     if new_text == text:
         return "ERROR: patch made no changes"
     try:
