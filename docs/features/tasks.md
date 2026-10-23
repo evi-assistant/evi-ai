@@ -202,6 +202,7 @@ eVi's home (see [What `evi task start` does](#what-evi-task-start-does)).
 | `claimed` | a start whose run finishes `done` with every required check passing | `implemented` |
 | `claimed` | a start that fails in any other way | `open` |
 | `implemented` | `evi task submit` | `needs_review` |
+| `open` | `evi task submit --director` (work the director finished on the branch) | `needs_review` |
 | `needs_review` | `evi task verify` (director) | `verified` |
 | `needs_review` | `evi task reject` (director) | `rejected` |
 | `implemented`, `needs_review`, `verified`, `rejected` | `evi task reopen` | `open` |
@@ -543,7 +544,11 @@ file. `--format json` gives `{task, label, path}`.
 the worktree git has `task/<id>` checked out in (so it holds the work you
 committed), running the required checks once more, and records it with the
 status. A bundle that can't be collected is a note on stderr, and the task
-keeps the evidence it had.
+keeps the evidence it had. `--director` also takes an `open` task whose
+work you finished yourself after the implementer's attempts: commit it on
+`task/<id>` first (a branch with nothing beyond its base is refused). A
+reviewer note says the director finished it, so the verdict signs that. It
+is refused in any process an eVi agent started.
 
 **`evi task reopen ID`** sends an implemented, needs_review, verified or
 rejected task back to `open`, dropping any attestation. `--reason TEXT` is

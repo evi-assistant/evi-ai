@@ -526,6 +526,50 @@ def test_submit_collects_the_evidence_again_and_records_its_summary(repo):
     assert "evidence:" in res.stderr
 
 
+def _stopped_open(repo: Path, *, commit: bool) -> None:
+    """T1 as a start leaves it when its run stops short (open, with a branch),
+    then, with `commit`, the director's own work committed on that branch."""
+    from evi import worktree as wt
+
+    q = tasks.TaskQueue(repo)
+    q.create(tasks.new_task("T1", title="Make x two", acceptance=["calc.x == 2"],
+                            files_in_scope=["calc.py"], required_checks=[PYTEST]))
+    q.update("T1", lambda r: tasks.claim(r, holder="evi"))
+    iso = wt.open_isolated("task/T1", start=repo)
+    if commit:
+        (iso.path / "calc.py").write_text("x = 2\n", encoding="utf-8")
+        _git(iso.path, "commit", "-q", "-am", "the director finished it")
+    wt.release(iso)
+    q.update("T1", lambda r: tasks.finish(
+        r, holder="evi", implemented=False, stop_reason="max_turns", exit_code=3,
+        fields={"worktree": str(iso.path), "branch": iso.branch, "base": iso.base,
+                "backend": "ollama", "model": "qwen3"}))
+
+
+def test_the_director_can_submit_an_open_task_they_finished(repo):
+    _stopped_open(repo, commit=True)
+    res = _cli("task", "submit", "T1")
+    assert res.exit_code != 0 and "with --director, an open one" in res.output + res.stderr
+    assert _record(repo)["status"] == "open"
+    res = _cli("task", "submit", "T1", "--director")
+    assert res.exit_code == 0, res.output
+    record = _record(repo)
+    assert record["status"] == "needs_review" and record["evidence_summary"]["files"] == 1
+    note = record["reviewer_notes"][-1]
+    assert note["verdict"] == "director" and "finished by the director" in note["note"]
+
+
+def test_a_director_submit_needs_committed_work_and_the_directors_own_shell(repo, monkeypatch):
+    _stopped_open(repo, commit=False)
+    res = _cli("task", "submit", "T1", "--director")
+    assert res.exit_code != 0 and "nothing committed beyond its base" in res.output + res.stderr
+    assert _record(repo)["status"] == "open"
+    monkeypatch.setenv("EVI_AGENT", "1")
+    res = _cli("task", "submit", "T1", "--director")
+    assert res.exit_code != 0 and "refusing to submit task T1" in res.output + res.stderr
+    assert _record(repo)["status"] == "open"
+
+
 def test_submit_without_a_worktree_keeps_the_task_and_says_why(repo):
     _started(repo)
     _git(repo, "worktree", "remove", "--force", _record(repo)["worktree"])

@@ -6209,7 +6209,13 @@ def task_release(
 
 
 @task_app.command("submit")
-def task_submit(task_id: str = typer.Argument(..., help="The task id.")) -> None:
+def task_submit(
+    task_id: str = typer.Argument(..., help="The task id."),
+    director: bool = typer.Option(
+        False, "--director",
+        help="Director only: submit an open task whose work you finished yourself on its "
+             "branch (committed there) after the implementer's attempts."),
+) -> None:
     """Hand an implemented task to the director for review (needs_review).
 
     Its evidence bundle is collected again first (evi/evidence.py), from the
@@ -6217,14 +6223,36 @@ def task_submit(task_id: str = typer.Argument(..., help="The task id.")) -> None
     eVi's own run of its required checks (in a trusted repository) and the
     latest start's run report; the bundle's path and summary are recorded
     with the status. A bundle that can't be collected is noted on stderr and
-    the task keeps the evidence it had."""
+    the task keeps the evidence it had. With --director an open task may be
+    submitted too, when its branch has commits beyond its base; a reviewer
+    note records that the director finished it. Refused, like verify, from
+    any process an eVi agent may have started."""
+    from evi import attest
     from evi import evidence as _evidence
     from evi import tasks as _tasks
 
+    if director:
+        why = attest.agent_parent()
+        if why:
+            _task_fail(f"refusing to submit task {task_id} as the director: {why}. Only the "
+                       "director, from their own shell, may.")
     queue = _task_queue()
     with _task_errors():
         record = queue.read(task_id)
-        _tasks.submit(record)  # only an implemented task, before anything is collected
+        # Only an implemented task (or, --director, an open one), before anything is collected.
+        _tasks.submit(record, by_director=director)
+        if director and _tasks.status_of(record) == "open":
+            branch = str(record.get("branch") or "").strip()
+            base = str(record.get("base") or "").strip()
+            if not branch or not base:
+                raise _tasks.TaskError(f"task {task_id} has no branch and base (start it first)")
+            try:
+                head = attest.branch_head(_tasks.head_ref(branch), cwd=queue.root)
+            except attest.AttestError as exc:
+                raise _tasks.TaskError(str(exc)) from exc
+            if head.startswith(base) or base.startswith(head):
+                raise _tasks.TaskError(f"{branch} has nothing committed beyond its base: commit "
+                                       "the work there first")
     fields: dict = {}
     if str(record.get("branch") or "").strip():
         try:
@@ -6240,7 +6268,7 @@ def task_submit(task_id: str = typer.Argument(..., help="The task id.")) -> None
     def change(current: dict) -> dict:
         if fields and current.get("attempts") != attempts:  # a start ran meanwhile
             raise _tasks.TaskError(f"task {task_id} changed meanwhile; run the command again")
-        out = _tasks.submit(current)
+        out = _tasks.submit(current, by_director=director)
         out.update(fields)
         return out
 

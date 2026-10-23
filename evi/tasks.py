@@ -591,13 +591,24 @@ def finish(
     return _ordered(out)
 
 
-def submit(record: Mapping[str, Any]) -> dict[str, Any]:
-    """implemented -> needs_review."""
+def submit(record: Mapping[str, Any], *, by_director: bool = False,
+           now: _dt.datetime | None = None) -> dict[str, Any]:
+    """implemented -> needs_review. `by_director`: also an open task whose
+    work the director finished on its branch after the implementer's
+    attempts (`evi task submit --director`), noted as such in the reviewer
+    notes, which the verdict signs."""
     status = status_of(record)
-    if status != "implemented":
-        raise IllegalTransition(f"task {record.get('id')} is {status or '(no status)'!r}: only an "
-                                "implemented task can be submitted for review")
+    if status != "implemented" and not (by_director and status == "open"):
+        raise IllegalTransition(
+            f"task {record.get('id')} is {status or '(no status)'!r}: only an implemented task "
+            "can be submitted for review" + (" (or, with --director, an open one)"
+                                            if status == "open" else ""))
     out = _without_attestation(record)
+    if status == "open":
+        out["reviewer_notes"] = _note(
+            record, "director",
+            f"finished by the director on {record.get('branch') or 'its branch'} after "
+            f"{int(record.get('attempts') or 0)} implementer attempt(s)", now)
     out["status"] = "needs_review"
     return _ordered(out)
 
