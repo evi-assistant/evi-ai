@@ -119,12 +119,12 @@ def _check_backend() -> list[Check]:
     base = (cfg.llm.base_url or "").rstrip("/")
     if not base:
         return [Check("backend reachable", "warn", "no base_url configured")]
-    url = base + "/models"
     try:
         import httpx
-
+        from evi.portprobe import normalize_localhost
         from evi.backends.presets import resolve_api_key
 
+        url = normalize_localhost(base) + "/models"
         key = resolve_api_key(cfg.llm.api_key or "")
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         r = httpx.get(url, timeout=2.5, headers=headers)
@@ -134,8 +134,15 @@ def _check_backend() -> list[Check]:
                 "fail",
                 f"{base} rejected the API key (HTTP {r.status_code}) — check [llm] api_key",
             )]
-        if r.status_code < 500:
+        if 200 <= r.status_code < 300:
             return [Check("backend reachable", "ok", f"{base} (HTTP {r.status_code})")]
+        if r.status_code == 404:
+            return [Check(
+                "backend reachable",
+                "warn",
+                f"{base} does not answer /models like an OpenAI-compatible server; "
+                "base_url usually ends in /v1",
+            )]
         return [Check("backend reachable", "warn", f"{base} returned HTTP {r.status_code}")]
     except Exception as exc:  # noqa: BLE001
         return [Check(
