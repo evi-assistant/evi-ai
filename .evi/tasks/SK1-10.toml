@@ -1,20 +1,59 @@
 id = "SK1-10"
 title = "cli: help text that names a [section] keeps the brackets"
-status = "open"
+status = "verified"
 why = "Typer renders help with Rich markup, so a literal [llm] in a docstring or an option's help is taken as a style tag and disappears. `evi backend use --help` reads 'Switch the active backend (copies it into ) ...' (evi/apps/cli/main.py:4683, the docstring of backend_use says 'copies it into [llm]'), and `evi eval baseline record --help` shows 'A saved backend, 'fake', or .' for its --backend option."
 hints = "In evi/apps/cli/main.py, find help strings (command docstrings and typer.Option / typer.Argument help=) that contain a literal [word] meant as text (e.g. [llm], [worktree], [checks], [tasks], [evidence], [companion], [web]) and escape the opening bracket as \\\\[ (a backslash before [ in the Python string, i.e. write 'copies it into \\\\[llm]' in a normal string or r'copies it into \\[llm]' in a raw string), which is how Rich keeps it literal. Do not touch [red]/[dim]/[bold]/[cyan] style tags used in console.print. Add tests/test_cli_help_brackets.py: use typer.testing.CliRunner and evi.apps.cli.main.app, run `backend use --help` and `eval baseline record --help`, and assert '[llm]' appears in the first output and that the --backend help in the second no longer ends with \"or .\"."
-acceptance = ["`evi backend use --help` shows 'copies it into [llm]'.", "`evi eval baseline record --help` shows the full --backend help (no \"or .\").", "No other command's help loses text: the new test also checks at least one more command whose help names a [section] (find one with grep).", "Style tags in console output are unchanged."]
+acceptance = ["`evi backend use --help` shows 'copies it into [llm]'.", "`evi eval baseline record --help` shows the full --backend help (no \"or .\").", "No command's help loses a [section]: the new test walks every command of the CLI, renders its --help and checks each literal [word] of its help texts (not Rich style names) appears in the output.", "Style tags in console output are unchanged."]
 files_in_scope = ["evi/apps/cli/main.py", "tests/test_cli_help_brackets.py"]
 required_checks = ["python -m pytest -q tests/test_cli_help_brackets.py tests/test_backend_cli.py", "python -m ruff check evi/apps/cli/main.py tests/test_cli_help_brackets.py"]
 implementer = "evi-local"
 created = "2026-10-23T06:26:52Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 3
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-10"
+branch = "task/SK1-10"
+base = "74c5d21f00086fea3e2177c6df3937b6b1c6cfbd"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-10\\3"
+reviewer_notes = [{at = "2026-10-23T13:12:37Z", verdict = "review", note = "Review of attempt 1: your three fixes and tests are right, and you finished just as the turns ran out. The brief underestimated the job: 25 more help texts still lose a [word]. Command (the [word] it loses): ultracode ([llm], [ultracode]); run ([auto], [checks], [llm]); batch ([auto]); scheduler ([auto]); voice speak ([voice]); voice diarize ([diarize], [models]); eval run ([llm]); workflow run ([llm], [worktree]); skill add ([plugins]); models active, models use, models recommend, models backend, models preset ([llm]); models specialty list, models specialty set ([models]); team run ([auto], [worktree]); profile add ([llm]); companion on ([companion]). Each [word] is in that command's docstring or in a help= of its options: find it with search_files (pattern like `\\[llm\\]` in evi/apps/cli/main.py; the file is too big to read whole) and escape it as \\\\[llm] the way you did. Then make the new test check every command at once, so none can regress: walk the command tree with `root = typer.main.get_command(app)` and, for each command `cmd` (recurse while `isinstance(getattr(cmd, \"commands\", None), dict)`; do NOT use isinstance(cmd, click.Group), it is false here), collect `cmd.help` and each `p.help` for p in `cmd.params`, find words with re.findall(r\"(?<!\\\\)\\[([a-z_][a-z0-9_.-]*)\\]\", text) that are not Rich style names (red green yellow blue cyan magenta white black dim bold italic underline), run `CliRunner().invoke(app, [*path, \"--help\"], terminal_width=200)` and assert \"[\" + word + \"]\" is in its output; collect all failures and assert the list is empty, so one run names them all. Keep your existing tests. Run the required checks with run_command and quote their last lines."}, {at = "2026-10-23T13:14:27Z", verdict = "review", note = "Review of attempt 2 (it stopped as loop_detected: one big apply_patch on the run command's docstring failed three times because its SEARCH block was not copied exactly). Don't patch big blocks. For each line below, read just that line (read_file with offset = line - 1 and limit 1) and use edit_file with old_string = a few words of THAT line around the bracket and new_string = the same words with the [ escaped: in a docstring or a normal \"...\" string write \\\\[ (two characters: backslash, backslash, then [), exactly as you already did for backend use. Lines in evi/apps/cli/main.py that still need it (line numbers as of now; they don't shift because each edit keeps the line count): 2862, 2949, 2955, 3951, 4102, 4868, 4882, 5052, 5057, 5292, 5293, 5298, 5301, 5640, 5736, 7322, 8026, 8066 (two on that line), 8206, 8369, 8436, 8467, 8513, 8679, 8681, 9692, 9693, 10190, 10368. Do NOT touch lines 559, 1407, 1538, 1736, 5154, 5856, 7829, 9717, 10346 (comments, code and console markup). Your walk-every-command test from the last review is the check: run `python -m pytest -q tests/test_cli_help_brackets.py` with run_command after every five or so edits, and it lists what is still lost. Then run both required checks and quote their last lines."}, {at = "2026-10-23T16:04:30Z", verdict = "director", note = "finished by the director on task/SK1-10 after 3 implementer attempt(s)"}]
+
+[evidence_summary]
+hash = "sha256:eb300d2ef909b3fb01a6aa6f835cd6f2193b7453b193b5b684184906d2fa26d1"
+files = 2
+insertions = 80
+deletions = 33
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 5
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "max_turns"
+exit_code = 3
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-10\\3\\report.json"
+summary = "max_turns"
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-10"
+digest = "sha256:2c2dce0818c85208fe3d47b75737786635761a2c95395698e25ac656b6807eff"
+head = "de211bdc62f18730fe06c45730ef3b62126116ad"
+evidence = "sha256:eb300d2ef909b3fb01a6aa6f835cd6f2193b7453b193b5b684184906d2fa26d1"
+verdict = "verified"
+rounds = 2
+signer = "director"
+signed_at = "2026-10-23T16:04:39Z"
+key = "302b45cb92785c8d"
+sig = "78f1477f869a56581e01cff119a53de55e9cb213e941c0a4888b65cd617208da"
+
+[attestation.review]
+base = "74c5d21f00086fea3e2177c6df3937b6b1c6cfbd"
+exit_code = 0
+report_sha256 = "3f7686523b30d200b48544b5cc7bc378a003eb0e37d42306f49798df2be9b0b8"
