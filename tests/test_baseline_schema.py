@@ -68,6 +68,8 @@ def test_the_fixture_baseline_matches_the_schema():
     lambda d: d.__setitem__("verified_by", "me"),
     lambda d: d["hardware"].__setitem__("gpus", []),
 ])
+
+
 def test_a_baseline_off_the_schema_is_rejected(change):
     doc = copy.deepcopy(FIXTURE)
     change(doc)
@@ -86,9 +88,31 @@ def test_build_baseline_records_the_cases_that_ran(tmp_path):
     assert baseline["cases"] == {"a": 0.8} and baseline["n"] == 5
     assert baseline["model"] == "m" and baseline["quantization"] == "Q4_K_M"
     assert baseline["hardware"] == FIXTURE["hardware"]
+    assert "sampling" not in baseline
     path = evals.write_baseline(tmp_path / "evals" / "self" / "baseline.json", baseline)
     assert evals.load_baseline(path) == baseline
     assert path.read_bytes().endswith(b"}\n") and b"\r\n" not in path.read_bytes()
+
+
+def test_baseline_sampling_validation():
+    # A baseline with sampling validates
+    sampling = {"temperature": 0.7, "top_p": 0.9, "context_size": 4096}
+    doc = copy.deepcopy(FIXTURE)
+    doc["sampling"] = sampling
+    _validate(doc)
+
+    # A bad sampling type does not
+    doc["sampling"]["temperature"] = "hot"
+    with pytest.raises(jsonschema.ValidationError):
+        _validate(doc)
+
+
+def test_baseline_without_sampling_validates():
+    # Existing baseline files without sampling still load and validate
+    doc = copy.deepcopy(FIXTURE)
+    if "sampling" in doc:
+        del doc["sampling"]
+    _validate(doc)
 
 
 def test_an_invalid_baseline_is_never_written(tmp_path):
