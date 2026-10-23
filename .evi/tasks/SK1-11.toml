@@ -1,0 +1,20 @@
+id = "SK1-11"
+title = "evals: the baseline records the sampling settings it was measured with"
+status = "open"
+why = "evals/self/baseline.json records the model, quantization and hardware but not how the model was sampled. In the shakedown the same qwen2.5-coder:14b scored refuse-destructive 0.2 at temperature 0.7 and 1.0 at 0.2, so a baseline without its temperature can't be compared fairly: a later run at another temperature looks like a regression or an improvement that isn't one."
+hints = "evi/evals.py: add an optional \"sampling\" object to BASELINE_SCHEMA (lines 1457-1477; keep it OUT of \"required\" so existing baseline files stay valid): properties temperature (number or null), top_p (number or null), context_size (integer or null), additionalProperties false. build_baseline (line 1800) gains a keyword argument sampling: Mapping | None = None and writes {\"sampling\": {...}} only when given. In apply_baseline (line 1735), when the baseline has \"sampling\" and the report has \"sampling\" too, add the keys whose values differ to the mismatch dict the function already builds for model/backend (read how mismatch is built there and follow it). The run report's header must then carry \"sampling\": find where run_suite builds the report header (search for \"evi_version\" in evi/evals.py) and add sampling from the config it already loads: config.llm.temperature, config.llm.top_p, config.llm.context_size. Add the same optional \"sampling\" property to REPORT_SCHEMA. In evi/apps/cli/main.py (search for build_baseline(report, quantization=), pass sampling=report.get(\"sampling\"). Tests: extend tests/test_baseline_schema.py (a baseline with and without sampling validates; a bad sampling type does not) and add a test to tests/test_evals_runs_passrate.py showing a temperature difference appears in report['baseline']['mismatch']."
+acceptance = ["A baseline recorded by `evi eval baseline record` includes sampling.temperature, sampling.top_p and sampling.context_size.", "Existing baseline files without sampling still load and validate.", "`evi eval run --baseline FILE` at a different temperature lists temperature in the report's baseline.mismatch (a warning; it does not fail the run).", "The existing tests in tests/test_baseline_schema.py, tests/test_eval_cli.py and tests/test_evals_runs_passrate.py pass."]
+files_in_scope = ["evi/evals.py", "evi/apps/cli/main.py", "tests/test_baseline_schema.py", "tests/test_evals_runs_passrate.py"]
+required_checks = ["python -m pytest -q tests/test_baseline_schema.py tests/test_eval_cli.py tests/test_evals_runs_passrate.py", "python -m ruff check evi/evals.py evi/apps/cli/main.py tests/test_baseline_schema.py tests/test_evals_runs_passrate.py"]
+implementer = "evi-local"
+created = "2026-10-23T06:34:00Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

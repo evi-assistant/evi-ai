@@ -1,0 +1,20 @@
+id = "SK1-10"
+title = "cli: help text that names a [section] keeps the brackets"
+status = "open"
+why = "Typer renders help with Rich markup, so a literal [llm] in a docstring or an option's help is taken as a style tag and disappears. `evi backend use --help` reads 'Switch the active backend (copies it into ) ...' (evi/apps/cli/main.py:4683, the docstring of backend_use says 'copies it into [llm]'), and `evi eval baseline record --help` shows 'A saved backend, 'fake', or .' for its --backend option."
+hints = "In evi/apps/cli/main.py, find help strings (command docstrings and typer.Option / typer.Argument help=) that contain a literal [word] meant as text (e.g. [llm], [worktree], [checks], [tasks], [evidence], [companion], [web]) and escape the opening bracket as \\\\[ (a backslash before [ in the Python string, i.e. write 'copies it into \\\\[llm]' in a normal string or r'copies it into \\[llm]' in a raw string), which is how Rich keeps it literal. Do not touch [red]/[dim]/[bold]/[cyan] style tags used in console.print. Add tests/test_cli_help_brackets.py: use typer.testing.CliRunner and evi.apps.cli.main.app, run `backend use --help` and `eval baseline record --help`, and assert '[llm]' appears in the first output and that the --backend help in the second no longer ends with \"or .\"."
+acceptance = ["`evi backend use --help` shows 'copies it into [llm]'.", "`evi eval baseline record --help` shows the full --backend help (no \"or .\").", "No other command's help loses text: the new test also checks at least one more command whose help names a [section] (find one with grep).", "Style tags in console output are unchanged."]
+files_in_scope = ["evi/apps/cli/main.py", "tests/test_cli_help_brackets.py"]
+required_checks = ["python -m pytest -q tests/test_cli_help_brackets.py tests/test_backend_cli.py", "python -m ruff check evi/apps/cli/main.py tests/test_cli_help_brackets.py"]
+implementer = "evi-local"
+created = "2026-10-23T06:26:52Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

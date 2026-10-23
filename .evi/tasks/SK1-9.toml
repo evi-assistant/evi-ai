@@ -1,0 +1,20 @@
+id = "SK1-9"
+title = "checks: find a module's tests next to it, not only under tests/"
+status = "open"
+why = "The verify gate runs only the tests it can link to the changed files (evi/checks.py _test_targets, lines 273-287). For a changed module it looks only at tests/test_<name>.py, so a project that keeps test_<name>.py beside the module (or in tests/<same subfolder>/) gets no test run at all. Found in the shakedown: the read-then-edit eval fixture keeps test_calc.py next to calc.py, the model broke sub() with replace_all, and no check ran to catch it."
+hints = "Change only _test_targets in evi/checks.py. For a changed module at <dir>/<name>.py (dir may be empty), add these candidates in this order, keeping only files that exist and no duplicates: tests/test_<name>.py (as today), <dir>/test_<name>.py (beside the module), and, when dir is not empty, tests/<dir>/test_<name>.py. A changed test file still targets itself, and conftest.py / __init__.py / __main__.py are still skipped. Paths are POSIX-style strings relative to root (as today); build them with '/'. Add tests to tests/test_checks_detection.py next to the existing _test_targets / detect tests, imitating their tmp_path layout."
+acceptance = ["A changed calc.py with test_calc.py beside it (both at the root) yields the target test_calc.py.", "A changed pkg/util.py with pkg/test_util.py yields pkg/test_util.py; with tests/pkg/test_util.py it yields that too; both exist -> both, no duplicates.", "tests/test_<name>.py is still found first, and a changed test file still targets itself.", "A changed conftest.py, __init__.py or __main__.py still yields nothing.", "The existing tests in tests/test_checks_detection.py pass unchanged."]
+files_in_scope = ["evi/checks.py", "tests/test_checks_detection.py"]
+required_checks = ["python -m pytest -q tests/test_checks_detection.py", "python -m ruff check evi/checks.py tests/test_checks_detection.py"]
+implementer = "evi-local"
+created = "2026-10-23T06:26:48Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
