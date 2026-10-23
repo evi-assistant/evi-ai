@@ -1,6 +1,6 @@
 id = "SK1-5"
 title = "portprobe: llama.cpp discovery also probes 9931 (llama-server's new default port)"
-status = "open"
+status = "verified"
 why = "There is no 9931 anywhere in evi/ (grep). llama-server's default port moved from 8080 to 9931 (llama.cpp b11521), and the official Llama tray app listens on 9931 (roadmap research, group-models-ops). Zero-config detection: /api/backend/status probes _KNOWN_BACKENDS (evi/apps/web/server.py:269-273) through _probe_candidate (server.py:872-888). For llamacpp, that calls portprobe.discover_llamacpp_url, which scans only port..port+10 (evi/portprobe.py:155-181). LlamaCppBackend._effective_base_url uses the same function (evi/backends/llamacpp.py:37-55). Fixing discover_llamacpp_url covers both without touching server.py. Probe on HEAD: 9931 is never probed."
 hints = "portprobe.py:21-23 holds the constants; change discover_llamacpp_url at 155-181. Make it: ports = [start + i for i in range(span + 1)], then ports += [p for p in extra_ports if p not in ports]. Keep the rest: the concurrent port_open pass, then the HTTP pass in `ports` order (do not sort). Add the new tests next to the existing discover tests in tests/test_portprobe.py (105-138), stubbing exactly as they do: monkeypatch.setattr(pp, 'port_open', lambda host, port: ...) and monkeypatch.setattr(pp, 'is_openai_server', lambda url, **k: ...). Do not edit apps/web/server.py, backends/*.py or the default URLs."
 acceptance = ["evi/portprobe.py defines LLAMACPP_EXTRA_PORTS = (9931,) with a comment saying why (llama-server's default moved from 8080 to 9931, and the Llama app listens there).", "discover_llamacpp_url(base_url, *, span=LLAMACPP_PORT_SPAN, api_key=None, extra_ports=LLAMACPP_EXTRA_PORTS) probes port..port+span, then each extra port not already in that range, on the same host. For 'http://localhost:8080/v1' the probed ports are 8080..8090 plus 9931.", "When only 9931 answers like an OpenAI server, it returns 'http://127.0.0.1:9931/v1'. When 8081 and 9931 both do, 8081 wins (the configured span comes first).", "A base_url already on port 9931 probes 9931 exactly once.", "extra_ports=() probes only the span (the old behaviour).", "The module and function docstrings mention 9931. The existing tests/test_portprobe.py passes with test_discover_scans_span_ports updated to expect 9931 too, and tests/test_backends.py and tests/test_backend_status.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/portprobe.py", "tests/test_portprobe.py"]
 required_checks = ["python -m pytest -q tests/test_portprobe.py tests/test_backends.py tests/test_backend_status.py", "python -m ruff check evi/portprobe.py tests/test_portprobe.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:38Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-5"
+branch = "task/SK1-5"
+base = "82708a59813afe5b02ad37ada9a7f9e356c780d8"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-5\\2"
+reviewer_notes = [{at = "2026-10-23T08:13:37Z", verdict = "review", note = "Review of attempt 1: your edits to evi/portprobe.py and tests/test_portprobe.py were not reviewed yet, but their tests pass (17 passed). Every `python -m pytest` you ran failed with \"No module named pytest\" because run_command picked the wrong Python: an eVi bug, now fixed, not your code. Run the two required checks with run_command, fix anything they report, and hand off with each acceptance criterion and the last line of each check's output. If the same command fails the same way twice, stop and say so in your hand-off instead of running it again."}]
+
+[evidence_summary]
+hash = "sha256:dc86b777b29dd59063c5c4f3e3f835a954758412324c83555072b4f95daa8c7d"
+files = 2
+insertions = 48
+deletions = 7
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 55
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-5\\2\\report.json"
+summary = "The task SK1-5 is implemented. The `discover_llamacpp_url` function now probes both the configured port span and the new default `llama-server` port (9931)."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-5"
+digest = "sha256:67cbc80d206d7b4d2a491befc8550fb8741eb1c2df0843bba3f8bd97d17ea4ba"
+head = "dbe17acbaa862addeb517edd61dd87e778ab26e3"
+evidence = "sha256:dc86b777b29dd59063c5c4f3e3f835a954758412324c83555072b4f95daa8c7d"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T08:42:55Z"
+key = "302b45cb92785c8d"
+sig = "aa7e1f5d56b92a7d6d88bb9b7814f0e2485a5065ad93136bbe68b6032c1994fe"
+
+[attestation.review]
+base = "82708a59813afe5b02ad37ada9a7f9e356c780d8"
+exit_code = 0
+report_sha256 = "3ff6d2e91fdd20b2b231c8bfd3c12d93fc55b8fc976007b6c263ced97d488fed"
