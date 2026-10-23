@@ -811,6 +811,13 @@ All notable user-visible changes to eVi. Format loosely follows
   review-remember` writes its rule there.
 
 ### Added
+- **`edit_file` recovers from the near misses small models make.** An edit
+  whose only difference is whitespace or indentation (spaces for tabs, a
+  dropped or flattened indent, trailing spaces) is applied when exactly one
+  block matches, re-indented the way the file indents it, and the result
+  says so. A re-sent edit that is already in the file succeeds as "already
+  applied". A miss names the closest lines of the file; an ambiguous match
+  names the line of each occurrence.
 - **`find_files`, `search_files`, `list_dir` and the index skip what
   `.gitignore` and `.eviignore` ignore.** Build output and generated files no
   longer fill searches or get embedded; `list_dir` says how many entries it
@@ -1320,6 +1327,11 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **A crash or a full disk mid-write no longer leaves a file half-written.**
+  `write_file`, `edit_file` and `apply_patch` write through a temp file and
+  `os.replace`; the file's mode and line endings are kept, a symlink is
+  written through to its target, and a write refused because another
+  program has the file open is retried briefly.
 - **Editing a CRLF file keeps it CRLF.** `edit_file` and `apply_patch` turned a
   Windows file's line endings into LF and couldn't find text a model echoed
   back with `\r\n`; a slice from `read_file` came back LF. All three now keep

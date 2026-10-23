@@ -36,7 +36,11 @@ same syntax and can re-include with `!`); `list_dir` ends with a line saying
 how many entries it hid. Pointing a tool at an ignored file or folder still
 reads it: an explicit request wins. `edit_file`, `apply_patch` and slice reads
 keep a file's own line endings (CRLF stays CRLF), and parallel writes to one
-file wait for each other.
+file wait for each other. Writes are atomic (a temp file, then `os.replace`).
+When `edit_file`'s `old_string` isn't found exactly, it tries the same text
+ignoring each line's surrounding whitespace and applies it on a unique match,
+re-indented to the file; a re-sent edit that is already applied succeeds; a
+miss shows the closest lines and an ambiguous match lists each line number.
 
 ## `code` — code execution and reading (default on)
 
