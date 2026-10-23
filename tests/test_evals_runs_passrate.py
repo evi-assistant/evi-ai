@@ -74,6 +74,8 @@ def _suite(*cases: EvalCase) -> EvalSuite:
     (["ok", "ok", "nope", "ok", "ok"], 4, True),
     (["ok", "nope", "ok", "nope", "ok"], 3, False),
 ])
+
+
 def test_runs_5_pass_rate_0_8_passes_on_4_of_5_and_fails_on_3_of_5(
         home, tmp_path, fake_llm, answers, passes, passed):
     case = EvalCase(name="flaky", prompt="say ok", contains=["ok"], runs=5, pass_rate=0.8)
@@ -242,6 +244,43 @@ def test_apply_baseline_names_how_the_run_differs_from_the_baseline():
     assert evals.report_ok(report)  # a warning, not a failure
     html = evals.render_html(report)
     assert "differs: model other-model" in html
+
+
+def test_baseline_sampling_mismatch_appears_in_report():
+    report = _report({"a": 1.0})
+    report["cases"][0]["passed"] = True
+    report["sampling"] = {"temperature": 0.7, "top_p": 0.9, "context_size": 4096}
+    baseline = {
+        "model": "m", "backend": "test", "cases": {"a": 1.0},
+        "sampling": {"temperature": 0.2, "top_p": 0.9, "context_size": 4096}
+    }
+    evals.apply_baseline(report, baseline)
+    assert "sampling.temperature 0.7 (the baseline's is 0.2)" in report["baseline"]["mismatch"]
+    assert evals.report_ok(report)
+
+
+def test_baseline_recording_includes_sampling(tmp_path, fake_llm):
+    # Acceptance criterion 1: A baseline recorded by `evi eval baseline record` includes sampling.
+    case = EvalCase(name="a", prompt="p", contains=["ok"])
+    suite = _suite(case)
+    ctx = _ctx(_scripted(fake_llm, ["ok"]), tmp_path)
+    report = evals.run_suite(suite, ctx, hardware=HW)
+
+    # Check report header has sampling from Config().llm
+    cfg = Config.load()
+    assert report["sampling"] == {
+        "temperature": cfg.llm.temperature,
+        "top_p": cfg.llm.top_p,
+        "context_size": cfg.llm.context_size,
+    }
+
+    # Check build_baseline records it
+    baseline = evals.build_baseline(report, quantization="Q4", sampling=report["sampling"])
+    assert baseline["sampling"] == report["sampling"]
+
+    # Check write_baseline accepts it
+    path = evals.write_baseline(tmp_path / "baseline.json", baseline)
+    assert evals.load_baseline(path)["sampling"] == report["sampling"]
 
 
 def test_compare_gives_per_case_deltas_and_regressions():

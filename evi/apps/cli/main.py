@@ -4329,7 +4329,8 @@ def eval_baseline_record(
     try:
         path, _page = evals.write_report(report)
         evals.write_baseline(target, evals.build_baseline(report, quantization=quant,
-                                                          hardware=hardware))
+                                                          hardware=hardware,
+                                                          sampling=report.get("sampling")))
     except evals.EvalError as exc:
         _eval_fail(str(exc), 1)
     _eval_summary(report)

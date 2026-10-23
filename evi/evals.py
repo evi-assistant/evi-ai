@@ -1363,6 +1363,14 @@ def run_suite(
         rows.append(row)
         if on_case is not None:
             on_case(row)
+    # The run report's header carries sampling from the config it already loads.
+    from evi.config import Config
+    cfg = Config.load()
+    sampling = {
+        "temperature": cfg.llm.temperature,
+        "top_p": cfg.llm.top_p,
+        "context_size": cfg.llm.context_size,
+    }
     report: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION, "kind": REPORT_KIND,
         "suite": suite.name, "model": ctx.model or "unknown", "backend": ctx.backend or "unknown",
@@ -1370,6 +1378,7 @@ def run_suite(
         "started_at": started_at, "finished_at": _now(),
         "duration_s": round(time.monotonic() - started, 3),
         "hardware": dict(hardware) if hardware is not None else hardware_summary(),
+        "sampling": sampling,
         "baseline": None, "cases": rows,
     }
     return summarize(report)
@@ -1411,6 +1420,15 @@ REPORT_SCHEMA: dict[str, Any] = {
         "finished_at": _TIME,
         "duration_s": {"type": "number", "minimum": 0},
         "hardware": _HARDWARE_SCHEMA,
+        "sampling": {
+            "type": ["object", "null"],
+            "properties": {
+                "temperature": {"type": ["number", "null"]},
+                "top_p": {"type": ["number", "null"]},
+                "context_size": {"type": ["integer", "null"]},
+            },
+            "additionalProperties": False,
+        },
         "baseline": {"type": ["object", "null"]},
         "total": {"type": "integer", "minimum": 0},
         "ran": {"type": "integer", "minimum": 0},
@@ -1468,6 +1486,15 @@ BASELINE_SCHEMA: dict[str, Any] = {
         "backend": {"type": "string", "minLength": 1},
         "quantization": {"type": "string", "minLength": 1},
         "hardware": {**_HARDWARE_SCHEMA, "additionalProperties": False},
+        "sampling": {
+            "type": ["object", "null"],
+            "properties": {
+                "temperature": {"type": ["number", "null"]},
+                "top_p": {"type": ["number", "null"]},
+                "context_size": {"type": ["integer", "null"]},
+            },
+            "additionalProperties": False,
+        },
         "n": {"type": "integer", "minimum": 1},
         "recorded_at": _TIME,
         "evi_version": {"type": "string", "minLength": 1},
@@ -1779,6 +1806,13 @@ def apply_baseline(report: dict[str, Any], baseline: Mapping[str, Any],
         want, got = baseline.get(key), report.get(key)
         if want is not None and str(want) != str(got):
             mismatch.append(f"{key} {got} (the baseline's is {want})")
+    # A sampling setting the baseline was measured with differs.
+    b_samp, r_samp = baseline.get("sampling"), report.get("sampling")
+    if isinstance(b_samp, dict) and isinstance(r_samp, dict):
+        for k in ("temperature", "top_p", "context_size"):
+            want, got = b_samp.get(k), r_samp.get(k)
+            if want != got:
+                mismatch.append(f"sampling.{k} {got} (the baseline's is {want})")
     report["baseline"] = {
         "path": path, "tolerance": tolerance, "model": baseline.get("model"),
         "backend": baseline.get("backend"), "regressed": regressed, "missing": missing,
@@ -1798,7 +1832,8 @@ def load_baseline(path: Path) -> dict[str, Any]:
 
 
 def build_baseline(report: Mapping[str, Any], *, quantization: str,
-                   hardware: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                   hardware: Mapping[str, Any] | None = None,
+                   sampling: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The baseline a recorded `report` makes: its model, backend, hardware
     and N, and the pass rate of every case that ran."""
     from evi import __version__
@@ -1806,7 +1841,7 @@ def build_baseline(report: Mapping[str, Any], *, quantization: str,
     cases = {r["name"]: float(r["pass_rate"]) for r in report.get("cases") or []
              if not r.get("skipped") and r.get("pass_rate") is not None}
     hw = dict(hardware if hardware is not None else report.get("hardware") or {})
-    return {
+    baseline = {
         "schema_version": BASELINE_SCHEMA_VERSION,
         "suite": str(report.get("suite")),
         "model": str(report.get("model")),
@@ -1819,6 +1854,9 @@ def build_baseline(report: Mapping[str, Any], *, quantization: str,
         "evi_version": __version__,
         "cases": cases,
     }
+    if sampling is not None:
+        baseline["sampling"] = sampling
+    return baseline
 
 
 def write_baseline(path: Path, baseline: Mapping[str, Any]) -> Path:
