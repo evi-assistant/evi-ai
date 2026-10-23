@@ -140,7 +140,9 @@ REVIEW_SYSTEM_PROMPT = (
 
 # Verdict keywords the single-pass review prompt is told to end with.
 _VERDICTS = ("REQUEST_CHANGES", "NEEDS_DISCUSSION", "APPROVE")
-_FILE_LINE_RE = re.compile(r"[\w./\\-]+:\d+")
+# A `file:line` reference. Not a URL's //host:port (a reviewer quoting
+# http://localhost:1234 in a suggested test is not a finding at a line).
+_FILE_LINE_RE = re.compile(r"(?<![\w./\\-])(?!//)[\w./\\-]+:\d+")
 
 
 def parse_verdict(text: str) -> str:

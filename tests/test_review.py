@@ -62,6 +62,12 @@ def test_review_exit_code_falls_back_to_file_line_issues() -> None:
     assert review_exit_code("## Correctness\n- foo.py:42 off-by-one") == 1
     # No verdict and no concrete issues -> pass.
     assert review_exit_code("Everything looks clean, no issues.") == 0
+    # A URL's host:port is not a file:line (a suggested test quoting one).
+    assert review_exit_code('Try `pp.discover("http://localhost:1234/v1")`.') == 0
+    assert review_exit_code("probe https://example.com:8080/models first") == 0
+    for issue in ("`evi/portprobe.py:13-15`", r"C:\repo\x.py:3", "Makefile:12",
+                  "(tests/test_x.py:104)"):
+        assert review_exit_code(f"## Tests\n- {issue} is wrong") == 1, issue
 
 
 # ----- repo-scoped review context + learned rules (Bugbot-style) -------------
