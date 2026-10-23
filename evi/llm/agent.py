@@ -67,6 +67,7 @@ from evi.tools.base import (
     bind_context,
     unbind_context,
 )
+from evi.tools.repair import unknown_tool_message
 from evi.history import (
     INTERRUPTED,
     compaction_cut,
@@ -2888,7 +2889,7 @@ class Agent:
             for m in calls_meta:
                 scope = turn_scope if m["sets_scope"] else batch_scope
                 if m["tool"] is None:
-                    m["blocked"] = f"ERROR: unknown tool '{m['name']}'"
+                    m["blocked"] = unknown_tool_message(m["name"], self.tools)
                 elif not skillscope.allows(m["name"], scope):
                     m["blocked"] = (
                         f"ERROR: tool '{m['name']}' is not allowed by the active skill's scope"
@@ -3604,7 +3605,7 @@ class Agent:
         `_gate_permissions` + `_run_before_hooks` so it can batch prompts.
         """
         if tool is None:
-            return f"ERROR: unknown tool '{name}'"
+            return unknown_tool_message(name, self.tools)
         if not self._ask_permission(tool, args_json):
             return self._denial_message(tool, name, args_json)
         return self._run_before_hooks(name, args_json)
