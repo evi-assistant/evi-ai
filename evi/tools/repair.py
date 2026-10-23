@@ -8,9 +8,11 @@ named, so the model (and the log) can see what eVi changed.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
+import math
 import re
-from typing import Any
+from typing import Any, Callable
 
 # A quoted string (kept as it is), or a bare JSON word to spell as Python.
 _JSON_WORD = re.compile(r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(true|false|null)\b""")
@@ -97,3 +99,119 @@ def parse_arguments(raw: str, *, allow_truncated: bool) -> tuple[dict[str, Any] 
     except (TypeError, ValueError, RecursionError):
         return None, []
     return value, notes
+
+
+# Argument names models use for one the tool calls something else.
+ALIASES = {"file_path": "path", "filepath": "path", "filename": "path", "file": "path",
+           "cmd": "command"}
+
+_INT = re.compile(r"[+-]?\d+")
+_TRUE, _FALSE = {"true", "yes"}, {"false", "no"}
+_EXAMPLE = {"string": "...", "integer": 1, "number": 1, "boolean": True, "array": [],
+            "object": {}}
+
+
+def _coerce(value: Any, schema: dict[str, Any]) -> tuple[Any, bool]:
+    """(`value` as `schema`'s type, True) when the conversion is unambiguous;
+    (`value`, False) when it already fits or can't be converted."""
+    kind = schema.get("type")
+    if kind == "integer":
+        if isinstance(value, str) and _INT.fullmatch(value.strip()):
+            return int(value.strip()), True
+        if isinstance(value, float) and value.is_integer():
+            return int(value), True
+    elif kind == "number" and isinstance(value, str):
+        text = value.strip()
+        if _INT.fullmatch(text):
+            return int(text), True
+        try:
+            num = float(text)
+        except ValueError:
+            return value, False
+        if math.isfinite(num):
+            return num, True
+    elif kind == "boolean" and isinstance(value, str):
+        word = value.strip().lower()
+        if word in _TRUE | _FALSE:
+            return word in _TRUE, True
+    elif kind == "string":
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value), True
+    elif kind == "array":
+        if isinstance(value, str):
+            parsed = loads_tolerant(value)
+            return (parsed if isinstance(parsed, list) else [value]), True
+        if value is not None and not isinstance(value, (list, dict)):
+            return [value], True
+    elif kind == "object" and isinstance(value, str):
+        parsed = loads_tolerant(value)
+        if isinstance(parsed, dict):
+            return parsed, True
+    return value, False
+
+
+def fit_arguments(
+    args: dict[str, Any], schema: dict[str, Any], func: Callable[..., Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """`args` fitted to the tool: an alias renamed to the name the schema
+    uses (unless that name is given too), each value coerced to its schema
+    type (`_coerce`), and an argument `func` doesn't take dropped (none is
+    dropped for a function that takes **kwargs, such as an MCP tool's).
+    Returns the new dict and a note for each change."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    props = props if isinstance(props, dict) else {}
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes_any = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    out: dict[str, Any] = {}
+    notes: list[str] = []
+    for key, value in args.items():
+        target = ALIASES.get(key)
+        if key not in props and target in props and target not in args and target not in out:
+            notes.append(f"{key} -> {target}")
+            key = target
+        out[key] = value
+    for key, value in list(out.items()):
+        sub = props.get(key)
+        if isinstance(sub, dict):
+            new, changed = _coerce(value, sub)
+            if changed:
+                out[key] = new
+                notes.append(f"{key}: {json.dumps(value)} -> {json.dumps(new)}")
+    if params and not takes_any:
+        for key in [k for k in out if k not in params or k == "ctx"]:
+            del out[key]
+            notes.append(f"dropped unknown argument {key}")
+    return out, notes
+
+
+def missing_required(args: dict[str, Any], func: Callable[..., Any]) -> list[str]:
+    """The arguments `func` needs (no default) that `args` lacks."""
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return []
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    return [n for n, p in params.items()
+            if n != "ctx" and p.kind in named and p.default is inspect.Parameter.empty
+            and n not in args]
+
+
+def usage(name: str, schema: dict[str, Any]) -> str:
+    """How to call a tool: its arguments and their types, the required ones
+    first and the others marked '?', then an example with the required ones,
+    e.g. 'read_file(path: string, offset?: integer), e.g. {"path": "..."}'."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    props = props if isinstance(props, dict) else {}
+    required = [r for r in (schema.get("required") or []) if r in props]
+
+    def kind(key: str) -> str:
+        sub = props.get(key)
+        return str(sub.get("type", "any")) if isinstance(sub, dict) else "any"
+
+    parts = [f"{k}: {kind(k)}" for k in required]
+    parts += [f"{k}?: {kind(k)}" for k in props if k not in required]
+    example = {k: _EXAMPLE.get(kind(k), "...") for k in required}
+    return f"{name}({', '.join(parts)}), e.g. {json.dumps(example)}"
