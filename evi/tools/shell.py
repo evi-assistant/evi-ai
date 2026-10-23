@@ -96,23 +96,36 @@ def _direct_argv(command: str, folder: Path, env: dict[str, str] | None) -> list
     return resolve_argv(command.split(), folder, env if env is not None else dict(os.environ))
 
 
+def _default_timeout(ctx: ToolContext | None) -> int:
+    """Determine the default timeout for a command run.
+    If the run is held to a policy (e.g. `evi task start`), use the [checks]
+    timeout; otherwise, use the standard shell default."""
+    from evi import checks
+
+    agent = getattr(ctx, "agent", None)
+    if agent is not None and getattr(agent, "policy", None) is not None:
+        return int(checks.settings(getattr(agent, "config", None)).timeout)
+    return _DEFAULT_TIMEOUT
+
+
 @tool(
     description=(
         "Run a shell command and return its exit code + combined stdout/stderr. "
         "Use for builds, tests, git, grep, and other CLIs. Runs in the session "
         "working folder unless `cwd` is set. `timeout` is seconds (default 60, "
-        "max 600). Output is truncated if very large."
+        "or the [checks] timeout (300 s by default) in a run held to a policy "
+        "such as `evi task start`; max 600). Output is truncated if very large."
     ),
     category="shell",
 )
 def run_command(
-    command: str, cwd: str = "", timeout: int = _DEFAULT_TIMEOUT,
+    command: str, cwd: str = "", timeout: int = 0,
     ctx: ToolContext | None = None,
 ) -> str:
     command = (command or "").strip()
     if not command:
         return "ERROR: command is required"
-    timeout = max(1, min(int(timeout or _DEFAULT_TIMEOUT), _MAX_TIMEOUT))
+    timeout = max(1, min(int(timeout or _default_timeout(ctx)), _MAX_TIMEOUT))
 
     workdir_path = workdir.resolve(cwd) if cwd else workdir.get_cwd()
     if not Path(workdir_path).is_dir():
