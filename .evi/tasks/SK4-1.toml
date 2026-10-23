@@ -1,6 +1,6 @@
 id = "SK4-1"
 title = "tools: a new evi/tools/repair.py reads tool-call arguments that aren't strict JSON, and closes a cut-off object"
-status = "open"
+status = "verified"
 why = "First slice of roadmap item loop-tools-tool-call-repair. A tool call whose arguments aren't strict JSON (single quotes, Python True/None) fails with a raw JSONDecodeError, and a reply that hits its token limit cuts the arguments off mid-object. evi/llm/agent.py has _loads_tolerant (line 269) for calls written as text, but structured calls never use it. This task only adds the parsing helpers and their tests, in a NEW module; the director wires them into the agent loop later (the permission check must see the repaired arguments)."
 hints = "Create evi/tools/repair.py with exactly this content (it was run against every acceptance criterion before filing):\n\n\"\"\"Repairs for the tool calls small models get wrong.\n\nArguments that aren't strict JSON, cut off mid-object, mistyped or misnamed\nare read and fitted to the tool where that is unambiguous; each repair is\nnamed, so the model (and the log) can see what eVi changed.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport ast\nimport json\nimport re\nfrom typing import Any\n\n\ndef loads_tolerant(blob: str) -> Any:\n    \"\"\"`blob` parsed as JSON, or failing that as the Python-literal forms\n    local models write (single-quoted strings, True/None, and lowercase\n    true/false/null beside them). None when nothing parses.\"\"\"\n    try:\n        return json.loads(blob)\n    except (ValueError, TypeError, RecursionError):\n        pass\n    try:\n        return ast.literal_eval(blob)\n    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):\n        pass\n    norm = re.sub(r\"\\bfalse\\b\", \"False\", blob)\n    norm = re.sub(r\"\\btrue\\b\", \"True\", norm)\n    norm = re.sub(r\"\\bnull\\b\", \"None\", norm)\n    try:\n        return ast.literal_eval(norm)\n    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):\n        return None\n\n\ndef close_truncated(blob: str) -> str | None:\n    \"\"\"`blob` with what a cut-off JSON value lacks appended: a closing quote\n    for an open string (a dangling backslash dropped first), else a trailing\n    comma or colon dropped, then a closer for each open { or [. None when\n    nothing is open.\"\"\"\n    stack: list[str] = []\n    in_str = esc = False\n    for ch in blob:\n        if in_str:\n            if esc:\n                esc = False\n            elif ch == \"\\\\\":\n                esc = True\n            elif ch == '\"':\n                in_str = False\n        elif ch == '\"':\n            in_str = True\n        elif ch in \"{[\":\n            stack.append(\"}\" if ch == \"{\" else \"]\")\n        elif ch in \"}]\" and stack:\n            stack.pop()\n    if not stack and not in_str:\n        return None\n    out = blob\n    if in_str:\n        if esc:\n            out = out[:-1]\n        out += '\"'\n    else:\n        out = out.rstrip()\n        while out.endswith((\",\", \":\")):\n            out = out[:-1].rstrip()\n    return out + \"\".join(reversed(stack))\n\n\ndef parse_arguments(raw: str, *, allow_truncated: bool) -> tuple[dict[str, Any] | None, list[str]]:\n    \"\"\"A tool call's arguments as a dict, and a note for each repair made to\n    read them; (None, []) when they aren't a JSON object even after repair.\n    Strict JSON first, then the forms `loads_tolerant` reads. A cut-off\n    object (a reply that hit its token limit) is closed only when\n    `allow_truncated`: a tool that writes would write a cut-off argument as\n    if it were whole.\"\"\"\n    text = (raw or \"\").strip() or \"{}\"\n    notes: list[str] = []\n    try:\n        value = json.loads(text)\n    except (ValueError, TypeError, RecursionError):\n        value = loads_tolerant(text)\n        notes = [\"read arguments that were not strict JSON\"]\n        if value is None and allow_truncated:\n            closed = close_truncated(text)\n            if closed is not None:\n                value = loads_tolerant(closed)\n                notes = [\"closed arguments that were cut off\"]\n    if not isinstance(value, dict):\n        return None, []\n    try:  # a Python literal can hold what JSON can't (a set, bytes)\n        json.dumps(value)\n    except (TypeError, ValueError, RecursionError):\n        return None, []\n    return value, notes\n\nThen create tests/test_tool_repair.py with one small test per acceptance criterion, calling `from evi.tools.repair import close_truncated, parse_arguments` directly (no agent, no files). Write it with write_file once; it is a new file. Comments in tests state why in one line, never thinking aloud."
 acceptance = ["parse_arguments('{\"path\": \"a.py\"', allow_truncated=True) == ({'path': 'a.py'}, ['closed arguments that were cut off']), and with allow_truncated=False it is (None, []).", "A strict JSON object comes back as it is with no notes; '' comes back as ({}, []).", "parse_arguments(\"{'path': 'a.py', 'all': true}\", allow_truncated=False) == ({'path': 'a.py', 'all': True}, ['read arguments that were not strict JSON']).", "close_truncated closes an open string ('{\"path\": \"a.p' -> '{\"path\": \"a.p\"}'), nested brackets ('{\"a\": [1, 2' -> '{\"a\": [1, 2]}'), drops a trailing comma ('{\"path\": \"a.py\",' -> '{\"path\": \"a.py\"}') and a dangling backslash, and returns None for a complete object.", "Arguments that aren't a JSON object even after repair give (None, []): '[1, 2]', '\"x\"', '{\"path\"', '{\"path\":', 'not json', and \"{'a': {1, 2}}\" (a Python set JSON can't hold)."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/tools/repair.py", "tests/test_tool_repair.py"]
 required_checks = ["python -m pytest -q tests/test_tool_repair.py tests/test_text_tool_calls.py", "python -m ruff check evi/tools/repair.py tests/test_tool_repair.py"]
 implementer = "evi-local"
 created = "2026-10-23T22:10:07Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK4-1"
+branch = "task/SK4-1"
+base = "004452652ad85f6b4b01105a6f1e40890bdae813"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK4-1\\2"
+reviewer_notes = [{at = "2026-10-23T22:11:51Z", verdict = "review", note = "Director note (attempt 2). evi/tools/repair.py is exactly right: do not change it. Two fixes in tests/test_tool_repair.py only:\n1. One line in test_close_truncated is wrong (my brief was unclear). \"A dangling backslash\" means a backslash at the end of an OPEN string, e.g. the text {\"path\": \"x\\ . Replace the line\n    assert close_truncated('{\"path\": \"a.py\"\\') == '{\"path\": \"a.py\"}'\nwith\n    assert close_truncated('{\"path\": \"x\\') == '{\"path\": \"x\"}'\nUse edit_file with exactly that old_string and new_string (they differ: \"a.py\"\\ becomes \"x\\). Then run the required checks.\n2. Put two blank lines between the top-level test functions and one after the import (PEP 8), and keep lines under 100 characters (wrap the long assert lines).\nIf an edit_file says old_string and new_string are identical, read the file again instead of re-sending it."}, {at = "2026-10-23T22:14:28Z", verdict = "verified", note = "Director triage: (1) correctness 'notes overwritten': by design, once a cut-off object is closed that note replaces 'not strict JSON' (criterion 1 expects exactly ['closed arguments that were cut off']). (2) security 'literal_eval DoS': probed - 100 000 nested brackets, 5 000-deep JSON, a 100 000-digit number and 5 000-digit literal all return (None, []) in at most 0.04 s; RecursionError/MemoryError/SyntaxError are caught, and arguments are bounded by the model's output limit. The tests lens's quoted true/false suggestion was a real bug, fixed in the touch-up with a test."}]
+
+[evidence_summary]
+hash = "sha256:12f905976706e0f825b34f2ff3defc7b44ff84b8e051c2ef9516987de3635e74"
+files = 2
+insertions = 138
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 15
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK4-1\\2\\report.json"
+summary = "I have implemented task SK4-1."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK4-1"
+digest = "sha256:fb40d5d52d89e3aa0075b4650f26042ca0acd7f0a3a018f9238ca366b273663c"
+head = "1c5a7e6fa6bd802c27f0d5097dfaf334eb939cac"
+evidence = "sha256:12f905976706e0f825b34f2ff3defc7b44ff84b8e051c2ef9516987de3635e74"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-23T22:14:37Z"
+key = "302b45cb92785c8d"
+sig = "817cbf3f853ebf634d1ee9cfd5890a0defb6ed822f4aae24f718d6321865aae5"
+
+[attestation.review]
+base = "004452652ad85f6b4b01105a6f1e40890bdae813"
+exit_code = 1
+report_sha256 = "ccc845af5abd888cf18171ac0a6ef486ceaec0e88dc35560dda0b10935075b3a"
+override = "Director triage: (1) correctness 'notes overwritten': by design, once a cut-off object is closed that note replaces 'not strict JSON' (criterion 1 expects exactly ['closed arguments that were cut off']). (2) security 'literal_eval DoS': probed - 100 000 nested brackets, 5 000-deep JSON, a 100 000-digit number and 5 000-digit literal all return (None, []) in at most 0.04 s; RecursionError/MemoryError/SyntaxError are caught, and arguments are bounded by the model's output limit. The tests lens's quoted true/false suggestion was a real bug, fixed in the touch-up with a test."
