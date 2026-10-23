@@ -17,6 +17,7 @@ is a separate, larger feature. Tokens compare in constant time.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,12 +60,39 @@ def save_users(users: list[User], path: Path | None = None) -> None:
     p.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def login_dir_key(name: str) -> str:
+    """What decides that two logins share a data dir: its name (_safe_user),
+    case-folded, since Windows and macOS fold case in paths."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip()).strip("._-")
+    return (slug or "user").casefold()
+
+
+def colliding_logins(users: list[User]) -> dict[str, list[str]]:
+    """{login name: [the other logins it would share a data dir with]} for
+    each users.json login whose users/<dir> a differently named login maps to
+    as well."""
+    by_dir: dict[str, list[str]] = {}
+    for u in users:
+        names = by_dir.setdefault(login_dir_key(u.name), [])
+        if u.name not in names:
+            names.append(u.name)
+    return {n: [m for m in names if m != n]
+            for names in by_dir.values() if len(names) > 1 for n in names}
+
+
 def add_user(name: str, path: Path | None = None) -> User:
     """Add (or re-issue) a user with a fresh random token. Returns the User."""
     name = name.strip()
     if not name:
         raise ValueError("name is required")
-    users = [u for u in load_users(path) if u.name.lower() != name.lower()]
+    users = load_users(path)
+    for u in users:
+        if u.name.lower() != name.lower() and login_dir_key(u.name) == login_dir_key(name):
+            raise ValueError(
+                f"{name!r} would share the data folder users/{login_dir_key(name)} "
+                f"with the login {u.name!r}: choose another name"
+            )
+    users = [u for u in users if u.name.lower() != name.lower()]
     user = User(name=name, token=secrets.token_urlsafe(24))
     users.append(user)
     save_users(users, path)

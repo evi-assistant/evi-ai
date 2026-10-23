@@ -457,6 +457,22 @@ def _check_web_access() -> list[Check]:
                 "web.multi_user is on but ~/.evi/users.json has no users",
                 fix=("evi web-config users add <name>",),
             ))
+
+        from evi.users import colliding_logins
+        collisions = colliding_logins(users)
+        if collisions:
+            groups = []
+            for name, others in collisions.items():
+                group = sorted({name, *others})
+                if group not in groups:
+                    groups.append(group)
+            detail = "multi-user logins collide: " + ", ".join(
+                f"{', '.join(repr(n) for n in g)}" for g in groups
+            ) + ". None of them can sign in until all but one are renamed."
+            # Fixes: remove all but one from each group.
+            # To be safe and simple, we suggest removing all colliding logins.
+            fixes = tuple(f'evi web-config users remove "{n}"' for n in collisions)
+            out.append(Check("multi-user logins", "warn", detail, fix=fixes))
     return out
 
 
