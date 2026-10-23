@@ -1,6 +1,6 @@
 id = "SK1-2"
 title = "fs: per-path write lock for write_file/edit_file/apply_patch, plus a parallel checkpoint-seq regression test"
-status = "open"
+status = "verified"
 why = "edit_file reads (evi/tools/fs.py:237, _read_keep_eol), journals (268-272) and writes (274) without a lock. write_file (196-211) and apply_patch (301-341) do the same. The agent runs up to 4 tool bodies at once in a thread pool (evi/llm/agent.py:2976), so two writes to one file can lose an update. Probe on HEAD, with a 0.2 s delay injected in record_before_write: two parallel edit_file calls on 'A\\nB\\n' ('A'->'A1', 'B'->'B1') ended as 'A1\\nB\\n', and B1 was lost. The checkpoint-seq half is ALREADY fixed: evi/checkpoints.py:40-42 defines _LOCK, taken in record_before_write (85-86) and rewind (134-135). No test covers parallel seqs (tests/test_checkpoints.py:66 is sequential), so this task adds one."
 hints = "In fs.py add `import os` and `import threading`, plus _PATH_LOCKS: dict[str, threading.Lock] = {} and _PATH_LOCKS_GUARD = threading.Lock(). Then add `def _path_lock(p)` that takes key = os.path.normcase(os.path.abspath(p)) and, under the guard, does a get-or-create of the Lock. In write_file (fs.py:196-211), edit_file (224-276) and apply_patch (301-341), wrap everything after the `p = workdir.resolve(path)` / is_file checks in `with _path_lock(p):`. Returns inside the with block are fine. Do not touch evi/checkpoints.py; its lock already exists. For the tests, monkeypatch.setattr('evi.checkpoints.record_before_write', slow) works because fs imports it inside each call. slow = lambda path, root=None, *, ctx=None: time.sleep(0.2) or 0. Imitate tests/test_checkpoints.py:77-131 (monkeypatch.setattr(config, 'HOME', tmp_path / 'home'); call fs.edit_file(str(p), ...))."
 acceptance = ["evi/tools/fs.py has _path_lock(p: Path) -> threading.Lock. It returns the same lock object for the same file (keyed by os.path.normcase(os.path.abspath(p)), so a path that differs only in case shares the lock on Windows) and different locks for different files.", "write_file, edit_file and apply_patch hold _path_lock(p) from their read of the file through the checkpoint, the write and the read-cache pop.", "Lost-update test: with evi.checkpoints.record_before_write monkeypatched to sleep 0.2 s, two threads started together (threading.Barrier(2)) run edit_file 'A'->'A1' and 'B'->'B1' on a file containing 'A\\nB\\n', and the file ends as 'A1\\nB1\\n'. This test fails on the current code.", "The same holds for one edit_file and one apply_patch on the same file: both changes land.", "Seq test: 8 threads each calling fs.write_file on a different file (evi.config.HOME monkeypatched to tmp_path/'home') leave journal entries (checkpoints.list_checkpoints(limit=100, root=tmp_path/'home')) whose seq values are exactly {1..8}. 16 threads calling checkpoints.record_before_write(path, root=...) directly return 16 distinct seqs, {1..16}.", "The existing tests in tests/test_tools.py, tests/test_apply_patch.py and tests/test_checkpoints.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/tools/fs.py", "tests/test_fs_write_lock.py"]
 required_checks = ["python -m pytest -q tests/test_fs_write_lock.py tests/test_tools.py tests/test_apply_patch.py tests/test_checkpoints.py", "python -m ruff check evi/tools/fs.py tests/test_fs_write_lock.py"]
 implementer = "evi-local"
 created = "2026-10-17T18:17:32Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 5
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-2"
+branch = "task/SK1-2"
+base = "9e5e7af35e2b96d9d9b6648b9f0a42f86b00f9dd"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-2\\5"
+reviewer_notes = [{at = "2026-10-23T07:27:34Z", verdict = "review", note = "Review of attempt 1: evi/tools/fs.py is still unchanged, so _path_lock does not exist and the lock tests fail. Your multi-block apply_patch of fs.py was right; eVi refused it because of a bug in its patch parser (fs.py quotes the patch markers inside strings), which is now fixed, so apply_patch on fs.py works. Implement the lock as the hints say. In tests/test_fs_write_lock.py, test_parallel_seq_write_file finds no journal entries: evi.checkpoints reads the module attribute evi.config.HOME, so use `from evi import config` and `monkeypatch.setattr(config, 'HOME', tmp_path / 'home')` as the hints say, instead of mocking Config.load. Remove comments that think aloud ('Actually, let's ...', 'Let's check the actual implementation ...'); a comment says why, in one line. Your hand-off must name each acceptance criterion that is not met: attempt 1's said the issues were fixed while fs.py had not changed."}, {at = "2026-10-23T07:31:18Z", verdict = "review", note = "Review of attempt 2: evi/tools/fs.py is right; do not change its logic again. Two tests fail with AttributeError: <class 'evi.config.Config'> has no attribute 'HOME'. HOME is an attribute of the module evi.config, not of the class Config. In tests/test_fs_write_lock.py replace line 7 `from evi.config import Config` with `from evi import config`, and change lines 105 and 132 to `monkeypatch.setattr(config, 'HOME', home)`. Then remove the 23 lines that hold only spaces in that file, and the two in evi/tools/fs.py just before each `with _path_lock(p):`. Run the tests with run_command (`python -m pytest -q tests/test_fs_write_lock.py`) and put the last line of its output in your hand-off. Attempt 2's hand-off said every criterion was met while 2 tests were failing."}, {at = "2026-10-23T07:36:44Z", verdict = "review", note = "Review of attempt 3: your edits were right and every test passes now; do not change any logic. run_command was missing from the run (an eVi bug, now fixed): use it this time. Left to do, formatting only: remove the 23 lines that hold only spaces in tests/test_fs_write_lock.py and the two in evi/tools/fs.py (just before each `with _path_lock(p):`), and put two blank lines between top-level functions in tests/test_fs_write_lock.py. Then run `python -m pytest -q tests/test_fs_write_lock.py tests/test_tools.py tests/test_apply_patch.py tests/test_checkpoints.py` and `python -m ruff check evi/tools/fs.py tests/test_fs_write_lock.py` with run_command, and quote the last line of each in your hand-off."}, {at = "2026-10-23T07:39:40Z", verdict = "review", note = "Review of attempt 4: run_command ran in C:\\Windows instead of this worktree (an eVi bug with folders on a network share, now fixed), so every pytest you ran there failed; your code was fine. Everything in the attempt 3 note still applies: formatting only, then run the two checks with run_command and quote their last lines. On this share run_command takes one program with plain arguments (no && or quotes): run each command on its own."}]
+
+[evidence_summary]
+hash = "sha256:872304c64d13daac6d9df9e631270d23d002b5f8c8b0fb00c77ab7f4e389bfb6"
+files = 2
+insertions = 257
+deletions = 81
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 47
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-2\\5\\report.json"
+summary = "The implementation of task SK1-2 is complete. I have added per-path write locks to `write_file`, `edit_file`, and `apply_patch` in `evi/tools/fs.py` to prevent lost updates during parallel tool execution. I also added a comprehensive regression test suite in `tests/test_fs_write_lock.py` covering bo"
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-2"
+digest = "sha256:68120aeb78229297a76cf2ab07bee6a48ab461edd4b6edba93c8ac9d454a9cba"
+head = "4c9cde24bbdcd237f4ba9e1c252c8608a43c8e16"
+evidence = "sha256:872304c64d13daac6d9df9e631270d23d002b5f8c8b0fb00c77ab7f4e389bfb6"
+verdict = "verified"
+rounds = 4
+signer = "director"
+signed_at = "2026-10-23T07:48:41Z"
+key = "302b45cb92785c8d"
+sig = "4fdebea7c58479b64f821ba4cdbd4a5a19986ebe1cd1643cd59f81834e8726e7"
+
+[attestation.review]
+base = "9e5e7af35e2b96d9d9b6648b9f0a42f86b00f9dd"
+exit_code = 0
+report_sha256 = "4c59159e49a649c92f9c13223722becd55bd04ef0524a065eb987855f5ab442b"
