@@ -90,8 +90,11 @@ def parse_rules(text: str) -> List[Rule]:
         if not line:
             continue
 
-        regex = re.compile(_translate(line))
-        rules.append(Rule(regex, negate, dir_only, anchored))
+        try:
+            regex = re.compile(_translate(line))
+            rules.append(Rule(regex, negate, dir_only, anchored))
+        except re.error:
+            continue
     return rules
 
 

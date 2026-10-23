@@ -107,6 +107,13 @@ def test_trailing_whitespace_and_cr_are_stripped():
     assert IgnoreRules(parse_rules("*.log  \r\n")).ignored("a.log", False) is True
 
 
+def test_a_malformed_rule_is_skipped_and_the_rest_still_apply():
+    rules = IgnoreRules(parse_rules("[]\n[z-a]\n*.log\n"))
+    assert rules.ignored("a.log", False) is True
+    assert rules.ignored("a.txt", False) is False
+    assert len(parse_rules("[]")) == 0
+
+
 def test_ignore_filter_path_variants(tmp_path):
     # AC 8: Works when base is spelled differently from resolved root
     repo = tmp_path / "repo"
