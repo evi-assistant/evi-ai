@@ -125,3 +125,24 @@ def test_build_image_content_small_png_keeps_size(tmp_path):
     data = base64.b64decode(url.split(",")[1])
     res = Image.open(BytesIO(data))
     assert res.size == (200, 100)
+
+
+def test_build_image_content_config_load_once(tmp_path, monkeypatch):
+    """Check that build_image_content calls Config.load() exactly once for multiple images."""
+    from types import SimpleNamespace
+
+    from evi.config import Config
+
+    calls = []
+    monkeypatch.setattr(Config, "load", lambda: calls.append(1) or SimpleNamespace(
+        vision=SimpleNamespace(max_px=1568)))
+
+    # Create 3 dummy images
+    for i in range(3):
+        p = tmp_path / f"img{i}.jpg"
+        p.write_bytes(b"fake image data")
+
+    # build_image_content should resolve max_px once and pass it to _data_url_for
+    build_image_content("text", [str(p) for p in tmp_path.glob("*.jpg")])
+
+    assert len(calls) == 1

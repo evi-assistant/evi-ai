@@ -141,6 +141,13 @@ def build_image_content(
     Skips paths that don't exist, so a stale upload reference doesn't blow
     up the whole turn. Always returns at least the text part.
     """
+    if max_px is None:
+        try:
+            from evi.config import Config
+            max_px = Config.load().vision.max_px
+        except Exception:
+            max_px = 1568
+
     parts: list[dict] = [{"type": "text", "text": text}]
     for raw in image_paths:
         p = Path(raw).expanduser()
