@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from evi import workdir
+from evi.ignore import ignore_filter
 from evi.citations import Citation, ToolOutput, trim_excerpt
 from evi.tools.base import ToolContext, tool
 
@@ -370,8 +371,16 @@ def list_dir(path: str = ".") -> str:
     p = workdir.resolve(path)
     if not p.is_dir():
         return f"ERROR: not a directory: {p}"
+
+    skip = ignore_filter(p)
     entries = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
-    return "\n".join(f"{'D' if e.is_dir() else 'F'} {e.name}" for e in entries)
+    keep = [e for e in entries if not skip(e)]
+
+    res = "\n".join(f"{'D' if e.is_dir() else 'F'} {e.name}" for e in keep)
+    if len(keep) < len(entries):
+        hidden = len(entries) - len(keep)
+        res += f"\n({hidden} entries hidden by .gitignore/.eviignore)"
+    return res
 
 
 def _is_ignored(p: Path, base: Path) -> bool:
@@ -395,10 +404,12 @@ def find_files(pattern: str, path: str = ".") -> str:
     base = workdir.resolve(path)
     if not base.is_dir():
         return f"ERROR: not a directory: {base}"
+
+    skip = ignore_filter(base)
     try:
         matches = sorted(
             str(m) for m in base.glob(pattern)
-            if m.is_file() and not _is_ignored(m, base)
+            if m.is_file() and not _is_ignored(m, base) and not skip(m)
         )
     except (ValueError, OSError) as exc:
         return f"ERROR: bad glob {pattern!r}: {exc}"
@@ -432,11 +443,12 @@ def search_files(
         base_dir = base.parent
     elif base.is_dir():
         base_dir = base
+        skip = ignore_filter(base)
         files = []
         for m in base.rglob(glob or "*"):
             if len(files) >= _MAX_SEARCH_FILES:
                 break
-            if m.is_file() and not _is_ignored(m, base):
+            if m.is_file() and not _is_ignored(m, base) and not skip(m):
                 files.append(m)
     else:
         return f"ERROR: no such path: {base}"
