@@ -300,8 +300,9 @@ def test_a_broken_config_never_makes_the_bot_speak_in_a_group(home, monkeypatch)
     caught mid-edit used to be posted into the group, to anyone."""
     pairing.approve(CHANNEL, pairing.request_pairing(CHANNEL, PAIRED_UID, "pat"))
     (home / "config.toml").write_text("[channels\nallow_groups = true\n", encoding="utf-8")
-    with pytest.raises(Exception):
-        Config.load()
+    # Config.load falls back to the defaults (with load_error); the channel
+    # still refuses to run on them.
+    assert Config.load().load_error
 
     sent = _run_loop(monkeypatch, [_update("group", uid=31337), ANONYMOUS_ADMIN,
                                    SERVICE_FORWARD, _update("group")])
@@ -309,7 +310,8 @@ def test_a_broken_config_never_makes_the_bot_speak_in_a_group(home, monkeypatch)
 
     # The paired sender's own direct chat still hears why nothing works.
     (reply,) = _run_loop(monkeypatch, [_update("private")])
-    assert reply[0] == PAIRED_UID and reply[1].startswith("⚠ TOMLDecodeError")
+    assert reply[0] == PAIRED_UID and reply[1].startswith("⚠ ConfigUnreadable")
+    assert "TOMLDecodeError" in reply[1]
     # Pairing needs no config, so a stranger's direct chat still gets a code
     # (and no error text).
     (reply,) = _run_loop(monkeypatch, [_update("private", uid=31337)])

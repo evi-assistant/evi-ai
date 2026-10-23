@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from evi.channels import pairing, policy, telegram_api
-from evi.config import HOME, Config
+from evi.config import HOME, Config, ConfigUnreadable
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,13 @@ def handle_message(msg: dict[str, Any], cfg: Config | None = None) -> str:
         logger.info("telegram: pairing requested by %s (%s) -> %s", msg.get("name"), uid, code)
         return _PAIR_HELP.format(code=code)
     cfg = cfg or Config.load()
+    if cfg.load_error:
+        # config.toml can't be read, so Config.load fell back to the defaults.
+        # A remote surface doesn't run on settings the owner didn't choose:
+        # nothing is answered, and (the loop's error path) only a paired
+        # sender's direct chat hears why.
+        raise ConfigUnreadable(
+            f"eVi's config.toml can't be read ({cfg.load_error}); fix it and try again")
     # The policy's value, so the gate, status() and the turn log agree: only a
     # real `true` opens groups (a hand-written "false" is a non-empty string).
     if not private and not channel_policy(cfg).allow_groups:
