@@ -388,7 +388,7 @@ def test_a_shell_proposal_is_refused_at_check_in_and_at_approval(home, sources, 
     assert [r["tool"] for r in res.refused] == ["run_command"]
     assert "shell line" in res.refused[0]["reason"]
     [pid] = res.proposals
-    assert [p["tool"] for p in comp.proposals()] == ["note_add"]
+    assert [p["tool"] for p in comp.proposals(now=at(10))] == ["note_add"]
     # One stored before this rule (or written by hand) is refused on approval.
     path = comp.store.proposals_path
     data = json.loads(path.read_text(encoding="utf-8"))
