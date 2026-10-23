@@ -419,6 +419,17 @@ def test_checks_run_only_in_a_trusted_folder(repo, tmp_path):
     _validate(bundle.report)
 
 
+def test_a_required_checks_bare_python_is_this_interpreter(tmp_path):
+    # As in a run's own checks (evi.checks.resolve_argv): on Windows a bare
+    # "python" would otherwise be the base install's, beside the venv's launcher.
+    out = tmp_path / "checks"
+    out.mkdir()
+    rec = evidence._run_check(["python", "-c", "import sys; print(sys.prefix)"], tmp_path, out,
+                              1, lambda s: s, timeout=60)
+    assert rec["ok"] and rec["cmd"].startswith("python ")
+    assert (out / "01-python.txt").read_text(encoding="utf-8").strip() == sys.prefix
+
+
 def test_a_work_tree_that_isnt_the_repositorys_own_is_not_diffed(repo, tmp_path):
     """A repository whose config points git at another folder (core.worktree)
     would list every file there: its diff is refused, with a note."""

@@ -439,6 +439,31 @@ def tail_text(text: str, lines: int = DEFAULT_TAIL_LINES) -> str:
     return kept if len(kept) <= MAX_TAIL_CHARS else "…" + kept[-(MAX_TAIL_CHARS - 1):]
 
 
+_PYTHON_NAMES = ("python", "python3")
+
+
+def resolve_argv(argv: Sequence[str], root: Path, env: dict[str, str]) -> list[str]:
+    """`argv` with a bare program name made a path. ``python`` / ``python3``
+    is the interpreter the built-in checks use: the folder's own virtualenv,
+    else this one (not in a frozen build, where sys.executable is eVi). Any
+    other bare name is looked up on the check's PATH: Windows would search
+    the parent's own folder first, which for a venv interpreter is the base
+    Python's. A name that resolves to nothing stays as it is."""
+    words = list(argv)
+    if not words or os.sep in words[0] or "/" in words[0]:
+        return words
+    stem = words[0].lower().removesuffix(".exe")
+    exe: str | None = None
+    if stem in _PYTHON_NAMES:
+        exe = _project_python(root) or (
+            sys.executable if sys.executable and not getattr(sys, "frozen", False) else None)
+    if exe is None:
+        exe = shutil.which(words[0], path=env.get("PATH"))
+    if exe:
+        words[0] = exe
+    return words
+
+
 def run_check(
     check: Check,
     root: str | Path,
@@ -461,7 +486,7 @@ def run_check(
         return max(0, int((time.monotonic() - started) * 1000))
 
     try:
-        res = proc.run(list(check.argv), cwd=str(root), timeout=timeout,
+        res = proc.run(resolve_argv(check.argv, Path(root), env), cwd=str(root), timeout=timeout,
                        cancel_token=cancel_token, env=env, merge_stderr=True,
                        encoding="utf-8")
     except OSError as exc:

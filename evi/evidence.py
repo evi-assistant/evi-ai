@@ -569,14 +569,15 @@ def _run_check(argv: Sequence[str], cwd: Path, out: Path, n: int, red: Any, *,
     report) into `out`; its report.json entry. Its process tree is killed
     once `cancel_token` is set."""
     from evi import proc
-    from evi.checks import display
+    from evi.checks import display, resolve_argv
 
     words = [str(w) for w in argv]
     slug = f"{n:02d}-{_slug(Path(words[0]).name or words[0])}"
     junit_file = out / f"{slug}.junit.xml" if is_pytest(words) else None
-    run_argv = junit_argv(words, junit_file) if junit_file is not None else words
     env = proc.scrubbed_env()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    run_argv = resolve_argv(junit_argv(words, junit_file) if junit_file is not None else words,
+                            cwd, env)
     started = time.monotonic()
     note = ""
     try:

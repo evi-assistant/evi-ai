@@ -19,6 +19,7 @@ eVi's home and trust list are under tmp_path, never ~/.evi.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -222,6 +223,49 @@ def test_a_check_that_cannot_start_is_a_failure_not_a_crash(tmp_path):
     run = run_check(Check("nope", (str(tmp_path / "no-such-program"),), "test", "config"),
                     tmp_path)
     assert run.exit is None and "could not start" in run.tail
+
+
+def test_a_bare_python_runs_this_interpreter_not_whatever_windows_finds_first(tmp_path):
+    # On Windows a venv's python.exe starts the base interpreter, and a bare
+    # "python" spawned from there is found in the base install's folder first.
+    run = run_check(Check("python", ("python", "-c", "import sys; print(sys.prefix)"),
+                          "test", "task"), tmp_path)
+    assert run.ok and run.tail.strip() == sys.prefix
+    assert run.record()["cmd"].startswith("python ")  # the report keeps what was asked
+
+
+def _fake_program(folder: Path, name: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    exe = folder / (name + (".exe" if sys.platform == "win32" else ""))
+    exe.write_bytes(b"")
+    exe.chmod(0o755)
+    return exe
+
+
+def _same(got: list[str], want: list[str]) -> bool:
+    """argv equal, but the program's case as the platform compares it
+    (shutil.which on Windows spells the extension as PATHEXT does)."""
+    return [os.path.normcase(got[0]), *got[1:]] == [os.path.normcase(want[0]), *want[1:]]
+
+
+def test_bare_program_names_resolve_to_paths(tmp_path):
+    env = {"PATH": str(tmp_path / "bin")}
+    tool = _fake_program(tmp_path / "bin", "lintit")
+    assert _same(checks.resolve_argv(("lintit", "-q"), tmp_path, env), [str(tool), "-q"])
+    assert checks.resolve_argv(("python3", "-V"), tmp_path, env) == [sys.executable, "-V"]
+    own = _fake_program(tmp_path / ".venv" / ("Scripts" if sys.platform == "win32" else "bin"),
+                        "python")
+    assert checks.resolve_argv(("python", "-V"), tmp_path, env) == [str(own), "-V"]
+    # A path, or a name found nowhere, is left alone.
+    assert checks.resolve_argv(("./x.sh",), tmp_path, env) == ["./x.sh"]
+    assert checks.resolve_argv(("no-such-tool",), tmp_path, env) == ["no-such-tool"]
+
+
+def test_a_frozen_build_looks_python_up_on_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    env = {"PATH": str(tmp_path / "bin")}
+    py = _fake_program(tmp_path / "bin", "python")
+    assert _same(checks.resolve_argv(("python", "-V"), tmp_path, env), [str(py), "-V"])
 
 
 def test_a_check_gets_no_secrets_and_its_output_is_redacted(tmp_path, monkeypatch):
