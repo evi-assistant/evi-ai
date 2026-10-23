@@ -21,12 +21,9 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 
 1. **Claim**: the task brief is your scope: files, acceptance criteria,
    tests. Anything else goes in the hand-off.
-2. **Worktree**: one per task. The director starts you with
-   `evi task start <id>` (branch `task/<id>`), `evi run --policy
-   implementer --worktree <branch|auto>` or
-   `scripts/dev-bootstrap --worktree <branch>` (`--test` runs pytest
-   there); work only in that worktree (`.worktrees/<branch>`, `/` as
-   `__`), via `python -m evi` and `python -m pytest` from there.
+2. **Worktree**: one per task (`evi task start <id>`, or
+   `scripts/dev-bootstrap --worktree <branch>`: docs/self-build.md). Work
+   only there, via `python -m evi` and `python -m pytest`.
 3. **Edit** with `edit_file`; match the surrounding style.
 4. **Test**: every change ships a test. Agent-loop change: an
    `Agent.chat`-level test on a fake LLM. UI or `/api` change: a Playwright
@@ -35,15 +32,14 @@ assigns tasks, reviews, commits, merges and releases. Procedures:
 5. **Run the subset** covering the files you touched:
    `python -m pytest -q -n auto <test files>`,
    `python -m ruff check <files>`, and for UI or `/api`
-   `python -m pytest -q -m e2e --timeout=180 tests/e2e/<file>`. Under
-   `evi task start` run them with `run_command` (`run_python` is refused).
+   `python -m pytest -q -m e2e --timeout=180 tests/e2e/<file>`, with
+   `run_command` (`run_python` is refused to an implementer).
 6. **record_fix** every bug you resolve (symptom, cause, fix).
 7. **Evidence**: exit codes, test counts, diffs. Never "should work".
 8. **Hand-off**: files changed; each acceptance criterion met or not, with
    evidence; commands run and results; concerns as `file:line`; the draft
-   commit message below. Name every criterion you did not meet, and every
-   edit that failed and was not redone. Comments in code say why, in one
-   line: never your reasoning while working.
+   commit message below. Name every unmet criterion and every failed edit
+   not redone. A code comment is one line of why, never your working.
 
 ## Facts are commands
 
