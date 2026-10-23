@@ -1,0 +1,20 @@
+id = "SK1-13"
+title = "fs: apply_patch falls back to a block's text as given in a mixed-EOL file, as edit_file does"
+status = "open"
+why = "SK1-1 made edit_file and apply_patch match in the file's own line ending. edit_file falls back to old_string/new_string as given when the EOL-normalized old_string is not in the file (a mixed-EOL file); apply_patch (evi/tools/fs.py:339-351) has no such fallback, so a SEARCH block that matches a mixed-EOL file exactly as written fails with 'block N SEARCH not found'. Found by the retro review gate run on SK1-1."
+hints = "In apply_patch's loop over blocks (fs.py:339-351): after old_n, new_n = _to_eol(old, eol), _to_eol(new, eol), when old_n is not in new_text but old is, use old/new as given (the same rule as edit_file, fs.py around the `elif old_string in text:` branch). Count and replace with the chosen pair; the not-found and matches-N-times errors stay as they are.\nTests go in tests/test_fs_eol.py next to test_edit_file_mixed_eol_fallback: build files with write_bytes and assert on read_bytes, never read_text."
+acceptance = ["Mixed-EOL file b'x = 1\\r\\ny = 2\\nz = 3\\n': apply_patch with one block, SEARCH 'y = 2\\nz = 3' -> REPLACE 'y = 20\\nz = 30', applies 1 hunk and leaves b'x = 1\\r\\ny = 20\\nz = 30\\n'.", "On a CRLF-only file an LF-formatted patch still applies every hunk and keeps every line ending CRLF (the existing test passes).", "A SEARCH found neither normalized nor as given still returns 'block N SEARCH not found'.", "The existing tests in tests/test_fs_eol.py, tests/test_apply_patch.py and tests/test_tools.py pass."]
+files_in_scope = ["evi/tools/fs.py", "tests/test_fs_eol.py"]
+required_checks = ["python -m pytest -q tests/test_fs_eol.py tests/test_apply_patch.py tests/test_tools.py", "python -m ruff check evi/tools/fs.py tests/test_fs_eol.py"]
+implementer = "evi-local"
+created = "2026-10-23T08:45:03Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
