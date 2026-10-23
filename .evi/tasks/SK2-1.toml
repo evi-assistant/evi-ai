@@ -1,0 +1,20 @@
+id = "SK2-1"
+title = "web: the session handoff route reads the user's own transcript and stages a copy for sync, as the CLI does"
+status = "open"
+why = "POST /api/session/{id}/handoff (evi/apps/web/server.py, handoff_session, around line 3439) only returns resume affordances: it never calls sessions.stage_handoff, which copies the transcript to ~/.evi/handoff/ for `evi sync` to carry, so a session handed off from the web UI doesn't reach the other device. The CLI `evi sessions handoff` does stage it (evi/apps/cli/main.py around line 9409). The route also ignores multi-user mode: it calls handoff_info without root=, so a signed-in web user's session (kept under HOME/users/<name>/transcripts) is looked up in the shared transcripts folder and 404s."
+hints = "In handoff_session: get the current user's transcripts root with `transcripts_root, _ = _user_data_roots()` (defined in create_app; None means single-user / the owner, i.e. the shared defaults) and pass root=transcripts_root to sessions.handoff_info.\nWhen transcripts_root is None (single-user or the owner), also stage the copy: `staged = sessions.stage_handoff(session_id)` inside try/except (OSError, ValueError) as exc, answering HTTPException(500, f\"could not copy the session for sync: {exc}\") on failure, the way the CLI handles it. Return {\"ok\": True, **info, \"staged\": str(staged) if staged else None}.\nWhen transcripts_root is set (a named web user), don't stage: `evi sync` carries only ~/.evi/handoff/, and a user's transcript must not land in the owner's shared folder. Return \"staged\": None.\nUpdate the route's docstring to say it stages the copy (single-user or owner).\nTests: extend tests/test_handoff.py next to test_handoff_endpoint, imitating it (monkeypatch evi.transcripts.TRANSCRIPTS_DIR and evi.sessions.TRANSCRIPTS_DIR to a tmp folder, and evi.sessions.HANDOFF_DIR to another tmp folder)."
+acceptance = ["Single-user: POST /api/session/h1/handoff answers 200 with \"staged\" naming <HANDOFF_DIR>/h1.jsonl, and that file holds the session's lines (same count as the transcript).", "An unknown session still answers 404 and stages nothing.", "When stage_handoff raises OSError (monkeypatch it), the route answers 500 with a message starting 'could not copy the session for sync'.", "Multi-user: build the app with `from tests.test_web_hardening import _make_app`; `_make_app(monkeypatch, tmp_path, token=\"own\", multi_user=True, users=[{\"name\": \"alice\", \"token\": \"al\"}])`, write alice's session h2 under tmp_path/'home'/'users'/'alice'/'transcripts'/<day>/h2.jsonl (the layout _write_session in tests/test_handoff.py makes), and POST /api/session/h2/handoff with headers {\"Authorization\": \"Bearer al\"}. Today that answers 404; after the fix it answers 200 with the right message count and \"staged\": null, and HANDOFF_DIR stays empty.", "The existing tests in tests/test_handoff.py pass."]
+files_in_scope = ["evi/apps/web/server.py", "tests/test_handoff.py"]
+required_checks = ["python -m pytest -q tests/test_handoff.py", "python -m ruff check evi/apps/web/server.py tests/test_handoff.py"]
+implementer = "evi-local"
+created = "2026-10-23T16:46:21Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

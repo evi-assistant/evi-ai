@@ -1,0 +1,20 @@
+id = "SK2-3"
+title = "shell: run_command in a run held to a policy (a task run) defaults to the [checks] timeout, not 60 s"
+status = "open"
+why = "run_command's default timeout is 60 s (evi/tools/shell.py _DEFAULT_TIMEOUT, around line 37). In the Phase 1 shakedown the implementer's `python -m pytest ...` hit it again and again (tests/test_eval_cli.py takes about three minutes on the share), and a timed-out run looks like a failure, so the model kept retrying. eVi's own checks give a command [checks] timeout (300 s by default, evi/checks.py settings). A run held to a policy (evi task start, evi run --policy) has no one to wait on, so its commands should get that budget unless the model asks for another."
+hints = "evi/tools/shell.py: change run_command's signature default to `timeout: int = 0` (0 = the default for this run) and update the tool description to say: default 60 s, or the [checks] timeout (300 s by default) in a run held to a policy such as `evi task start`; max 600.\nAdd `def _default_timeout(ctx) -> int`: agent = getattr(ctx, \"agent\", None); if agent is not None and getattr(agent, \"policy\", None) is not None, return int(checks.settings(getattr(agent, \"config\", None)).timeout) (from evi import checks inside the function); else _DEFAULT_TIMEOUT.\nThen `timeout = max(1, min(int(timeout or _default_timeout(ctx)), _MAX_TIMEOUT))`. An explicit timeout from the model still wins.\nTests in tests/test_shell_tool.py: monkeypatch evi.tools.shell.proc.run with a stub that records its timeout= and returns an object with returncode 0, output '', cancelled/timed_out/detached False (types.SimpleNamespace). Build ctx = types.SimpleNamespace(agent=types.SimpleNamespace(policy=object(), config=Config(), permission_callback=None), cancel_token=None)."
+acceptance = ["run_command('echo hi') with no ctx uses timeout 60 (the stub records 60).", "With a ctx whose agent has a policy and a default Config, the stub records 300; with [checks] timeout set to 120 on that Config, 120.", "An explicit timeout=30 is used as given in both cases; a timeout above 600 is cut to 600.", "With a ctx whose agent has no policy (policy=None), the default is 60.", "The existing tests in tests/test_shell_tool.py, tests/test_shell_guard.py and tests/test_implementer_policy.py pass."]
+files_in_scope = ["evi/tools/shell.py", "tests/test_shell_tool.py"]
+required_checks = ["python -m pytest -q tests/test_shell_tool.py tests/test_shell_guard.py tests/test_implementer_policy.py", "python -m ruff check evi/tools/shell.py tests/test_shell_tool.py"]
+implementer = "evi-local"
+created = "2026-10-23T16:46:36Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
