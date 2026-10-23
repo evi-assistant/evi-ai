@@ -19,6 +19,30 @@ def test_parse_patch_multiple_blocks():
     assert blocks == [("a", "b"), ("c", "d")]
 
 
+def test_markers_inside_a_line_are_text_not_markers():
+    # A SEARCH that quotes the format (apply_patch's own source does) is one block.
+    quoted = 'msg = "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"'
+    assert _parse_patch(_patch((quoted, quoted.replace("msg", "hint")), ("c", "d"))) == [
+        (quoted, quoted.replace("msg", "hint")), ("c", "d")]
+    # Empty sections, a short marker and words after it still parse.
+    assert _parse_patch("<<< SEARCH\nx\n=======\n>>>>>>> REPLACE") == [("x", "")]
+    assert _parse_patch("<<<<<<< SEARCH (block 1)\na\n======= \nb\n>>>>>>> REPLACE") == [
+        ("a", "b")]
+
+
+def test_apply_patch_patches_a_file_that_quotes_the_markers(tmp_path):
+    f = tmp_path / "tool.py"
+    src = ('def hint():\n    return "<<<<<<< SEARCH\\n=======\\n>>>>>>> REPLACE"\n'
+           '\n\ndef other():\n    return 1\n')
+    f.write_text(src, encoding="utf-8", newline="\n")
+    old = 'def hint():\n    return "<<<<<<< SEARCH\\n=======\\n>>>>>>> REPLACE"'
+    out = apply_patch(str(f), _patch((old, old.replace("hint", "usage")),
+                                     ("    return 1", "    return 2")))
+    assert "applied 2 hunk(s)" in out
+    assert f.read_text(encoding="utf-8") == src.replace("hint", "usage").replace(
+        "return 1", "return 2")
+
+
 def test_apply_patch_multi_hunk(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")

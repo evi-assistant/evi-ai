@@ -276,9 +276,11 @@ def edit_file(
     return f"edited {p}: {count if replace_all else 1} replacement(s){_post_write(p)}"
 
 
+# Each marker starts its line, so a file whose text holds the markers inside
+# a line (a string literal, as in this module) can still be patched.
 _PATCH_RE = re.compile(
-    r"<{3,}\s*SEARCH[^\n]*\n(.*?)\n?={3,}[^\n]*\n(.*?)\n?>{3,}\s*REPLACE",
-    re.DOTALL,
+    r"^<{3,}[ \t]*SEARCH[^\n]*\n(.*?)\n?^={3,}[^\n]*\n(.*?)\n?^>{3,}[ \t]*REPLACE",
+    re.DOTALL | re.MULTILINE,
 )
 
 
