@@ -35,6 +35,56 @@ def test_path_lock_case_insensitivity(monkeypatch):
     else:
         assert lock1 is not lock2
 
+def test_path_lock_symlink(tmp_path):
+    """AC1: _path_lock returns same lock for symlink and target."""
+    import os
+    target = tmp_path / "target.txt"
+    target.write_text("content")
+    link = tmp_path / "link.txt"
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("Symlinks not supported on this platform")
+
+    lock_target = fs._path_lock(target)
+    lock_link = fs._path_lock(link)
+
+    assert lock_target is lock_link
+
+def test_path_lock_weakref(tmp_path):
+    """AC2: a file's lock is kept only while someone holds it."""
+    import gc
+    import os
+
+    p = tmp_path / "weakref_test.txt"
+    p.write_text("content", encoding="utf-8")
+    key = os.path.normcase(os.path.realpath(p))
+    lock = fs._path_lock(p)
+    assert fs._path_lock(p) is lock and key in fs._PATH_LOCKS
+    del lock
+    gc.collect()
+    assert key not in fs._PATH_LOCKS
+    with fs._path_lock(p):
+        assert key in fs._PATH_LOCKS
+
+
+def test_path_lock_through_a_junction_is_the_targets(tmp_path):
+    """A folder junction (Windows; no privilege needed, unlike a symlink)."""
+    import sys
+
+    import pytest
+
+    if sys.platform != "win32":
+        pytest.skip("junctions are Windows-only")
+    import _winapi
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "f.txt").write_text("x", encoding="utf-8")
+    _winapi.CreateJunction(str(real), str(tmp_path / "via"))
+    assert fs._path_lock(tmp_path / "via" / "f.txt") is fs._path_lock(real / "f.txt")
+
 
 def test_lost_update_edit_file(tmp_path, monkeypatch):
     """AC3: Parallel edit_file calls do not lose updates."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import weakref
 from pathlib import Path
 
 from evi import workdir
@@ -34,17 +35,35 @@ _MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024  # skip files larger than 2 MB when gre
 _READ_CACHE: dict[str, tuple[int, int, ToolOutput]] = {}
 _READ_CACHE_MAX = 128
 
-_PATH_LOCKS: dict[str, threading.Lock] = {}
+class _PathLock:
+    """A file's lock. A wrapper, as a threading.Lock can't be weakly referenced:
+    _PATH_LOCKS drops it once no caller holds it."""
+
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+
+    def __enter__(self):
+        return self.lock.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return self.lock.__exit__(exc_type, exc_val, exc_tb)
+
+
+_PATH_LOCKS: weakref.WeakValueDictionary[str, _PathLock] = weakref.WeakValueDictionary()
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
-def _path_lock(p: Path) -> threading.Lock:
+def _path_lock(p: Path) -> _PathLock:
     """Return a per-file lock, case-insensitive on Windows."""
-    key = os.path.normcase(os.path.abspath(p))
+    key = os.path.normcase(os.path.realpath(p))
     with _PATH_LOCKS_GUARD:
-        if key not in _PATH_LOCKS:
-            _PATH_LOCKS[key] = threading.Lock()
-        return _PATH_LOCKS[key]
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PathLock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def clear_read_cache() -> None:
