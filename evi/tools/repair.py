@@ -8,11 +8,12 @@ named, so the model (and the log) can see what eVi changed.
 from __future__ import annotations
 
 import ast
+import difflib
 import inspect
 import json
 import math
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 # A quoted string (kept as it is), or a bare JSON word to spell as Python.
 _JSON_WORD = re.compile(r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\b(true|false|null)\b""")
@@ -215,3 +216,20 @@ def usage(name: str, schema: dict[str, Any]) -> str:
     parts += [f"{k}?: {kind(k)}" for k in props if k not in required]
     example = {k: _EXAMPLE.get(kind(k), "...") for k in required}
     return f"{name}({', '.join(parts)}), e.g. {json.dumps(example)}"
+
+
+def unknown_tool_message(name: str, known: Iterable[str]) -> str:
+    """What to tell a model that called a tool there is none of: the close
+    names, else how to find one (search_tools, when tools load on demand),
+    else the tools there are."""
+    names = sorted(set(known))
+    msg = f"ERROR: unknown tool '{name}'"
+    close = difflib.get_close_matches(str(name), names, n=3, cutoff=0.6)
+    if close:
+        return f"{msg}. Did you mean: {', '.join(close)}?"
+    if "search_tools" in names:
+        return f"{msg}. Use search_tools to find a tool by what it does."
+    if names:
+        more = ", ..." if len(names) > 40 else ""
+        return f"{msg}. The tools are: {', '.join(names[:40])}{more}"
+    return msg
