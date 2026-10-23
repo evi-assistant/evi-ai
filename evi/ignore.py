@@ -30,28 +30,19 @@ class Rule:
     anchored: bool
 
 
-def _translate(pattern: str) -> str:
+def _translate_literal(text: str) -> str:
     i = 0
     res = []
-    while i < len(pattern):
-        if pattern.startswith('**/', i):
-            res.append('(?:.*/)?')
-            i += 3
-        elif pattern.startswith('/**', i) and i + 3 == len(pattern):
-            res.append('/.*')
-            i += 3
-        elif pattern[i] == '*':
-            res.append('[^/]*')
-            i += 1
-        elif pattern[i] == '?':
+    while i < len(text):
+        if text[i] == '?':
             res.append('[^/]')
             i += 1
-        elif pattern[i] == '[':
+        elif text[i] == '[':
             j = i + 1
-            while j < len(pattern) and pattern[j] != ']':
+            while j < len(text) and text[j] != ']':
                 j += 1
-            if j < len(pattern):
-                content = pattern[i+1:j]
+            if j < len(text):
+                content = text[i+1:j]
                 if content.startswith('!'):
                     content = '^' + content[1:]
                 res.append(f'[{content}]')
@@ -60,9 +51,52 @@ def _translate(pattern: str) -> str:
                 res.append(re.escape('['))
                 i += 1
         else:
-            res.append(re.escape(pattern[i]))
+            res.append(re.escape(text[i]))
             i += 1
     return "".join(res)
+
+
+def _translate(pattern: str) -> str:
+    # Mark a trailing '/**' (\x02: '/.*') and each '**/' that starts the pattern
+    # or follows a '/' (\x01: zero or more folders; a middle one keeps its '/').
+    p = pattern
+    if p.endswith('/**'):
+        p = p[:-3] + '\x02'
+    if p.startswith('**/'):
+        p = '\x01' + p[3:]
+    p = p.replace('/**/', '/\x01')
+
+    # Any other run of stars is one '*'; split on them (CPython fnmatch's scheme).
+    p = re.sub(r'\*+', '*', p)
+
+    parts = p.split('*')
+
+    translated_parts = []
+    for part in parts:
+        sub_parts = []
+        curr = ""
+        for char in part:
+            if char == '\x01':
+                sub_parts.append(_translate_literal(curr))
+                sub_parts.append('(?:.*/)?')
+                curr = ""
+            elif char == '\x02':
+                sub_parts.append(_translate_literal(curr))
+                sub_parts.append('/.*')
+                curr = ""
+            else:
+                curr += char
+        sub_parts.append(_translate_literal(curr))
+        translated_parts.append("".join(sub_parts))
+
+    if len(translated_parts) == 1:
+        return translated_parts[0]
+
+    p0 = translated_parts[0]
+    p_last = translated_parts[-1]
+    middle = "".join(f'(?>[^/]*?{p})' for p in translated_parts[1:-1])
+
+    return p0 + middle + '[^/]*' + p_last
 
 
 def parse_rules(text: str) -> List[Rule]:
