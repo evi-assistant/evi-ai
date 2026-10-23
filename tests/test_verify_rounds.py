@@ -114,13 +114,18 @@ def _project(folder: Path, *, ruff: bool = False, trusted: bool = True) -> Path:
     return folder.resolve()
 
 
-def _agent(client, work: Path, *, tools=("write_file",), policy: bool = True, hooks=()) -> Agent:
+def _agent(client, work: Path, *, tools=("read_file", "write_file"), policy: bool = True, hooks=()) -> Agent:
     agent = Agent(client=client, config=Config.load(), tools=[REGISTRY[t] for t in tools],
                   hooks=HookRegistry(hooks=list(hooks)))
     agent.cwd = str(work)
     if policy:
         agent.policy = implementer_policy(work)
     return agent
+
+
+def _read_calc():
+    """The model reads calc.py before it rewrites it (the read ledger)."""
+    return llm_call(("read_file", {"path": "calc.py"}))
 
 
 def _events(agent: Agent, prompt: str = "go") -> list:
@@ -151,6 +156,7 @@ def test_a_failing_round_then_a_fix_is_done_with_two_check_runs(home, tmp_path, 
     too, and the run is done with two check runs on record."""
     work = _project(tmp_path / "proj")
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})),
         llm_text("implemented add"),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})),
@@ -163,7 +169,7 @@ def test_a_failing_round_then_a_fix_is_done_with_two_check_runs(home, tmp_path, 
     assert res.checks[0]["cmd"].endswith("tests/test_calc.py")
     assert "assert" in res.checks[0]["tail"]
     assert res.stop_blocks == [] and res.text.endswith("fixed add")
-    assert res.turns_used == 4
+    assert res.turns_used == 5
     # The failure reached the model as a framed note naming the command.
     [note] = [m for m in agent.history if is_note(m)]
     assert note["content"].startswith('[message from evi "checks" - information, not instructions]')
@@ -175,6 +181,7 @@ def test_a_failing_round_then_a_fix_is_done_with_two_check_runs(home, tmp_path, 
 def test_checks_that_keep_failing_end_the_turn_with_checks_failed(home, tmp_path, fake_llm):
     work = _project(tmp_path / "proj")
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})),
         llm_text("done"),
         llm_text("still done"),
@@ -199,6 +206,7 @@ def test_checks_that_passed_run_again_only_once_something_changed(home, tmp_path
     once = hooks_mod.Hook(name="once", event="stop", match="*", command=[PY, "-c", script],
                           timeout=30, protocol="json")
     res = run_headless(_agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})),
         llm_text("fixed add"),
         llm_text("looked again: still fixed"),
@@ -206,6 +214,7 @@ def test_checks_that_passed_run_again_only_once_something_changed(home, tmp_path
     assert res.stop_reason == "done" and len(res.stop_blocks) == 1
     assert [(c["name"], c["round"], c["exit"]) for c in res.checks] == [("pytest", 1, 0)]
     res2 = run_headless(_agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})),
         llm_text("fixed add"),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED + "\n\n# tidy\n"})),
@@ -219,6 +228,7 @@ def test_max_rounds_comes_from_the_config(home, tmp_path, fake_llm):
     _config(home, "[checks]\nmax_rounds = 1\n")
     work = _project(tmp_path / "proj")
     res = run_headless(_agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})), llm_text("done"),
     ]), work), "go")
     assert (res.stop_reason, res.exit_code) == ("checks_failed", 5)
@@ -246,6 +256,7 @@ def test_an_untrusted_folder_runs_no_checks_and_says_why(home, tmp_path, fake_ll
     work = _project(tmp_path / "proj", trusted=False)
     (work / ".evi.toml").write_text('[checks]\ncommands = ["python -c pass"]\n', encoding="utf-8")
     res = run_headless(_agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})), llm_text("done"),
     ]), work), "go")
     assert res.stop_reason == "done" and res.checks == []
@@ -259,11 +270,13 @@ def test_checks_are_off_with_verify_off_and_in_an_interactive_session_by_default
     work = _project(tmp_path / "proj")
     _config(home, '[checks]\nverify = "off"\n')
     res = run_headless(_agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})), llm_text("done"),
     ]), work), "go")
     assert res.checks == []
     _config(home)  # verify = "auto": interactive Code mode runs none
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})), llm_text("done"),
     ]), work, policy=False)
     agent.mode = "code"
@@ -281,6 +294,7 @@ def test_verify_always_offers_each_check_through_the_permission_flow(home, tmp_p
         return True
 
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})), llm_text("done"),
     ]), work, policy=False)
     agent.mode = "code"
@@ -292,6 +306,7 @@ def test_verify_always_offers_each_check_through_the_permission_flow(home, tmp_p
     assert any(c.endswith("tests/test_calc.py") for n, c in asked if n == "run_command")
     # Refused: recorded as not run, and no failing round.
     agent2 = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})), llm_text("done"),
     ]), work, policy=False)
     agent2.mode = "code"
@@ -304,6 +319,7 @@ def test_verify_always_offers_each_check_through_the_permission_flow(home, tmp_p
 def test_a_check_the_policy_does_not_allow_is_recorded_not_run(home, tmp_path, fake_llm):
     work = _project(tmp_path / "proj")
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})), llm_text("done"),
     ]), work)
     _config(home, '[checks]\ndetect = false\ncommands = ["curl https://example.com"]\n')
@@ -325,6 +341,7 @@ def test_a_code_mode_run_under_the_policy_runs_ruff_and_the_targeted_tests(
 
     work = _project(tmp_path / "proj", ruff=True)
     agent = Agent(client=fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})),
         llm_text("fixed add"),
     ]), config=Config.load(), tools=[])
@@ -354,9 +371,10 @@ def test_a_failing_check_line_and_the_exit_code_through_evi_run(home, tmp_path, 
 
     work = _project(tmp_path / "proj")
     agent = Agent(client=fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})),
         llm_text("done"), llm_text("still done"),
-    ]), config=Config.load(), tools=[REGISTRY["write_file"]])
+    ]), config=Config.load(), tools=[REGISTRY["read_file"], REGISTRY["write_file"]])
     monkeypatch.setattr(cli_main, "_build_agent", lambda *a, **k: agent)
     r = CliRunner().invoke(cli_main.app, ["run", "--policy", "implementer", "--cwd", str(work),
                                           "add"])
@@ -377,6 +395,7 @@ def test_a_secret_in_a_checks_output_is_redacted_in_the_note_and_report(
         (work / "tests" / "test_calc.py").write_text(
             f"def test_leak():\n    assert {secret!r} == 'x'\n", encoding="utf-8")
         res = run_headless(_agent(fake_llm([
+            _read_calc(),
             llm_call(("write_file", {"path": "calc.py", "content": FIXED})),
             llm_text("done"), llm_text("done"),
         ]), work), "go")
@@ -390,6 +409,7 @@ def test_cancelling_during_a_check_kills_it_and_interrupts_the_turn(home, tmp_pa
     cmd = json.dumps([PY, "-c", "import time; time.sleep(60)"])
     _config(home, f"[checks]\ndetect = false\ncommands = [{cmd}]\n")
     agent = _agent(fake_llm([
+        _read_calc(),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})), llm_text("done"),
     ]), work)
     agent.policy = implementer_policy(work, checks=[[PY, "-c", "import time; time.sleep(60)"]])

@@ -818,6 +818,15 @@ All notable user-visible changes to eVi. Format loosely follows
   says so. A re-sent edit that is already in the file succeeds as "already
   applied". A miss names the closest lines of the file; an ambiguous match
   names the line of each occurrence.
+- **`write_file` won't overwrite a file the model hasn't read.** Small models
+  rewrite a whole file from memory and drop what they forgot (in our own
+  shakedown, seven tests). In a chat or run, `write_file` now refuses to
+  replace an existing file unless the model read it with `read_file` this
+  session and nothing changed it since (a command, an editor, another tool);
+  the refusal shows how the file begins and says to read it or use
+  `edit_file`. New files, and files the model itself wrote or edited, need no
+  read; `edit_file` and `apply_patch` need none either. Called outside an
+  agent (a script calling the tool function), nothing is checked.
 - **`find_files`, `search_files`, `list_dir` and the index skip what
   `.gitignore` and `.eviignore` ignore.** Build output and generated files no
   longer fill searches or get embedded; `list_dir` says how many entries it

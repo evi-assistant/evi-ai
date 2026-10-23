@@ -155,7 +155,8 @@ def repo(home, tmp_path, monkeypatch) -> Path:
 
 def _agent(client) -> Agent:
     return Agent(client=client, config=Config.load(),
-                 tools=[REGISTRY["write_file"], REGISTRY["run_command"]], transcripts=None)
+                 tools=[REGISTRY[n] for n in ("read_file", "write_file", "run_command")],
+                 transcripts=None)
 
 
 class _Gates:
@@ -272,6 +273,7 @@ def test_create_start_status_result_leaves_the_task_implemented(repo, make_runs,
     import jsonschema
 
     client = fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done: calc.py sets x = 2; the required check passes."),
     ])
@@ -289,10 +291,11 @@ def test_create_start_status_result_leaves_the_task_implemented(repo, make_runs,
     assert status["state"] == "done", status
     assert status["stop_reason"] == "done" and status["exit_code"] == 0
     assert status["task_status"] == "implemented" and status["implemented"] is True
-    assert status["turns_used"] == 2 and status["max_turns"] == 10
+    assert status["turns_used"] == 3 and status["max_turns"] == 10
     assert status["started_at"] and status["ended_at"] and status["elapsed_s"] >= 0
     kinds = [e["kind"] for e in status["events"]]
-    assert kinds == ["ToolCall", "ToolResult", "Text", "CheckResult", "FilesChanged", "Done"]
+    assert kinds == ["ToolCall", "ToolResult", "ToolCall", "ToolResult", "Text", "CheckResult",
+                     "FilesChanged", "Done"]
     by_kind = {e["kind"]: e["summary"] for e in status["events"]}
     assert by_kind["ToolCall"].startswith("write_file") and "calc.py" in by_kind["ToolCall"]
     assert by_kind["Text"].startswith("Done: calc.py sets x = 2")
@@ -341,6 +344,7 @@ def test_create_start_status_result_leaves_the_task_implemented(repo, make_runs,
 
 def test_steer_reaches_the_running_agent_as_a_director_note(repo, make_runs, fake_llm):
     client = fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done, and only calc.py changed."),
     ])
@@ -573,6 +577,7 @@ def test_closing_stops_a_run_in_its_required_checks(repo, make_runs, fake_llm, t
 
 def test_a_cancel_once_the_outcome_is_recorded_says_so(repo, make_runs, fake_llm):
     runs = make_runs(_agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done."),
     ])))
@@ -1267,7 +1272,8 @@ async def test_stdio_client_drives_the_agent_category_end_to_end(
     scripted_model.holds.extend(holds)
     steer_text = "Director here: keep to calc.py."
     scripted_model.script.extend([
-        # T1: write the fix, then the hand-off.
+        # T1: read calc.py, write the fix, then the hand-off.
+        {"call": ("read_file", {"path": "calc.py"})},
         {"call": ("write_file", {"path": "calc.py", "content": "x = 2\n"})},
         {"text": "Done: calc.py sets x = 2."},
         # T2: held until steered, then held again until cancelled.

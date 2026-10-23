@@ -85,7 +85,8 @@ def _hook(script: str, *, name: str = "gate", protocol: str = "json", timeout: f
                 timeout=timeout, protocol=protocol)
 
 
-def _agent(client, hooks: list[Hook], workdir: Path, tools=("write_file",)) -> Agent:
+def _agent(client, hooks: list[Hook], workdir: Path,
+           tools=("read_file", "write_file")) -> Agent:
     agent = Agent(client=client, config=Config.load(), tools=[REGISTRY[t] for t in tools],
                   hooks=HookRegistry(hooks=list(hooks)))
     agent.cwd = str(workdir)
@@ -382,6 +383,7 @@ def test_the_pytest_gate_example_blocks_until_the_tests_pass(home, tmp_path, fak
     _config(home, '[checks]\nverify = "off"\n')
     work = _project(tmp_path / "proj")
     agent = _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": BUGGY})),
         llm_text("implemented add"),
         llm_call(("write_file", {"path": "calc.py", "content": FIXED})),

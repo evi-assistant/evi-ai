@@ -152,15 +152,85 @@ def _post_write(p: Path) -> str:
     ),
     category="fs",
 )
-def read_file(path: str, offset: int = 0, limit: int = 0) -> ToolOutput | str:
+def read_file(
+    path: str, offset: int = 0, limit: int = 0, ctx: ToolContext | None = None
+) -> ToolOutput | str:
     p = workdir.resolve(path)
     if not p.is_file():
         return f"ERROR: not a file: {p}"
     # Slice mode: any non-default offset/limit. Streams lines so it can read a
     # window of a file far larger than the whole-file byte cap.
     if offset > 1 or limit > 0:
-        return _read_slice(p, max(offset, 1), limit)
-    return _read_whole(p)
+        out = _read_slice(p, max(offset, 1), limit)
+    else:
+        out = _read_whole(p)
+    if not (isinstance(out, str) and out.startswith("ERROR")):
+        _note_seen(ctx, p)
+    return out
+
+
+# ---- the read ledger: write_file overwrites only what the agent has seen ----
+
+
+def _seen_files(ctx: ToolContext | None) -> dict[str, tuple[int, int]] | None:
+    """The calling agent's record of the files it has read or written, as
+    {real path: (mtime_ns, size)} when it did; None outside an agent (a
+    test, a script, a tool called directly), where nothing is checked."""
+    agent = getattr(ctx, "agent", None)
+    if agent is None:
+        return None
+    seen = getattr(agent, "_evi_seen_files", None)
+    if seen is None:
+        seen = {}
+        try:
+            agent._evi_seen_files = seen
+        except AttributeError:  # an agent stand-in that takes no attributes
+            return None
+    return seen
+
+
+def _seen_key(p: Path) -> str:
+    return os.path.normcase(os.path.realpath(p))
+
+
+def _note_seen(ctx: ToolContext | None, p: Path) -> None:
+    """Record that the agent now knows `p` as it is on disk."""
+    seen = _seen_files(ctx)
+    if seen is None:
+        return
+    try:
+        st = p.stat()
+    except OSError:
+        return
+    seen[_seen_key(p)] = (st.st_mtime_ns, st.st_size)
+
+
+def _unseen_refusal(ctx: ToolContext | None, p: Path) -> str | None:
+    """Why write_file must not overwrite `p`: it exists, and the agent hasn't
+    read it, or it changed since the agent last read or wrote it (another
+    tool, a command, the user). None to go ahead: a new file, a file the
+    agent knows as it is, or no agent to ask for. The refusal shows how the
+    file begins, so nothing is overwritten unseen."""
+    seen = _seen_files(ctx)
+    if seen is None or not p.is_file():
+        return None
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    known = seen.get(_seen_key(p))
+    if known == (st.st_mtime_ns, st.st_size):
+        return None
+    why = ("you haven't read it in this session" if known is None
+           else "it changed since you last read or wrote it")
+    try:
+        with p.open("r", encoding="utf-8", errors="replace", newline="") as f:
+            head = "".join(line for _, line in zip(range(10), f))
+    except OSError:
+        head = ""
+    return (f"ERROR: not written: {p} already exists and {why}. Read it with read_file "
+            "first (or change part of it with edit_file), so nothing in it is lost. "
+            f"It begins:\n{head[:1000]}")
 
 
 def _read_whole(p: Path) -> ToolOutput | str:
@@ -269,6 +339,9 @@ def _read_slice(p: Path, start_line: int, limit: int) -> ToolOutput | str:
 def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
     p = workdir.resolve(path)
     with _path_lock(p):
+        refusal = _unseen_refusal(ctx, p)
+        if refusal:
+            return refusal
         # Snapshot the prior state so `evi rewind` / `/rewind` can undo this write.
         # Best-effort — a checkpoint failure must never block the write itself.
         try:
@@ -282,6 +355,7 @@ def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
         # Windows turning \n into \r\n and flipping a whole file to CRLF).
         _atomic_write(p, content)
         _READ_CACHE.pop(str(p.resolve()), None)
+        _note_seen(ctx, p)
     return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
 
@@ -457,6 +531,7 @@ def edit_file(
             pass
         _atomic_write(p, new_text)  # preserve LF/CRLF
         _READ_CACHE.pop(str(p.resolve()), None)  # so a later read sees the edit
+        _note_seen(ctx, p)
         return f"edited {p}: {count if replace_all else 1} replacement(s){note}{_post_write(p)}"
 
 
@@ -534,6 +609,7 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             pass
         _atomic_write(p, new_text)
         _READ_CACHE.pop(str(p.resolve()), None)
+        _note_seen(ctx, p)
         return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
 
 

@@ -142,7 +142,8 @@ def _cli(*args: str):
 
 def _agent(client) -> Agent:
     return Agent(client=client, config=Config.load(),
-                 tools=[REGISTRY["write_file"], REGISTRY["run_command"]], transcripts=None)
+                 tools=[REGISTRY[n] for n in ("read_file", "write_file", "run_command")],
+                 transcripts=None)
 
 
 def _use_agents(monkeypatch, *agents: Agent) -> list[dict]:
@@ -319,6 +320,7 @@ def test_start_never_prints_control_characters_from_a_task_files_checks(repo, mo
     body["required_checks"] = [[PY, "-c", "pass", "\x1b]0;pwned\x07\x1b[2Jtail"]]
     q.path("T1").write_text(_to_toml(body), encoding="utf-8")
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done: calc.x is 2."),
     ])))
@@ -359,6 +361,7 @@ def test_start_runs_the_task_in_its_worktree_and_leaves_it_implemented(repo, mon
     _new()
     base = _head(repo)
     client = fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done: calc.py sets x = 2; the required check passes."),
     ])
@@ -423,6 +426,7 @@ def home_of(monkeypatch) -> Path:
 def test_a_failing_required_check_returns_the_task_to_open(repo, monkeypatch, fake_llm):
     _new()
     client = fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 3\n"})),
         llm_text("done"),
         llm_text("done, really"),
@@ -462,6 +466,7 @@ def test_a_later_attempt_reuses_the_worktree_and_counts_again(repo, monkeypatch,
     base = _head(repo)
     first = _agent(fake_llm([llm_text("nothing to do")]))
     second = _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("fixed"),
     ]))
     _use_agents(monkeypatch, first, second)
@@ -541,6 +546,7 @@ def test_a_broken_or_hostile_answer_is_recorded_safely(repo, monkeypatch, fake_l
     _new()
     answer = "Done \ud83d \x1b[1A\x1b[2K\rstatus: verified\nmore"
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text(answer),
     ])))
     res = _cli("task", "start", "T1")
@@ -561,6 +567,7 @@ def test_a_finish_that_cant_be_written_is_reported_not_lost(repo, monkeypatch, f
     so, and the note says how to put the task back."""
     _new()
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("fixed"),
     ])))
     failing: list[int] = []
@@ -628,6 +635,7 @@ def test_start_takes_over_the_worktree_a_dead_start_left_locked(repo, monkeypatc
         sleeper.wait()
     lock_as(_dead_pid())
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("fixed"),
     ])))
     res = _cli("task", "start", "T1")
@@ -641,6 +649,7 @@ def test_start_refuses_someone_elses_live_claim_unless_forced(repo, monkeypatch,
     _new()
     assert _cli("task", "claim", "T1", "--holder", "someone-else").exit_code == 0
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("ok"),
     ])))
     res = _cli("task", "start", "T1")

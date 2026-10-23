@@ -76,6 +76,7 @@ expect_tools = ["write_file"]
 file_contains = [{ path = "calc.py", contains = "a + b" }]
 diff_touches_only = ["calc.py"]
 fake = [
+  { tool = "read_file", args = { path = "calc.py" } },
   { tool = "write_file", args = { path = "calc.py", content = "def add(a, b):\n    return a + b\n" } },
   { text = "Fixed add()." },
 ]

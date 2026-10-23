@@ -9,9 +9,9 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-17):** 1 item shipped in 1.0.53 and 34 more are
-done for the next release: all of Phase 0 and Phase 1's loop
-infrastructure. Phase 1's two shakedown batches and the eval baseline wait
+**Status (2026-10-23):** 1 item shipped in 1.0.53 and 35 more are
+done for the next release: all of Phase 0, Phase 1's loop
+infrastructure and Phase 2's edit recovery. Phase 1's two shakedown batches and the eval baseline wait
 on the reference local model; the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
@@ -114,7 +114,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `tool-result-pipeline` | Tool-result pipeline: budget and spill, stale masking, untrusted envelopes | L | director | `models-ops-token-budget-recovery`, `loop-agent-cancel`, `fix-tool-context-binding`, `safety-secret-redaction` | Planned |
 | `loop-tools-tool-call-repair` | Tool-call repair: tolerant parsing, coercion, aliases and tagged-text recovery | M | evi-frontier | `loop-eval-gates` | Planned |
 | `loop-tools-loop-guard-step-budget` | Loop detection and a graceful step budget | M | director | `loop-eval-gates`, `loop-tools-tool-call-repair`, `loop-agent-cancel` | Planned |
-| `loop-tools-edit-recovery` | Forgiving, safe edits: near-miss recovery, already-applied detection, read-before-edit, atomic writes | M | evi-local | `loop-shakedown-batch-1`, `fix-loop-state-propagation`, `fix-tool-context-binding` | Planned |
+| `loop-tools-edit-recovery` | Forgiving, safe edits: near-miss recovery, already-applied detection, read-before-edit, atomic writes | M | evi-local | `loop-shakedown-batch-1`, `fix-loop-state-propagation`, `fix-tool-context-binding` | Done (Phase 2 batch 1, unreleased) |
 | `tool-schema-safe-names` | Provider-safe tool names and schema normalization for local grammars | M | evi-frontier | `extensibility-interop-mcp-sdk2-migration`, `loop-eval-gates` | Planned |
 | `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Planned |
 | `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names` | Planned |

@@ -186,8 +186,8 @@ def _record(repo: Path, task_id: str = "T1") -> dict:
 
 def _agent(client) -> Agent:
     return Agent(client=client, config=Config.load(), transcripts=None,
-                 tools=[REGISTRY[n] for n in ("write_file", "edit_file", "apply_patch",
-                                              "run_command")])
+                 tools=[REGISTRY[n] for n in ("read_file", "write_file", "edit_file",
+                                              "apply_patch", "run_command")])
 
 
 # ---- 1. write tools under a confined policy ------------------------------------------
@@ -453,6 +453,7 @@ def test_run_task_denies_an_out_of_scope_write_and_tells_the_model_why(repo, fak
         llm_call(("write_file", {"path": "other.py", "content": "y = 2\n"}),
                  ("apply_patch", {"path": "other.py", "patch": patch}),
                  ("run_command", {"command": "ruff format ."})),
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done: calc.py sets x = 2. Concern: other.py:1 may want y = 2 too."),
     ])
@@ -465,7 +466,7 @@ def test_run_task_denies_an_out_of_scope_write_and_tells_the_model_why(repo, fak
     calls = run.result.tool_calls
     assert [(c["name"], c["status"]) for c in calls] == [
         ("write_file", "denied"), ("apply_patch", "denied"), ("run_command", "denied"),
-        ("write_file", "ok")]
+        ("read_file", "ok"), ("write_file", "ok")]
     for c in calls[:2]:
         assert "'other.py' is not in the task's files_in_scope" in c["reason"]
         assert "concern in your hand-off" in c["reason"]
@@ -499,6 +500,7 @@ def test_the_backstop_records_a_file_a_command_wrote(repo, fake_llm):
     q.create(tasks.new_task("T1", title="Make x two", files_in_scope=["calc.py"],
                             required_checks=[[PY, "check_stray.py"]]))
     client = fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done."),
     ])
@@ -534,7 +536,8 @@ def test_the_backstop_caps_its_list_and_never_fails_the_run(repo, fake_llm, monk
             raise tasks.TaskError("git status failed")
 
         monkeypatch.setattr(tasks, "out_of_scope", broken)
-    client = fake_llm([llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
+    client = fake_llm([llm_call(("read_file", {"path": "calc.py"})),
+                       llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
                        llm_text("Done.")])
     run = tasks.run_task(q, "T1", lambda _wt: _agent(client), holder="me")
     assert run.implemented and run.recorded, run.note
@@ -596,7 +599,8 @@ def test_a_runs_record_leaves_out_the_caches_its_tests_leave_untracked(repo, fak
     q = tasks.TaskQueue(repo)
     q.create(tasks.new_task("T1", title="Make x two", files_in_scope=["calc.py"],
                             required_checks=[[PY, "check_caches.py"]]))
-    client = fake_llm([llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
+    client = fake_llm([llm_call(("read_file", {"path": "calc.py"})),
+                       llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
                        llm_text("Done.")])
     run = tasks.run_task(q, "T1", lambda _wt: _agent(client), holder="me")
     assert run.implemented, (run.stop_reason, run.note)
@@ -737,39 +741,44 @@ def _run_cli(monkeypatch, agent, *args: str):
     return CliRunner().invoke(cli_main.app, ["run", *args])
 
 
+_READ_WRITE = [REGISTRY["read_file"], REGISTRY["write_file"]]
+
+
 def test_evi_run_confine_holds_writes_to_the_scope(home, root, monkeypatch, fake_llm):
     def script():
         return fake_llm([
+            llm_call(("read_file", {"path": "calc.py"}), ("read_file", {"path": "other.py"})),
             llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"}),
                      ("write_file", {"path": "other.py", "content": "y = 2\n"})),
             llm_text("done"),
         ])
 
-    agent = Agent(client=script(), config=Config(), tools=[REGISTRY["write_file"]])
+    agent = Agent(client=script(), config=Config(), tools=_READ_WRITE)
     res = _run_cli(monkeypatch, agent, "--policy", "implementer", "--format", "json",
                    "--cwd", str(root), "--scope", "calc.py", "--confine", "go")
     assert res.exit_code == 0, res.output
     report = json.loads(res.stdout)
     assert agent.policy.confine and agent.policy.extra_writable == ("calc.py",)
-    assert [c["status"] for c in report["tool_calls"]] == ["ok", "denied"]
-    assert "not in the task's files_in_scope" in report["tool_calls"][1]["reason"]
+    assert [c["status"] for c in report["tool_calls"]] == ["ok", "ok", "ok", "denied"]
+    assert "not in the task's files_in_scope" in report["tool_calls"][3]["reason"]
     assert (root / "other.py").read_text(encoding="utf-8") == "y = 1\n"
 
     # Without --confine, --scope keeps its meaning: it grants protected files only.
     (root / "calc.py").write_text("x = 1\n", encoding="utf-8")
-    agent = Agent(client=script(), config=Config(), tools=[REGISTRY["write_file"]])
+    agent = Agent(client=script(), config=Config(), tools=_READ_WRITE)
     res = _run_cli(monkeypatch, agent, "--policy", "implementer", "--format", "json",
                    "--cwd", str(root), "--scope", "calc.py", "go")
     assert res.exit_code == 0, res.output
     assert not agent.policy.confine
-    assert [c["status"] for c in json.loads(res.stdout)["tool_calls"]] == ["ok", "ok"]
+    assert [c["status"] for c in json.loads(res.stdout)["tool_calls"]] == ["ok"] * 4
 
     # --confine without --scope: nothing may change, and a note says so.
-    agent = Agent(client=script(), config=Config(), tools=[REGISTRY["write_file"]])
+    agent = Agent(client=script(), config=Config(), tools=_READ_WRITE)
     res = _run_cli(monkeypatch, agent, "--policy", "implementer", "--format", "json",
                    "--cwd", str(root), "--confine", "go")
     assert res.exit_code == 0, res.output
-    assert [c["status"] for c in json.loads(res.stdout)["tool_calls"]] == ["denied", "denied"]
+    assert [c["status"] for c in json.loads(res.stdout)["tool_calls"]] == [
+        "ok", "ok", "denied", "denied"]
     assert "--confine without --scope" in res.stderr
 
 

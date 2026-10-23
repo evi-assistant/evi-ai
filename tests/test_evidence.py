@@ -157,7 +157,8 @@ def _use_agents(monkeypatch, *agents: Agent) -> None:
 
 
 def _agent(client) -> Agent:
-    return Agent(client=client, config=Config.load(), tools=[REGISTRY["write_file"]],
+    return Agent(client=client, config=Config.load(),
+                 tools=[REGISTRY["read_file"], REGISTRY["write_file"]],
                  transcripts=None)
 
 
@@ -199,6 +200,7 @@ def test_a_task_run_leaves_a_bundle_whose_report_validates_and_junit_matches_pyt
                "--check", shlex.join(PYTEST))
     assert res.exit_code == 0, res.output
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})),
         llm_text("Done: calc.x is 2."),
     ])))
@@ -271,6 +273,7 @@ def test_a_bundle_that_cant_be_collected_never_loses_the_run(repo, monkeypatch, 
 
     monkeypatch.setattr(evidence, "collect_task", broken)
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("done"),
     ])))
     res = _cli("task", "start", "T1")
@@ -827,6 +830,7 @@ def test_ctrl_c_during_a_starts_evidence_stops_its_checks(repo, monkeypatch, fak
     monkeypatch.setattr(evidence, "collect_task", collect_task)
     before = signal.getsignal(signal.SIGINT)
     _use_agents(monkeypatch, _agent(fake_llm([
+        llm_call(("read_file", {"path": "calc.py"})),
         llm_call(("write_file", {"path": "calc.py", "content": "x = 2\n"})), llm_text("done"),
     ])))
     res = _cli("task", "start", "T1")

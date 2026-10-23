@@ -41,6 +41,11 @@ When `edit_file`'s `old_string` isn't found exactly, it tries the same text
 ignoring each line's surrounding whitespace and applies it on a unique match,
 re-indented to the file; a re-sent edit that is already applied succeeds; a
 miss shows the closest lines and an ambiguous match lists each line number.
+In a chat or run, `write_file` overwrites an existing file only after the
+model has read it with `read_file` and while it is unchanged since (same size
+and modification time); otherwise it refuses, shows the file's first lines and
+says to read it or use `edit_file`. Files the model created, wrote or edited
+itself count as read; outside an agent nothing is checked.
 
 ## `code` — code execution and reading (default on)
 
