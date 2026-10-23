@@ -3472,7 +3472,11 @@ def create_app() -> FastAPI:
             try:
                 staged = _sessions.stage_handoff(sid)
             except (OSError, ValueError) as exc:
-                raise HTTPException(500, f"could not copy the session for sync: {exc}")
+                # The reason (it may name a path on this machine) goes to the log only.
+                logger.warning("handoff: could not stage session %s: %s", sid, exc)
+                raise HTTPException(
+                    500, "could not copy the session for sync (the reason is in the server log)"
+                ) from exc
 
         return {"ok": True, **info, "staged": str(staged) if staged else None}
 

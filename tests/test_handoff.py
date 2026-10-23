@@ -85,6 +85,7 @@ def test_handoff_endpoint(monkeypatch, tmp_path):
     r = client.post("/api/session/h1/handoff")
     assert r.status_code == 500
     assert "could not copy the session for sync" in r.json()["detail"]
+    assert "disk full" not in r.json()["detail"]  # the reason stays in the server log
 
 
 def test_handoff_multi_user(monkeypatch, tmp_path):
