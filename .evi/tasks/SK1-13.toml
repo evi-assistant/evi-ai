@@ -1,6 +1,6 @@
 id = "SK1-13"
 title = "fs: apply_patch falls back to a block's text as given in a mixed-EOL file, as edit_file does"
-status = "open"
+status = "verified"
 why = "SK1-1 made edit_file and apply_patch match in the file's own line ending. edit_file falls back to old_string/new_string as given when the EOL-normalized old_string is not in the file (a mixed-EOL file); apply_patch (evi/tools/fs.py:359-371) has no such fallback, so a SEARCH block that matches a mixed-EOL file exactly as written fails with 'block N SEARCH not found'. Found by the retro review gate run on SK1-1."
 hints = "In apply_patch's loop over blocks (fs.py:359-371): after old_n, new_n = _to_eol(old, eol), _to_eol(new, eol), when old_n is not in new_text but old is, use old/new as given (the same rule as edit_file, fs.py around the `elif old_string in text:` branch). Count and replace with the chosen pair; the not-found and matches-N-times errors stay as they are.\nTests go in tests/test_fs_eol.py next to test_edit_file_mixed_eol_fallback: build files with write_bytes and assert on read_bytes, never read_text."
 acceptance = ["Mixed-EOL file b'x = 1\\r\\ny = 2\\nz = 3\\n': apply_patch with one block, SEARCH 'y = 2\\nz = 3' -> REPLACE 'y = 20\\nz = 30', applies 1 hunk and leaves b'x = 1\\r\\ny = 20\\nz = 30\\n'.", "On a CRLF-only file an LF-formatted patch still applies every hunk and keeps every line ending CRLF (the existing test passes).", "A SEARCH found neither normalized nor as given still returns 'block N SEARCH not found'.", "The existing tests in tests/test_fs_eol.py, tests/test_apply_patch.py and tests/test_tools.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/tools/fs.py", "tests/test_fs_eol.py"]
 required_checks = ["python -m pytest -q tests/test_fs_eol.py tests/test_apply_patch.py tests/test_tools.py", "python -m ruff check evi/tools/fs.py tests/test_fs_eol.py"]
 implementer = "evi-local"
 created = "2026-10-23T08:45:03Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK1-13"
+branch = "task/SK1-13"
+base = "ea9f8571b7e3da4f9611451464d0f8b9037b434c"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK1-13\\1"
+reviewer_notes = [{at = "2026-10-23T16:37:46Z", verdict = "verified", note = "Director triage: the correctness lens's BLOCKING finding (the fallback inserts the replacement as given, without EOL normalization) is the specified behaviour: acceptance criterion 1 requires b'x = 1\\r\\ny = 20\\nz = 30\\n' for a mixed-EOL file, the same rule edit_file follows since SK1-1 (its criterion 4); in a mixed-EOL file there is no single line ending to normalize to, so the strings as given are written. The other findings are SUGGESTIONs."}]
+
+[evidence_summary]
+hash = "sha256:fa076d62d95132eb85eb4c276a817916af55d0bf7c6eabf3358a4adbf37f5647"
+files = 2
+insertions = 55
+deletions = 3
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 42
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK1-13\\1\\report.json"
+summary = "I have implemented the mixed-EOL fallback for `apply_patch` in `evi/tools/fs.py`, matching the behavior of `edit_file`."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK1-13"
+digest = "sha256:6a00c9ac92f7b74354faebb6460e6a089cb7077453904a00da9fb38f5a3ce037"
+head = "3baa0f99f1c4da9a6f330ea600a5901697a9225a"
+evidence = "sha256:fa076d62d95132eb85eb4c276a817916af55d0bf7c6eabf3358a4adbf37f5647"
+verdict = "verified"
+rounds = 0
+signer = "director"
+signed_at = "2026-10-23T16:37:55Z"
+key = "302b45cb92785c8d"
+sig = "420686fb24499d9426bdd05bbc5138cc42443818e3be8b51f88f6f2d2d533ff1"
+
+[attestation.review]
+base = "ea9f8571b7e3da4f9611451464d0f8b9037b434c"
+exit_code = 1
+report_sha256 = "63c061992ed214362f969c1439df9fb45f3ed7952b5475a1a231360dd45d8435"
+override = "Director triage: the correctness lens's BLOCKING finding (the fallback inserts the replacement as given, without EOL normalization) is the specified behaviour: acceptance criterion 1 requires b'x = 1\\r\\ny = 20\\nz = 30\\n' for a mixed-EOL file, the same rule edit_file follows since SK1-1 (its criterion 4); in a mixed-EOL file there is no single line ending to normalize to, so the strings as given are written. The other findings are SUGGESTIONs."
