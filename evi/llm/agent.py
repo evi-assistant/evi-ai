@@ -35,6 +35,7 @@ import functools
 import itertools
 import json
 import queue
+import re
 import secrets
 import threading
 import time
@@ -719,6 +720,45 @@ _CONTINUE = "continue"
 # The most of a verify note (a check's output, a hook's reason) the history
 # gets, after redaction.
 _NOTE_MAX = 6000
+
+
+LOOP_DETECTED_REASON = "loop_detected"
+# How often one call may fail the same way, with nothing written between,
+# before the turn ends as loop_detected.
+LOOP_REPEATS = 3
+LOOP_NOTE = (f"(eVi) This exact call has now failed the same way {LOOP_REPEATS} times with "
+             "nothing written in between, so running it again won't help: the run stops "
+             "here. Report what you tried and what blocked you.")
+_DIGITS = re.compile(r"\d+")
+
+
+class _RepeatGuard:
+    """Counts a turn's calls that fail the same way: the same tool and
+    arguments, the same output once its numbers are dropped (a timing differs
+    from run to run), with no successful write in between. A failure is an
+    ERROR, a denial, a block or a non-zero ``exit N``; any successful write
+    starts the count again, so an edit-then-retest cycle never trips it."""
+
+    def __init__(self) -> None:
+        self.counts: dict[tuple[str, str, str], int] = {}
+
+    def note(self, name: str, args: Any, output: str, tool: Any = None) -> bool:
+        """Record one call's result; True when it is the LOOP_REPEATS-th
+        identical failure."""
+        from evi.policy import WRITE_TOOLS
+
+        text = str(output or "")
+        failed = text.startswith(("ERROR", "PERMISSION DENIED", "BLOCKED")) or bool(
+            re.match(r"exit [1-9]\d*\b", text))
+        if not failed:
+            if name in WRITE_TOOLS or (tool is not None and getattr(tool, "category", "")
+                                       == "fs" and not getattr(tool, "read_only", True)):
+                self.counts.clear()
+            return False
+        key = (name, args if isinstance(args, str) else json.dumps(args, sort_keys=True),
+               _DIGITS.sub("#", text[:4000]))
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key] >= LOOP_REPEATS
 
 
 @dataclass
@@ -2338,6 +2378,7 @@ class Agent:
         # The verify gate's state for this turn: what it wrote, the checks
         # and stop-hook blocks so far.
         vstate = self._turn_verify = self._start_verify(plan_only)
+        repeats = _RepeatGuard()
 
         for turn_idx in range(max_turns):
             # A cancel that came in during the last tool round (or before the
@@ -2910,10 +2951,16 @@ class Agent:
 
             # Emit results + append history in the ORIGINAL order so
             # tool_call_id pairing stays consistent.
+            stuck = False
             for i, (m, output) in enumerate(zip(calls_meta, outputs)):
                 fname = m["name"]
                 call = m["call"]
                 out_obj = output or ToolOutput(text="(no output)")
+                if i not in not_run and repeats.note(fname, m["args"], out_obj.text,
+                                                     m.get("tool")):
+                    stuck = True
+                    out_obj = ToolOutput(text=f"{out_obj.text}\n\n{LOOP_NOTE}",
+                                         citations=list(out_obj.citations))
                 yield ToolResult(fname, out_obj.text, list(out_obj.citations))
                 self.history.append(
                     {
@@ -2935,6 +2982,9 @@ class Agent:
                     self._record_write(vstate, m.get("tool"), m["args"], out_obj.text)
             if cancelled:
                 yield from self._finish_turn(INTERRUPTED_REASON)
+                return
+            if stuck:
+                yield from self._finish_turn(LOOP_DETECTED_REASON)
                 return
 
         yield from self._finish_turn(

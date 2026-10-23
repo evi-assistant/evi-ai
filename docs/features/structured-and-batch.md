@@ -122,7 +122,8 @@ The run ends `checks_failed` (exit 5) when the checks still fail after `[checks]
 | `done` | 0 | The model finished. Tool calls denied along the way don't change that: the agent carries on past a denial, so they are listed in `denied_tools` (status `denied` in `tool_calls`), and the text format notes them on stderr. A reply the backend cut at its token limit is `done` too, with `done_reason` `length`. |
 | `error` | 1 | The backend failed (the turn's `Error` event), the turn raised, or the agent couldn't be built (an MCP server that won't start, a delegate CLI-agent backend refused). `error` says what happened; `text` keeps what streamed before it. |
 | `max_turns` | 3 | The run used all its `--max-turns` model round trips before the model finished. |
-| `step_budget`, `loop_detected` | 3 | Reserved for run limits of the task loop; no run stops this way yet. |
+| `loop_detected` | 3 | One tool call failed the same way three times (same tool and arguments, same output once its numbers are dropped) with no successful write in between. The third result tells the model so, and the run ends. |
+| `step_budget` | 3 | Reserved for run limits of the task loop; no run stops this way yet. |
 | `permission_denied` | 4 | Reserved for a turn that stops on a denial (its `Done` reason says so). Today the agent never stops on one, so a denied call alone never gives this. |
 | `guardrail` | 4 | An input guardrail or a `user_prompt_submit` hook refused the prompt, or the backend ended the reply with `content_filter`. |
 | `checks_failed` | 5 | The project checks still failed after `[checks] max_rounds` failing rounds ([Checks and stop-hook blocks](#checks-and-stop-hook-blocks)). `checks` shows what failed. |

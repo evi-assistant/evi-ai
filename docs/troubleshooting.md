@@ -119,7 +119,10 @@ its `error` says what went wrong.
 | 6 | `stop_hook_exhausted` | A blocking stop hook (`protocol = "json"`) kept blocking past `[hooks] max_blocks`. | See [below](#a-run-ended-checks_failed-exit-5-or-stop_hook_exhausted-exit-6). |
 | 130 | `interrupted` | Ctrl+C or a SIGINT stopped the run (above). | — |
 
-`step_budget` and `loop_detected` (exit 3) and `permission_denied` (4) are
+`loop_detected` (exit 3) means one tool call failed the same way three times
+with nothing written in between (a missing module, a command the policy
+denies, a file that isn't there): read that call's result in the report, fix
+what it says, and run again. `step_budget` (3) and `permission_denied` (4) are
 reserved for the task loop; no run stops with them yet.
 
 **Tool calls were denied but the run exited 0.** That is by design: the agent
