@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import difflib
 import threading
 import weakref
 from pathlib import Path
@@ -246,6 +247,27 @@ def write_file(path: str, content: str, ctx: ToolContext | None = None) -> str:
     return f"wrote {len(content)} chars to {p}{_post_write(p)}"
 
 
+def _closest_region(text: str, old: str) -> tuple[int, int, float] | None:
+    """(first line, last line, similarity), 1-based, of the window of as many
+    lines as `old` that is most like it; None for an empty file or no likeness."""
+    lines = text.splitlines()
+    want = old.splitlines() or [old]
+    k = len(want)
+    if not lines:
+        return None
+    sm = difflib.SequenceMatcher(autojunk=False)
+    sm.set_seq2("\n".join(want))
+    best_r, best_i = 0.0, 0
+    for i in range(max(1, len(lines) - k + 1)):
+        sm.set_seq1("\n".join(lines[i:i + k]))
+        if sm.real_quick_ratio() <= best_r or sm.quick_ratio() <= best_r:
+            continue
+        r = sm.ratio()
+        if r > best_r:
+            best_r, best_i = r, i
+    return (best_i + 1, min(best_i + k, len(lines)), best_r) if best_r > 0 else None
+
+
 @tool(
     description=(
         "Make a surgical edit to a text file: replace the exact substring "
@@ -288,12 +310,37 @@ def edit_file(
         elif old_string in text:
             target_old, target_new = old_string, new_string
         else:
-            return f"ERROR: old_string not found in {p}"
+            # A re-sent edit that is already in the file is not an error (a
+            # blank new_string, e.g. a deletion, says nothing either way).
+            if new_n.strip() and new_n in text:
+                return (f"edited {p}: already applied (new_string is in the file, "
+                        "old_string is not); nothing changed")
+            err = f"ERROR: old_string not found in {p}"
+            region = _closest_region(text, old_n)
+            if region and region[2] >= 0.5:
+                a, b, r = region
+                shown = text.splitlines()[a - 1 : min(b, a + 19)]  # at most 20 lines
+                numbered = "\n".join(f"{n:>5}| {line}" for n, line in enumerate(shown, start=a))
+                err += f"\n\nclosest match, lines {a}-{b} ({r:.0%} alike):\n{numbered}"
+            return err
 
         count = text.count(target_old)
         if count > 1 and not replace_all:
+            indices = []
+            start = 0
+            while True:
+                idx = text.find(target_old, start)
+                if idx == -1:
+                    break
+                indices.append(text.count("\n", 0, idx) + 1)
+                start = idx + len(target_old)
+
+            line_list = ", ".join(map(str, indices[:20]))
+            if len(indices) > 20:
+                line_list += ", ..."
+
             return (
-                f"ERROR: old_string appears {count} times in {p}; pass "
+                f"ERROR: old_string appears {count} times in {p} (lines {line_list}); pass "
                 "replace_all=true or include more surrounding context to make it unique"
             )
         new_text = (
