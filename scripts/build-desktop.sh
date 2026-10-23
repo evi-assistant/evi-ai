@@ -20,8 +20,17 @@ echo ">> [2/2] bundling the Tauri app (standalone config)"
 # and bundle it next to the exe. Prints nothing elsewhere (MSVC, macOS, Linux).
 py="${EVI_PYTHON:-python3}"; command -v "$py" >/dev/null 2>&1 || py="python"
 extra=()
+# Stamp the app with the package version (what the release workflow does from
+# the tag): the checked-in Tauri version is a placeholder, and an app built
+# with it looks OLDER than every release, so its updater "upgrades" it to the
+# latest published one.
+version="$("$py" -c "import tomllib; print(tomllib.load(open('$root/pyproject.toml', 'rb'))['project']['version'])")"
+mkdir -p "$root/desktop/src-tauri/binaries"
+printf '{"version": "%s"}\n' "$version" > "$root/desktop/src-tauri/binaries/version.conf.json"
+extra+=(--config src-tauri/binaries/version.conf.json)
+echo ">> app version $version (from pyproject.toml)"
 overlay="$("$py" "$root/scripts/stage_webview2_loader.py")"
-if [ -n "$overlay" ]; then extra=(--config "$overlay"); fi
+if [ -n "$overlay" ]; then extra+=(--config "$overlay"); fi
 cd "$root/desktop"
 # A non-zero exit here is usually the optional updater-signing step (needs the
 # CI-only TAURI_SIGNING_PRIVATE_KEY); the installers are still produced.

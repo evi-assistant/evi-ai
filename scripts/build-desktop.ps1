@@ -20,9 +20,21 @@ Write-Host ">> [2/2] bundling the Tauri app (standalone config)"
 # runtime: stage it and bundle it next to the exe. Prints nothing for MSVC.
 $py = if ($env:EVI_PYTHON) { $env:EVI_PYTHON } elseif (Test-Path "$root\.venv-build\Scripts\python.exe") { "$root\.venv-build\Scripts\python.exe" } elseif (Test-Path "$root\.venv\Scripts\python.exe") { "$root\.venv\Scripts\python.exe" } else { "python" }
 $extra = @()
+# Stamp the app with the package version (what the release workflow does
+# from the tag): the checked-in Tauri version is a placeholder, and an app
+# built with it looks OLDER than every release, so its updater "upgrades"
+# it to the latest published one.
+$version = & $py -c "import tomllib; print(tomllib.load(open(r'$root\pyproject.toml', 'rb'))['project']['version'])"
+if ($LASTEXITCODE -ne 0 -or -not $version) { throw "couldn't read the version from pyproject.toml" }
+# As a file: Windows PowerShell drops the quotes of inline JSON passed to npm.
+$versionConf = "$root\desktop\src-tauri\binaries\version.conf.json"
+New-Item -ItemType Directory -Force -Path (Split-Path $versionConf) | Out-Null
+[IO.File]::WriteAllText($versionConf, "{`"version`": `"$version`"}`n")
+$extra += @("--config", "src-tauri\binaries\version.conf.json")
+Write-Host ">> app version $version (from pyproject.toml)"
 $overlay = & $py "$here\stage_webview2_loader.py"
 if ($LASTEXITCODE -ne 0) { throw "staging WebView2Loader.dll failed (see above)" }
-if ($overlay) { $extra = @("--config", $overlay) }
+if ($overlay) { $extra += @("--config", $overlay) }
 Push-Location "$root\desktop"
 try {
     # Native exe; a non-zero exit here is usually the optional updater-signing

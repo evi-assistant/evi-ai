@@ -23,3 +23,12 @@ def test_the_self_check_imports_the_scheduler():
     text = (ROOT / "scripts" / "sidecar_entry.py").read_text(encoding="utf-8")
     assert '"apscheduler.schedulers.background"' in text
     assert '"apscheduler.triggers.cron"' in text
+
+
+def test_the_desktop_builds_stamp_the_package_version():
+    # The checked-in Tauri version is a placeholder; an app built with it looks
+    # older than every release, and its updater then "upgrades" it to one.
+    for name in ("build-desktop.ps1", "build-desktop.sh"):
+        text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        assert "pyproject.toml" in text and "version.conf.json" in text, name
+        assert text.index("version.conf.json") < text.index("npm run tauri build"), name
