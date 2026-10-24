@@ -72,13 +72,18 @@ def test_the_loop_guard_lets_the_model_report_before_the_turn_ends(fake_llm, tmp
     assert len(requests) == 4 and not requests[-1].get("tools")
 
 
-def test_a_loop_on_the_last_step_ends_without_another_request(fake_llm, tmp_path):
+def test_a_repeat_on_the_last_step_is_not_run_so_the_turn_is_out_of_steps(fake_llm, tmp_path):
+    # The third identical call comes on the tool-free last step: it isn't run, so
+    # only two failed, and the turn ends out of steps, without another request.
     (tmp_path / "f.txt").write_text("a = 1\n", encoding="utf-8")
     miss = llm_call(("edit_file", {"path": "f.txt", "old_string": "zzz", "new_string": "y"}))
     client = fake_llm([miss, miss, miss])
     events = list(_agent(client, tmp_path).chat("go", max_turns=3))
-    assert events[-1] == Done("loop_detected")
+    assert events[-1] == Done("max_turns_reached")
     assert len(client.chat.completions.requests) == 3
+    results = [e.output for e in events if isinstance(e, ToolResult)]
+    assert len(results) == 3 and "did not run it" in results[-1]
+    assert not any("did not run it" in r for r in results[:2])
 
 
 def test_the_hand_off_step_runs_no_checks(fake_llm, tmp_path, monkeypatch):
@@ -98,3 +103,19 @@ def test_the_hand_off_step_runs_no_checks(fake_llm, tmp_path, monkeypatch):
                   .chat("go", max_turns=2))
     assert events[-1] == Done("max_turns_reached") and ran == []
     assert not any(isinstance(e, CheckResult) for e in events)
+
+
+def test_a_call_on_the_hand_off_step_is_answered_not_run(fake_llm, tmp_path):
+    # Ollama returns tool calls even with no tools sent; the last step must not run them.
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8")
+    agent = _agent(fake_llm([_read(), _read()]), tmp_path)
+    events = list(agent.chat("go", max_turns=2))
+    assert events[-1] == Done("max_turns_reached")
+    results = [e.output for e in events if isinstance(e, ToolResult)]
+    # Step 1's read ran; the hand-off step's call shows as not run.
+    assert len(results) == 2 and "x" in results[0] and "did not run it" in results[1]
+    last = agent.history[-1]
+    assert last["role"] == "tool" and "did not run it" in last["content"]
+    from evi.history import validate_history
+
+    assert validate_history(agent.history) == []

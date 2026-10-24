@@ -3064,6 +3064,25 @@ class Agent:
                 yield from self._finish_turn(finish_reason or "stop")
                 return
 
+            if wrap_up:
+                # The hand-off step offers no tools, but a model can call one
+                # anyway (Ollama returns calls with no tools sent): each is
+                # answered, never run, and the turn ends.
+                for call in assistant_msg["tool_calls"]:
+                    placeholder = synthetic_tool_result(
+                        call["id"], call["function"]["name"],
+                        why="This was the run's last step, with no tools, so eVi did not run it.",
+                    )
+                    name = self._real_tool_name(call["function"]["name"])
+                    yield ToolCall(name, call["function"]["arguments"])
+                    yield ToolResult(name, placeholder["content"], [])
+                    self.history.append(placeholder)
+                    self._log_to_transcript(
+                        "tool", placeholder["content"], tool_call_id=call["id"],
+                    )
+                yield from self._finish_turn(wrap_up)
+                return
+
             # Execute the requested tools. Permission is gated in ONE pass
             # (so a multi-call turn can prompt once via the batch callback),
             # before-hooks run per call, then the actual tool bodies run in
@@ -3209,9 +3228,6 @@ class Agent:
                 continue
             if stuck:
                 yield from self._finish_turn(LOOP_DETECTED_REASON)
-                return
-            if wrap_up:
-                yield from self._finish_turn(wrap_up)
                 return
 
         yield from self._finish_turn(
