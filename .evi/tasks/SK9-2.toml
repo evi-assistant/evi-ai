@@ -1,0 +1,20 @@
+id = "SK9-2"
+title = "cleanup: old tool-output spill files are deleted at startup, with the transcripts' retention or after 14 days"
+status = "open"
+why = "Second slice of roadmap item tool-result-pipeline. SK9-1's spill files are scratch copies of large tool outputs; without a cleanup they pile up under eVi's home forever, since [tools] cleanup_period_days defaults to 0 (keep transcripts forever)."
+hints = "evi/apps/cli/main.py, _maybe_cleanup_transcripts (search for `def _maybe_cleanup_transcripts`). Directly after the line `days = config.tools.cleanup_period_days` and before `if days <= 0 or not config.tools.transcripts:` add:\n    try:  # tool-output spill files are scratch: kept DEFAULT_KEEP_DAYS at most\n        from evi import tool_output\n        from evi.config import HOME\n\n        tool_output.prune(HOME, days if days > 0 else tool_output.DEFAULT_KEEP_DAYS)\n    except OSError:\n        pass\nand say in the docstring that it also deletes spill files (tool_output.prune). Change nothing else.\nTests in a NEW file tests/test_tool_output_cleanup.py: reset the once-per-process flag first (monkeypatch.setattr(cli_main, '_CLEANUP_DONE', False), cli_main being evi.apps.cli.main), point HOME at tmp_path (monkeypatch.setattr('evi.config.HOME', tmp_path)), create spill folders with evi.tool_output.spill(tmp_path, ...), age one with os.utime, then call cli_main._maybe_cleanup_transcripts(cfg) with a Config() whose tools.cleanup_period_days you set."
+acceptance = ["With cleanup_period_days = 0, a spill folder 30 days old is deleted and one written now is kept (the 14-day default).", "With cleanup_period_days = 60, the 30-day-old spill folder is kept; with cleanup_period_days = 7, a 10-day-old one is deleted.", "Transcript pruning is unchanged: with cleanup_period_days = 0 TranscriptStore.prune is not called (monkeypatch it to record calls).", "The tests in tests/test_tool_output.py pass."]
+files_in_scope = ["evi/apps/cli/main.py", "tests/test_tool_output_cleanup.py"]
+required_checks = ["python -m pytest -q tests/test_tool_output_cleanup.py tests/test_tool_output.py", "python -m ruff check evi/apps/cli/main.py tests/test_tool_output_cleanup.py"]
+implementer = "evi-local"
+created = "2026-10-24T15:41:31Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
