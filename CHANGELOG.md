@@ -867,6 +867,14 @@ All notable user-visible changes to eVi. Format loosely follows
   successful write in between, the third result tells the model so and the
   run ends with `stop_reason` `loop_detected` (exit 3). Editing and
   re-running a failing test never trips it.
+- **A run that is out of turns, or stopped by the loop guard, ends with a
+  hand-off instead of mid-work.** The turn's last model round trip now runs
+  with no tools and a note asking what is done, what is not done yet and
+  the next step; a run the loop guard stops gets one such round trip to
+  report what it tried. The stop reasons and exit codes are unchanged
+  (`max_turns`, `loop_detected`, exit 3), and the project checks don't run
+  on that last step: a run out of turns never counts as done. Subagents and
+  task runs get the same.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

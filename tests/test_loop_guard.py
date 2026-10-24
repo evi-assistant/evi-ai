@@ -27,7 +27,7 @@ def _run(agent: Agent, max_turns: int = 10) -> tuple[list[str], str]:
 def test_the_same_failing_call_ends_the_turn_as_loop_detected(fake_llm, tmp_path):
     missing = {"path": str(tmp_path / "missing.txt")}
     client = fake_llm([llm_call(("read_file", missing)) for _ in range(LOOP_REPEATS)]
-                      + [llm_text("never reached")])
+                      + [llm_text("Tried reading missing.txt; it isn't there.")])
     outputs, reason = _run(_agent(client))
 
     assert reason == "loop_detected" and "loop_detected" in STOP_REASONS
@@ -35,7 +35,9 @@ def test_the_same_failing_call_ends_the_turn_as_loop_detected(fake_llm, tmp_path
     assert len(outputs) == LOOP_REPEATS
     assert all(o.startswith("ERROR: not a file") for o in outputs)
     assert LOOP_NOTE in outputs[-1] and not any(LOOP_NOTE in o for o in outputs[:-1])
-    assert len(client.requests) == LOOP_REPEATS  # no further round-trip
+    # One more round trip, with no tools, for the model's report; then the turn ends.
+    assert len(client.requests) == LOOP_REPEATS + 1
+    assert not client.requests[-1].get("tools")
 
 
 def test_a_write_in_between_starts_the_count_again(fake_llm, tmp_path):

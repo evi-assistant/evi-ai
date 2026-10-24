@@ -121,8 +121,9 @@ its `error` says what went wrong.
 
 `loop_detected` (exit 3) means one tool call failed the same way three times
 with nothing written in between (a missing module, a command the policy
-denies, a file that isn't there): read that call's result in the report, fix
-what it says, and run again. `step_budget` (3) and `permission_denied` (4) are
+denies, a file that isn't there): read that call's result and the model's
+report after it (`text`), fix what it says, and run again. A `max_turns` run
+ends with a hand-off too: its last round trip has no tools and asks for one. `step_budget` (3) and `permission_denied` (4) are
 reserved for the task loop; no run stops with them yet.
 
 **Tool calls were denied but the run exited 0.** That is by design: the agent

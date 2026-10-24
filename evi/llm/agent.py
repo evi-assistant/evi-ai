@@ -741,12 +741,19 @@ _NOTE_MAX = 6000
 
 
 LOOP_DETECTED_REASON = "loop_detected"
+# Done.reason of a turn that used every step max_turns allows.
+MAX_TURNS_REASON = "max_turns_reached"
+# The note before a turn's last step, which runs with no tools: the hand-off
+# a run that is out of steps would otherwise end without.
+BUDGET_NOTE = ("This is your last step: the run's step budget is spent, and no tools are "
+               "available now. Reply with a short hand-off: what is done, what is not done "
+               "yet, and the next step.")
 # How often one call may fail the same way, with nothing written between,
 # before the turn ends as loop_detected.
 LOOP_REPEATS = 3
 LOOP_NOTE = (f"(eVi) This exact call has now failed the same way {LOOP_REPEATS} times with "
              "nothing written in between, so running it again won't help: the run stops "
-             "here. Report what you tried and what blocked you.")
+             "here. No tools are available now: report what you tried and what blocked you.")
 _DIGITS = re.compile(r"\d+")
 
 
@@ -2397,6 +2404,10 @@ class Agent:
         # and stop-hook blocks so far.
         vstate = self._turn_verify = self._start_verify(plan_only)
         repeats = _RepeatGuard()
+        # Set, the step being taken is the turn's last: no tools, a hand-off
+        # asked for, and the turn then ends with this reason (out of steps,
+        # or stopped by the loop guard).
+        wrap_up: str | None = None
 
         for turn_idx in range(max_turns):
             # A cancel that came in during the last tool round (or before the
@@ -2413,13 +2424,18 @@ class Agent:
                 self._log_to_transcript("user", _steer)
                 yield Steering(_steer, applied=True)
 
+            if (wrap_up is None and 0 < turn_idx == max_turns - 1 and not plan_only
+                    and tool_choice != "none"):
+                wrap_up = MAX_TURNS_REASON
+                self._append_note(BUDGET_NOTE, "evi", "budget")
+
             # Recompute each round so tools surfaced mid-turn by `search_tools`
             # (deferred tool-search-at-scale) become available immediately. An
             # active skill's tool scope does NOT trim this list: a tool list
             # that changes mid-turn makes local backends re-process the whole
             # prompt. The scope is enforced at dispatch below instead.
             tool_schemas = (
-                None if plan_only
+                None if plan_only or wrap_up
                 else ([t.openai_schema() for t in self.tools.values()] or None)
             )
             dlog(
@@ -2467,7 +2483,7 @@ class Agent:
                 else:
                     create_kwargs["max_tokens"] = self.config.llm.max_tokens
                 # tool_choice: caller-provided per-turn, else default ("auto").
-                if tool_choice is not None:
+                if tool_choice is not None and not wrap_up:
                     if tool_choice == "none":
                         # Explicit "no tools" — drop the schemas too so the
                         # model doesn't see them at all.
@@ -2723,7 +2739,8 @@ class Agent:
             # no structured calls AND the reply leads with JSON / a code fence,
             # so we never execute a tool-call example buried in normal prose.
             # Never from a reply cut off mid-stream.
-            if not tool_buf and text_buf and stream_error is None and not cancelled:
+            if (not tool_buf and text_buf and stream_error is None and not cancelled
+                    and not wrap_up):
                 _stripped = "".join(text_buf).strip()
                 if (
                     _stripped[:1] in ("`", "{", "[")
@@ -2867,6 +2884,9 @@ class Agent:
                 return
 
             if not tool_buf:
+                if wrap_up:  # the hand-off: no checks, the turn is out of steps
+                    yield from self._finish_turn(wrap_up)
+                    return
                 if not plan_only and finish_reason not in ("length", "content_filter"):
                     # A would-be end: the checks and blocking stop hooks may
                     # send the model back to work (a framed note), or end the
@@ -3019,12 +3039,18 @@ class Agent:
             if cancelled:
                 yield from self._finish_turn(INTERRUPTED_REASON)
                 return
+            if stuck and wrap_up is None and turn_idx + 1 < max_turns:
+                wrap_up = LOOP_DETECTED_REASON  # one tool-free step to report in
+                continue
             if stuck:
                 yield from self._finish_turn(LOOP_DETECTED_REASON)
                 return
+            if wrap_up:
+                yield from self._finish_turn(wrap_up)
+                return
 
         yield from self._finish_turn(
-            INTERRUPTED_REASON if self._cancelled() else "max_turns_reached"
+            INTERRUPTED_REASON if self._cancelled() else MAX_TURNS_REASON
         )
 
     def _run_calls(
