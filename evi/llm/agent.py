@@ -2549,7 +2549,7 @@ class Agent:
             # prompt. The scope is enforced at dispatch below instead.
             tool_schemas = (
                 None if plan_only or wrap_up
-                else ([t.openai_schema() for t in self.tools.values()] or None)
+                else (self._wire_tool_schemas() or None)
             )
             # Compact before a request that wouldn't fit, mid-tool-loop too:
             # the end-of-turn check alone lets a long tool round overflow.
@@ -2880,7 +2880,9 @@ class Agent:
                     _stripped[:1] in ("`", "{", "[")
                     or _stripped.startswith(TAGGED_CALL_STARTS)
                 ):
-                    _recovered = recover_text_tool_calls(_stripped, set(self.tools))
+                    _recovered = recover_text_tool_calls(
+                        _stripped, set(self.tools) | set(getattr(self, "_from_wire", {}))
+                    )
                     if _recovered:
                         for _idx, _rc in enumerate(_recovered):
                             tool_buf[_idx] = {
@@ -3042,7 +3044,7 @@ class Agent:
             # fetches / etc. don't queue up.
             calls_meta: list[dict[str, Any]] = []
             for call in assistant_msg["tool_calls"]:
-                fname = call["function"]["name"]
+                fname = self._real_tool_name(call["function"]["name"])
                 fargs = call["function"]["arguments"]
                 yield ToolCall(fname, fargs)
                 calls_meta.append({
@@ -3069,7 +3071,9 @@ class Agent:
             for m in calls_meta:
                 scope = turn_scope if m["sets_scope"] else batch_scope
                 if m["tool"] is None:
-                    m["blocked"] = unknown_tool_message(m["name"], self.tools)
+                    m["blocked"] = unknown_tool_message(
+                        m["name"], getattr(self, "_from_wire", None) or self.tools
+                    )
                 elif not skillscope.allows(m["name"], scope):
                     m["blocked"] = (
                         f"ERROR: tool '{m['name']}' is not allowed by the active skill's scope"
@@ -3788,6 +3792,43 @@ class Agent:
                 return f"BLOCKED BY HOOK {veto.hook_name!r}: {msg}"
         return None
 
+    def _wire_tool_schemas(self) -> list[dict[str, Any]]:
+        """The tool list as it goes over the wire: each tool under its
+        provider-safe name (`toolschema.wire_names`: an MCP tool "server.tool"
+        is "server__tool") with its parameters normalized
+        (`toolschema.normalize_schema`), byte-identical from turn to turn.
+        Remembers the way back (`_from_wire`) for dispatch. Should two tools
+        ever share a wire name, both keep their own names instead."""
+        from evi import toolschema
+
+        names = list(self.tools)
+        wire = toolschema.wire_names(names)
+        counts: dict[str, int] = {}
+        for w in wire.values():
+            counts[w] = counts.get(w, 0) + 1
+        cache: dict[str, Any] = self.__dict__.setdefault("_schema_cache", {})
+        out: list[dict[str, Any]] = []
+        from_wire: dict[str, str] = {}
+        for name, tool in self.tools.items():
+            sent = wire[name] if counts[wire[name]] == 1 else name
+            schema = tool.openai_schema()
+            fn = schema.get("function") if isinstance(schema, dict) else None
+            if isinstance(fn, dict):
+                params = fn.get("parameters")
+                key = json.dumps([sent, params], sort_keys=True, default=str)
+                if key not in cache:
+                    cache[key] = toolschema.normalize_schema(params)
+                schema = {**schema, "function": {**fn, "name": sent, "parameters": cache[key]}}
+            from_wire[sent] = name
+            out.append(schema)
+        self._from_wire = from_wire
+        return out
+
+    def _real_tool_name(self, name: str) -> str:
+        """The tool a name the model used stands for: its own name for one
+        sent under a provider-safe name (`_wire_tool_schemas`), else as is."""
+        return getattr(self, "_from_wire", {}).get(name, name)
+
     def _prepare_call(
         self, name: str, arguments: str, *, ready: bool = True
     ) -> tuple[str, list[str], str | None]:
@@ -3798,7 +3839,7 @@ class Agent:
         when they aren't). A call to no known tool, to a tool without
         `prepare`, or from a reply that broke off (`ready` False: it never
         runs) keeps its arguments as they are."""
-        prepare = getattr(self.tools.get(name), "prepare", None)
+        prepare = getattr(self.tools.get(self._real_tool_name(name)), "prepare", None)
         if not ready or not callable(prepare):
             return arguments, [], None
         try:

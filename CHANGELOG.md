@@ -899,6 +899,15 @@ All notable user-visible changes to eVi. Format loosely follows
   compacts and sends it again, once; a second refusal is the turn's error. A
   prompt that fills the server's reported window (Ollama cuts silently) is
   flagged. New stream events: `ContextCompacted`, `ContextTruncated`.
+- **MCP tools work with OpenAI-style backends.** An MCP tool is named
+  `<server>.<tool>`, and OpenAI-compatible APIs refuse a tool name with a dot
+  (or over 64 characters), so every request failed once an MCP server was on.
+  Tools now go to the model under provider-safe names (`github__search`; a
+  long or clashing name gets a short hash) that are the same on every turn,
+  with their schemas normalized for providers and local grammars (`$ref`
+  inlined, `allOf` merged, "X or null" made optional); the model's call maps
+  back to the real tool, so permissions, hooks and logs see `github.search`
+  (new `evi/toolschema.py`).
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when
