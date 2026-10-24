@@ -22,6 +22,7 @@ temperature     = 0.7                         # lower (0.3) is friendlier to too
 max_tokens      = 4096
 request_timeout = 120.0
 context_size    = 32768                       # token window; the managed llama.cpp runtime sets it itself
+compaction_model = ""                        # writes compaction summaries; empty = the chat model
 allow_cli_agent_unattended = false            # let unattended runs use a delegate CLI-agent backend (below)
 
 [comfy]
