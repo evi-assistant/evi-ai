@@ -254,6 +254,7 @@ class MCPManager:
             parameters=parameters,
             func=call,
             category="mcp",
+            trust="untrusted",
         )
 
 

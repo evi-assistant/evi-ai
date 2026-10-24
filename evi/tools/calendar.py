@@ -54,6 +54,7 @@ def _format(events, errors) -> str:
         "Pass `source` to restrict to one named source; omit for all."
     ),
     category="calendar",
+    trust="untrusted",
 )
 def calendar_today(source: str = "") -> str:
     sources = _resolve_sources(source)
@@ -74,6 +75,7 @@ def calendar_today(source: str = "") -> str:
         "Pass `source` to restrict to one named source."
     ),
     category="calendar",
+    trust="untrusted",
 )
 def calendar_week(source: str = "") -> str:
     sources = _resolve_sources(source)
@@ -92,6 +94,7 @@ def calendar_week(source: str = "") -> str:
         "(default 30). `source` restricts to one named source."
     ),
     category="calendar",
+    trust="untrusted",
 )
 def calendar_search(query: str, days: int = 30, source: str = "") -> str:
     needle = query.strip().lower()
@@ -118,6 +121,7 @@ def calendar_search(query: str, days: int = 30, source: str = "") -> str:
         "Looks up to 30 days out. Pass `source` to restrict to one."
     ),
     category="calendar",
+    trust="untrusted",
 )
 def calendar_next(source: str = "") -> str:
     sources = _resolve_sources(source)
