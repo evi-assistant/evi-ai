@@ -889,6 +889,16 @@ All notable user-visible changes to eVi. Format loosely follows
   first), so the tools filling a small window are easy to find and switch
   off. `GET /api/session/{id}/context` returns it as `buckets.schemas` and
   `schema_groups`.
+- **A long tool round no longer overflows the window, and an overflow error
+  no longer ends the turn.** The context budget is checked before every
+  request instead of only at the end of a turn, counting the tool schemas
+  and correcting eVi's ~4 chars/token estimate with the backend's own
+  `prompt_tokens`; the history is compacted first when the next prompt would
+  fill `compact_when_pct` of the window. When a backend refuses a prompt as
+  too long (OpenAI's `context_length_exceeded`, llama-server, LM Studio), eVi
+  compacts and sends it again, once; a second refusal is the turn's error. A
+  prompt that fills the server's reported window (Ollama cuts silently) is
+  flagged. New stream events: `ContextCompacted`, `ContextTruncated`.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

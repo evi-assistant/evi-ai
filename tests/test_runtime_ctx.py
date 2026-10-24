@@ -497,12 +497,14 @@ def test_open_sessions_compact_against_the_new_window_after_a_swap(managed, monk
     st = _wait_for_setup()
     assert st["error"] == "" and st["ctx"] == _ctx_of(managed[-1]) == 8192
 
+    # Each turn checks before its request and at its end; this stub collapses
+    # nothing, so both checks try, each against the new window.
     turn("s-a")                                            # straight into a turn
-    assert compacted["s-a"] == [8192]                      # the new window
+    assert compacted["s-a"] and set(compacted["s-a"]) == {8192}
     # The context meter shows it before s-b's next turn, which compacts too.
     assert client.get("/api/session/s-b/usage").json()["ceiling"] == 8192
     turn("s-b")
-    assert compacted == {"s-a": [8192], "s-b": [8192]}
+    assert compacted["s-b"] and set(compacted["s-b"]) == {8192}
 
 
 # ---- leaving the managed runtime gives context_size back -------------------

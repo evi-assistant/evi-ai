@@ -173,6 +173,13 @@ llama-server (`/props`, its `-c`) and LM Studio for a loaded model
 that doesn't answer leaves `context_size` in charge. A larger server window
 never raises it.
 
+The check runs before every request, mid-tool-loop too: when the next prompt
+(the history plus the tool schemas, by an estimate eVi corrects with the
+backend's own `prompt_tokens` each round) would fill `compact_when_pct` of the
+window, the history is compacted first. A backend that refuses a prompt as
+too long gets it again once, compacted; a second refusal ends the turn with
+the error.
+
 ### `context_size` and the managed llama.cpp runtime
 
 With eVi's managed llama.cpp runtime (first-run setup in the web or desktop

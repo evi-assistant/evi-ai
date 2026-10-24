@@ -208,6 +208,7 @@ SCHEMA: dict[str, Any] = {
     "oneOf": [{"$ref": f"#/$defs/{name}"} for name in (
         "TextDelta", "ThinkingDelta", "ToolCall", "ToolResult", "ToolProgress",
         "UsageStats", "LogProbs", "Guardrail", "RouteInfo", "Steering", "Done", "Error",
+        "ContextCompacted", "ContextTruncated",
         "CheckResult", "ChecksSkipped", "ChecksFailed", "StopBlocked", "FilesChanged",
         "PermissionRequest", "PermissionExpired", "SystemMessage", "RunStart", "RunResult",
     )],
@@ -246,6 +247,17 @@ SCHEMA: dict[str, Any] = {
         }),
         "RouteInfo": _kind("RouteInfo", {"model": _STR, "route": _STR}),
         "Steering": _kind("Steering", {"text": _STR, "applied": _BOOL}),
+        # The history was compacted mid-turn to fit the window ("budget":
+        # before a request; "overflow": after the backend refused one, which
+        # is then sent again once).
+        "ContextCompacted": _kind("ContextCompacted", {
+            "reason": {"enum": ["budget", "overflow"]},
+            "collapsed": {"type": "integer", "minimum": 1},
+        }),
+        # The reported prompt filled the server's window: probably cut.
+        "ContextTruncated": _kind("ContextTruncated", {
+            "prompt_tokens": _INT, "window": _INT,
+        }),
         "Done": _kind("Done", {"reason": _STR}),
         "Error": _kind("Error", {"message": _STR}),
         # Verify-before-done (evi/checks.py, protocol="json" stop hooks).

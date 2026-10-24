@@ -695,6 +695,27 @@ class RouteInfo:
 
 
 @dataclass
+class ContextCompacted:
+    """The history was compacted in the middle of a turn to fit the model's
+    window: before a request that wouldn't have fit ("budget"), or after the
+    backend refused one as too long ("overflow"; the request is then sent
+    again, once). `collapsed` is how many messages the summary replaced."""
+
+    reason: str
+    collapsed: int
+
+
+@dataclass
+class ContextTruncated:
+    """The backend reports a prompt as long as the window it runs the model
+    with: a server that cuts a longer prompt silently (Ollama) probably
+    dropped the start of the conversation."""
+
+    prompt_tokens: int
+    window: int
+
+
+@dataclass
 class Steering:
     """A follow-up the user sent while a turn was already running.
 
@@ -746,6 +767,23 @@ MAX_TURNS_REASON = "max_turns_reached"
 # How long a server's reported context window is trusted before it is asked
 # again (a model reload can change it).
 _WINDOW_PROBE_TTL = 60.0
+# What a backend's error says of a prompt longer than the model's window
+# (OpenAI's context_length_exceeded, llama-server, LM Studio, vLLM).
+_OVERFLOW = re.compile(
+    r"context[_ ](?:length|size|window)|maximum context|exceeds? the (?:available )?context"
+    r"|too many tokens|prompt is too long",
+    re.IGNORECASE,
+)
+# The calibration ratio (reported prompt tokens / eVi's estimate) is kept in
+# this range: one odd report mustn't make the budget absurd.
+_RATIO_RANGE = (0.5, 3.0)
+
+
+def _is_overflow(err: BaseException | None) -> bool:
+    """Whether a failed request failed because the prompt didn't fit."""
+    if err is None:
+        return False
+    return bool(_OVERFLOW.search(f"{err} {getattr(err, 'code', '') or ''}"))
 # The note before a turn's last step, which runs with no tools: the hand-off
 # a run that is out of steps would otherwise end without.
 BUDGET_NOTE = ("This is your last step: the run's step budget is spent, and no tools are "
@@ -1348,16 +1386,52 @@ class Agent:
         """
         return _approx_tokens(self.history), self.context_ceiling()
 
-    def context_ceiling(self) -> int:
+    def context_ceiling(self, *, probe: bool = True) -> int:
         """The window the conversation must fit in: `config.llm.context_size`,
         or the smaller window the server says it runs the model with
         (`Backend.context_window`: a model Ollama or LM Studio loaded with
-        less, llama-server's -c). 0 when neither is known."""
+        less, llama-server's -c). 0 when neither is known. `probe` False uses
+        the last answer the server gave, never asking it: for the request
+        path, which a probe of a slow server mustn't hold up."""
         configured = int(self.config.llm.context_size or 0)
-        reported = self._server_window()
+        reported = self._server_window() if probe else self._known_window()
         if reported and (not configured or reported < configured):
             return reported
         return configured
+
+    def _prompt_estimate(self, tool_schemas: list[dict[str, Any]] | None) -> int:
+        """The next request's prompt in tokens: the history and the tool
+        schemas by the ~4 chars/token estimate, scaled by how far the
+        backend's own count (prompt_tokens) was from the estimate last time."""
+        raw = _approx_tokens(self.history)
+        if tool_schemas:
+            raw += len(json.dumps(tool_schemas, ensure_ascii=False)) // 4
+        ratio = getattr(self, "_token_ratio", None)
+        return int(raw * ratio) if ratio else raw
+
+    def _over_budget(self, tool_schemas: list[dict[str, Any]] | None) -> bool:
+        """Whether the next request would fill `compact_when_pct` of the
+        context ceiling, so the history should be compacted first."""
+        pct = self.config.llm.compact_when_pct
+        ceiling = self.context_ceiling(probe=False)
+        if not ceiling or not pct:
+            return False
+        return self._prompt_estimate(tool_schemas) * 100 >= ceiling * pct
+
+    def _calibrate(self, reported: int, estimated: int) -> None:
+        """Remember how the backend's prompt_tokens compared with eVi's raw
+        estimate of the same prompt, for the next budget check."""
+        if reported > 0 and estimated > 0:
+            low, high = _RATIO_RANGE
+            self._token_ratio = min(high, max(low, reported / estimated))
+
+    def _known_window(self) -> int | None:
+        """The server's last reported window for the active backend, URL and
+        model, however old; None when it hasn't been asked."""
+        llm = self.config.llm
+        key = (getattr(llm, "backend", ""), getattr(llm, "base_url", ""), llm.model)
+        cached = getattr(self, "_window_probe", None)
+        return cached[2] if cached is not None and cached[0] == key else None
 
     def _server_window(self) -> int | None:
         """The backend's reported window for the active model, asked at most
@@ -2444,6 +2518,9 @@ class Agent:
         # asked for, and the turn then ends with this reason (out of steps,
         # or stopped by the loop guard).
         wrap_up: str | None = None
+        # One compact-and-retry per turn when the backend refuses a prompt as
+        # too long; a second refusal is the turn's Error.
+        overflow_retried = False
 
         for turn_idx in range(max_turns):
             # A cancel that came in during the last tool round (or before the
@@ -2473,6 +2550,15 @@ class Agent:
             tool_schemas = (
                 None if plan_only or wrap_up
                 else ([t.openai_schema() for t in self.tools.values()] or None)
+            )
+            # Compact before a request that wouldn't fit, mid-tool-loop too:
+            # the end-of-turn check alone lets a long tool round overflow.
+            if not plan_only and self._over_budget(tool_schemas):
+                collapsed = self.compact_history()
+                if collapsed:
+                    yield ContextCompacted(reason="budget", collapsed=collapsed)
+            raw_estimate = _approx_tokens(self.history) + (
+                len(json.dumps(tool_schemas, ensure_ascii=False)) // 4 if tool_schemas else 0
             )
             dlog(
                 "llm.request",
@@ -2632,6 +2718,13 @@ class Agent:
                 if stream is None and self._cancelled():
                     yield from self._finish_turn(INTERRUPTED_REASON)
                     return
+                if stream is None and _is_overflow(last_err) and not overflow_retried:
+                    overflow_retried = True
+                    collapsed = self.compact_history()
+                    if collapsed:
+                        dlog("llm.overflow_recovered", {"collapsed": collapsed})
+                        yield ContextCompacted(reason="overflow", collapsed=collapsed)
+                        continue  # the same step again, with the shorter history
                 if stream is None:
                     yield Error(
                         f"LLM request failed: "
@@ -2755,6 +2848,11 @@ class Agent:
                     completion_tokens=completion,
                     total_tokens=total,
                 )
+                self._calibrate(prompt, raw_estimate)
+                window = self._known_window()
+                if window and prompt >= window:
+                    dlog("llm.prompt_truncated", {"prompt": prompt, "window": window})
+                    yield ContextTruncated(prompt_tokens=prompt, window=window)
 
             # Confidence summary from collected logprobs.
             if logprob_tokens:
