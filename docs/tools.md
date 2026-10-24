@@ -60,6 +60,16 @@ is answered with the tool's arguments and an example; an unknown tool with
 the close names (or `search_tools`, or the list of tools). A reply that
 starts with a call written as `<tool_call>` or `<function=...>` text runs it.
 
+A tool result may fill about 15% of the context window (between 2,000 and
+60,000 characters; 16,000 when the window is unknown). A longer one enters the
+conversation as its head and its tail (more tail for command and test output,
+where the error is) with a line saying how much was cut, and the whole of it
+goes to a spill file, `<eVi home>/tool-output/<session>/<call>.txt` (secrets
+redacted, readable by you only), which the model can page with `read_file`'s
+`offset` and `limit`; under the implementer policy the session may read that
+folder. Spill files are deleted at startup after `[tools]
+cleanup_period_days`, or after 14 days when that is 0 (`evi/tool_output.py`).
+
 ## `code` — code execution and reading (default on)
 
 | Tool             | What it does                                                | Checked as |

@@ -70,7 +70,12 @@ def _overflow() -> Exception:
                         "requested 5120 tokens. (code: context_length_exceeded)")
 
 
-def test_a_request_that_would_not_fit_is_compacted_first_mid_tool_loop(fake_llm, tmp_path):
+def test_a_request_that_would_not_fit_is_compacted_first_mid_tool_loop(
+    fake_llm, tmp_path, monkeypatch
+):
+    # The per-result cap (evi.tool_output) would shrink this one result first; this
+    # test is about the budget check, so the cap is out of the way here.
+    monkeypatch.setattr("evi.tool_output.cap_chars", lambda _window: 10**9)
     (tmp_path / "big.txt").write_text("word " * 1600, encoding="utf-8")  # ~2000 tokens
     client = fake_llm([llm_call(("read_file", {"path": "big.txt"})), llm_text("done")])
     agent = _agent(client, tmp_path, size=2000)

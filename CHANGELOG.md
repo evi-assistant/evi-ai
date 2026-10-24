@@ -916,6 +916,14 @@ All notable user-visible changes to eVi. Format loosely follows
   and the web chat says what to keep, word for word. New `[llm]
   compaction_model` names the model that writes summaries (empty: the chat
   model).
+- **One big tool result can't fill a small model's window any more.** A
+  result longer than about 15% of the context window (a long log, a big file
+  slice, an MCP dump) now enters the conversation as its head and tail
+  (more tail for command and test output), with the whole of it in a spill
+  file under `<eVi home>/tool-output/` that the model can page with
+  `read_file`; secrets are redacted in it, and old spill files are deleted at
+  startup (after `[tools] cleanup_period_days`, or 14 days). With an 8K
+  window a result is held to about 1.2K tokens.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

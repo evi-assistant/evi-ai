@@ -30,6 +30,7 @@ permission flow: each call is allowed or denied with a reason, never asked.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import contextvars
 import functools
 import itertools
@@ -795,6 +796,9 @@ _NOTE_MAX = 6000
 LOOP_DETECTED_REASON = "loop_detected"
 # Done.reason of a turn that used every step max_turns allows.
 MAX_TURNS_REASON = "max_turns_reached"
+# Tools whose output ends with what matters (an error, a test summary): a
+# result cut to fit the window keeps more of its tail.
+_TAIL_BIASED_TOOLS = frozenset({"run_command", "run_python", "monitor", "check_file"})
 # How long a server's reported context window is trusted before it is asked
 # again (a model reload can change it).
 _WINDOW_PROBE_TTL = 60.0
@@ -3196,6 +3200,8 @@ class Agent:
                         text=f"{out_obj.text}\n\n(eVi repaired this call: {'; '.join(m['repairs'])}.)",
                         citations=list(out_obj.citations), extra=dict(out_obj.extra),
                     )
+                if i not in not_run:
+                    out_obj = self._fit_output(fname, m["args"], call["id"], out_obj)
                 if i not in not_run and repeats.note(fname, m["args"], out_obj.text,
                                                      m.get("tool")):
                     stuck = True
@@ -3866,6 +3872,60 @@ class Agent:
             out.append(schema)
         self._from_wire = from_wire
         return out
+
+    def _fit_output(
+        self, name: str, args_json: str, call_id: str, output: ToolOutput
+    ) -> ToolOutput:
+        """`output` held to its share of the context window (evi.tool_output):
+        a longer one becomes its head and tail, and the whole of it goes to a
+        spill file the model can page with read_file (whose folder this
+        session's policy may then read). A read of a spill file that is
+        itself too long is cut, not spilled again."""
+        from evi import tool_output
+        from evi.config import HOME
+
+        text = output.text or ""
+        cap = tool_output.cap_chars(self.context_ceiling(probe=False))
+        if len(text) <= cap:
+            return output
+        spill_root = Path(HOME) / "tool-output"
+        if name == "read_file" and self._reads_under(args_json, spill_root):
+            note = "Read the rest of this file in parts, with read_file's offset and limit."
+        else:
+            try:
+                path = tool_output.spill(HOME, self.session_id, call_id, text)
+            except OSError as e:
+                note = f"The whole output couldn't be kept ({e})."
+            else:
+                self._allow_reading(path.parent)
+                note = (f"The whole output is in {path}: read it with read_file, using "
+                        "offset and limit (in lines) to page through it.")
+        dlog("tool.output_clipped", {"name": name, "chars": len(text), "cap": cap})
+        return ToolOutput(
+            text=tool_output.clip(text, cap, note, tail_biased=name in _TAIL_BIASED_TOOLS),
+            citations=list(output.citations), extra=dict(output.extra),
+        )
+
+    def _reads_under(self, args_json: str, folder: Path) -> bool:
+        """Whether a read_file call's path is inside `folder`."""
+        try:
+            raw = json.loads(args_json).get("path", "")
+            target = Path(getattr(self, "cwd", "") or ".", str(raw)).resolve()
+            return target.is_relative_to(folder.resolve())
+        except (ValueError, TypeError, AttributeError, OSError):
+            return False
+
+    def _allow_reading(self, folder: Path) -> None:
+        """Let this session's policy read `folder` (its spill files): a run
+        under the implementer policy may otherwise read only its own root."""
+        policy = getattr(self, "policy", None)
+        roots = getattr(policy, "read_roots", None)
+        if roots is None or folder in roots:
+            return
+        try:
+            self.policy = dataclasses.replace(policy, read_roots=(*roots, folder))
+        except (TypeError, ValueError):
+            pass
 
     def _real_tool_name(self, name: str) -> str:
         """The tool a name the model used stands for: its own name for one
