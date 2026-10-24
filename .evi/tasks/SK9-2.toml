@@ -1,6 +1,6 @@
 id = "SK9-2"
 title = "cleanup: old tool-output spill files are deleted at startup, with the transcripts' retention or after 14 days"
-status = "open"
+status = "verified"
 why = "Second slice of roadmap item tool-result-pipeline. SK9-1's spill files are scratch copies of large tool outputs; without a cleanup they pile up under eVi's home forever, since [tools] cleanup_period_days defaults to 0 (keep transcripts forever)."
 hints = "evi/apps/cli/main.py, _maybe_cleanup_transcripts (search for `def _maybe_cleanup_transcripts`). Directly after the line `days = config.tools.cleanup_period_days` and before `if days <= 0 or not config.tools.transcripts:` add:\n    try:  # tool-output spill files are scratch: kept DEFAULT_KEEP_DAYS at most\n        from evi import tool_output\n        from evi.config import HOME\n\n        tool_output.prune(HOME, days if days > 0 else tool_output.DEFAULT_KEEP_DAYS)\n    except OSError:\n        pass\nand say in the docstring that it also deletes spill files (tool_output.prune). Change nothing else.\nTests in a NEW file tests/test_tool_output_cleanup.py: reset the once-per-process flag first (monkeypatch.setattr(cli_main, '_CLEANUP_DONE', False), cli_main being evi.apps.cli.main), point HOME at tmp_path (monkeypatch.setattr('evi.config.HOME', tmp_path)), create spill folders with evi.tool_output.spill(tmp_path, ...), age one with os.utime, then call cli_main._maybe_cleanup_transcripts(cfg) with a Config() whose tools.cleanup_period_days you set."
 acceptance = ["With cleanup_period_days = 0, a spill folder 30 days old is deleted and one written now is kept (the 14-day default).", "With cleanup_period_days = 60, the 30-day-old spill folder is kept; with cleanup_period_days = 7, a 10-day-old one is deleted.", "Transcript pruning is unchanged: with cleanup_period_days = 0 TranscriptStore.prune is not called (monkeypatch it to record calls).", "The tests in tests/test_tool_output.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/apps/cli/main.py", "tests/test_tool_output_cleanup.py"]
 required_checks = ["python -m pytest -q tests/test_tool_output_cleanup.py tests/test_tool_output.py", "python -m ruff check evi/apps/cli/main.py tests/test_tool_output_cleanup.py"]
 implementer = "evi-local"
 created = "2026-10-24T15:41:31Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK9-2"
+branch = "task/SK9-2"
+base = "0d6ef9837f0b1a28e9122c0ee02096a7875be290"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK9-2\\1"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:a6f6aeaa5ba3dac9beabd57521c2355ea64c44607d9b1399c2bcca2c0eed806c"
+files = 2
+insertions = 84
+deletions = 1
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 6
+failures = 0
+errors = 0
+skipped = 0
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK9-2\\1\\report.json"
+summary = "I have implemented the cleanup of tool-output spill files at startup."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK9-2"
+digest = "sha256:f2d3971c67530ab63c52627b00058f45c5dfbb40b97184048ccb5a65e337e494"
+head = "6af41799b4fb0be3e691fe09970271302db1c81f"
+evidence = "sha256:a6f6aeaa5ba3dac9beabd57521c2355ea64c44607d9b1399c2bcca2c0eed806c"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T15:48:52Z"
+key = "302b45cb92785c8d"
+sig = "a16814bf49c922859575acfd7eba09b7fc71d8e41b5b37538300d874a04f47ba"
+
+[attestation.review]
+base = "0d6ef9837f0b1a28e9122c0ee02096a7875be290"
+exit_code = 0
+report_sha256 = "7f3cfa96acb660918160734a1863a13ab4d199a21338ca24f7e9ea4d58379117"
