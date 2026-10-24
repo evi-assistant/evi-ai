@@ -69,6 +69,7 @@ from evi.tools.base import (
 )
 from evi.tools.repair import loads_tolerant as _loads_tolerant, unknown_tool_message
 from evi.history import (
+    previous_summary,
     INTERRUPTED,
     compaction_cut,
     compaction_messages,
@@ -504,6 +505,36 @@ class _ThinkParser:
             out = (self._buf, "")
         self._buf = ""
         return out
+
+
+# The headings of every compaction summary, in this order: what a model needs
+# to carry on from the summary alone.
+SUMMARY_SECTIONS = ("Objective", "Decisions", "Done", "In progress", "Files", "Blockers",
+                    "Next step")
+
+
+def _summary_prompt(rendered: str, previous: str = "", focus: str = "") -> str:
+    """The request for a compaction summary of `rendered` (a transcript from
+    _render_for_summary): SUMMARY_SECTIONS as headings, the earlier summary
+    to update when there is one (`previous`), and the user's focus
+    (`/compact <focus>`) word for word."""
+    headings = "\n".join(f"## {s}" for s in SUMMARY_SECTIONS)
+    parts = [
+        "Summarise the conversation below so the assistant can carry on from the "
+        "summary alone. Use exactly these headings, with a few short lines under each "
+        "('none' when there is nothing), and keep concrete facts: file paths, "
+        "commands, names, numbers and decisions. Do not invent details. Aim for "
+        "under 400 words.\n\n" + headings,
+    ]
+    if previous:
+        parts.append("The conversation before this part was already summarised. Update "
+                     "that summary with the conversation below: keep what still holds, "
+                     "change what changed, and lose nothing that matters.\n\nEarlier "
+                     "summary:\n" + previous)
+    if focus:
+        parts.append(f"Pay particular attention to: {focus}")
+    parts.append("Conversation:\n\n" + rendered)
+    return "\n\n".join(parts)
 
 
 def _render_for_summary(messages: list[dict[str, Any]]) -> str:
@@ -1483,7 +1514,7 @@ class Agent:
         if ceiling > 0 and pct > 0 and used * 100 >= ceiling * pct:
             self.compact_history()
 
-    def compact_history(self, keep_recent: int | None = None) -> int:
+    def compact_history(self, keep_recent: int | None = None, focus: str = "") -> int:
         """Summarise the oldest stretch of history.
 
         Keeps the original system prompt (index 0) and, verbatim, roughly the
@@ -1521,14 +1552,10 @@ class Agent:
         if self._fire_lifecycle("before_compact", str(len(middle))):
             return 0
 
-        # Render the slice we want to summarise as a plain transcript.
-        rendered = _render_for_summary(middle)
-        summary_prompt = (
-            "Summarise the conversation below into a concise paragraph "
-            "preserving any concrete facts, decisions, file paths, "
-            "preferences, and unfinished tasks. Aim for under 400 words. "
-            "Do not invent details. Conversation:\n\n" + rendered
-        )
+        # The slice to summarise as a plain transcript; an earlier summary at
+        # its start is updated rather than summarised again.
+        previous, fresh = previous_summary(middle)
+        summary_prompt = _summary_prompt(_render_for_summary(fresh), previous, focus.strip())
 
         try:
             stream = self.client.chat.completions.create(

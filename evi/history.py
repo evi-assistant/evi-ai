@@ -292,6 +292,26 @@ def _parts(content: Any) -> list[Any]:
     return [{"type": "text", "text": str(content)}] if content else []
 
 
+def previous_summary(messages: Sequence[Mapping[str, Any]]) -> tuple[str, list[Mapping[str, Any]]]:
+    """The summary an earlier compaction left at the start of `messages`
+    (compaction_messages' note), and the messages after it, its
+    acknowledgement left out too; ("", messages) when they don't start with
+    one. A new compaction updates that summary instead of nesting it."""
+    msgs = list(messages)
+    first = msgs[0] if msgs else {}
+    content = first.get("content")
+    if first.get("role") != "user" or not isinstance(content, str) \
+            or not content.startswith("[compacted: "):
+        return "", msgs
+    _header, blank, summary = content.partition("\n\n")
+    if not blank:  # not compaction_messages' shape: an ordinary message, kept whole
+        return "", msgs
+    rest = msgs[1:]
+    if rest and rest[0].get("role") == "assistant" and rest[0].get("content") == COMPACTION_ACK:
+        rest = rest[1:]
+    return summary.strip(), rest
+
+
 def compaction_messages(summary: str, collapsed: int, *, next_role: str | None) -> list[dict[str, Any]]:
     """The messages that stand in for `collapsed` summarised ones.
 
