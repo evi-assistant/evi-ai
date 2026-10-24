@@ -9,10 +9,10 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-23):** 1 item shipped in 1.0.53 and 38 more are
+**Status (2026-10-23):** 1 item shipped in 1.0.53 and 39 more are
 done for the next release: all of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair and loop guard. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard and token budget. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -110,7 +110,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
 | `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned; the probe, the session ceiling and tool-schema counts in /context are done (Phase 2 batch 3, unreleased); the system prompt's parts in /context and sending Ollama a window are left |
-| `models-ops-token-budget-recovery` | Real-token budgeting checked every round, and overflow compact-and-retry | M | director | `models-ops-context-window-probe`, `fix-history-validity` | Planned |
+| `models-ops-token-budget-recovery` | Real-token budgeting checked every round, and overflow compact-and-retry | M | director | `models-ops-context-window-probe`, `fix-history-validity` | Done (Phase 2 batch 3, unreleased) |
 | `tool-result-pipeline` | Tool-result pipeline: budget and spill, stale masking, untrusted envelopes | L | director | `models-ops-token-budget-recovery`, `loop-agent-cancel`, `fix-tool-context-binding`, `safety-secret-redaction` | Planned |
 | `loop-tools-tool-call-repair` | Tool-call repair: tolerant parsing, coercion, aliases and tagged-text recovery | M | evi-frontier | `loop-eval-gates` | Done (Phase 2 batch 2, unreleased); per-model repair counts in `evi stats` still to do |
 | `loop-tools-loop-guard-step-budget` | Loop detection and a graceful step budget | M | director | `loop-eval-gates`, `loop-tools-tool-call-repair`, `loop-agent-cancel` | Done (Phase 2 batch 2, unreleased); a repeated-text detector and a Continue button are left |
