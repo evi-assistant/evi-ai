@@ -1855,7 +1855,7 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
             ("/goal [text|clear]", "set / clear / show the ongoing goal"),
             ("/plan [task]", "next turn runs in plan-only mode"),
             ("/auto [on|off]", "auto-approve every tool call this session"),
-            ("/compact", "summarise older history into one note"),
+            ("/compact [focus]", "summarise older history into one note"),
             ("/reload", "re-read config.toml across the running session"),
         ]
         lines = ["**Built-in commands**"]
@@ -1924,7 +1924,7 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
         )
 
     if name == "compact":
-        collapsed = agent.compact_history()
+        collapsed = agent.compact_history(focus=args)
         if collapsed == 0:
             return _SlashOutcome(handled=True, text="nothing to compact (history is short)")
         return _SlashOutcome(
