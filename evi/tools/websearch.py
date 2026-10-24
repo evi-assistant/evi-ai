@@ -40,6 +40,7 @@ _FETCH_DEADLINE = 60.0         # wall clock for a whole web_fetch (every hop, he
         "your training data."
     ),
     category="web",
+    trust="untrusted",
     long=True,
 )
 def web_search(query: str, limit: int = 5) -> str:
@@ -161,6 +162,7 @@ def _search_ollama(query: str, limit: int) -> str:
         "Use after `web_search` to read a result. Returns up to ~16 KB."
     ),
     category="web",
+    trust="untrusted",
     long=True,
 )
 def web_fetch(url: str):
