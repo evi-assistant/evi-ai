@@ -91,3 +91,11 @@ def test_compaction_focus():
     agent.compact_history(keep_recent=4)
     prompt_no_focus = client_no_focus.requests[0]['messages'][1]['content']
     assert "Pay particular attention to:" not in prompt_no_focus
+
+
+def test_a_note_not_in_the_compaction_shape_is_kept_whole():
+    # Without the blank line after its header it isn't one of ours: its text must not be lost.
+    odd = {'role': 'user', 'content': '[compacted: by hand] all of this matters'}
+    listy = {'role': 'user', 'content': [{'type': 'text', 'text': '[compacted: 3]\n\nx'}]}
+    assert previous_summary([odd]) == ('', [odd])
+    assert previous_summary([listy]) == ('', [listy])

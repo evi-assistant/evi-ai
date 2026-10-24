@@ -303,11 +303,13 @@ def previous_summary(messages: Sequence[Mapping[str, Any]]) -> tuple[str, list[M
     if first.get("role") != "user" or not isinstance(content, str) \
             or not content.startswith("[compacted: "):
         return "", msgs
-    summary = content.partition("\n\n")[2].strip()
+    _header, blank, summary = content.partition("\n\n")
+    if not blank:  # not compaction_messages' shape: an ordinary message, kept whole
+        return "", msgs
     rest = msgs[1:]
     if rest and rest[0].get("role") == "assistant" and rest[0].get("content") == COMPACTION_ACK:
         rest = rest[1:]
-    return summary, rest
+    return summary.strip(), rest
 
 
 def compaction_messages(summary: str, collapsed: int, *, next_role: str | None) -> list[dict[str, Any]]:
