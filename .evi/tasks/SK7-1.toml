@@ -1,6 +1,6 @@
 id = "SK7-1"
 title = "toolschema: provider-safe tool names (server.tool -> server__tool) with a collision-free, stable wire-name map"
-status = "open"
+status = "verified"
 why = "First slice of roadmap item tool-schema-safe-names. OpenAI-compatible APIs accept a tool name only if it matches ^[a-zA-Z0-9_-]{1,64}$, but eVi names an MCP tool '<server>.<tool>' (evi/mcp/manager.py), so with an OpenAI-style backend and an MCP server enabled every request is refused. This task adds the naming functions in a NEW module; the director sends these names and maps them back at dispatch afterwards."
 hints = "Create evi/toolschema.py with exactly this content (it was run against every acceptance criterion before filing):\n\n\"\"\"Tool names and schemas every provider accepts.\n\nOpenAI-compatible APIs take a tool name only if it matches\n^[a-zA-Z0-9_-]{1,64}$, and local grammars choke on JSON-schema features such\nas $ref and allOf. eVi's own names (\"github.search\" for an MCP tool) and an\nMCP server's schemas don't always fit, so what goes over the wire is made to.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport hashlib\nimport re\nfrom typing import Iterable\n\n_SAFE = re.compile(r\"[a-zA-Z0-9_-]{1,64}\")\n_UNSAFE_CHAR = re.compile(r\"[^a-zA-Z0-9_-]\")\n\n\ndef _digest(name: str) -> str:\n    return hashlib.sha256(name.encode(\"utf-8\")).hexdigest()[:8]\n\n\ndef safe_name(name: str) -> str:\n    \"\"\"`name` as a provider-safe tool name: itself when it already is one;\n    otherwise \".\" becomes \"__\" (an MCP tool \"server.tool\" is sent as\n    \"server__tool\") and any other character outside [a-zA-Z0-9_-] becomes\n    \"_\". A result over 64 characters, or an empty one, is cut and ends with\n    \"_\" and 8 hex characters of the name's hash, so it stays unique and the\n    same on every turn and run.\"\"\"\n    if _SAFE.fullmatch(name):\n        return name\n    flat = _UNSAFE_CHAR.sub(\"_\", name.replace(\".\", \"__\"))\n    if flat and len(flat) <= 64:\n        return flat\n    return f\"{flat[:55]}_{_digest(name)}\"\n\n\ndef wire_names(names: Iterable[str]) -> dict[str, str]:\n    \"\"\"Each tool name mapped to the name it goes over the wire as, all\n    distinct: safe_name, or, when two names would come out the same (\"a.b\"\n    and \"a__b\"), each one but a name that is already safe takes the hashed\n    form. The same names always give the same map.\"\"\"\n    names = sorted(set(names))\n    plain = {n: safe_name(n) for n in names}\n    taken: dict[str, int] = {}\n    for wire in plain.values():\n        taken[wire] = taken.get(wire, 0) + 1\n    out: dict[str, str] = {}\n    for n in names:\n        wire = plain[n]\n        if taken[wire] > 1 and wire != n:\n            wire = f\"{wire[:55]}_{_digest(n)}\"\n        out[n] = wire\n    return out\n\nTests in a NEW file tests/test_toolschema.py: plain function calls (`from evi.toolschema import safe_name, wire_names`), and a regex re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', name) to check results. Comments state why in one line."
 acceptance = ["safe_name('read_file') == 'read_file' (a safe name is kept as it is) and safe_name('github.search') == 'github__search'.", "safe_name('my server.do thing!') == 'my_server__do_thing_'; safe_name('über.tool') == '_ber__tool'.", "A name that would be over 64 characters ('x' * 70, or 's.' + 'y' * 80) comes out exactly 64 characters, ending in '_' and 8 hex characters, and matching the pattern; safe_name('') matches the pattern too.", "Every result of safe_name matches ^[a-zA-Z0-9_-]{1,64}$, and calling it twice gives the same string.", "wire_names(['a.b', 'a__b', 'read_file', 'github.search']) gives 4 distinct names: 'a__b' -> 'a__b', 'read_file' and 'github.search' -> 'github__search' as safe_name gives them, and 'a.b' its hashed form; the same map comes back whatever order the names are given in.", "Two different names over 64 characters that share their first 55 characters get different wire names."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/toolschema.py", "tests/test_toolschema.py"]
 required_checks = ["python -m pytest -q tests/test_toolschema.py", "python -m ruff check evi/toolschema.py tests/test_toolschema.py"]
 implementer = "evi-local"
 created = "2026-10-24T09:09:44Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK7-1"
+branch = "task/SK7-1"
+base = "578d265bdc702cd37f93213841329d41bbc288c0"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK7-1\\1"
+reviewer_notes = [{at = "2026-10-24T09:12:11Z", verdict = "verified", note = "Director triage: correctness 'hashed names can still collide': only when two distinct names share their first 55 safe characters AND their 32-bit sha256 prefixes match (about 2^-32 per such pair); accepted for a name map. The director's dispatch wiring checks the wire names are unique, so even that case can't misroute a call."}]
+
+[evidence_summary]
+hash = "sha256:78e23598e40872caa2e9cc08d639571e502ba8b1a780509a6c282c9aac24ae20"
+files = 2
+insertions = 125
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 6
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK7-1\\1\\report.json"
+summary = "I have implemented task SK7-1, providing provider-safe tool names and a stable wire-name map."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK7-1"
+digest = "sha256:cb3065d970bb7e978137e1494f4fd9a02a3ff79db5b7651a3a594f077833ab1d"
+head = "99bdee967c9a833db1615b16b2959a6831d4cca1"
+evidence = "sha256:78e23598e40872caa2e9cc08d639571e502ba8b1a780509a6c282c9aac24ae20"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T09:12:19Z"
+key = "302b45cb92785c8d"
+sig = "0d8837a83bae40c4a41dfd0c9328dceafd17fd18d6297e860a513228fcf97e9b"
+
+[attestation.review]
+base = "578d265bdc702cd37f93213841329d41bbc288c0"
+exit_code = 1
+report_sha256 = "50dcea16999de8228d36044bda9e175bcb8e999a237a864255e232ac4e8d13f0"
+override = "Director triage: correctness 'hashed names can still collide': only when two distinct names share their first 55 safe characters AND their 32-bit sha256 prefixes match (about 2^-32 per such pair); accepted for a name map. The director's dispatch wiring checks the wire names are unique, so even that case can't misroute a call."
