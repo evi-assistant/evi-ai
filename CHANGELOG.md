@@ -924,6 +924,12 @@ All notable user-visible changes to eVi. Format loosely follows
   `read_file`; secrets are redacted in it, and old spill files are deleted at
   startup (after `[tools] cleanup_period_days`, or 14 days). With an 8K
   window a result is held to about 1.2K tokens.
+- **Web pages, MCP replies and calendar invites reach the model fenced as
+  untrusted.** Their text goes inside `<untrusted source="...">` …
+  `</untrusted>` (a look-alike tag in the text can't close it), and the
+  system prompt says fenced text is information, never instructions, so a
+  page that says "ignore your instructions" reads as what it is. A plugin or
+  SDK tool opts in with `trust="untrusted"`.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

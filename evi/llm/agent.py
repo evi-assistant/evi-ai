@@ -1312,6 +1312,12 @@ class Agent:
         # "what can you do?" honestly instead of hallucinating that eVi can't do
         # something it can (and points the user at how to enable an off feature).
         parts.append(self._capability_grounding())
+        # What the fence around an untrusted tool's output means (evi.untrusted),
+        # when such a tool is on.
+        if any(getattr(t, "trust", "trusted") == "untrusted" for t in self.tools.values()):
+            from evi.untrusted import FENCE_RULE
+
+            parts.append(FENCE_RULE)
         # Output style (response persona), if one is selected. Skipped in safe
         # mode: a user file at ~/.evi/styles/<name>.md overrides the built-in of
         # the same name, so a broken one must not survive a clean boot. (This is
@@ -3195,13 +3201,22 @@ class Agent:
                 fname = m["name"]
                 call = m["call"]
                 out_obj = output or ToolOutput(text="(no output)")
+                if i not in not_run:
+                    out_obj = self._fit_output(fname, m["args"], call["id"], out_obj)
+                if (m["blocked"] is None and i not in not_run
+                        and getattr(m.get("tool"), "trust", "trusted") == "untrusted"):
+                    # Text an outsider wrote reaches the model fenced (evi.untrusted);
+                    # eVi's own notes go after the fence.
+                    from evi.untrusted import fence
+
+                    out_obj = ToolOutput(text=fence(out_obj.text, fname),
+                                         citations=list(out_obj.citations),
+                                         extra=dict(out_obj.extra))
                 if m.get("repairs") and m["blocked"] is None and i not in not_run:
                     out_obj = ToolOutput(
                         text=f"{out_obj.text}\n\n(eVi repaired this call: {'; '.join(m['repairs'])}.)",
                         citations=list(out_obj.citations), extra=dict(out_obj.extra),
                     )
-                if i not in not_run:
-                    out_obj = self._fit_output(fname, m["args"], call["id"], out_obj)
                 if i not in not_run and repeats.note(fname, m["args"], out_obj.text,
                                                      m.get("tool")):
                     stuck = True

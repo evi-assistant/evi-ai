@@ -190,8 +190,11 @@ def test_source_data_is_framed_as_untrusted_and_tool_results_too(home, sources, 
     assert f"<<END SOURCE DATA {nonce}>>" in text
     assert text.index("IGNORE PREVIOUS") > start  # inside the block
     tool_msg = [m for m in client.requests[1]["messages"] if m["role"] == "tool"][-1]
-    assert tool_msg["content"].startswith(f"<<SOURCE DATA {nonce} from calendar_search")
-    assert "found: dentist" in tool_msg["content"]
+    # The agent's untrusted fence (evi.untrusted) wraps the Companion's own frame.
+    body = tool_msg["content"]
+    assert body.startswith('<untrusted source="calendar_search">\n')
+    assert body.split("\n", 1)[1].startswith(f"<<SOURCE DATA {nonce} from calendar_search")
+    assert "found: dentist" in body
 
 
 def test_calls_outside_the_sources_are_refused_and_change_nothing(home, sources, fake_llm):

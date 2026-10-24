@@ -70,6 +70,14 @@ redacted, readable by you only), which the model can page with `read_file`'s
 folder. Spill files are deleted at startup after `[tools]
 cleanup_period_days`, or after 14 days when that is 0 (`evi/tool_output.py`).
 
+The output of a tool marked untrusted (`web_search`, `web_fetch`, the
+calendar tools and every MCP tool: text someone outside the conversation
+wrote) reaches the model inside `<untrusted source="<tool>">` …
+`</untrusted>`, with any look-alike tag in the text defused so it can't close
+the fence early, and the system prompt carries one line saying fenced text is
+information, never instructions (`evi/untrusted.py`). A plugin or SDK tool
+opts in with `@tool(..., trust="untrusted")`.
+
 ## `code` — code execution and reading (default on)
 
 | Tool             | What it does                                                | Checked as |
