@@ -38,6 +38,14 @@ class ModelInfo:
         return self.name or self.id
 
 
+def window_tokens(value: object) -> int | None:
+    """`value` when it is a window size a server reported (a positive int,
+    not a bool), else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 @dataclass
 class PullProgress:
     """One update emitted by `Backend.pull_model` during a download."""
@@ -78,6 +86,13 @@ class Backend(ABC):
         for m in self.list_models():
             if m.id == model_id:
                 return m
+        return None
+
+    def context_window(self, model_id: str) -> int | None:
+        """The context window, in tokens, that `model_id` runs with on this
+        server now; None when the server doesn't say, and the configured
+        [llm] context_size stands. Answers fast or not at all (an unreachable
+        server is None); callers cache it."""
         return None
 
     def supports_pull(self) -> bool:
