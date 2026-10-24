@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from evi.backends.base import Backend
+from evi.backends.base import Backend, window_tokens
 
 
 class LlamaCppBackend(Backend):
@@ -73,3 +73,25 @@ class LlamaCppBackend(Backend):
             finally:
                 self.base_url = original
         return self._list_via_openai_endpoint()
+
+    def context_window(self, model_id: str) -> int | None:
+        """The window llama-server runs with (`/props`: n_ctx, under
+        default_generation_settings in current builds and at the top level
+        in older ones). A llama-server serves one model, so `model_id` is not
+        needed."""
+        from evi.portprobe import fast_get
+
+        root = self._effective_base_url().rstrip("/").removesuffix("/v1")
+        r = fast_get(f"{root}/props")
+        if r is None or r.status_code != 200:
+            return None
+        try:
+            data = r.json()
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        settings = data.get("default_generation_settings")
+        if isinstance(settings, dict) and window_tokens(settings.get("n_ctx")):
+            return window_tokens(settings.get("n_ctx"))
+        return window_tokens(data.get("n_ctx"))
