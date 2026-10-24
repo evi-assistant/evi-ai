@@ -637,7 +637,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/goal [text|clear]", "set / clear / show the ongoing goal"),
         ("/plan [on|off]", "plan-only next turn; /plan on|off toggles persistent read-only plan mode"),
         ("/auto [on|off]", "auto-approve every tool call for this session"),
-        ("/compact", "summarise older history into one note to free context"),
+        ("/compact [focus]", "summarise older history into one note to free context"),
         ("/context, /ctx", "show where the context window is being spent"),
         ("/recent [n]", "list recent sessions (resume via `evi sessions resume`)"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
@@ -744,7 +744,7 @@ def _handle_plan(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
 
 
 def _handle_compact(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
-    collapsed = agent.compact_history()
+    collapsed = agent.compact_history(focus=args.strip())
     if collapsed == 0:
         console.print("[dim]nothing to compact (history is short)[/dim]")
     else:
