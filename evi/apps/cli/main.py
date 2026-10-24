@@ -479,12 +479,20 @@ def _maybe_cleanup_transcripts(config: Config) -> None:
     """Delete transcripts older than tools.cleanup_period_days, once per process.
 
     Mirrors Claude Code's `cleanupPeriodDays` startup cleanup. No-op when the
-    setting is 0 (keep forever) or transcripts are disabled."""
+    setting is 0 (keep forever) or transcripts are disabled. Also deletes
+    tool-output spill files (tool_output.prune)."""
     global _CLEANUP_DONE
     if _CLEANUP_DONE:
         return
     _CLEANUP_DONE = True
     days = config.tools.cleanup_period_days
+    try:  # tool-output spill files are scratch: kept DEFAULT_KEEP_DAYS at most
+        from evi import tool_output
+        from evi.config import HOME
+
+        tool_output.prune(HOME, days if days > 0 else tool_output.DEFAULT_KEEP_DAYS)
+    except OSError:
+        pass
     if days <= 0 or not config.tools.transcripts:
         return
     try:
