@@ -247,11 +247,12 @@ SCHEMA: dict[str, Any] = {
         }),
         "RouteInfo": _kind("RouteInfo", {"model": _STR, "route": _STR}),
         "Steering": _kind("Steering", {"text": _STR, "applied": _BOOL}),
-        # The history was compacted mid-turn to fit the window ("budget":
-        # before a request; "overflow": after the backend refused one, which
-        # is then sent again once).
+        # The history was made smaller mid-turn to fit the window ("mask":
+        # stale tool results became stubs; "budget": compacted before a
+        # request; "overflow": after the backend refused one, which is then
+        # sent again once).
         "ContextCompacted": _kind("ContextCompacted", {
-            "reason": {"enum": ["budget", "overflow"]},
+            "reason": {"enum": ["mask", "budget", "overflow"]},
             "collapsed": {"type": "integer", "minimum": 1},
         }),
         # The reported prompt filled the server's window: probably cut.

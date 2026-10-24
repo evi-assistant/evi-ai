@@ -1924,6 +1924,11 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
         )
 
     if name == "compact":
+        if args == "--fast":  # only the cheap pass: stale tool results to stubs
+            masked = agent.mask_stale_results()
+            return _SlashOutcome(handled=True, text=(
+                f"**masked** {masked} old tool results" if masked
+                else "no old tool results to mask"))
         collapsed = agent.compact_history(focus=args)
         if collapsed == 0:
             return _SlashOutcome(handled=True, text="nothing to compact (history is short)")

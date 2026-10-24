@@ -177,8 +177,11 @@ never raises it.
 The check runs before every request, mid-tool-loop too: when the next prompt
 (the history plus the tool schemas, by an estimate eVi corrects with the
 backend's own `prompt_tokens` each round) would fill `compact_when_pct` of the
-window, the history is compacted first. A backend that refuses a prompt as
-too long gets it again once, compacted; a second refusal ends the turn with
+window, the history is compacted first; already past 60% of it, tool
+results from before your last two messages are first masked: each becomes a
+short stub naming a spill file that holds the whole result (`read_file` can
+bring it back), which needs no summary call. A backend that refuses a prompt
+as too long gets it again once, masked and compacted; a second refusal ends the turn with
 the error.
 
 ### `context_size` and the managed llama.cpp runtime

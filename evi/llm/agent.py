@@ -796,6 +796,15 @@ _NOTE_MAX = 6000
 LOOP_DETECTED_REASON = "loop_detected"
 # Done.reason of a turn that used every step max_turns allows.
 MAX_TURNS_REASON = "max_turns_reached"
+# Masking (the tool-result pipeline's cheap pass, before compaction): past
+# MASK_WATERMARK_PCT of the window, tool results longer than MASK_MIN_CHARS
+# and older than the last MASK_KEEP_TURNS prompts become stubs that name a
+# spill file holding the whole result.
+MASK_WATERMARK_PCT = 60
+MASK_KEEP_TURNS = 2
+MASK_MIN_CHARS = 400
+MASK_PREFIX = "(masked)"
+_SPILL_NAMED = re.compile(r"The whole output is in (.+?\.txt):")
 # Tools whose output ends with what matters (an error, a test summary): a
 # result cut to fit the window keeps more of its tail.
 _TAIL_BIASED_TOOLS = frozenset({"run_command", "run_python", "monitor", "check_file"})
@@ -1450,14 +1459,56 @@ class Agent:
         ratio = getattr(self, "_token_ratio", None)
         return int(raw * ratio) if ratio else raw
 
-    def _over_budget(self, tool_schemas: list[dict[str, Any]] | None) -> bool:
-        """Whether the next request would fill `compact_when_pct` of the
-        context ceiling, so the history should be compacted first."""
-        pct = self.config.llm.compact_when_pct
+    def _over_budget(
+        self, tool_schemas: list[dict[str, Any]] | None, pct: int | None = None
+    ) -> bool:
+        """Whether the next request would fill `pct` (default
+        `compact_when_pct`) of the context ceiling."""
+        pct = self.config.llm.compact_when_pct if pct is None else pct
         ceiling = self.context_ceiling(probe=False)
         if not ceiling or not pct:
             return False
         return self._prompt_estimate(tool_schemas) * 100 >= ceiling * pct
+
+    def mask_stale_results(self, keep_turns: int = MASK_KEEP_TURNS) -> int:
+        """Replace each tool result longer than MASK_MIN_CHARS from before the
+        last `keep_turns` prompts with a stub naming a spill file that holds
+        the whole of it (evi.tool_output; a result already spilled keeps its
+        file). The call's id and name stay, so the history stays valid; the
+        transcript keeps the full text. Returns how many were masked."""
+        from evi import tool_output
+        from evi.config import HOME
+        from evi.history import is_note
+
+        prompts = [i for i, m in enumerate(self.history)
+                   if m.get("role") == "user" and not is_note(m)]
+        if len(prompts) <= keep_turns:
+            return 0
+        masked = 0
+        for i in range(1, prompts[-keep_turns]):
+            m = self.history[i]
+            content = m.get("content")
+            if (m.get("role") != "tool" or not isinstance(content, str)
+                    or len(content) < MASK_MIN_CHARS or content.startswith(MASK_PREFIX)):
+                continue
+            named = _SPILL_NAMED.search(content)
+            if named:
+                where = named.group(1)
+            else:
+                try:
+                    where = str(tool_output.spill(HOME, self.session_id,
+                                                  f"{m.get('tool_call_id', i)}", content))
+                except OSError:
+                    continue  # nowhere to keep it: leave it whole
+                self._allow_reading(Path(where).parent)
+            self.history[i] = {**m, "content": (
+                f"{MASK_PREFIX} An earlier result of {m.get('name') or 'a tool'}, masked to "
+                f"save space. The whole of it is in {where}: read it with read_file if "
+                "you need it again.")}
+            masked += 1
+        if masked:
+            dlog("context.masked", {"results": masked})
+        return masked
 
     def _calibrate(self, reported: int, estimated: int) -> None:
         """Remember how the backend's prompt_tokens compared with eVi's raw
@@ -2590,6 +2641,10 @@ class Agent:
             )
             # Compact before a request that wouldn't fit, mid-tool-loop too:
             # the end-of-turn check alone lets a long tool round overflow.
+            if not plan_only and self._over_budget(tool_schemas, MASK_WATERMARK_PCT):
+                masked = self.mask_stale_results()
+                if masked:
+                    yield ContextCompacted(reason="mask", collapsed=masked)
             if not plan_only and self._over_budget(tool_schemas):
                 collapsed = self.compact_history()
                 if collapsed:
@@ -2757,10 +2812,14 @@ class Agent:
                     return
                 if stream is None and _is_overflow(last_err) and not overflow_retried:
                     overflow_retried = True
+                    masked = self.mask_stale_results()  # the cheap pass first
+                    if masked:
+                        yield ContextCompacted(reason="mask", collapsed=masked)
                     collapsed = self.compact_history()
                     if collapsed:
-                        dlog("llm.overflow_recovered", {"collapsed": collapsed})
                         yield ContextCompacted(reason="overflow", collapsed=collapsed)
+                    if masked or collapsed:
+                        dlog("llm.overflow_recovered", {"masked": masked, "collapsed": collapsed})
                         continue  # the same step again, with the shorter history
                 if stream is None:
                     yield Error(

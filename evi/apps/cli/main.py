@@ -752,6 +752,11 @@ def _handle_plan(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
 
 
 def _handle_compact(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    if args.strip() == "--fast":  # only the cheap pass: stale tool results to stubs
+        masked = agent.mask_stale_results()
+        console.print(f"[green]masked[/green] {masked} old tool results" if masked
+                      else "[dim]no old tool results to mask[/dim]")
+        return "continue"
     collapsed = agent.compact_history(focus=args.strip())
     if collapsed == 0:
         console.print("[dim]nothing to compact (history is short)[/dim]")

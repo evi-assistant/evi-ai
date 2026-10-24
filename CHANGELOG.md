@@ -930,6 +930,12 @@ All notable user-visible changes to eVi. Format loosely follows
   system prompt says fenced text is information, never instructions, so a
   page that says "ignore your instructions" reads as what it is. A plugin or
   SDK tool opts in with `trust="untrusted"`.
+- **Old tool results are masked before anything is summarised.** Past 60% of
+  the window (and on an overflow), tool results from before your last two
+  messages become short stubs naming a spill file that holds each whole
+  result, which costs no summary call and loses nothing `read_file` can't
+  bring back; compaction follows only if that wasn't enough. `/compact
+  --fast` runs just this pass. `ContextCompacted` gains the reason `mask`.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when
