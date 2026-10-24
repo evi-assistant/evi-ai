@@ -48,7 +48,7 @@ Two things drive **automatic compaction** (`_maybe_autocompact`), checked after 
 When either fires, `compact_history()` runs:
 
 - The original system prompt (index 0) and roughly the most recent `llm.compact_keep_recent` messages are kept verbatim. The cut moves forward to the start of a turn (your next message), so a tool result is never kept without the call it answers. If that would keep fewer than half of `compact_keep_recent` (a short exchange after a long tool turn, or one turn longer than the setting), the cut goes to the nearest step instead: the next message of yours or of the model's.
-- Everything in between is sent to your *same* LLM backend in a one-shot call that produces a concise summary (under ~400 words, preserving facts, decisions, file paths, preferences, and unfinished tasks). Notes from outside the chat (another session, a channel push) go into that call sealed, the way the model reads them (see [Notes in a chat](sessions.md#notes-in-a-chat)), so a note's text can't pass as yours in the summary.
+- Everything in between is sent to your LLM backend in a one-shot call (the chat model, or `llm.compaction_model` when set) for a summary under fixed headings: **Objective, Decisions, Done, In progress, Files, Blockers, Next step**, keeping concrete facts (paths, commands, numbers) and under ~400 words. When the summarised stretch starts with an earlier summary, that summary is **updated** with what came after it instead of being summarised again inside the new one, so repeated compactions don't lose more each time. `/compact <focus>` (REPL and web) adds what to pay particular attention to, word for word.
 - That summary replaces the middle as a **user** message prefixed `[compacted: N earlier messages summarised]`, followed by an assistant acknowledgement (`Understood. I'll continue from that summary.`) when the kept part starts with a message of yours. It is never a second `system` message, which Gemma and Mistral chat templates reject, and user and model turns keep alternating.
 - A **compaction record** is written to the session's transcript (summary, where the cut was, how many messages were kept and how many summarised), so a web or desktop chat revived from disk comes back as the model last saw it. See [Transcripts](sessions.md#transcripts).
 - **Fail-safe**: if the summary call fails or comes back empty, history is left untouched — a transient model outage never loses context. A `before_compact` lifecycle hook can also veto compaction.
@@ -82,6 +82,7 @@ auto_approve = ["fs", "code_read", "memory", "skills", "image"]
 context_size          = 32768   # approx token ceiling for your model (0 = unknown)
 compact_after_messages = 40     # compact once history exceeds this many messages (0 = disabled)
 compact_keep_recent    = 10     # most-recent messages left un-summarised
+compaction_model       = ""     # writes the summaries; empty = the chat model
 compact_when_pct       = 85     # compact when usage reaches this % of context_size
 ```
 

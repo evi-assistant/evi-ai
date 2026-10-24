@@ -908,6 +908,14 @@ All notable user-visible changes to eVi. Format loosely follows
   inlined, `allOf` merged, "X or null" made optional); the model's call maps
   back to the real tool, so permissions, hooks and logs see `github.search`
   (new `evi/toolschema.py`).
+- **Compaction keeps what a model needs to carry on, and no longer nests
+  summaries.** A compaction summary now has fixed headings (Objective,
+  Decisions, Done, In progress, Files, Blockers, Next step) instead of one
+  paragraph, and a later compaction updates the earlier summary instead of
+  summarising it again inside the new one. `/compact <focus>` in the REPL
+  and the web chat says what to keep, word for word. New `[llm]
+  compaction_model` names the model that writes summaries (empty: the chat
+  model).
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when
