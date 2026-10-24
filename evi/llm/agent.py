@@ -1559,7 +1559,7 @@ class Agent:
 
         try:
             stream = self.client.chat.completions.create(
-                model=self.config.llm.model,
+                model=self.config.llm.compaction_model or self.config.llm.model,
                 messages=[
                     {"role": "system", "content": "You write conversation summaries."},
                     {"role": "user", "content": summary_prompt},
