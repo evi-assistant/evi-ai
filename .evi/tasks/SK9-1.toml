@@ -1,6 +1,6 @@
 id = "SK9-1"
 title = "tool output: cap a result to a share of the window, keep head and tail, spill the whole of it to a file"
-status = "open"
+status = "verified"
 why = "First slice of roadmap item tool-result-pipeline. A tool result enters the history whole up to each tool's own cap (run_python 16 KB, read_file 256 KB, MCP unlimited by default), so one big log or file can fill a small model's window. This task adds the pure helpers in a NEW module; the director applies them to every result in the agent loop afterwards."
 hints = "Create evi/tool_output.py with exactly this content (it was run against every acceptance criterion before filing):\n\n\"\"\"Tool output that would crowd the model's window: cut to its head and tail,\nthe whole of it kept in a spill file the model can page with read_file.\n\nA result is held to a share of the context window (`cap_chars`); what is cut\ngoes to ``<eVi home>/tool-output/<session>/<call>.txt`` (secrets redacted,\nreadable by the user only), and the result says where. Spill files are\nscratch: `prune` deletes old ones.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nimport re\nimport shutil\nimport time\nfrom pathlib import Path\n\n# A tool result may fill this share of the context window.\nWINDOW_SHARE = 0.15\n# The cap in characters, whatever the window: a tiny window still sees\n# something useful, a huge one never takes a whole log at once.\nMIN_CHARS, MAX_CHARS = 2_000, 60_000\n# The cap when the window is unknown (no [llm] context_size, nothing reported).\nDEFAULT_CHARS = 16_000\n# Spill files are kept this long when [tools] cleanup_period_days is 0.\nDEFAULT_KEEP_DAYS = 14\n_UNSAFE = re.compile(r\"[^A-Za-z0-9_.-]\")\n\n\ndef cap_chars(window_tokens: int) -> int:\n    \"\"\"How many characters one tool result may keep: WINDOW_SHARE of a\n    `window_tokens` window at ~4 characters a token, within MIN_CHARS and\n    MAX_CHARS; DEFAULT_CHARS when the window is unknown (0).\"\"\"\n    if window_tokens <= 0:\n        return DEFAULT_CHARS\n    return max(MIN_CHARS, min(MAX_CHARS, int(window_tokens * WINDOW_SHARE * 4)))\n\n\ndef clip(text: str, cap: int, note: str, *, tail_biased: bool = False) -> str:\n    \"\"\"`text` cut to about `cap` characters: its head and its tail, joined by\n    a line saying how much was cut and `note` (where the whole of it is).\n    Command and test output keeps more tail (`tail_biased`: the error is at\n    the end); anything else more head. Cuts fall on line breaks when one is\n    near. `text` within `cap` comes back as it is.\"\"\"\n    if len(text) <= cap:\n        return text\n    budget = max(0, cap - len(note) - 80)\n    head_n = budget * (3 if not tail_biased else 1) // 4\n    tail_n = budget - head_n\n    head = text[:head_n]\n    nl = head.rfind(\"\\n\")\n    if nl > head_n // 2:\n        head = head[:nl + 1]\n    tail = text[len(text) - tail_n:] if tail_n else \"\"\n    nl = tail.find(\"\\n\")\n    if 0 <= nl < tail_n // 2:\n        tail = tail[nl + 1:]\n    cut = len(text) - len(head) - len(tail)\n    return f\"{head}\\n[... {cut:,} characters cut. {note} ...]\\n{tail}\"\n\n\ndef spill_dir(home: Path, session_id: str) -> Path:\n    \"\"\"The folder a session's spill files go in.\"\"\"\n    return Path(home) / \"tool-output\" / (_UNSAFE.sub(\"_\", session_id) or \"session\")\n\n\ndef spill(home: Path, session_id: str, call_id: str, text: str) -> Path:\n    \"\"\"Write `text` (secrets redacted) to the session's spill file for\n    `call_id`, readable by the user only, and return its path.\"\"\"\n    from evi.redact import Redactor\n\n    folder = spill_dir(home, session_id)\n    folder.mkdir(parents=True, exist_ok=True)\n    path = folder / f\"{_UNSAFE.sub('_', call_id) or 'call'}.txt\"\n    path.write_text(Redactor()(text), encoding=\"utf-8\")\n    try:\n        os.chmod(path, 0o600)\n    except OSError:\n        pass  # Windows: the user's profile folder is already theirs\n    return path\n\n\ndef prune(home: Path, keep_days: int) -> int:\n    \"\"\"Delete the session spill folders nothing was written to for\n    `keep_days` days; returns how many.\"\"\"\n    root = Path(home) / \"tool-output\"\n    if keep_days <= 0 or not root.is_dir():\n        return 0\n    cutoff = time.time() - keep_days * 86_400\n    removed = 0\n    for folder in root.iterdir():\n        try:\n            newest = max((p.stat().st_mtime for p in folder.iterdir()),\n                         default=folder.stat().st_mtime)\n        except OSError:\n            continue\n        if folder.is_dir() and newest < cutoff:\n            shutil.rmtree(folder, ignore_errors=True)\n            removed += 1\n    return removed\n\nTests in a NEW file tests/test_tool_output.py. Use tmp_path as the eVi home argument (never the real one). For the redaction test set an env var named like a secret (monkeypatch.setenv('ACME_API_KEY', 'Zq8vN2kLp4Xr7Tw1Ys5M-probe')) and call evi.redact.refresh() before spilling (and again in a finally, as tests/test_verify_rounds.py's secret test does). For prune, age a folder with os.utime on its file and on the folder. Comments state why in one line."
 acceptance = ["cap_chars(0) == 16000; cap_chars(1000) == 2000 (the floor); cap_chars(8192) == 4915; cap_chars(32768) == 19660; cap_chars(1_000_000) == 60000 (the ceiling).", "A 2.4 MB text of 40 000 numbered lines clipped with cap_chars(8192) and tail_biased=True comes out at most 4915 characters, starts with 'line 0:', ends with the last line ('line 39999: ...\\n'), and has one line '[... N characters cut. <note> ...]' with N the exact count cut (formatted with thousands separators) and the note given.", "Without tail_biased the head is the larger part (about 3/4 of what's kept); text within the cap comes back unchanged.", "spill(tmp_path, 'sess:1/x', 'call/0?', text) writes tmp_path/tool-output/sess_1_x/call_0_.txt and returns that path; a secret value from the environment in the text is written as [REDACTED:...] instead.", "prune(tmp_path, 14) deletes a session folder whose newest file is 30 days old and keeps one written now, returning 1; prune(tmp_path, 0) deletes nothing and returns 0; prune on a home with no tool-output folder returns 0."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/tool_output.py", "tests/test_tool_output.py"]
 required_checks = ["python -m pytest -q tests/test_tool_output.py", "python -m ruff check evi/tool_output.py tests/test_tool_output.py"]
 implementer = "evi-local"
 created = "2026-10-24T15:41:19Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK9-1"
+branch = "task/SK9-1"
+base = "ad5aa3c7745effffafc4240ec19b580a15ce0e40"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK9-1\\1"
+reviewer_notes = [{at = "2026-10-24T15:45:25Z", verdict = "verified", note = "Director triage: (1) 'NotADirectoryError for a file under tool-output/': iterdir() on a file raises NotADirectoryError, an OSError, which the loop's except OSError catches and skips; no crash. (2) 'quadratic I/O / large list': max() takes a generator (one linear pass over the folder, no list), and folder.stat() is only the default for an empty folder."}]
+
+[evidence_summary]
+hash = "sha256:e2fa57d7e377e5c95d052e34a00ae1de2627a5af4cac0fd2dfb8e938c9c1357f"
+files = 2
+insertions = 235
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 5
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK9-1\\1\\report.json"
+summary = "I have implemented task SK9-1."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK9-1"
+digest = "sha256:c43d6638643f769b4375c445eb3b2a186146d20c791d5201ab55c07572aed647"
+head = "121420a46540627c70f53f679d6606565a9cce2e"
+evidence = "sha256:e2fa57d7e377e5c95d052e34a00ae1de2627a5af4cac0fd2dfb8e938c9c1357f"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T15:45:33Z"
+key = "302b45cb92785c8d"
+sig = "0d2acdb5b171a778ea10782cfecafe3e1cae82d728f842cacfdead52c12c1b12"
+
+[attestation.review]
+base = "ad5aa3c7745effffafc4240ec19b580a15ce0e40"
+exit_code = 1
+report_sha256 = "974ece29c480e3c9157cc8f96fb25a099879696774e441f1f84b2788aa55b6f2"
+override = "Director triage: (1) 'NotADirectoryError for a file under tool-output/': iterdir() on a file raises NotADirectoryError, an OSError, which the loop's except OSError catches and skips; no crash. (2) 'quadratic I/O / large list': max() takes a generator (one linear pass over the folder, no list), and folder.stat() is only the default for an empty folder."
