@@ -3338,9 +3338,7 @@ def create_app() -> FastAPI:
         if sess is None:
             return context_breakdown([], 0)
         _follow_runtime_window(sess)
-        return context_breakdown(
-            sess.agent.history, sess.agent.config.llm.context_size or 0
-        )
+        return context_breakdown(sess.agent.history, sess.agent.context_ceiling())
 
     @app.post("/api/session/{session_id}/channel")
     def push_channel(session_id: str, req: dict[str, Any]) -> dict[str, Any]:

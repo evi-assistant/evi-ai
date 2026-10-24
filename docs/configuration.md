@@ -161,6 +161,18 @@ details), and keys eVi doesn't use — top-level keys, nested or inline tables,
 dates — are kept. Comments are not kept. A value with a newline in it (a stop
 sequence, say) is written escaped, so the file still loads.
 
+### `context_size` and the window the server runs
+
+`context_size` is the window eVi fits the conversation into (auto-compaction
+starts at `compact_when_pct` of it, and `/context` and the usage display
+measure against it). When the server says it runs the model with a smaller
+window, that smaller window is used instead: Ollama for a loaded model
+(`/api/ps`; a model Ollama hasn't loaded yet reports nothing),
+llama-server (`/props`, its `-c`) and LM Studio for a loaded model
+(`/api/v0`). eVi asks at most once a minute per backend and model; a server
+that doesn't answer leaves `context_size` in charge. A larger server window
+never raises it.
+
 ### `context_size` and the managed llama.cpp runtime
 
 With eVi's managed llama.cpp runtime (first-run setup in the web or desktop

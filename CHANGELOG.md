@@ -875,6 +875,14 @@ All notable user-visible changes to eVi. Format loosely follows
   (`max_turns`, `loop_detected`, exit 3), and the project checks don't run
   on that last step: a run out of turns never counts as done. Subagents and
   task runs get the same.
+- **eVi fits the conversation into the window the server really runs the
+  model with.** When Ollama (a loaded model), llama-server or LM Studio (a
+  loaded model) reports a smaller window than `[llm] context_size`, that
+  window is the ceiling: auto-compaction, `/context` and the usage display
+  use it, so a long chat is compacted instead of having its start silently
+  dropped by the server. Asked at most once a minute (new
+  `Backend.context_window`); a silent or unreachable server leaves
+  `context_size` in charge.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

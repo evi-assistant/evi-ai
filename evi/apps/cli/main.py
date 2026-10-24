@@ -1222,7 +1222,7 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     """Show where the context window is being spent (Phase 88)."""
     from evi.context_report import BUCKETS, context_breakdown
 
-    rep = context_breakdown(agent.history, agent.config.llm.context_size or 0)
+    rep = context_breakdown(agent.history, agent.context_ceiling())
     used, ceiling, pct = rep["used"], rep["ceiling"], rep["pct"]
     color = "red" if pct >= 85 else "yellow" if pct >= 70 else "green"
     head = f"[bold]Context[/bold] — {rep['messages']} messages, ~{used:,} tokens"

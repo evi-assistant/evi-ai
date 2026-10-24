@@ -743,6 +743,9 @@ _NOTE_MAX = 6000
 LOOP_DETECTED_REASON = "loop_detected"
 # Done.reason of a turn that used every step max_turns allows.
 MAX_TURNS_REASON = "max_turns_reached"
+# How long a server's reported context window is trusted before it is asked
+# again (a model reload can change it).
+_WINDOW_PROBE_TTL = 60.0
 # The note before a turn's last step, which runs with no tools: the hand-off
 # a run that is out of steps would otherwise end without.
 BUDGET_NOTE = ("This is your last step: the run's step budget is spent, and no tools are "
@@ -1338,13 +1341,46 @@ class Agent:
         return out or None
 
     def token_usage(self) -> tuple[int, int]:
-        """Return (approx_tokens_in_history, configured_context_size).
+        """Return (approx_tokens_in_history, context_ceiling()).
 
         Both numbers are best-effort: the token count is an estimate (see
-        `_approx_tokens`) and the ceiling comes from
-        `config.llm.context_size` which the user sets per model.
+        `_approx_tokens`), and the ceiling is `context_ceiling`.
         """
-        return _approx_tokens(self.history), int(self.config.llm.context_size or 0)
+        return _approx_tokens(self.history), self.context_ceiling()
+
+    def context_ceiling(self) -> int:
+        """The window the conversation must fit in: `config.llm.context_size`,
+        or the smaller window the server says it runs the model with
+        (`Backend.context_window`: a model Ollama or LM Studio loaded with
+        less, llama-server's -c). 0 when neither is known."""
+        configured = int(self.config.llm.context_size or 0)
+        reported = self._server_window()
+        if reported and (not configured or reported < configured):
+            return reported
+        return configured
+
+    def _server_window(self) -> int | None:
+        """The backend's reported window for the active model, asked at most
+        once a minute (_WINDOW_PROBE_TTL) per backend, URL and model; None
+        when it doesn't say or the probe fails."""
+        llm = self.config.llm
+        key = (getattr(llm, "backend", ""), getattr(llm, "base_url", ""), llm.model)
+        now = time.monotonic()
+        cached = getattr(self, "_window_probe", None)
+        if cached is not None and cached[0] == key and now - cached[1] < _WINDOW_PROBE_TTL:
+            return cached[2]
+        window: int | None = None
+        try:
+            from evi.backends.factory import get_backend
+
+            backend = get_backend(llm)
+            if hasattr(backend, "discover_ports"):
+                backend.discover_ports = False  # a probe of the configured URL, not a scan
+            window = backend.context_window(llm.model)
+        except Exception as e:  # noqa: BLE001 — a probe must never break a turn
+            dlog("context.window_probe_failed", repr(e))
+        self._window_probe = (key, now, window)
+        return window
 
     def refresh_context_size(self) -> int:
         """Bring the ceiling in step with eVi's managed llama.cpp server when
