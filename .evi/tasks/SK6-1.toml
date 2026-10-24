@@ -1,6 +1,6 @@
 id = "SK6-1"
 title = "context report: count the tool schemas sent with every request, per category and per MCP server"
-status = "open"
+status = "verified"
 why = "Part of roadmap item models-ops-context-window-probe (the per-component breakdown). /context and the web usage popover split the conversation into system/user/assistant/tools, but the tool schemas that go with EVERY request are not counted at all; with a few MCP servers they are thousands of tokens, the first thing to trim on a small window. This task adds the count to evi/context_report.py; showing it in the CLI and web is SK6-2."
 hints = "All in evi/context_report.py (read it first; it is short):\n1) The imports become `import json` and `from typing import Any, Iterable`, and BUCKETS becomes (\"system\", \"schemas\", \"user\", \"assistant\", \"tools\") with this comment above it: `# Display order of the buckets. \"schemas\" is the tool schemas that go with` / `# every request (counted when context_breakdown is given the tools).`\n2) Add this function directly above context_breakdown:\n\ndef tool_schema_tokens(tools: Iterable[Any]) -> dict[str, int]:\n    \"\"\"Estimated tokens of the tool schemas that go with every request, per\n    group: a built-in tool's category (\"fs\", \"code\", ...), or \"mcp:<server>\"\n    for an MCP tool (named \"<server>.<tool>\"). Largest group first; the same\n    ~4 chars/token estimate as the buckets.\"\"\"\n    chars: dict[str, int] = {}\n    for tool in tools:\n        try:\n            size = len(json.dumps(tool.openai_schema(), ensure_ascii=False))\n        except (AttributeError, TypeError, ValueError):\n            continue  # not a tool, or a schema that can't be sent anyway\n        name = str(getattr(tool, \"name\", \"\"))\n        category = str(getattr(tool, \"category\", \"\") or \"other\")\n        group = f\"mcp:{name.split('.', 1)[0]}\" if category == \"mcp\" and \".\" in name else category\n        chars[group] = chars.get(group, 0) + size\n    return dict(sorted(((g, c // 4) for g, c in chars.items()), key=lambda kv: (-kv[1], kv[0])))\n\n3) context_breakdown gets a third parameter, `tools: Iterable[Any] = ()`, and its docstring says the schemas of `tools` (the session's tools) go into the schemas bucket and that the result also has `schema_groups`. Right after the line `buckets = {b: chars[b] // 4 for b in BUCKETS}` add\n    schema_groups = tool_schema_tokens(tools)\n    buckets[\"schemas\"] = sum(schema_groups.values())\nand add `\"schema_groups\": schema_groups,` as the last entry of the returned dict. Change nothing else.\n4) Tests: ADD to tests/test_context_report.py (read it, then edit_file or apply_patch; keep every existing test). Use real tools (`import evi.tools.fs  # noqa: F401  registers read_file and write_file`, then `from evi.tools.base import REGISTRY, Tool`) and build MCP-like tools as Tool(name=\"github.search\", description=\"d\" * 400, parameters={\"type\": \"object\", \"properties\": {}}, func=lambda **k: \"\", category=\"mcp\"). Comments state why in one line."
 acceptance = ["tool_schema_tokens([REGISTRY['read_file'], REGISTRY['write_file']]) == {'fs': (len(json.dumps(rf.openai_schema())) + len(json.dumps(wf.openai_schema()))) // 4} for those two tools.", "MCP tools named 'github.search', 'github.issue' and 'notes.add' are grouped as 'mcp:github' and 'mcp:notes'; the groups come largest first.", "Something that isn't a tool (e.g. object()) in the list is skipped, not an error.", "context_breakdown(history, 1000, tools=[REGISTRY['read_file']]) has buckets['schemas'] == sum(schema_groups.values()) > 0, and 'used' includes it; without tools, buckets['schemas'] == 0, schema_groups == {} and 'used' is as before.", "BUCKETS == ('system', 'schemas', 'user', 'assistant', 'tools'), and the existing tests in tests/test_context_report.py and tests/test_context_window.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/context_report.py", "tests/test_context_report.py"]
 required_checks = ["python -m pytest -q tests/test_context_report.py tests/test_context_window.py", "python -m ruff check evi/context_report.py tests/test_context_report.py"]
 implementer = "evi-local"
 created = "2026-10-24T05:23:32Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK6-1"
+branch = "task/SK6-1"
+base = "f9d2760a0087d18b6dab12a87db9012639c85ae2"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK6-1\\1"
+reviewer_notes = [{at = "2026-10-24T05:25:53Z", verdict = "verified", note = "Director triage: (1) correctness 'cumulative rounding': flooring per group loses at most one token per group on a ~4 chars/token estimate, the same flooring the existing buckets use; not a defect. (2) performance 'json.dumps per call': context_breakdown runs on /context and the usage-popover click, not per turn, and the agent already serializes every schema for every request; caching would add invalidation for no measurable gain."}]
+
+[evidence_summary]
+hash = "sha256:7e10a1d86931d311dd6291f657d06b8b22e7a807adb5bc7c3652d15f6e0dee9a"
+files = 2
+insertions = 78
+deletions = 5
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 11
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK6-1\\1\\report.json"
+summary = "I have implemented task SK6-1. I added tool schema token estimation to the context report, allowing the system to track how many tokens the tool definitions consume in every request."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK6-1"
+digest = "sha256:eb9ae29c1fd3af6fd78727d1e67ed2de3ec7a2d8b2f46fa17ba391bde6f4df9a"
+head = "a732763b543e447830b6f2be04ec570f02e55121"
+evidence = "sha256:7e10a1d86931d311dd6291f657d06b8b22e7a807adb5bc7c3652d15f6e0dee9a"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T05:26:00Z"
+key = "302b45cb92785c8d"
+sig = "3dd57dcb32ea15e9747ff65d4d1e9751b399ac29b54eacae999c17ef645804d7"
+
+[attestation.review]
+base = "f9d2760a0087d18b6dab12a87db9012639c85ae2"
+exit_code = 1
+report_sha256 = "331ddd7b34fc251137a5aa3b73e765253910f4f9854fd6e8a6eb890e0f671611"
+override = "Director triage: (1) correctness 'cumulative rounding': flooring per group loses at most one token per group on a ~4 chars/token estimate, the same flooring the existing buckets use; not a defect. (2) performance 'json.dumps per call': context_breakdown runs on /context and the usage-popover click, not per turn, and the agent already serializes every schema for every request; caching would add invalidation for no measurable gain."
