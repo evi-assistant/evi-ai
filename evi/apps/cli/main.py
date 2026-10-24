@@ -1222,7 +1222,7 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     """Show where the context window is being spent (Phase 88)."""
     from evi.context_report import BUCKETS, context_breakdown
 
-    rep = context_breakdown(agent.history, agent.context_ceiling())
+    rep = context_breakdown(agent.history, agent.context_ceiling(), agent.tools.values())
     used, ceiling, pct = rep["used"], rep["ceiling"], rep["pct"]
     color = "red" if pct >= 85 else "yellow" if pct >= 70 else "green"
     head = f"[bold]Context[/bold] — {rep['messages']} messages, ~{used:,} tokens"
@@ -1232,7 +1232,7 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
         head += " [dim](no llm.context_size set)[/dim]"
     console.print(head)
 
-    labels = {"system": "system prompt", "user": "you",
+    labels = {"system": "system prompt", "schemas": "tool schemas", "user": "you",
               "assistant": "assistant", "tools": "tools"}
     width = 24
     for b in BUCKETS:
@@ -1244,6 +1244,11 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
             f"  [cyan]{labels[b]:<14}[/cyan] [dim]{bar}[/dim] "
             f"{toks:,} [dim]({share}%)[/dim]"
         )
+    groups = list(rep["schema_groups"].items())
+    if groups:
+        shown = ", ".join(f"{g} {t:,}" for g, t in groups[:8])
+        more = f" and {len(groups) - 8} more" if len(groups) > 8 else ""
+        console.print(f"  [dim]tool schemas by group: {shown}{more}[/dim]")
     return "continue"
 
 

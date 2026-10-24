@@ -75,8 +75,8 @@ def test_context_popover(page: Page, evi_base_url: str):
     expect(chip).to_be_visible(timeout=20000)
     chip.click()
     expect(page.locator(".ctx-pop")).to_be_visible()
-    # one row per bucket (system / you / assistant / tools)
-    assert page.locator(".ctx-pop .ctx-row").count() == 4
+    # one row per bucket (system / schemas / you / assistant / tools)
+    assert page.locator(".ctx-pop .ctx-row").count() == 5
 
 
 # ---- dispatch panel (Phase 85) -------------------------------------------

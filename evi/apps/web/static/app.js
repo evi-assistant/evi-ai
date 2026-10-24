@@ -267,13 +267,13 @@ chipUsage.addEventListener('click', async (ev) => {
     rep = await r.json();
   } catch { return; }
   const k = n => n >= 1000 ? Math.round(n / 1000) + 'k' : '' + n;
-  const labels = { system: 'system prompt', user: 'you', assistant: 'assistant', tools: 'tools' };
+  const labels = { system: 'system prompt', schemas: 'tool schemas', user: 'you', assistant: 'assistant', tools: 'tools' };
   const pop = document.createElement('div');
   pop.className = 'ctx-pop';
   let html = `<div class="ctx-head">~${rep.used.toLocaleString()} tokens`
     + (rep.ceiling ? ` / ${rep.ceiling.toLocaleString()} (${rep.pct}%)` : '')
     + ` · ${rep.messages} msgs</div>`;
-  for (const b of ['system', 'user', 'assistant', 'tools']) {
+  for (const b of ['system', 'schemas', 'user', 'assistant', 'tools']) {
     const toks = (rep.buckets && rep.buckets[b]) || 0;
     const share = (rep.pct_of_used && rep.pct_of_used[b]) || 0;
     html += `<div class="ctx-row"><span class="ctx-lbl">${labels[b]}</span>`
