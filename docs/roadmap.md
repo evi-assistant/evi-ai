@@ -109,7 +109,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
-| `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned |
+| `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned; the probe and the session ceiling are done (Phase 2 batch 3, unreleased), the per-component /context breakdown and sending Ollama a window are left |
 | `models-ops-token-budget-recovery` | Real-token budgeting checked every round, and overflow compact-and-retry | M | director | `models-ops-context-window-probe`, `fix-history-validity` | Planned |
 | `tool-result-pipeline` | Tool-result pipeline: budget and spill, stale masking, untrusted envelopes | L | director | `models-ops-token-budget-recovery`, `loop-agent-cancel`, `fix-tool-context-binding`, `safety-secret-redaction` | Planned |
 | `loop-tools-tool-call-repair` | Tool-call repair: tolerant parsing, coercion, aliases and tagged-text recovery | M | evi-frontier | `loop-eval-gates` | Done (Phase 2 batch 2, unreleased); per-model repair counts in `evi stats` still to do |
