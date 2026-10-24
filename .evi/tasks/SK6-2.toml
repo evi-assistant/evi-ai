@@ -1,0 +1,20 @@
+id = "SK6-2"
+title = "/context and the web usage popover show the tool-schema tokens, with the groups in the CLI"
+status = "open"
+why = "Part of roadmap item models-ops-context-window-probe: SK6-1 made context_breakdown count the tool schemas when given the tools. The CLI /context, the web context route and the web usage popover now pass and show them."
+hints = "Four small edits, nothing else:\n1) evi/apps/cli/main.py, _handle_context (around line 1221; search for `def _handle_context`): the call becomes `rep = context_breakdown(agent.history, agent.context_ceiling(), agent.tools.values())`; the labels dict gains `\"schemas\": \"tool schemas\"` (after system); and just before its final `return \"continue\"` add:\n    groups = list(rep[\"schema_groups\"].items())\n    if groups:\n        shown = \", \".join(f\"{g} {t:,}\" for g, t in groups[:8])\n        more = f\" and {len(groups) - 8} more\" if len(groups) > 8 else \"\"\n        console.print(f\"  [dim]tool schemas by group: {shown}{more}[/dim]\")\n2) evi/apps/web/server.py (search for `return context_breakdown(sess.agent.history`): pass `sess.agent.tools.values()` as the third argument (wrap the line as ruff wants).\n3) evi/apps/web/static/app.js (search for `const labels = { system: 'system prompt'`): add `schemas: 'tool schemas'` after system in labels, and 'schemas' after 'system' in the list the next for loop walks.\n4) tests/e2e/test_ui_features.py, test_context_popover: the popover now has 5 rows (update the count and its comment).\nTests in a NEW file tests/test_context_surfaces.py: (a) the CLI: monkeypatch.setattr(cli_main, 'console', Console(file=io.StringIO(), width=120)) (cli_main is evi.apps.cli.main, Console from rich.console), call cli_main._handle_context(agent, '', CommandStore(root=tmp_path)) for an Agent(client=None, config=Config(), transcripts=None, tools=[REGISTRY['read_file'], <an MCP-like Tool named 'github.search' with category 'mcp'>]) and check the printed text; (b) the web route: `from tests._live_web import web_app`, c = TestClient(web_app(monkeypatch, tmp_path, agent)) for an agent whose client is fake_llm([llm_text('hi')]) and tools [REGISTRY['read_file']]; c.post('/api/chat', json={'session_id': 's1', 'message': 'go'}); then GET /api/session/s1/context. Import evi.tools.fs with `# noqa: F401  registers read_file`."
+acceptance = ["/context in the CLI prints a 'tool schemas' row and a line 'tool schemas by group: ...' naming 'fs' and 'mcp:github' for an agent with read_file and an MCP tool 'github.search'.", "With no tools, /context prints the 'tool schemas' row at 0 and no 'by group' line.", "GET /api/session/<id>/context returns buckets.schemas > 0 and schema_groups containing 'fs' for a session whose agent has read_file.", "app.js shows a 'tool schemas' row in the usage popover (labels and the row list both have schemas), and the e2e popover test expects 5 rows.", "The existing tests in tests/test_context_report.py pass."]
+files_in_scope = ["evi/apps/cli/main.py", "evi/apps/web/server.py", "evi/apps/web/static/app.js", "tests/e2e/test_ui_features.py", "tests/test_context_surfaces.py"]
+required_checks = ["python -m pytest -q tests/test_context_surfaces.py tests/test_context_report.py", "python -m ruff check evi/apps/cli/main.py evi/apps/web/server.py tests/e2e/test_ui_features.py tests/test_context_surfaces.py"]
+implementer = "evi-local"
+created = "2026-10-24T05:23:35Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
