@@ -121,23 +121,25 @@ def test_normalize_schema_allof():
 def test_normalize_schema_limits_and_drops():
     # AC4: recursive/unresolvable refs become {}, depth limit, dropped keywords
     # Recursive ref
-    s_rec = {'properties': {'node': {'$ref': '#/'}}}
-    assert normalize_schema(s_rec)['properties']['node'] == {}
+    s_rec = {'$defs': {'Node': {'type': 'object', 'properties': {'child': {'$ref': '#/$defs/Node'}}}},
+             'type': 'object', 'properties': {'root': {'$ref': '#/$defs/Node'}}}
+    assert normalize_schema(s_rec)['properties']['root'] == {'type': 'object', 'properties': {'child': {}}}
     # Unresolvable ref
     s_un = {'properties': {'node': {'$ref': '#/nope'}}}
     assert normalize_schema(s_un)['properties']['node'] == {}
     # Depth limit
-    s_deep = {}
+    s_deep = {'type': 'object', 'properties': {}}
     curr = s_deep
     for _ in range(12):
-        curr['p'] = {}
-        curr = curr['p']
-    res_deep = normalize_schema(s_deep)
-    # Check depth 9 is {}
-    node = res_deep
-    for _ in range(MAX_DEPTH + 4):
-        node = node.get('p', {})
-    assert node == {}
+        nxt = {'type': 'object', 'properties': {}}
+        curr['properties']['x'] = nxt
+        curr = nxt
+    node = normalize_schema(s_deep)
+    depth = 0
+    while node.get('properties', {}).get('x'):
+        node = node['properties']['x']
+        depth += 1
+    assert depth == MAX_DEPTH and node == {'type': 'object', 'properties': {'x': {}}}
     # Dropped keywords
     s_drop = {'$schema': 'v7', '$id': 'id', 'examples': [1], 'type': 'string'}
     assert normalize_schema(s_drop) == {'type': 'string'}
