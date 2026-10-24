@@ -883,6 +883,12 @@ All notable user-visible changes to eVi. Format loosely follows
   dropped by the server. Asked at most once a minute (new
   `Backend.context_window`); a silent or unreachable server leaves
   `context_size` in charge.
+- **`/context` counts the tool schemas sent with every request.** A new
+  "tool schemas" row in `/context` and the web usage popover, and in the CLI
+  a line breaking it down per tool category and per MCP server (largest
+  first), so the tools filling a small window are easy to find and switch
+  off. `GET /api/session/{id}/context` returns it as `buckets.schemas` and
+  `schema_groups`.
 - **The Companion: an opt-in, safe-scoped proactive watcher (Duet-style).**
   The always-on personal agents (Claude Duet, OpenAI Dots, Meta Muse) check
   your sources every few hours, brief you each morning and speak up only when

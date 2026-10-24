@@ -53,7 +53,7 @@ When either fires, `compact_history()` runs:
 - A **compaction record** is written to the session's transcript (summary, where the cut was, how many messages were kept and how many summarised), so a web or desktop chat revived from disk comes back as the model last saw it. See [Transcripts](sessions.md#transcripts).
 - **Fail-safe**: if the summary call fails or comes back empty, history is left untouched — a transient model outage never loses context. A `before_compact` lifecycle hook can also veto compaction.
 
-The **context report** (`evi/context_report.py`) categorises history into four buckets — `system`, `user` (you), `assistant`, and `tools` (tool calls + tool results) — and reports tokens per bucket, total used, the ceiling, and percent full.
+The **context report** (`evi/context_report.py`) categorises history into buckets — `system`, `user` (you), `assistant`, and `tools` (tool calls + tool results) — plus `schemas`, the tool schemas that go with every request, and reports tokens per bucket, total used, the ceiling, and percent full. The schemas are also broken down per group (`schema_groups`): a built-in tool's category (`fs`, `code`, …) or `mcp:<server>` for each MCP server, largest first, so you can see which tools to switch off on a small window. `/context` prints the groups under the bars.
 
 ## Setup
 

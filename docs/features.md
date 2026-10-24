@@ -197,7 +197,8 @@ refuse to run there. `evi attest init` makes the key; `evi task verify` and
 **Context management** — automatic compaction (`[llm] compact_*`), cut at a
 turn boundary and kept in the transcript, so a revived web chat resumes from
 the summary. REPL `/context` (`/ctx`) shows a per-bucket breakdown
-(system/you/assistant/tools); Web: click the usage chip. `/compact` forces it.
+(system/tool schemas/you/assistant/tools, with the schemas per category and
+MCP server); Web: click the usage chip. `/compact` forces it.
 
 **Predicted outputs** — `/predict <text|file>` speculative-decoding hint.
 
