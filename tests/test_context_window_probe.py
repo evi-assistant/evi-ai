@@ -13,6 +13,8 @@ from evi.backends.base import (
     window_tokens,
 )
 from evi.backends import (
+    LlamaCppBackend,
+    LMStudioBackend,
     OllamaBackend,
     OpenAICompatBackend,
 )
@@ -117,3 +119,49 @@ def test_ollama_context_window_robustness(monkeypatch: pytest.MonkeyPatch) -> No
     import evi.portprobe
     monkeypatch.setattr(evi.portprobe, "fast_get", lambda *a, **k: None)
     assert OllamaBackend().context_window("m") is None
+
+
+def test_llamacpp_reads_n_ctx_from_props(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = LlamaCppBackend("http://h:8080/v1", discover_ports=False)
+    for props, want in (
+        ({"default_generation_settings": {"n_ctx": 8192}}, 8192),  # current builds
+        ({"n_ctx": 4096}, 4096),  # older builds
+        ({"default_generation_settings": {"n_ctx": 0}, "n_ctx": 2048}, 2048),
+        ({"default_generation_settings": {}}, None),
+    ):
+        seen: list[str] = []
+
+        def handler(req: httpx.Request, props=props, seen=seen) -> httpx.Response:
+            seen.append(str(req.url))
+            return httpx.Response(200, json=props)
+
+        _patch_httpx(monkeypatch, handler)
+        assert b.context_window("x") == want, props
+        assert seen == ["http://h:8080/props"]
+
+
+def test_lmstudio_reads_the_loaded_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/v0/models/qwen/qwen3-8b":
+            return httpx.Response(200, json={"state": "loaded", "loaded_context_length": 4096,
+                                             "max_context_length": 32768})
+        return httpx.Response(404)
+
+    _patch_httpx(monkeypatch, handler)
+    b = LMStudioBackend("http://h:1234/v1")
+    assert b.context_window("qwen/qwen3-8b") == 4096
+    assert b.context_window("other") is None  # a 404
+
+    def not_loaded(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "not-loaded", "loaded_context_length": 4096})
+
+    _patch_httpx(monkeypatch, not_loaded)
+    assert b.context_window("qwen/qwen3-8b") is None
+
+
+def test_llamacpp_and_lmstudio_answer_none_to_a_bad_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    backends = [LlamaCppBackend("http://h:8080/v1", discover_ports=False),
+                LMStudioBackend("http://h:1234/v1")]
+    for response in (httpx.Response(200, text="not json"), httpx.Response(200, json=[1, 2, 3])):
+        _patch_httpx(monkeypatch, lambda req, r=response: r)
+        assert [b.context_window("m") for b in backends] == [None, None]
