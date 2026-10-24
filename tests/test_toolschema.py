@@ -1,6 +1,6 @@
 import re
 
-from evi.toolschema import safe_name, wire_names
+from evi.toolschema import safe_name, wire_names, normalize_schema, MAX_DEPTH
 
 SAFE_PATTERN = re.compile(r'[a-zA-Z0-9_-]{1,64}')
 
@@ -69,3 +69,86 @@ def test_wire_names_long_collisions():
     assert res[name1] != res[name2]
     assert len(res[name1]) == 64
     assert len(res[name2]) == 64
+
+
+def test_normalize_schema_refs():
+    # AC1: $ref resolved inline, $defs and $ref removed
+    schema = {
+        '$defs': {
+            'Addr': {'type': 'object', 'properties': {'city': {'type': 'string'}}, 'required': ['city']}
+        },
+        'type': 'object',
+        'properties': {
+            'home': {'$ref': '#/$defs/Addr'},
+            'work': {'anyOf': [{'$ref': '#/$defs/Addr'}, {'type': 'null'}]}
+        }
+    }
+    res = normalize_schema(schema)
+    addr = {'type': 'object', 'properties': {'city': {'type': 'string'}}, 'required': ['city']}
+    assert res['properties']['home'] == addr
+    assert res['properties']['work'] == addr
+    assert '$defs' not in res
+    assert not any('$ref' in str(v) for v in res.values())
+
+
+def test_normalize_schema_nulls():
+    # AC2: "X or null" becomes plain X; type list with null simplified
+    # anyOf with null branch
+    s1 = {'anyOf': [{'type': 'string', 'default': 'hi'}, {'type': 'null'}]}
+    assert normalize_schema(s1) == {'type': 'string', 'default': 'hi'}
+    # type list with null
+    s2 = {'type': ['string', 'null']}
+    assert normalize_schema(s2) == {'type': 'string'}
+    # anyOf with multiple non-null branches
+    s3 = {'anyOf': [{'type': 'string'}, {'type': 'integer'}, {'type': 'null'}]}
+    assert normalize_schema(s3) == {'anyOf': [{'type': 'string'}, {'type': 'integer'}]}
+
+
+def test_normalize_schema_allof():
+    # AC3: allOf merged into one schema
+    s = {
+        'allOf': [
+            {'properties': {'a': {'type': 'string'}}, 'required': ['a']},
+            {'properties': {'b': {'type': 'integer'}}}
+        ]
+    }
+    res = normalize_schema(s)
+    assert 'allOf' not in res
+    assert res['properties'] == {'a': {'type': 'string'}, 'b': {'type': 'integer'}}
+    assert res['required'] == ['a']
+
+
+def test_normalize_schema_limits_and_drops():
+    # AC4: recursive/unresolvable refs become {}, depth limit, dropped keywords
+    # Recursive ref
+    s_rec = {'$defs': {'Node': {'type': 'object', 'properties': {'child': {'$ref': '#/$defs/Node'}}}},
+             'type': 'object', 'properties': {'root': {'$ref': '#/$defs/Node'}}}
+    assert normalize_schema(s_rec)['properties']['root'] == {'type': 'object', 'properties': {'child': {}}}
+    # Unresolvable ref
+    s_un = {'properties': {'node': {'$ref': '#/nope'}}}
+    assert normalize_schema(s_un)['properties']['node'] == {}
+    # Depth limit
+    s_deep = {'type': 'object', 'properties': {}}
+    curr = s_deep
+    for _ in range(12):
+        nxt = {'type': 'object', 'properties': {}}
+        curr['properties']['x'] = nxt
+        curr = nxt
+    node = normalize_schema(s_deep)
+    depth = 0
+    while node.get('properties', {}).get('x'):
+        node = node['properties']['x']
+        depth += 1
+    assert depth == MAX_DEPTH and node == {'type': 'object', 'properties': {'x': {}}}
+    # Dropped keywords
+    s_drop = {'$schema': 'v7', '$id': 'id', 'examples': [1], 'type': 'string'}
+    assert normalize_schema(s_drop) == {'type': 'string'}
+
+
+def test_normalize_schema_identity_and_edge():
+    # AC5: identity for simple schemas, input unchanged, None handling
+    s = {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}
+    s_copy = s.copy()
+    assert normalize_schema(s) == s
+    assert s == s_copy
+    assert normalize_schema(None) == {'type': 'object', 'properties': {}}
