@@ -1,6 +1,6 @@
 id = "SK7-2"
 title = "toolschema: normalize_schema makes an MCP tool's JSON schema acceptable to every provider and local grammar"
-status = "open"
+status = "verified"
 why = "Second slice of roadmap item tool-schema-safe-names. MCP servers (often generated from Pydantic) send schemas with $ref/$defs, allOf and anyOf-with-null; OpenAI rejects some of these and local grammar builders (llama.cpp, Ollama's JSON constraint) choke on them. normalize_schema turns them into plain object schemas; the director applies it when the tool list is sent."
 hints = "evi/toolschema.py exists (SK7-1): read it, then APPEND exactly this at the end of the module with edit_file or apply_patch (never write_file over it), changing nothing above:\n\n# Keywords that describe a schema document rather than a value; local\n# grammars reject some of them, and none of them help the model.\n_DROPPED = frozenset({\"$schema\", \"$id\", \"$comment\", \"$anchor\", \"$defs\", \"definitions\",\n                      \"examples\", \"deprecated\", \"readOnly\", \"writeOnly\"})\n# Deeper than this, a schema is cut to {} (any value): grammar builders\n# recurse on it, and a model can't make use of it anyway.\nMAX_DEPTH = 8\n\n\ndef _ref_target(ref: str, root: dict) -> dict | None:\n    \"\"\"The schema a local \"#/$defs/X\" (or \"#/definitions/X\") reference names.\"\"\"\n    if not ref.startswith(\"#/\"):\n        return None\n    node: object = root\n    for part in ref[2:].split(\"/\"):\n        if not isinstance(node, dict):\n            return None\n        node = node.get(part.replace(\"~1\", \"/\").replace(\"~0\", \"~\"))\n    return node if isinstance(node, dict) else None\n\n\ndef _normalize(node: object, root: dict, depth: int, seen: tuple[str, ...]) -> object:\n    if isinstance(node, list):\n        return [_normalize(v, root, depth, seen) for v in node]\n    if not isinstance(node, dict):\n        return node\n    if depth > MAX_DEPTH:\n        return {}\n    ref = node.get(\"$ref\")\n    if isinstance(ref, str):\n        target = _ref_target(ref, root)\n        if target is None or ref in seen:  # unresolvable, or recursive: any value\n            return {k: v for k, v in node.items() if k != \"$ref\" and k not in _DROPPED}\n        merged = {**target, **{k: v for k, v in node.items() if k != \"$ref\"}}\n        return _normalize(merged, root, depth, seen + (ref,))\n    out: dict = {}\n    for key, value in node.items():\n        if key in _DROPPED:\n            continue\n        if key in (\"properties\", \"patternProperties\", \"$defs\", \"definitions\"):\n            out[key] = ({k: _normalize(v, root, depth + 1, seen) for k, v in value.items()}\n                        if isinstance(value, dict) else value)\n        elif key in (\"items\", \"additionalProperties\", \"not\", \"if\", \"then\", \"else\",\n                     \"anyOf\", \"oneOf\", \"allOf\", \"prefixItems\"):\n            out[key] = _normalize(value, root, depth + 1, seen)\n        else:\n            out[key] = value\n    if isinstance(out.get(\"allOf\"), list):\n        parts = [p for p in out.pop(\"allOf\") if isinstance(p, dict)]\n        for part in parts:\n            for key, value in part.items():\n                if key == \"properties\" and isinstance(value, dict):\n                    out[\"properties\"] = {**out.get(\"properties\", {}), **value}\n                elif key == \"required\" and isinstance(value, list):\n                    out[\"required\"] = sorted(set(out.get(\"required\", [])) | set(value))\n                else:\n                    out.setdefault(key, value)\n    for key in (\"anyOf\", \"oneOf\"):\n        branches = out.get(key)\n        if isinstance(branches, list):\n            rest = [b for b in branches if b != {\"type\": \"null\"}]\n            if len(rest) < len(branches):  # \"X or null\": the field is optional\n                if len(rest) == 1 and isinstance(rest[0], dict):\n                    out.pop(key)\n                    out = {**rest[0], **out}\n                else:\n                    out[key] = rest\n    if isinstance(out.get(\"type\"), list) and \"null\" in out[\"type\"]:\n        kinds = [t for t in out[\"type\"] if t != \"null\"]\n        out[\"type\"] = kinds[0] if len(kinds) == 1 else kinds\n    return out\n\n\ndef normalize_schema(schema: dict) -> dict:\n    \"\"\"`schema` (a tool's JSON-schema parameters) in a form every provider and\n    local grammar accepts: local $ref resolved inline ($defs dropped after),\n    allOf merged into one object, \"X or null\" (anyOf/oneOf with a null branch,\n    or a type list with \"null\") made plain X, document-only keywords\n    (_DROPPED) removed, and anything deeper than MAX_DEPTH cut to {}. A\n    recursive or unresolvable $ref becomes {} (any value). `schema` itself is\n    left unchanged.\"\"\"\n    if not isinstance(schema, dict):\n        return {\"type\": \"object\", \"properties\": {}}\n    out = _normalize(schema, schema, 0, ())\n    return out if isinstance(out, dict) else {\"type\": \"object\", \"properties\": {}}\n\nTests: ADD to tests/test_toolschema.py (read it first; keep every SK7-1 test). Build the schemas in the test as plain dicts, e.g. a Pydantic-style one: {'$defs': {'Addr': {'type': 'object', 'properties': {'city': {'type': 'string'}}, 'required': ['city']}}, 'type': 'object', 'properties': {'home': {'$ref': '#/$defs/Addr'}, 'work': {'anyOf': [{'$ref': '#/$defs/Addr'}, {'type': 'null'}]}}}. Comments state why in one line."
 acceptance = ["A '$ref': '#/$defs/Addr' property comes out as the Addr schema inline ({'type': 'object', 'properties': {'city': {'type': 'string'}}, 'required': ['city']}), and the result has no '$defs' and no '$ref' anywhere.", "{'anyOf': [<X>, {'type': 'null'}]} comes out as plain X (its other keys, e.g. a 'default', kept); {'type': ['string', 'null']} as {'type': 'string'}; an anyOf of string, integer and null keeps anyOf with the two non-null branches.", "{'allOf': [{'properties': {'a': {'type': 'string'}}, 'required': ['a']}, {'properties': {'b': {'type': 'integer'}}}]} comes out as one schema with properties a and b and required ['a'] (no allOf).", "A recursive $ref (a Node whose child is a Node) and an unresolvable one ('#/nope') come out as {} at that point; a schema 12 objects deep is cut to {} below MAX_DEPTH (8) levels; '$schema', '$id' and 'examples' are dropped.", "A schema that needs none of this (e.g. {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}) comes back equal to itself; the input dict is never changed; normalize_schema(None) gives {'type': 'object', 'properties': {}}.", "The SK7-1 tests still pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/toolschema.py", "tests/test_toolschema.py"]
 required_checks = ["python -m pytest -q tests/test_toolschema.py", "python -m ruff check evi/toolschema.py tests/test_toolschema.py"]
 implementer = "evi-local"
 created = "2026-10-24T09:09:50Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK7-2"
+branch = "task/SK7-2"
+base = "7f18a3fb45c114e93e065922e3de0a99adf9a8de"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK7-2\\2"
+reviewer_notes = [{at = "2026-10-24T09:14:50Z", verdict = "reopened", note = "Director review (round 1). evi/toolschema.py is right: do not change it. Two tests in tests/test_toolschema.py pass without testing what they claim; fix them with edit_file (read the file first; change only these two places):\n1. test_normalize_schema_limits_and_drops, \"Recursive ref\": '$ref': '#/' doesn't resolve at all, so it is the unresolvable case again. Use a real recursive schema:\n    s_rec = {'$defs': {'Node': {'type': 'object', 'properties': {'child': {'$ref': '#/$defs/Node'}}}},\n             'type': 'object', 'properties': {'root': {'$ref': '#/$defs/Node'}}}\n    assert normalize_schema(s_rec)['properties']['root'] == {'type': 'object', 'properties': {'child': {}}}\n2. Same test, \"Depth limit\": the chain uses the key 'p', which normalize_schema never walks into (it only recurses into keywords such as 'properties'), so the depth cut never runs. Build the chain with real nesting and check the cut:\n    s_deep = {'type': 'object', 'properties': {}}\n    curr = s_deep\n    for _ in range(12):\n        nxt = {'type': 'object', 'properties': {}}\n        curr['properties']['x'] = nxt\n        curr = nxt\n    node = normalize_schema(s_deep)\n    depth = 0\n    while node.get('properties', {}).get('x'):\n        node = node['properties']['x']\n        depth += 1\n    assert depth == MAX_DEPTH and node == {'type': 'object', 'properties': {'x': {}}}\n(Each properties level is one level deeper; the level past MAX_DEPTH is cut to {}.)\nAlso put two blank lines between top-level functions and a blank line after the imports. Then run the required checks and quote their last lines."}, {at = "2026-10-24T09:17:49Z", verdict = "verified", note = "Director triage: (1) allOf 'only the first non-properties key is kept': by design: properties and required are merged; any other keyword that differs between allOf parts is a contradictory constraint, and the first one is kept for a model-facing schema. (2) anyOf-null merge 'destructive': the field's own keys (description, default) win over the branch's on purpose, and the branches are normalized before the merge (anyOf values are normalized in the key loop above); the reviewer notes this itself."}]
+
+[evidence_summary]
+hash = "sha256:eeae0983e7ca6936f172d854853278816e9251d3e4b88331f2afce49d2cc2066"
+files = 2
+insertions = 170
+deletions = 1
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 11
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK7-2\\2\\report.json"
+summary = "The task SK7-2 is implemented. The `normalize_schema` function was already present in `evi/toolschema.py` (from SK7-1), and I have updated the tests in `tests/test_toolschema.py` to correctly verify the recursive reference and depth limit constraints as requested by the director's review."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK7-2"
+digest = "sha256:91afa1a50485c0d14fa2758a29199272fba741d6f4b4f98278adeb524379b372"
+head = "fa91e14b3e6dd0e410e825cc586c031e46c8f869"
+evidence = "sha256:eeae0983e7ca6936f172d854853278816e9251d3e4b88331f2afce49d2cc2066"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T09:17:57Z"
+key = "302b45cb92785c8d"
+sig = "c0c10cecb08ad5e7d7663b5bab0dda1b88dd430e7cc7f21027f6223062186c46"
+
+[attestation.review]
+base = "7f18a3fb45c114e93e065922e3de0a99adf9a8de"
+exit_code = 1
+report_sha256 = "fd0ddd833446fa37b280c8ca0e66d78181de785f215d2e34834d0ca7bf3a7260"
+override = "Director triage: (1) allOf 'only the first non-properties key is kept': by design: properties and required are merged; any other keyword that differs between allOf parts is a contradictory constraint, and the first one is kept for a model-facing schema. (2) anyOf-null merge 'destructive': the field's own keys (description, default) win over the branch's on purpose, and the branches are normalized before the merge (anyOf values are normalized in the key loop above); the reviewer notes this itself."
