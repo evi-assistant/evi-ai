@@ -1,0 +1,20 @@
+id = "SK10-2"
+title = "tools: web_search, web_fetch, the calendar tools and every MCP tool are marked untrusted"
+status = "open"
+why = "Part of roadmap item tool-result-pipeline. Tool.trust ('trusted' | 'untrusted', evi/tools/base.py) says whether a tool returns text an outsider wrote, but no built-in tool sets it. Web pages, MCP servers and calendar invites are exactly that; the director fences the output of every untrusted tool afterwards (SK10-1's fence)."
+hints = "Add `trust=\"untrusted\",` (on its own line, right after the `category=...` line) to: (1) the @tool(...) of web_search and of web_fetch in evi/tools/websearch.py; (2) the @tool(...) of calendar_today, calendar_week, calendar_search and calendar_next in evi/tools/calendar.py; (3) the Tool(...) that MCPManager._wrap_tool returns in evi/mcp/manager.py (after `category=\"mcp\",`). Change nothing else.\nTests in a NEW file tests/test_untrusted_tools.py: import evi.tools.websearch, evi.tools.calendar and evi.tools.fs (each with `# noqa: F401  registers ...`) and check REGISTRY[name].trust; for MCP, build a tool with MCPManager()._wrap_tool('fs', session, mcp_tool) as test_wrap_tool_invokes_session_via_bridge in tests/test_mcp.py does (copy its fake session and mcp_tool setup)."
+acceptance = ["REGISTRY['web_search'].trust and REGISTRY['web_fetch'].trust are 'untrusted'.", "REGISTRY['calendar_today'|'calendar_week'|'calendar_search'|'calendar_next'].trust are all 'untrusted'.", "A tool made by MCPManager._wrap_tool has trust 'untrusted'.", "read_file, write_file and run_command (when registered) stay 'trusted'.", "The existing tests in tests/test_websearch.py, tests/test_calendar.py and tests/test_mcp.py pass."]
+files_in_scope = ["evi/tools/websearch.py", "evi/tools/calendar.py", "evi/mcp/manager.py", "tests/test_untrusted_tools.py"]
+required_checks = ["python -m pytest -q tests/test_untrusted_tools.py tests/test_websearch.py tests/test_calendar.py tests/test_mcp.py", "python -m ruff check evi/tools/websearch.py evi/tools/calendar.py evi/mcp/manager.py tests/test_untrusted_tools.py"]
+implementer = "evi-local"
+created = "2026-10-24T16:13:15Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
