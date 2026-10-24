@@ -1,6 +1,6 @@
 id = "SK10-2"
 title = "tools: web_search, web_fetch, the calendar tools and every MCP tool are marked untrusted"
-status = "open"
+status = "verified"
 why = "Part of roadmap item tool-result-pipeline. Tool.trust ('trusted' | 'untrusted', evi/tools/base.py) says whether a tool returns text an outsider wrote, but no built-in tool sets it. Web pages, MCP servers and calendar invites are exactly that; the director fences the output of every untrusted tool afterwards (SK10-1's fence)."
 hints = "Add `trust=\"untrusted\",` (on its own line, right after the `category=...` line) to: (1) the @tool(...) of web_search and of web_fetch in evi/tools/websearch.py; (2) the @tool(...) of calendar_today, calendar_week, calendar_search and calendar_next in evi/tools/calendar.py; (3) the Tool(...) that MCPManager._wrap_tool returns in evi/mcp/manager.py (after `category=\"mcp\",`). Change nothing else.\nTests in a NEW file tests/test_untrusted_tools.py: import evi.tools.websearch, evi.tools.calendar and evi.tools.fs (each with `# noqa: F401  registers ...`) and check REGISTRY[name].trust; for MCP, build a tool with MCPManager()._wrap_tool('fs', session, mcp_tool) as test_wrap_tool_invokes_session_via_bridge in tests/test_mcp.py does (copy its fake session and mcp_tool setup)."
 acceptance = ["REGISTRY['web_search'].trust and REGISTRY['web_fetch'].trust are 'untrusted'.", "REGISTRY['calendar_today'|'calendar_week'|'calendar_search'|'calendar_next'].trust are all 'untrusted'.", "A tool made by MCPManager._wrap_tool has trust 'untrusted'.", "read_file, write_file and run_command (when registered) stay 'trusted'.", "The existing tests in tests/test_websearch.py, tests/test_calendar.py and tests/test_mcp.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/tools/websearch.py", "evi/tools/calendar.py", "evi/mcp/ma
 required_checks = ["python -m pytest -q tests/test_untrusted_tools.py tests/test_websearch.py tests/test_calendar.py tests/test_mcp.py", "python -m ruff check evi/tools/websearch.py evi/tools/calendar.py evi/mcp/manager.py tests/test_untrusted_tools.py"]
 implementer = "evi-local"
 created = "2026-10-24T16:13:15Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK10-2"
+branch = "task/SK10-2"
+base = "736666c58fbf02432fae5fed87dd874c85996464"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK10-2\\1"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:78d8430122d0e147140dec98e26747d073e1712ce93d042058821fb5e0158da9"
+files = 4
+insertions = 49
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 51
+failures = 0
+errors = 0
+skipped = 1
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK10-2\\1\\report.json"
+summary = "I have implemented task SK10-2 by marking web search, web fetch, calendar, and MCP tools as `untrusted`."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK10-2"
+digest = "sha256:52e50c161729b898fb2ecc2e48af910d8533b9922c7640c1fb9df7c509a38682"
+head = "d3e0c3a18c2892a38b47f81bfb64d39370f99f63"
+evidence = "sha256:78d8430122d0e147140dec98e26747d073e1712ce93d042058821fb5e0158da9"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-24T16:18:11Z"
+key = "302b45cb92785c8d"
+sig = "31749dbfa77f5d8b063c7b64758ea50fcb3546fc51fdd50053930ff5ff94d9f7"
+
+[attestation.review]
+base = "736666c58fbf02432fae5fed87dd874c85996464"
+exit_code = 0
+report_sha256 = "dacc80c61e2c3761fe689a553fe04fa8ed8d036c9ab4bcf0a72086b20ed404f6"
