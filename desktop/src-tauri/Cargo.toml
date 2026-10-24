@@ -30,7 +30,7 @@ url = "2"
 # sha256-check the zip, and extract the onedir into a writable dir.
 minisign-verify = "0.2"
 sha2 = "0.10"
-base64 = "0.22"  # decode the tauri-signer manifest signature before minisign-verify
+base64 = "0.23"  # decode the tauri-signer manifest signature before minisign-verify
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [features]
