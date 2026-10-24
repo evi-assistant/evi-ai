@@ -1,6 +1,6 @@
 id = "SK8-2"
 title = "/compact <focus>: what to keep in the summary, in the CLI and the web"
-status = "open"
+status = "verified"
 why = "Second slice of roadmap item memory-sessions-structured-compaction. SK8-1 gave compact_history a focus argument that goes into the summary request word for word; /compact in the REPL and the web chat now pass what follows the command, e.g. `/compact keep the API design`."
 hints = "Two one-line edits, nothing else: (1) evi/apps/cli/main.py, _handle_compact (search for `def _handle_compact`): `collapsed = agent.compact_history()` becomes `collapsed = agent.compact_history(focus=args.strip())`. (2) evi/apps/web/server.py, the `if name == \"compact\":` branch of _handle_slash (search for it): `collapsed = agent.compact_history()` becomes `collapsed = agent.compact_history(focus=args)` (args is already stripped there). Also update the /compact help text in both files (search for `(\"/compact\",`) to mention the optional focus, e.g. '/compact [focus]'.\nTests in a NEW file tests/test_compact_focus.py: call cli_main._handle_compact(agent, '  keep the API keys question  ', CommandStore(root=tmp_path)) with monkeypatch.setattr(cli_main, 'console', Console(file=io.StringIO())), and server_mod._handle_slash(agent, '/compact keep the API keys question', CommandStore(root=tmp_path)) (server_mod is evi.apps.web.server). Compaction makes a NON-streaming request (stream=False) and reads resp.choices[0].message.content, so tests need their own fake client, e.g.\nclass _Summarizer:\n    def __init__(self, *replies):\n        self.replies, self.requests = list(replies), []\n        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))\n    def create(self, **kw):\n        self.requests.append(kw)\n        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=self.replies.pop(0)))])\nand an Agent(client=_Summarizer('...'), config=Config(), transcripts=None, tools=[]) whose history gets 30 user/assistant pairs appended, then agent.compact_history(keep_recent=4). The summary request's prompt is client.requests[0]['messages'][1]['content']."
 acceptance = ["In the REPL, `/compact keep the API keys question` (with spaces around the focus) sends a summary request containing 'Pay particular attention to: keep the API keys question' followed by a newline.", "In the web chat's slash handler, the same command sends the same line.", "A bare `/compact` sends no 'Pay particular attention' line, in both.", "The /compact help text in both files names the optional focus.", "The SK8-1 tests in tests/test_structured_compaction.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/apps/cli/main.py", "evi/apps/web/server.py", "tests/test_
 required_checks = ["python -m pytest -q tests/test_compact_focus.py tests/test_structured_compaction.py", "python -m ruff check evi/apps/cli/main.py evi/apps/web/server.py tests/test_compact_focus.py"]
 implementer = "evi-local"
 created = "2026-10-24T09:42:30Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK8-2"
+branch = "task/SK8-2"
+base = "1dc111767efc781c067a546212939222c851ce1e"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK8-2\\2"
+reviewer_notes = [{at = "2026-10-24T11:03:48Z", verdict = "reopened", note = "Director review (round 1). The code edits in evi/apps/cli/main.py and evi/apps/web/server.py are right: do not change them. But the tests in tests/test_compact_focus.py call agent.compact_history(...) directly, so they never reach the code this task changed (they pass without it). The criteria are about the /compact COMMANDS. Replace the three tests (keep the _Summarizer class) with these, which call the two handlers:\n\nimport io\n\nfrom rich.console import Console\n\nimport evi.apps.cli.main as cli_main\nimport evi.apps.web.server as server_mod\nfrom evi.commands import CommandStore\n\ndef _agent(client):\n    agent = Agent(client=client, config=Config(), tools=[], transcripts=None)\n    for i in range(20):\n        agent.history += [{\"role\": \"user\", \"content\": f\"q{i}\"}, {\"role\": \"assistant\", \"content\": f\"a{i}\"}]\n    return agent\n\ndef _cli(agent, args, tmp_path, monkeypatch):\n    monkeypatch.setattr(cli_main, \"console\", Console(file=io.StringIO()))\n    cli_main._handle_compact(agent, args, CommandStore(root=tmp_path))\n\ndef test_the_repl_compact_command_passes_its_focus(tmp_path, monkeypatch):\n    client = _Summarizer(\"s\")\n    _cli(_agent(client), \"  keep the API keys question  \", tmp_path, monkeypatch)\n    assert \"Pay particular attention to: keep the API keys question\\n\" in client.requests[0][\"messages\"][1][\"content\"]\n\ndef test_the_web_compact_command_passes_its_focus(tmp_path):\n    client = _Summarizer(\"s\")\n    server_mod._handle_slash(_agent(client), \"/compact keep the API keys question\", CommandStore(root=tmp_path))\n    assert \"Pay particular attention to: keep the API keys question\\n\" in client.requests[0][\"messages\"][1][\"content\"]\n\ndef test_a_bare_compact_has_no_focus_line(tmp_path, monkeypatch):\n    client = _Summarizer(\"s\")\n    _cli(_agent(client), \"\", tmp_path, monkeypatch)\n    client2 = _Summarizer(\"s\")\n    server_mod._handle_slash(_agent(client2), \"/compact\", CommandStore(root=tmp_path))\n    for c in (client, client2):\n        assert \"Pay particular attention\" not in c.requests[0][\"messages\"][1][\"content\"]\n\nPut the imports at the top with the others (stdlib, then third-party, then evi, a blank line between groups) and two blank lines between top-level definitions. Run the required checks and quote their last lines."}, {at = "2026-10-24T11:11:21Z", verdict = "director", note = "finished by the director on task/SK8-2 after 2 implementer attempt(s)"}]
+
+[evidence_summary]
+hash = "sha256:5da1e80ea30f4162d4bae1447791ee8ec6f7d85ed589f39c5bf6994e1ffae3f4"
+files = 3
+insertions = 69
+deletions = 4
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 7
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "loop_detected"
+exit_code = 3
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK8-2\\2\\report.json"
+summary = "loop_detected"
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK8-2"
+digest = "sha256:349b013b859659a23c4808f62f16b82f12c7ebc7aee89835c1a5c40deb746594"
+head = "93dc26fd5b46cc1125a4e4a2ec26af72b8940f66"
+evidence = "sha256:5da1e80ea30f4162d4bae1447791ee8ec6f7d85ed589f39c5bf6994e1ffae3f4"
+verdict = "verified"
+rounds = 2
+signer = "director"
+signed_at = "2026-10-24T11:12:03Z"
+key = "302b45cb92785c8d"
+sig = "ede5cefc60104822a21980c38753e479179f3769e353101637aa257a30f993b9"
+
+[attestation.review]
+base = "1dc111767efc781c067a546212939222c851ce1e"
+exit_code = 0
+report_sha256 = "493cbd889c678f22882f90c7cfeb3fc834bf36e78270c7c373532c1e71f8db79"
