@@ -13,7 +13,7 @@ from typing import Iterator
 
 from openai import OpenAI
 
-from evi.backends.base import Backend, ModelInfo, PullProgress
+from evi.backends.base import Backend, ModelInfo, PullProgress, window_tokens
 
 
 class OllamaBackend(Backend):
@@ -40,6 +40,27 @@ class OllamaBackend(Backend):
             api_key=self.api_key,
             timeout=self.request_timeout,
         )
+
+    def context_window(self, model_id: str) -> int | None:
+        """The window Ollama loaded `model_id` with (`/api/ps`:
+        context_length). None while it isn't loaded: Ollama picks the window
+        when it loads the model (OLLAMA_CONTEXT_LENGTH, a Modelfile num_ctx),
+        and /api/show's context_length is only the model's own maximum."""
+        from evi.portprobe import fast_get
+
+        r = fast_get(f"{self.native_base}/api/ps")
+        if r is None or r.status_code != 200:
+            return None
+        try:
+            data = r.json()
+        except ValueError:
+            return None
+        models = data.get("models") if isinstance(data, dict) else None
+        want = model_id if ":" in model_id else f"{model_id}:latest"
+        for entry in models if isinstance(models, list) else []:
+            if isinstance(entry, dict) and want in (entry.get("name"), entry.get("model")):
+                return window_tokens(entry.get("context_length"))
+        return None
 
     def supports_pull(self) -> bool:
         return True
