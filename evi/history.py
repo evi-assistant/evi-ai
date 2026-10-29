@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 ROLES = ("system", "user", "assistant", "tool")
 
@@ -258,6 +258,27 @@ def compaction_cut(history: Sequence[Mapping[str, Any]], keep: int) -> int | Non
     if turn is not None and n - turn >= max(1, keep // 2):
         return turn
     return next((i for i in range(start, n) if roles[i] in ("user", "assistant")), None)
+
+
+def tail_within(history: Sequence[Mapping[str, Any]], cut: int, budget: int,
+                size: Callable[[Mapping[str, Any]], int]) -> int:
+    """`cut` (compaction_cut's) moved forward until the verbatim tail
+    history[cut:] is at most `budget` tokens, `size` being one message's
+    estimate. It stops only where compaction_cut may, at a user or assistant
+    message; when no such start fits, it is the newest one, so the latest step
+    stays verbatim even when it alone is over budget. A `budget` of 0 or less
+    leaves `cut` as it is."""
+    if budget <= 0:
+        return cut
+    total = sum(size(m) for m in history[cut:])
+    last = cut
+    for i in range(cut, len(history)):
+        if history[i].get("role") in ("user", "assistant"):
+            if total <= budget:
+                return i
+            last = i
+        total -= size(history[i])
+    return last
 
 
 def join_user_runs(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
