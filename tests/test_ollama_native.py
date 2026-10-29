@@ -112,6 +112,21 @@ def test_a_non_streamed_call_returns_one_message():
     assert fake.bodies[0]["options"]["num_predict"] == 50
 
 
+def test_a_side_call_asks_for_the_configured_window_too():
+    # A summary or title call names no window; without one Ollama would
+    # reload the model with its default and the next turn reload it again.
+    reply = json.dumps({"message": {"content": "t"}, "done": True}).encode()
+    fake = _Fake((200, reply), (200, reply))
+    cfg = Config()
+    cfg.llm.backend, cfg.llm.base_url, cfg.llm.context_size = "ollama", "http://127.0.0.1:9/v1", 16384
+    client = get_backend(cfg.llm).make_client()
+    client.http = httpx.Client(transport=httpx.MockTransport(fake))
+    client.chat.completions.create(model="m", stream=False, messages=[])
+    client.chat.completions.create(model="m", stream=False, messages=[],
+                                   extra_body={"options": {"num_ctx": 2048}})
+    assert [b["options"]["num_ctx"] for b in fake.bodies] == [16384, 2048]
+
+
 def test_the_request_body_maps_the_openai_knobs():
     body = native_body({
         "model": "m", "stream": True, "temperature": 0.2, "top_p": 0.9, "seed": 7,

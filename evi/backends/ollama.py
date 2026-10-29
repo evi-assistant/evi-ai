@@ -25,11 +25,13 @@ class OllamaBackend(Backend):
         api_key: str = "ollama",
         request_timeout: float = 120.0,
         native: bool = True,
+        num_ctx: int = 0,
     ) -> None:
         self.base_url = base_url
         self.api_key = api_key or "ollama"
         self.request_timeout = request_timeout
         self.native = native
+        self.num_ctx = num_ctx
 
     @property
     def native_base(self) -> str:
@@ -38,7 +40,8 @@ class OllamaBackend(Backend):
 
     def make_client(self) -> OpenAI:
         """The chat client: chat completions through the native /api/chat
-        (`evi.llm.ollama_native`, which takes num_ctx) unless `native` is off;
+        (`evi.llm.ollama_native`, which sends num_ctx, by default `num_ctx`)
+        unless `native` is off;
         the rest is the OpenAI client for /v1."""
         client = OpenAI(
             base_url=self.base_url,
@@ -49,7 +52,8 @@ class OllamaBackend(Backend):
             return client
         from evi.llm.ollama_native import OllamaNativeClient
 
-        return OllamaNativeClient(client, self.native_base, self.request_timeout)  # type: ignore[return-value]
+        return OllamaNativeClient(client, self.native_base, self.request_timeout,  # type: ignore[return-value]
+                                  num_ctx=self.num_ctx)
 
     def context_window(self, model_id: str) -> int | None:
         """The window Ollama loaded `model_id` with (`/api/ps`:

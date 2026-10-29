@@ -11,8 +11,9 @@ streamed chunks with ``choices[0].delta`` and a closing usage chunk, the
 - messages: multimodal content to text plus ``images``; an assistant's tool
   calls with their arguments as objects; a tool result with ``tool_name``;
 - tools as they are (the same function-schema shape);
-- options: ``num_ctx`` (from ``extra_body["options"]``, which the agent fills
-  with ``[llm] context_size``), ``temperature``, ``top_p``, ``num_predict``
+- options: ``num_ctx`` (from ``extra_body["options"]``, else the client's
+  ``[llm] context_size``, so a side call such as a summary or a title doesn't
+  reload the model with the server's default window), ``temperature``, ``top_p``, ``num_predict``
   (``max_tokens``), ``seed``, ``stop``, the penalties; ``response_format`` as
   ``format``; ``think`` / ``reasoning_effort`` as ``think``;
 - replies: ``message.content`` as text, ``message.thinking`` inside
@@ -213,6 +214,8 @@ class _Completions:
     def create(self, **kwargs: Any):
         owner = self._owner
         body = native_body(kwargs)
+        if owner.num_ctx > 0 and "num_ctx" not in body.get("options", {}):
+            body.setdefault("options", {})["num_ctx"] = owner.num_ctx
         url = f"{owner.native_base}/api/chat"
         if body["stream"]:
             return _Stream(owner.http, url, body)
@@ -245,11 +248,14 @@ class _Completions:
 
 class OllamaNativeClient:
     """An OpenAI-SDK-shaped client whose chat completions go to Ollama's
-    native ``/api/chat``; any other attribute is the `openai` client's."""
+    native ``/api/chat``; any other attribute is the `openai` client's.
+    `num_ctx` (> 0) is the window a request asks for when it names none."""
 
-    def __init__(self, openai_client: Any, native_base: str, timeout: float) -> None:
+    def __init__(self, openai_client: Any, native_base: str, timeout: float,
+                 num_ctx: int = 0) -> None:
         self._openai = openai_client
         self.native_base = native_base.rstrip("/")
+        self.num_ctx = int(num_ctx or 0)
         self.http = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
         self.chat = SimpleNamespace(completions=_Completions(self))
 
