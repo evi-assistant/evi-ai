@@ -957,6 +957,11 @@ class BranchRequest(BaseModel):
     at_index: int
 
 
+class CompactRequest(BaseModel):
+    upto: int
+    focus: str = ""
+
+
 class ModeRequest(BaseModel):
     mode: str  # chat | cowork | code
 
@@ -5070,6 +5075,19 @@ def create_app() -> FastAPI:
         with _holding_turn(sess, session_id):
             removed = sess.agent.truncate_history(req.after_index)
         return {"ok": True, "removed": removed, "length": len(sess.agent.history)}
+
+    @app.post("/api/session/{session_id}/compact")
+    def session_compact(session_id: str, req: CompactRequest) -> dict[str, object]:
+        """Compact up to here: summarise everything before history index
+        `upto` and keep the rest verbatim (Agent.compact_history). `collapsed`
+        is 0 when there was nothing before it or the summary failed."""
+        sess = _my_sessions().get(session_id)
+        if sess is None:
+            raise HTTPException(404, "no such session")
+        _follow_runtime_window(sess)
+        with _holding_turn(sess, session_id):
+            collapsed = sess.agent.compact_history(upto=req.upto, focus=req.focus[:500])
+        return {"ok": True, "collapsed": collapsed, "length": len(sess.agent.history)}
 
     @app.post("/api/session/{session_id}/edit")
     def session_edit(session_id: str, req: EditRequest) -> dict[str, object]:

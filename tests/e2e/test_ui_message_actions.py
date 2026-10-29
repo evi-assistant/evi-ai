@@ -176,3 +176,18 @@ def test_a_branch_survives_a_restart(page: Page, evi_base_url: str, evi_home):
 
     revived = _restart_copy(evi_home, branch)
     assert _messages(page, revived) == seen
+
+
+def test_compact_up_to_here(page: Page, evi_base_url: str):
+    # 🗜 on a message summarises what came before it; it and its reply stay.
+    page.goto(evi_base_url)
+    _send(page, "first question")
+    _send(page, "second question")
+    second = page.locator(".msg.user").nth(1)
+    second.hover()
+    page.once("dialog", lambda d: d.accept())
+    second.locator(".msg-actions button[title='Compact up to here']").click()
+    expect(page.locator(".msg.note.compaction")).to_have_count(1, timeout=20_000)
+    expect(page.locator(".msg.user")).to_have_count(1)
+    expect(page.locator(".msg.user").first).to_contain_text("second question")
+    expect(page.locator(".msg.assistant")).to_have_count(1)

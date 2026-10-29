@@ -579,6 +579,9 @@ function attachMessageActions(bubble, cls) {
     buttons.push({ label: '🔄', title: 'Re-roll', cls: 'reroll-btn', action: () => rerollFromBubble() });
   }
   buttons.push({ label: '🌿', title: 'Branch', action: () => branchFromBubble(idx) });
+  if (cls !== 'tool') {
+    buttons.push({ label: '🗜', title: 'Compact up to here', action: () => compactUpToBubble(idx) });
+  }
   buttons.push({ label: '🗑', title: 'Delete from here', action: () => truncateFromBubble(idx) });
   for (const b of buttons) {
     const btn = document.createElement('button');
@@ -797,6 +800,20 @@ async function truncateFromBubble(idx) {
   });
   if (!r.ok) { addBubble('error').textContent = 'truncate failed'; return; }
   await rebuildHistory();
+}
+
+// Summarise everything before this message; it and what follows stay as they are.
+async function compactUpToBubble(idx) {
+  if (!confirm('Summarise everything before this message? This message and the ones after it stay as they are.')) return;
+  const r = await fetch(`/api/session/${sessionId}/compact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ upto: parseInt(idx, 10) }),
+  });
+  const res = r.ok ? await r.json() : null;
+  if (!res) { addBubble('error').textContent = 'compact failed'; return; }
+  await rebuildHistory();
+  if (!res.collapsed) addBubble('system').textContent = 'Nothing to compact before that message (or the summary failed).';
 }
 
 // Render a tool result with a "show more" toggle when output is long.

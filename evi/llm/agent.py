@@ -75,9 +75,11 @@ from evi.history import (
     compaction_cut,
     compaction_messages,
     join_user_runs,
+    pack_blocks,
     pair_tool_results,
     seal_notes,
     synthetic_tool_result,
+    tail_within,
     validate_history,
 )
 from evi.transcripts import TranscriptStore
@@ -508,6 +510,11 @@ class _ThinkParser:
         return out
 
 
+# A compaction summary's reply budget, and what a summary request needs
+# besides the transcript: its instructions and the summary so far (which the
+# reply budget also bounds).
+SUMMARY_MAX_TOKENS = 1024
+SUMMARY_OVERHEAD_TOKENS = 512 + SUMMARY_MAX_TOKENS
 # The headings of every compaction summary, in this order: what a model needs
 # to carry on from the summary alone.
 SUMMARY_SECTIONS = ("Objective", "Decisions", "Done", "In progress", "Files", "Blockers",
@@ -540,10 +547,16 @@ def _summary_prompt(rendered: str, previous: str = "", focus: str = "") -> str:
 
 def _render_for_summary(messages: list[dict[str, Any]]) -> str:
     """Flatten a slice of Agent.history into readable plaintext for a summary
-    request. Tool messages get a label so the model knows what's what. Notes
-    from someone else are sealed (evi.history.seal_notes), so a note's body
-    can't start a [USER] line of its own and have the summary, which goes back
-    in as a user message, credit its text to the user."""
+    request (_summary_blocks, one per message, joined with blank lines)."""
+    return "\n\n".join(_summary_blocks(messages))
+
+
+def _summary_blocks(messages: list[dict[str, Any]]) -> list[str]:
+    """A slice of Agent.history as readable plaintext, one block per message,
+    for a summary request. Tool messages get a label so the model knows what's
+    what. Notes from someone else are sealed (evi.history.seal_notes), so a
+    note's body can't start a [USER] line of its own and have the summary,
+    which goes back in as a user message, credit its text to the user."""
     out: list[str] = []
     for m in seal_notes(messages):
         role = m.get("role", "?")
@@ -556,7 +569,7 @@ def _render_for_summary(messages: list[dict[str, Any]]) -> str:
             out.append(f"[{role.upper()}] {content}")
         else:
             out.append(f"[{role.upper()}] {content[:300]}")
-    return "\n\n".join(out)
+    return out
 
 
 # --- Event types ----------------------------------------------------------
@@ -1581,14 +1594,18 @@ class Agent:
         if ceiling > 0 and pct > 0 and used * 100 >= ceiling * pct:
             self.compact_history()
 
-    def compact_history(self, keep_recent: int | None = None, focus: str = "") -> int:
+    def compact_history(self, keep_recent: int | None = None, focus: str = "",
+                        upto: int | None = None) -> int:
         """Summarise the oldest stretch of history.
 
         Keeps the original system prompt (index 0) and, verbatim, roughly the
         most recent `keep_recent` messages: the cut moves forward to a turn
         boundary, or a step boundary when that would keep too little
         (evi.history.compaction_cut), so the tail never starts with a tool
-        result whose call was summarised away. Everything in between is
+        result whose call was summarised away, and then on until the tail
+        fits `[llm] compact_keep_pct` of the window (evi.history.tail_within).
+        `upto` ("compact up to here") instead keeps history[upto:] verbatim,
+        from the next user or assistant message on. Everything in between is
         replaced by the summary as a user message, followed by an assistant
         acknowledgement when the tail starts with a user message; never a
         second system message. A compaction record goes to the transcript so a
@@ -1596,19 +1613,27 @@ class Agent:
         collapsed (0 if nothing to do).
 
         Internally uses a one-shot LLM call with the same backend the
-        agent is already using; if that call fails we leave history
-        unchanged so a transient model outage doesn't lose context.
+        agent is already using, one per chunk when the stretch is longer
+        than the window takes (_summary_chunk_chars), each updating the
+        summary so far; if a call fails we leave history unchanged so a
+        transient model outage doesn't lose context.
         """
-        keep = keep_recent if keep_recent is not None else self.config.llm.compact_keep_recent
-        keep = max(2, int(keep))
-
-        # history[0] is always the system prompt; protect it.
-        if len(self.history) <= 1 + keep:
-            return 0
-
-        cut = compaction_cut(self.history, keep)
-        if cut is None:
-            return 0
+        if upto is not None:
+            n = len(self.history)
+            cut = next((i for i in range(max(1, int(upto)), n)
+                        if self.history[i].get("role") in ("user", "assistant")), n)
+        else:
+            keep = keep_recent if keep_recent is not None else self.config.llm.compact_keep_recent
+            keep = max(2, int(keep))
+            # history[0] is always the system prompt; protect it.
+            if len(self.history) <= 1 + keep:
+                return 0
+            cut = compaction_cut(self.history, keep)
+            if cut is None:
+                return 0
+            pct = int(getattr(self.config.llm, "compact_keep_pct", 0) or 0)
+            budget = self.context_ceiling(probe=False) * pct // 100
+            cut = tail_within(self.history, cut, budget, lambda m: _approx_tokens([m]))
         head = self.history[0]
         tail = self.history[cut:]
         middle = self.history[1:cut]
@@ -1620,27 +1645,13 @@ class Agent:
             return 0
 
         # The slice to summarise as a plain transcript; an earlier summary at
-        # its start is updated rather than summarised again.
-        previous, fresh = previous_summary(middle)
-        summary_prompt = _summary_prompt(_render_for_summary(fresh), previous, focus.strip())
-
-        try:
-            stream = self.client.chat.completions.create(
-                model=self.config.llm.compaction_model or self.config.llm.model,
-                messages=[
-                    {"role": "system", "content": "You write conversation summaries."},
-                    {"role": "user", "content": summary_prompt},
-                ],
-                temperature=0.2,
-                max_tokens=1024,
-                stream=False,
-            )
-            summary = stream.choices[0].message.content or ""
-        except Exception:
-            return 0
-
-        if not summary.strip():
-            return 0
+        # its start is updated rather than summarised again, and so is each
+        # chunk's summary by the next chunk.
+        summary, fresh = previous_summary(middle)
+        for chunk in pack_blocks(_summary_blocks(fresh), self._summary_chunk_chars()) or [""]:
+            summary = self._summarise(_summary_prompt(chunk, summary, focus.strip()))
+            if not summary:
+                return 0
 
         notes = compaction_messages(
             summary, len(middle), next_role=tail[0].get("role") if tail else None
@@ -1661,6 +1672,34 @@ class Agent:
             except OSError:
                 pass  # never let disk errors break the chat loop
         return len(middle)
+
+    def _summary_chunk_chars(self) -> int:
+        """How much transcript (in characters, ~4 per token) one summary
+        request may carry: the window less the request's own overhead
+        (SUMMARY_OVERHEAD_TOKENS), at least 1024 tokens' worth. 0, one chunk
+        whatever its size, when the window isn't known."""
+        ceiling = self.context_ceiling(probe=False)
+        if ceiling <= 0:
+            return 0
+        return max(1024, ceiling - SUMMARY_OVERHEAD_TOKENS) * 4
+
+    def _summarise(self, prompt: str) -> str:
+        """One compaction summary request; "" when it fails or comes back
+        empty."""
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.config.llm.compaction_model or self.config.llm.model,
+                messages=[
+                    {"role": "system", "content": "You write conversation summaries."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=SUMMARY_MAX_TOKENS,
+                stream=False,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception:
+            return ""
 
     def enable_auto_all(self) -> None:
         """Approve every tool call for the rest of this session."""

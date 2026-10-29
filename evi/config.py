@@ -75,6 +75,9 @@ class LLMSettings:
     # in-memory history exceeds this many messages. 0 = disabled.
     compact_after_messages: int = 40
     compact_keep_recent: int = 10  # leave this many turns un-summarised
+    # ...but no more than this % of the context window (0 = no limit), so a
+    # tail holding a big tool result can't keep a small window overflowing.
+    compact_keep_pct: int = 30
     # The model that writes compaction summaries; empty = the chat model.
     compaction_model: str = ""
     # Approximate token ceiling for the active model. Used for the

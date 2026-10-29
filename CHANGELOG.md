@@ -12,6 +12,17 @@ All notable user-visible changes to eVi. Format loosely follows
   instructions), largest first, so you can see whether memory or a long
   EVI.md is filling a small window. The web usage chip's popover lists them
   too, with the tool schemas by group.
+- **Compact up to here.** In the web and desktop app, the 🗜 action on a
+  message summarises everything before it and keeps it and what follows
+  verbatim.
+
+### Changed
+- **Compaction fits small windows.** The messages compaction keeps verbatim
+  now also fit `[llm] compact_keep_pct` of the window (30% by default), so a
+  big tool result near the end can't leave the window full right after
+  compacting. A stretch longer than the window can take is summarised a
+  chunk at a time, each chunk updating the summary so far, instead of in one
+  request whose start the model would silently drop.
 
 ## [1.1.0] — 2026-10-29
 
