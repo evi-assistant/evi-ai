@@ -348,3 +348,29 @@ def compaction_messages(summary: str, collapsed: int, *, next_role: str | None) 
     if next_role == "assistant":
         return [note]
     return [note, {"role": "assistant", "content": COMPACTION_ACK}]
+
+
+def pack_blocks(blocks: Sequence[str], limit: int, sep: str = "\n\n") -> list[str]:
+    """`blocks` (a transcript's messages, rendered) joined with `sep` into as
+    few chunks of at most `limit` characters as their order allows, so a long
+    transcript can be summarised a chunk at a time. A block longer than
+    `limit` is split into `limit`-sized pieces, none of it dropped. A `limit`
+    of 0 or less gives one chunk; no blocks give none."""
+    if not blocks:
+        return []
+    if limit <= 0:
+        return [sep.join(blocks)]
+    chunks: list[str] = []
+    cur: str | None = None
+    for block in blocks:
+        for i in range(0, max(len(block), 1), limit):
+            piece = block[i:i + limit]
+            joined = piece if cur is None else f"{cur}{sep}{piece}"
+            if cur is not None and len(joined) > limit:
+                chunks.append(cur)
+                cur = piece
+            else:
+                cur = joined
+    if cur is not None:
+        chunks.append(cur)
+    return chunks
