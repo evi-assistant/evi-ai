@@ -1250,7 +1250,13 @@ class Agent:
 
     def _compose_system_prompt(self) -> str:
         """Stitch base + style + memory + skills + project context together."""
-        parts = [self._base_system_prompt]
+        return "\n\n".join(text for _, text in self.system_prompt_parts())
+
+    def system_prompt_parts(self) -> list[tuple[str, str]]:
+        """The system prompt's parts as (label, text), in the order
+        _compose_system_prompt joins them with blank lines (/context counts
+        each part's tokens)."""
+        parts = [("base prompt", self._base_system_prompt)]
         # Model identity. The tool-discipline sentence (shared by both branches)
         # curbs a common small-model failure — firing a tool on a bare "hello".
         model_id = (getattr(self.config.llm, "model", "") or "").strip()
@@ -1286,47 +1292,47 @@ class Agent:
         if model_id and backend_kind in _LOCAL_MODEL_KINDS:
             # Local open-weight models hallucinate "I'm GPT-4" from their training
             # data when asked what they are — anchor their identity hard.
-            parts.append(
+            parts.append(("identity",
                 f"You are eVi, running the local open-weight model `{model_id}`. "
                 "You are NOT ChatGPT, GPT-4, Claude, or Gemini, and you were not "
                 "built by OpenAI, Anthropic, or Google. If the user asks which "
                 f"model or company you are, tell them you are eVi running `{model_id}` "
                 "locally." + _identity_discipline + _identity_staleness + _tool_discipline
-            )
+            ))
         elif model_id:
             # openai_compat / CLI-agent backends: the model may genuinely BE Claude,
             # GPT, Gemini, etc. (via the user's API key or CLI subscription), so do
             # NOT claim it's open-weight or deny what it is — just anchor the eVi
             # persona and answer honestly about the underlying model.
-            parts.append(
+            parts.append(("identity",
                 f"You are eVi, a local-first personal assistant. This session is "
                 f"powered by the `{model_id}` model through your configured backend. "
                 "Identify yourself as eVi; if the user asks which model powers you, "
                 f"answer honestly that it is `{model_id}` (don't claim to be an "
                 "open-weight or purely local model if you aren't)."
                 + _identity_discipline + _identity_staleness + _tool_discipline
-            )
+            ))
         # Session date + a dateless staleness note. Local models have no clock
         # (they invent "today"), and eVi ships a scheduler that rides this same
         # prompt, so an anchored date is load-bearing. No hardcoded cutoff — eVi
         # is model-pluggable (arbitrary local weights + 6 CLI backends) and can't
         # know each model's real cutoff, so cutoff is phrased as behavior.
-        parts.append(
+        parts.append(("date",
             f"Today is {self._session_date}. Your training data may be out of "
             "date; for current events, prices, or recent releases prefer web "
             "search (when it's enabled) over answering from memory, and say so "
             "when you're unsure."
-        )
+        ))
         # eVi's real capabilities + which are currently off, so the model answers
         # "what can you do?" honestly instead of hallucinating that eVi can't do
         # something it can (and points the user at how to enable an off feature).
-        parts.append(self._capability_grounding())
+        parts.append(("capabilities", self._capability_grounding()))
         # What the fence around an untrusted tool's output means (evi.untrusted),
         # when such a tool is on.
         if any(getattr(t, "trust", "trusted") == "untrusted" for t in self.tools.values()):
             from evi.untrusted import FENCE_RULE
 
-            parts.append(FENCE_RULE)
+            parts.append(("untrusted-text rule", FENCE_RULE))
         # Output style (response persona), if one is selected. Skipped in safe
         # mode: a user file at ~/.evi/styles/<name>.md overrides the built-in of
         # the same name, so a broken one must not survive a clean boot. (This is
@@ -1338,20 +1344,20 @@ class Agent:
             if not safemode.enabled():
                 st = style_text(getattr(self.config.llm, "output_style", "") or "")
                 if st:
-                    parts.append(st)
+                    parts.append(("output style", st))
         except Exception:  # noqa: BLE001
             pass
         if self.memory is not None:
             mem = self.memory.format_for_prompt()
             if mem:
-                parts.append(mem)
+                parts.append(("memory", mem))
         if self.skills is not None:
             sk = self.skills.format_for_prompt()
             if sk:
-                parts.append(sk)
+                parts.append(("skills", sk))
         if self.project is not None:
-            parts.append(self.project.format_for_prompt())
-        return "\n\n".join(parts)
+            parts.append(("project", self.project.format_for_prompt()))
+        return parts
 
     def _capability_grounding(self) -> str:
         """A short, honest statement of eVi's real capabilities + which are OFF.

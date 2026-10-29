@@ -280,6 +280,14 @@ chipUsage.addEventListener('click', async (ev) => {
       + `<span class="ctx-bar"><i style="width:${share}%"></i></span>`
       + `<span class="ctx-val">${k(toks)} ${share}%</span></div>`;
   }
+  // Which parts of the system prompt and which tool groups the tokens went to.
+  const sub = (title, groups) => {
+    const items = Object.entries(groups || {}).filter(([, t]) => t > 0);
+    if (!items.length) return '';
+    return `<div class="ctx-sub">${title}: `
+      + items.map(([g, t]) => `${escapeHtml(g)} ${k(t)}`).join(', ') + '</div>';
+  };
+  html += sub('system prompt', rep.system_groups) + sub('tool schemas', rep.schema_groups);
   pop.innerHTML = html;
   document.body.appendChild(pop);
   const rect = chipUsage.getBoundingClientRect();

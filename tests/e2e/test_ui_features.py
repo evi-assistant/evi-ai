@@ -77,6 +77,8 @@ def test_context_popover(page: Page, evi_base_url: str):
     expect(page.locator(".ctx-pop")).to_be_visible()
     # one row per bucket (system / schemas / you / assistant / tools)
     assert page.locator(".ctx-pop .ctx-row").count() == 5
+    # then the system prompt's parts
+    expect(page.locator(".ctx-pop .ctx-sub").first).to_contain_text("system prompt: ")
 
 
 # ---- dispatch panel (Phase 85) -------------------------------------------

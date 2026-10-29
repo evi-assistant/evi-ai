@@ -1235,7 +1235,8 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
     """Show where the context window is being spent (Phase 88)."""
     from evi.context_report import BUCKETS, context_breakdown
 
-    rep = context_breakdown(agent.history, agent.context_ceiling(), agent.tools.values())
+    rep = context_breakdown(agent.history, agent.context_ceiling(), agent.tools.values(),
+                            system_parts=agent.system_prompt_parts())
     used, ceiling, pct = rep["used"], rep["ceiling"], rep["pct"]
     color = "red" if pct >= 85 else "yellow" if pct >= 70 else "green"
     head = f"[bold]Context[/bold] — {rep['messages']} messages, ~{used:,} tokens"
@@ -1257,6 +1258,10 @@ def _handle_context(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRe
             f"  [cyan]{labels[b]:<14}[/cyan] [dim]{bar}[/dim] "
             f"{toks:,} [dim]({share}%)[/dim]"
         )
+    parts = [(p, t) for p, t in rep["system_groups"].items() if t]
+    if parts:
+        shown = ", ".join(f"{p} {t:,}" for p, t in parts)
+        console.print(f"  [dim]system prompt by part: {shown}[/dim]")
     groups = list(rep["schema_groups"].items())
     if groups:
         shown = ", ".join(f"{g} {t:,}" for g, t in groups[:8])

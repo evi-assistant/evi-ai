@@ -53,7 +53,7 @@ When either fires, `compact_history()` runs:
 - A **compaction record** is written to the session's transcript (summary, where the cut was, how many messages were kept and how many summarised), so a web or desktop chat revived from disk comes back as the model last saw it. See [Transcripts](sessions.md#transcripts).
 - **Fail-safe**: if the summary call fails or comes back empty, history is left untouched — a transient model outage never loses context. A `before_compact` lifecycle hook can also veto compaction.
 
-The **context report** (`evi/context_report.py`) categorises history into buckets — `system`, `user` (you), `assistant`, and `tools` (tool calls + tool results) — plus `schemas`, the tool schemas that go with every request, and reports tokens per bucket, total used, the ceiling, and percent full. The schemas are also broken down per group (`schema_groups`): a built-in tool's category (`fs`, `code`, …) or `mcp:<server>` for each MCP server, largest first, so you can see which tools to switch off on a small window. `/context` prints the groups under the bars.
+The **context report** (`evi/context_report.py`) categorises history into buckets — `system`, `user` (you), `assistant`, and `tools` (tool calls + tool results) — plus `schemas`, the tool schemas that go with every request, and reports tokens per bucket, total used, the ceiling, and percent full. The schemas are also broken down per group (`schema_groups`): a built-in tool's category (`fs`, `code`, …) or `mcp:<server>` for each MCP server, largest first, so you can see which tools to switch off on a small window. The system prompt is broken down the same way (`system_groups`), per part: the base prompt, identity, date, capabilities, the untrusted-text rule, output style, memory, skills and the project's instructions (EVI.md), so you can see whether memory or a long EVI.md is filling the window. Text no part accounts for (a later system message, or a part that changed since the prompt was sent) is `other`. `/context` prints both under the bars, and the web usage chip's popover lists them too.
 
 ## Setup
 
@@ -102,7 +102,7 @@ Core memory and compaction need **no extra dependencies** — it's plain Markdow
 
 ### REPL slash commands (CLI and Web both)
 
-- `/context` or `/ctx` — show the per-bucket context breakdown (system prompt / you / assistant / tools), total tokens, ceiling, and percent full. The bar turns green/yellow/red as you approach the limit.
+- `/context` or `/ctx` — show the per-bucket context breakdown (system prompt / tool schemas / you / assistant / tools), the system prompt by part, the tool schemas by group, total tokens, ceiling, and percent full. The bar turns green/yellow/red as you approach the limit.
 - `/compact` — force compaction now (summarise older history into one summary to free context). Prints how many messages were collapsed, or notes that history is too short.
 
 The assistant uses the `remember` / `recall` / `forget` / `list_memories` / `recall_by_tag` tools on its own during conversation — just talk to it ("remember that I prefer tabs over spaces", "what do you have stored about project-x?").

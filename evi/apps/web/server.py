@@ -3344,7 +3344,8 @@ def create_app() -> FastAPI:
             return context_breakdown([], 0)
         _follow_runtime_window(sess)
         return context_breakdown(
-            sess.agent.history, sess.agent.context_ceiling(), sess.agent.tools.values()
+            sess.agent.history, sess.agent.context_ceiling(), sess.agent.tools.values(),
+            system_parts=sess.agent.system_prompt_parts(),
         )
 
     @app.post("/api/session/{session_id}/channel")

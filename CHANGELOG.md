@@ -5,6 +5,14 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`/context` shows the system prompt by part.** The system prompt's tokens
+  are split into its parts (the base prompt, identity, date, capabilities,
+  the untrusted-text rule, output style, memory, skills and the project's
+  instructions), largest first, so you can see whether memory or a long
+  EVI.md is filling a small window. The web usage chip's popover lists them
+  too, with the tool schemas by group.
+
 ## [1.1.0] — 2026-10-29
 
 ### Security
