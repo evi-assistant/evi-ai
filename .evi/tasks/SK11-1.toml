@@ -1,6 +1,6 @@
 id = "SK11-1"
 title = "context_report: the system prompt's tokens per part (memory, skills, project, ...)"
-status = "open"
+status = "verified"
 why = "Last part of roadmap item models-ops-context-window-probe. /context shows the system prompt as one bucket, so a user can't tell whether memory, skills or the project's EVI.md is filling a small window. This task adds a pure function that splits the system bucket by the prompt's labelled parts; the agent handing it the parts and the CLI/web display are the director's wiring."
 hints = "Make exactly these three edits to evi/context_report.py and nothing else (the code was run against every acceptance criterion before filing):\n\n1. Insert this function directly above `def context_breakdown(`, with two blank lines before and after it:\n\ndef system_prompt_tokens(\n    history: list[dict[str, Any]], parts: Iterable[tuple[str, str]]\n) -> dict[str, int]:\n    \"\"\"Estimated tokens of the system messages in `history`, per part of the\n    prompt: `parts` is (label, text) in the order the agent joined them with\n    blank lines. A part counts where it is found in the first system message\n    (with the blank line after it); what no part accounts for (a part changed\n    since the prompt was sent, a later system message) is \"other\". Largest\n    first; the same ~4 chars/token estimate as the buckets.\"\"\"\n    system = [m for m in history if m.get(\"role\") == \"system\"]\n    total = sum(_text_chars(m) for m in system)\n    first = system[0].get(\"content\") if system else None\n    first = first if isinstance(first, str) else \"\"\n    chars: dict[str, int] = {}\n    pos = 0\n    for label, text in parts:\n        at = first.find(text, pos) if text else -1\n        if at < 0:\n            continue  # empty, or not in the prompt as sent\n        end = at + len(text)\n        if first.startswith(\"\\n\\n\", end):\n            end += 2  # the separator after it\n        chars[label] = chars.get(label, 0) + (end - at)\n        pos = end\n    other = total - sum(chars.values())\n    if other > 0:\n        chars[\"other\"] = chars.get(\"other\", 0) + other\n    return dict(sorted(((g, c // 4) for g, c in chars.items()), key=lambda kv: (-kv[1], kv[0])))\n\n2. Change context_breakdown's signature to:\n\ndef context_breakdown(\n    history: list[dict[str, Any]], ceiling: int, tools: Iterable[Any] = (),\n    system_parts: Iterable[tuple[str, str]] = (),\n) -> dict[str, Any]:\n\nand in its docstring replace \"`messages`, `schema_groups`, and per-bucket\" with \"`messages`, `schema_groups`, `system_groups` (the system bucket per part of `system_parts`, see system_prompt_tokens), and per-bucket\" (re-wrap the lines at 79 columns).\n\n3. In the dict context_breakdown returns, add this line right after the \"schema_groups\" line:\n\n        \"system_groups\": system_prompt_tokens(history, system_parts) if system_parts else {},\n\nTests go in a NEW file tests/test_context_system_parts.py (do not edit tests/test_context_report.py). Build each prompt the way the agent does, \"\\n\\n\".join(text for _, text in parts), and call system_prompt_tokens / context_breakdown directly; assert exact dicts. Comments state why in one line."
 acceptance = ["parts = [('base', 'a'*40), ('date', 'b'*20), ('project', '')] joined with blank lines as the only system message: system_prompt_tokens gives exactly {'base': 10, 'date': 5} (each part with its following blank line; an empty part is skipped; no 'other').", "With the same prompt but parts [('base', 'a'*40), ('date', 'c'*20)] (date changed since the prompt was sent), the result is {'base': 10, 'other': 5}.", "A second system message of 80 chars after that prompt adds 'other': 20, and the result's keys are ordered largest first: ['other', 'base', 'date'].", "A label used twice sums: content 'm'*8 + '\\n\\n' + 'n'*8 + '\\n\\n' + 'm'*8 with parts [('mem','m'*8), ('n','n'*8), ('mem','m'*8)] gives {'mem': 4, 'n': 2}.", "Two parts with the same text are found at successive positions, not twice at the first: content 'same\\n\\nsame' with parts [('a','same'), ('b','same')] gives {'a': 1, 'b': 1}.", "A history with no system message gives {}.", "context_breakdown(history, 1000, system_parts=parts) has 'system_groups' equal to system_prompt_tokens(history, parts); without system_parts it is {}; every existing key and value of context_breakdown is unchanged.", "The existing tests in tests/test_context_report.py pass unchanged."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/context_report.py", "tests/test_context_system_parts.py"]
 required_checks = ["python -m pytest -q tests/test_context_system_parts.py tests/test_context_report.py", "python -m ruff check evi/context_report.py tests/test_context_system_parts.py"]
 implementer = "evi-local"
 created = "2026-10-29T22:05:17Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK11-1"
+branch = "task/SK11-1"
+base = "5c9ff2c0eac271d6033d20322adf22b969fadcde"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK11-1\\1"
+reviewer_notes = [{at = "2026-10-29T22:22:59Z", verdict = "verified", note = "Gate triage: the one BLOCKING (system tokens double-counted) is false. system_groups is a sub-breakdown of buckets['system'] and never enters used = sum(buckets), exactly like schema_groups; the docstring says 'the system bucket per part', and test_context_breakdown_reports_the_parts_and_changes_nothing_else asserts every other key (used, pct, buckets) is unchanged with system_parts given. The SUGGESTIONs (separator fragility, sequential matching) are the documented design: parts are matched in the order the agent joins them with blank lines, and anything unmatched is 'other'."}]
+
+[evidence_summary]
+hash = "sha256:92665836d409a8e1644e46bb8b5d25f64a5dfeded43184173dbc85e5b43cea29"
+files = 2
+insertions = 95
+deletions = 3
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 13
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK11-1\\1\\report.json"
+summary = "I have implemented task SK11-1."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK11-1"
+digest = "sha256:4faf477eadee94daf36157d62f7ea98a252d85982369460c90039ff204c0f144"
+head = "a2513e2dfba161852a87c26afc84e44fd6b10963"
+evidence = "sha256:92665836d409a8e1644e46bb8b5d25f64a5dfeded43184173dbc85e5b43cea29"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-29T22:23:31Z"
+key = "302b45cb92785c8d"
+sig = "31a529031e26099211ef1f2ea3ae983ff49ef330102b89529e5724c5b0dd4ead"
+
+[attestation.review]
+base = "5c9ff2c0eac271d6033d20322adf22b969fadcde"
+exit_code = 0
+report_sha256 = "75b9751194699f47d989c3f9fb9d647741acbf8de35aed1c09b80b86c7b036b7"
+override = "Gate triage: the one BLOCKING (system tokens double-counted) is false. system_groups is a sub-breakdown of buckets['system'] and never enters used = sum(buckets), exactly like schema_groups; the docstring says 'the system bucket per part', and test_context_breakdown_reports_the_parts_and_changes_nothing_else asserts every other key (used, pct, buckets) is unchanged with system_parts given. The SUGGESTIONs (separator fragility, sequential matching) are the documented design: parts are matched in the order the agent joins them with blank lines, and anything unmatched is 'other'."
