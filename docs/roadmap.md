@@ -9,10 +9,10 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-23):** 1 item shipped in 1.0.53 and 41 more are
+**Status (2026-10-23):** 1 item shipped in 1.0.53 and 42 more are
 done for the next release: all of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names and the tool-result pipeline. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names and the tool-result pipeline and PowerShell on Windows. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -109,7 +109,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
-| `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned; the probe, the session ceiling and tool-schema counts in /context are done (Phase 2 batch 3, unreleased); the system prompt's parts in /context and sending Ollama a window are left |
+| `models-ops-context-window-probe` | Read the true context window from every backend, plus a per-component context breakdown | M | evi-frontier | `fix-managed-runtime-ctx`, `loop-eval-gates` | Planned; the probe, the session ceiling, tool-schema counts in /context and sending Ollama its window (the native API) are done (Phase 2 batch 3, unreleased); the system prompt's parts in /context are left |
 | `models-ops-token-budget-recovery` | Real-token budgeting checked every round, and overflow compact-and-retry | M | director | `models-ops-context-window-probe`, `fix-history-validity` | Done (Phase 2 batch 3, unreleased) |
 | `tool-result-pipeline` | Tool-result pipeline: budget and spill, stale masking, untrusted envelopes | L | director | `models-ops-token-budget-recovery`, `loop-agent-cancel`, `fix-tool-context-binding`, `safety-secret-redaction` | Done (Phase 2 batch 6, unreleased) |
 | `loop-tools-tool-call-repair` | Tool-call repair: tolerant parsing, coercion, aliases and tagged-text recovery | M | evi-frontier | `loop-eval-gates` | Done (Phase 2 batch 2, unreleased); per-model repair counts in `evi stats` still to do |
@@ -118,7 +118,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `tool-schema-safe-names` | Provider-safe tool names and schema normalization for local grammars | M | evi-frontier | `extensibility-interop-mcp-sdk2-migration`, `loop-eval-gates` | Done (Phase 2 batch 4, unreleased) |
 | `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Planned; the sectioned, incremental summary, /compact <focus> and compaction_model are done (Phase 2 batch 5, unreleased); a token-budgeted tail, chunking an oversized middle, 'compact up to here' and a recall eval are left |
 | `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names` | Planned |
-| `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Planned |
+| `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Done (Phase 2 batch 7, unreleased) |
 | `stream-loop-resilience-reasoning` | Resilient streaming and a native reasoning channel | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair` | Planned |
 
 ## Phase 3 — Safe autonomy: effects, policy, approvals, plans and goals
@@ -204,7 +204,7 @@ Decisions the maintainer still has to make; items that depend on them say so.
 1. Second channel: after channel-runtime-core ships, should eVi add Matrix, Signal (user-run signal-cli), email (IMAP/SMTP), or nothing beyond Telegram for now?
 2. Code signing: finish SignPath Foundation signing for the Windows installers (code-signing.md tracks the rollout), and pay the $99/yr Apple Developer ID for macOS notarization?
 3. Gemini backend: keep gemini as API-key/Vertex only with the Phase 0 driver fixes, replace all vendor CLI drivers with one ACP client next cycle, or drop gemini (and possibly qwen/copilot)?
-4. Behaviour-changing safety defaults: is it acceptable that code execution asks unless sandboxed, unattended runs deny by default, Telegram memory becomes recall-only and desktop shells need an update (SHELL_ABI 2)? Should the post-hotfix train be versioned 1.1.0?
+4. Behaviour-changing safety defaults: is it acceptable that code execution asks unless sandboxed, unattended runs deny by default, Telegram memory becomes recall-only and desktop shells need an update (SHELL_ABI 2)? Should the post-hotfix train be versioned 1.1.0? (Decided 2026-10-29: yes; the hotfix ships as 1.0.53.)
 5. Trust-gate scope: in an untrusted repo, should EVI.md/AGENTS.md text still load (prompt content only, no config) to reduce prompt fatigue?
 6. Desktop token: once a shell-injected token is mandatory with LAN binding and the default on desktop, is that acceptable, given that 'Open in browser' and `evi web-config token show` carry it?
 7. Multi-user web mode: invest in a real owner/admin model, per-user checkpoints and memory, or deprecate it in favour of single-user plus device tokens?
