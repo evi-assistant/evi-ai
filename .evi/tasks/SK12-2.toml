@@ -1,6 +1,6 @@
 id = "SK12-2"
 title = "history: pack_blocks, a transcript split into chunks a summariser can take"
-status = "open"
+status = "verified"
 why = "Part of roadmap item memory-sessions-structured-compaction (chunking an oversized middle). Compaction sends the whole stretch it summarises in one request, so a long session on a small window asks for more than the model can read and the summary silently loses its start. This task adds the pure function that packs the rendered messages into chunks; summarising chunk by chunk, each updating the summary so far, is the director's wiring."
 hints = "Add this function at the END of evi/history.py (after compaction_messages, two blank lines before it), and change nothing else in that file (the code was run against every acceptance criterion before filing):\n\ndef pack_blocks(blocks: Sequence[str], limit: int, sep: str = \"\\n\\n\") -> list[str]:\n    \"\"\"`blocks` (a transcript's messages, rendered) joined with `sep` into as\n    few chunks of at most `limit` characters as their order allows, so a long\n    transcript can be summarised a chunk at a time. A block longer than\n    `limit` is split into `limit`-sized pieces, none of it dropped. A `limit`\n    of 0 or less gives one chunk; no blocks give none.\"\"\"\n    if not blocks:\n        return []\n    if limit <= 0:\n        return [sep.join(blocks)]\n    chunks: list[str] = []\n    cur: str | None = None\n    for block in blocks:\n        for i in range(0, max(len(block), 1), limit):\n            piece = block[i:i + limit]\n            joined = piece if cur is None else f\"{cur}{sep}{piece}\"\n            if cur is not None and len(joined) > limit:\n                chunks.append(cur)\n                cur = piece\n            else:\n                cur = joined\n    if cur is not None:\n        chunks.append(cur)\n    return chunks\n\nTests go in a NEW file tests/test_pack_blocks.py (do not edit other test files), plain calls to pack_blocks with exact expected lists. Comments state why in one line."
 acceptance = ["pack_blocks(['aaa', 'bbb', 'ccc'], 8) == ['aaa\\n\\nbbb', 'ccc'].", "A block longer than the limit is split, none of it dropped: pack_blocks(['x' * 10], 4) == ['xxxx', 'xxxx', 'xx'] and pack_blocks(['ab', 'x' * 10, 'cd'], 4) == ['ab', 'xxxx', 'xxxx', 'xx', 'cd'].", "pack_blocks([], 10) == [] and pack_blocks(['a', 'b'], 0) == ['a\\n\\nb'].", "For 50 blocks of 21 characters and a limit of 120, every chunk is at most 120 characters and '\\n\\n'.join(chunks) == '\\n\\n'.join(blocks) (nothing lost or reordered when no block is split).", "A custom separator is used between blocks: pack_blocks(['a', 'b'], 10, sep=' | ') == ['a | b'].", "The existing tests in tests/test_history_ops.py and tests/test_structured_compaction.py pass."]
@@ -8,13 +8,53 @@ files_in_scope = ["evi/history.py", "tests/test_pack_blocks.py"]
 required_checks = ["python -m pytest -q tests/test_pack_blocks.py tests/test_history_ops.py tests/test_structured_compaction.py", "python -m ruff check evi/history.py tests/test_pack_blocks.py"]
 implementer = "evi-local"
 created = "2026-10-29T22:34:15Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 1
+backend = "rtx"
+model = "gemma4:31b-cloud"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK12-2"
+branch = "task/SK12-2"
+base = "bb955cf01c67b3b10a03e5d9eeb8ef3df21de580"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK12-2\\1"
+reviewer_notes = [{at = "2026-10-29T22:56:19Z", verdict = "verified", note = "Gate triage: both BLOCKING findings are false. (1) Empty block: the finding itself says it doesn't loop; an empty block is kept as sep.join keeps it (lossless by design, the function's contract). (2) Separator inside a split block: impossible, every piece but a block's last is exactly limit characters, so joining anything to it exceeds limit and flushes first; a separator only ever falls between blocks. The test pack_blocks(['ab', 'x'*10, 'cd'], 4) == ['ab', 'xxxx', 'xxxx', 'xx', 'cd'] pins this."}]
+
+[evidence_summary]
+hash = "sha256:1a7dc2f9c6a59b52ab5016af3a37ae9cb4419f3defeec396eb23ab2cd6682556"
+files = 2
+insertions = 66
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 18
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK12-2\\1\\report.json"
+summary = "I have implemented the `pack_blocks` function in `evi/history.py` and added a comprehensive test suite in `tests/test_pack_blocks.py`."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK12-2"
+digest = "sha256:b50b03882ca2d045e0f21c5b68d0905015b7c2a974c182cd7fcd6ece36edbd73"
+head = "fe3b9240f14dd6ed272b351e699d80ae1b662e9f"
+evidence = "sha256:1a7dc2f9c6a59b52ab5016af3a37ae9cb4419f3defeec396eb23ab2cd6682556"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-29T22:56:25Z"
+key = "302b45cb92785c8d"
+sig = "705abaf5421faa9f67e9f42f2fe1753a9bd5a028db757e39baac71ef9a06fbce"
+
+[attestation.review]
+base = "bb955cf01c67b3b10a03e5d9eeb8ef3df21de580"
+exit_code = 1
+report_sha256 = "0d65f8958cfa3015c7d0b48161ba880d698f938fbd6e2bf48fbcd6fb92c0d90a"
+override = "Gate triage: both BLOCKING findings are false. (1) Empty block: the finding itself says it doesn't loop; an empty block is kept as sep.join keeps it (lossless by design, the function's contract). (2) Separator inside a split block: impossible, every piece but a block's last is exactly limit characters, so joining anything to it exceeds limit and flushes first; a separator only ever falls between blocks. The test pack_blocks(['ab', 'x'*10, 'cd'], 4) == ['ab', 'xxxx', 'xxxx', 'xx', 'cd'] pins this."
