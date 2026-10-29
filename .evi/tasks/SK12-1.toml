@@ -1,0 +1,20 @@
+id = "SK12-1"
+title = "history: tail_within, the compaction cut moved forward until the verbatim tail fits a token budget"
+status = "open"
+why = "Part of roadmap item memory-sessions-structured-compaction (the token-budgeted tail). Compaction keeps the newest compact_keep_recent messages verbatim whatever their size, so a tail holding a big tool result can leave a small window still overflowing right after compacting. This task adds the pure function; the agent calling it with a budget from the context window is the director's wiring."
+hints = "Make exactly these two edits to evi/history.py and nothing else (the code was run against every acceptance criterion before filing):\n\n1. Change the line `from typing import Any, Mapping, Sequence` to `from typing import Any, Callable, Mapping, Sequence`.\n\n2. Insert this function directly after the function compaction_cut (before `def join_user_runs(`), with two blank lines before and after it:\n\ndef tail_within(history: Sequence[Mapping[str, Any]], cut: int, budget: int,\n                size: Callable[[Mapping[str, Any]], int]) -> int:\n    \"\"\"`cut` (compaction_cut's) moved forward until the verbatim tail\n    history[cut:] is at most `budget` tokens, `size` being one message's\n    estimate. It stops only where compaction_cut may, at a user or assistant\n    message; when no such start fits, it is the newest one, so the latest step\n    stays verbatim even when it alone is over budget. A `budget` of 0 or less\n    leaves `cut` as it is.\"\"\"\n    if budget <= 0:\n        return cut\n    total = sum(size(m) for m in history[cut:])\n    last = cut\n    for i in range(cut, len(history)):\n        if history[i].get(\"role\") in (\"user\", \"assistant\"):\n            if total <= budget:\n                return i\n            last = i\n        total -= size(history[i])\n    return last\n\nTests go in a NEW file tests/test_compaction_tail.py (do not edit other test files). Build histories from small helpers, e.g. U(n) = {'role': 'user', 'content': 'u' * (4 * n)}, A(n) for assistant and T(n) for tool, and use size = lambda m: len(m.get('content') or '') // 4, so U(10) is 10 tokens. Comments state why in one line."
+acceptance = ["With h = [system, U(10), A(10), U(10), A(5), T(500), A(10), U(10), A(10)] (the tail from index 3 is 545 tokens): tail_within(h, 3, 1000, size) == 3 (it already fits).", "tail_within(h, 3, 100, size) == 6: the cut moves past the 500-token tool result to the next assistant message.", "tail_within(h, 3, 25, size) == 7 and tail_within(h, 3, 5, size) == 8 (nothing fits: the newest user/assistant message, so the latest step stays verbatim).", "tail_within(h, 3, 0, size) == 3 and a negative budget also returns 3.", "The result is never a tool message: for [system, U(10), A(1), T(500)] with cut 1 and budget 50 it is 2.", "The existing tests in tests/test_history_ops.py and tests/test_structured_compaction.py pass."]
+files_in_scope = ["evi/history.py", "tests/test_compaction_tail.py"]
+required_checks = ["python -m pytest -q tests/test_compaction_tail.py tests/test_history_ops.py tests/test_structured_compaction.py", "python -m ruff check evi/history.py tests/test_compaction_tail.py"]
+implementer = "evi-local"
+created = "2026-10-29T22:34:10Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]

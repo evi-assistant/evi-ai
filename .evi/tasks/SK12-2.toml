@@ -1,0 +1,20 @@
+id = "SK12-2"
+title = "history: pack_blocks, a transcript split into chunks a summariser can take"
+status = "open"
+why = "Part of roadmap item memory-sessions-structured-compaction (chunking an oversized middle). Compaction sends the whole stretch it summarises in one request, so a long session on a small window asks for more than the model can read and the summary silently loses its start. This task adds the pure function that packs the rendered messages into chunks; summarising chunk by chunk, each updating the summary so far, is the director's wiring."
+hints = "Add this function at the END of evi/history.py (after compaction_messages, two blank lines before it), and change nothing else in that file (the code was run against every acceptance criterion before filing):\n\ndef pack_blocks(blocks: Sequence[str], limit: int, sep: str = \"\\n\\n\") -> list[str]:\n    \"\"\"`blocks` (a transcript's messages, rendered) joined with `sep` into as\n    few chunks of at most `limit` characters as their order allows, so a long\n    transcript can be summarised a chunk at a time. A block longer than\n    `limit` is split into `limit`-sized pieces, none of it dropped. A `limit`\n    of 0 or less gives one chunk; no blocks give none.\"\"\"\n    if not blocks:\n        return []\n    if limit <= 0:\n        return [sep.join(blocks)]\n    chunks: list[str] = []\n    cur: str | None = None\n    for block in blocks:\n        for i in range(0, max(len(block), 1), limit):\n            piece = block[i:i + limit]\n            joined = piece if cur is None else f\"{cur}{sep}{piece}\"\n            if cur is not None and len(joined) > limit:\n                chunks.append(cur)\n                cur = piece\n            else:\n                cur = joined\n    if cur is not None:\n        chunks.append(cur)\n    return chunks\n\nTests go in a NEW file tests/test_pack_blocks.py (do not edit other test files), plain calls to pack_blocks with exact expected lists. Comments state why in one line."
+acceptance = ["pack_blocks(['aaa', 'bbb', 'ccc'], 8) == ['aaa\\n\\nbbb', 'ccc'].", "A block longer than the limit is split, none of it dropped: pack_blocks(['x' * 10], 4) == ['xxxx', 'xxxx', 'xx'] and pack_blocks(['ab', 'x' * 10, 'cd'], 4) == ['ab', 'xxxx', 'xxxx', 'xx', 'cd'].", "pack_blocks([], 10) == [] and pack_blocks(['a', 'b'], 0) == ['a\\n\\nb'].", "For 50 blocks of 21 characters and a limit of 120, every chunk is at most 120 characters and '\\n\\n'.join(chunks) == '\\n\\n'.join(blocks) (nothing lost or reordered when no block is split).", "A custom separator is used between blocks: pack_blocks(['a', 'b'], 10, sep=' | ') == ['a | b'].", "The existing tests in tests/test_history_ops.py and tests/test_structured_compaction.py pass."]
+files_in_scope = ["evi/history.py", "tests/test_pack_blocks.py"]
+required_checks = ["python -m pytest -q tests/test_pack_blocks.py tests/test_history_ops.py tests/test_structured_compaction.py", "python -m ruff check evi/history.py tests/test_pack_blocks.py"]
+implementer = "evi-local"
+created = "2026-10-29T22:34:15Z"
+attempts = 0
+backend = ""
+model = ""
+worktree = ""
+branch = ""
+base = ""
+evidence = ""
+reviewer_notes = []
+
+[lease]
