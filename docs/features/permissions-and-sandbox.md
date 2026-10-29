@@ -165,8 +165,8 @@ without running anything. It runs under the OS sandbox when
 
 `run_command`, `monitor` with `kind=command` and any other `shell`-category tool
 run a whole command line, which can chain several commands. eVi splits the line
-the way the shell that runs it would (`cmd.exe` on Windows, `/bin/sh`
-elsewhere; `evi/shellsplit.py`): `;`, `&`, `&&`, `||`, `|` and newlines
+the way the shell that runs it would (PowerShell on Windows, or `cmd.exe` with
+`[tools] windows_shell = "cmd"`; `/bin/sh` elsewhere; `evi/shellsplit.py`): `;`, `&`, `&&`, `||`, `|` and newlines
 separate commands, and `$( )`, backticks and `( )` subshells are commands of
 their own. Rules then apply to each command (segment), not to the line as a
 whole:
@@ -186,7 +186,7 @@ whole:
   `iex` / `Invoke-Expression`, `cmd /c`, `powershell -Command` or
   `-EncodedCommand`); a shell reading its script from a pipe or stdin
   (`curl x | sh`); nesting deeper than 32 levels; a line over 100,000
-  characters. On Windows, `cmd.exe` expands and re-parses some things before
+  characters. With `cmd.exe` (`windows_shell = "cmd"`), it expands and re-parses some things before
   it splits the line, so these ask too: any `%VAR%` expansion (even
   `echo %PATH%`), any `for /f` loop, a `^&` or `^|` in a line that also has a
   `|` pipe, and a `^` before a bare carriage return.

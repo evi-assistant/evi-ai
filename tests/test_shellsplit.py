@@ -427,8 +427,12 @@ def test_empty_and_blank_lines():
         assert split("  \n ", dialect).segments == ()
 
 
-def test_default_dialect_matches_the_platform_shell():
-    assert default_dialect() == ("cmd" if os.name == "nt" else "bash")
+def test_default_dialect_matches_the_platform_shell(monkeypatch):
+    assert default_dialect() == ("pwsh" if os.name == "nt" else "bash")
+    if os.name == "nt":  # [tools] windows_shell = "cmd" keeps cmd.exe, and its syntax
+        monkeypatch.setattr("evi.shells.windows_shell", lambda: "cmd")
+        assert default_dialect() == "cmd"
+        monkeypatch.undo()
     assert split("ls").dialect == default_dialect()
     with pytest.raises(ValueError):
         split("ls", "fish")

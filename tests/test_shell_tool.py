@@ -76,7 +76,8 @@ def _unc_spelling(path):
         return None
 
 
-def test_a_command_in_a_unc_folder_runs_there_not_in_the_windows_folder(tmp_path):
+def test_a_command_in_a_unc_folder_runs_there_not_in_the_windows_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr("evi.shells.windows_shell", lambda: "cmd")  # cmd.exe's UNC workaround
     unc = _unc_spelling(tmp_path)
     if unc is None:
         pytest.skip(r"needs Windows and a reachable \\localhost\<drive>$ share")
@@ -89,7 +90,8 @@ def test_a_command_in_a_unc_folder_runs_there_not_in_the_windows_folder(tmp_path
         "ERROR: ") and not (tmp_path / "hi").exists()
 
 
-def test_a_unc_folder_behind_a_mapped_drive_runs_cmd_there_with_full_syntax():
+def test_a_unc_folder_behind_a_mapped_drive_runs_cmd_there_with_full_syntax(monkeypatch):
+    monkeypatch.setattr("evi.shells.windows_shell", lambda: "cmd")  # cmd.exe's UNC workaround
     from evi.permissions import _is_network_path
     from evi.tools.shell import _mapped_spelling
 

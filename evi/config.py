@@ -341,6 +341,9 @@ class ToolToggles:
     fs: bool = True
     code: bool = True
     shell: bool = False
+    # The shell run_command uses on Windows (evi.shells): "powershell" (pwsh
+    # when installed, else Windows PowerShell) or "cmd".
+    windows_shell: str = "powershell"
     gmail: bool = False
     outlook: bool = False
     image: bool = False

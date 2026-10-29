@@ -6,9 +6,9 @@ git*`` approves ``git status && git log`` (both segments are git) but not
 that the rule does not cover. Matched against the whole line, the rule's glob
 would approve the chained tail too.
 
-Three dialects, because eVi runs commands through the platform shell
-(``subprocess.run(shell=True)``: ``/bin/sh`` on POSIX, ``cmd.exe`` on Windows)
-and PowerShell lines are common on Windows:
+Three dialects, because eVi runs commands through the platform's shell
+(`evi.shells`: ``/bin/sh`` on POSIX; PowerShell on Windows by default, or
+``cmd.exe`` with ``[tools] windows_shell = "cmd"``):
 
 - ``bash``: ``; & && || | |&`` and newlines separate; ``$( )``, backticks,
   ``<( )``/``>( )`` and ``( )`` subshells are nested segments; ``'...'``,
@@ -39,7 +39,8 @@ let a specific allow rule approve an unparsable line. Where a construct is
 ambiguous the splitter splits, because more segments is always the safe
 direction: each one has to be covered on its own.
 
-Pure and side-effect free.
+Pure and side-effect free, but for :func:`default_dialect`, which reads
+``[tools] windows_shell`` on Windows.
 """
 
 from __future__ import annotations
@@ -55,8 +56,13 @@ _MAX_DEPTH = 32
 
 
 def default_dialect() -> str:
-    """The shell ``subprocess.run(shell=True)`` uses on this platform."""
-    return "cmd" if os.name == "nt" else "bash"
+    """The dialect of the shell a command line runs in here (`evi.shells`):
+    bash on POSIX; on Windows pwsh, or cmd when ``[tools] windows_shell`` says so."""
+    if os.name != "nt":
+        return "bash"
+    from evi import shells
+
+    return shells.dialect()
 
 
 @dataclass(frozen=True)

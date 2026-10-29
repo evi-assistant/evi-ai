@@ -19,6 +19,11 @@ Safety posture (matches eVi's existing stance):
   present, the command runs sandboxed (read-only FS except the workdir, no
   network), same as `run_python`. Falls back to unsandboxed with a note.
 - Runs in the session working folder (evi.workdir) unless `cwd` is given.
+- The shell is `evi.shells`'s: ``/bin/sh`` on POSIX; on Windows PowerShell by
+  default (``pwsh`` when installed, else Windows PowerShell), or ``cmd.exe``
+  with ``[tools] windows_shell = "cmd"``. cmd.exe can't run in a folder on a
+  network share, so there a line is run in the mapped drive letter, or as one
+  program when no letter maps the share; PowerShell runs there as it is.
 - Runs through `evi.proc.run`: at the timeout, or when the turn is cancelled
   (`ToolContext.cancel_token`), the command's whole process tree is killed
   and the output so far comes back. Its stdin is the null device, and a run
@@ -31,7 +36,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from evi import proc, workdir
+from evi import proc, shells, workdir
 from evi.tools.base import ToolContext, tool
 
 _DEFAULT_TIMEOUT = 60
@@ -67,18 +72,21 @@ def _mapped_spelling(folder: Path) -> Path | None:
     return None
 
 
-def _with_own_python(command: str, folder: Path) -> str:
+def _with_own_python(command: str, folder: Path, *, powershell: bool = False) -> str:
     """`command` with a leading bare ``python`` / ``python3`` made the
     interpreter a check uses (`evi.checks.resolve_argv`: the folder's own
     virtualenv, else eVi's), so `python -m pytest` here runs what the verify
-    gate runs rather than whichever Python the shell finds first."""
+    gate runs rather than whichever Python the shell finds first. PowerShell
+    needs the call operator to run a quoted path (``& "<venv>/python.exe"``)."""
     from evi.checks import resolve_argv
 
     head, sep, rest = command.partition(" ")
     if head.lower().removesuffix(".exe") not in ("python", "python3"):
         return command
     exe = resolve_argv([head], folder, {"PATH": ""})[0]
-    return command if exe == head else f'"{exe}"{sep}{rest}'
+    if exe == head:
+        return command
+    return f'& "{exe}"{sep}{rest}' if powershell else f'"{exe}"{sep}{rest}'
 
 
 def _direct_argv(command: str, folder: Path, env: dict[str, str] | None) -> list[str] | str:
@@ -111,7 +119,11 @@ def _default_timeout(ctx: ToolContext | None) -> int:
 @tool(
     description=(
         "Run a shell command and return its exit code + combined stdout/stderr. "
-        "Use for builds, tests, git, grep, and other CLIs. Runs in the session "
+        "Use for builds, tests, git, grep, and other CLIs. "
+        + ("On Windows the command runs in PowerShell (pwsh when installed, else "
+           "Windows PowerShell 5.1, which has no && or ||: separate steps with ;), "
+           "so write PowerShell syntax. " if os.name == "nt" else "")
+        + "Runs in the session "
         "working folder unless `cwd` is set. `timeout` is seconds (default 60, "
         "or the [checks] timeout (300 s by default) in a run held to a policy "
         "such as `evi task start`; max 600). Output is truncated if very large."
@@ -154,7 +166,16 @@ def run_command(
         pass
 
     env = proc.scrubbed_env() if sandboxed or proc.runs_unattended(ctx) else None
-    if use_shell and os.name == "nt":
+    encoding = None
+    if use_shell and shells.uses_powershell():
+        # PowerShell runs in a folder on a network share too, unlike cmd.exe.
+        try:
+            argv = shells.powershell_argv(
+                _with_own_python(command, Path(workdir_path), powershell=True))
+        except ValueError as exc:
+            return f"ERROR: {exc}"
+        use_shell, encoding = False, "utf-8"
+    elif use_shell and os.name == "nt":
         from evi.permissions import _is_network_path
 
         if _is_network_path(Path(workdir_path)):
@@ -177,6 +198,7 @@ def run_command(
             timeout=timeout,
             cancel_token=getattr(ctx, "cancel_token", None),
             env=env,
+            encoding=encoding,
         )
     except OSError as exc:
         return f"ERROR: failed to run command: {exc}"

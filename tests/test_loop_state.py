@@ -131,7 +131,7 @@ def _same_dir(a: str | Path, b: str | Path) -> bool:
 def test_chat_tools_run_in_agent_cwd(home, tmp_path, fake_llm):
     proj = tmp_path / "proj"
     proj.mkdir()
-    pwd = "cd" if os.name == "nt" else "pwd"
+    pwd = "(Get-Location).Path" if os.name == "nt" else "pwd"  # Windows: PowerShell
     client = fake_llm([
         fake_llm.call(
             ("write_file", {"path": "x.txt", "content": "hi"}),

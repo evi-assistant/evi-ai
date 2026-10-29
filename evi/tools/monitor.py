@@ -130,9 +130,19 @@ def _watch_command(
             scrub = True
         else:
             prefix = "(sandbox requested but no sandboxer on PATH — ran unsandboxed)\n"
+    encoding = None
+    if use_shell:
+        from evi import shells
+
+        if shells.uses_powershell():  # the shell run_command uses (evi.shells)
+            try:
+                argv = shells.powershell_argv(command)
+            except ValueError as exc:
+                return f"ERROR: {exc}"
+            use_shell, encoding = False, "utf-8"
     try:
         res = proc.run(
-            argv, shell=use_shell, merge_stderr=True,
+            argv, shell=use_shell, merge_stderr=True, encoding=encoding,
             timeout=max(0.0, deadline - time.monotonic()),
             cancel_token=cancel_token,
             until=until_rx.search if until_rx is not None else None,
