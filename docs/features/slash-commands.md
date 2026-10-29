@@ -164,7 +164,7 @@ as MCP prompts (`evi mcp serve`), `prompts/get` never inlines anything: template
 refs and the client's `args` both come back as text, so an MCP client can't
 read local files through a prompt.
 
-> **Changed after 1.0.53.** Earlier versions inlined every `@path` after the
+> **Changed in 1.1.0.** Earlier versions inlined every `@path` after the
 > arguments were substituted, including refs typed in the arguments, refs
 > outside the working folder (such as `@~/notes/style.md`), and key files.
 > Commands that relied on those now send the `@path` text instead. Move the

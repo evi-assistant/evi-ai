@@ -355,7 +355,7 @@ C:\evi
 
 _Generated from the working tree by `python scripts/handoff_facts.py write`; `python scripts/handoff_facts.py check` fails when this block is stale._
 
-**Package:** `evi-assistant` 1.0.53 · Python `>=3.12` · console scripts `evi`
+**Package:** `evi-assistant` 1.1.0 · Python `>=3.12` · console scripts `evi`
 
 | Fact | Count |
 |---|---|

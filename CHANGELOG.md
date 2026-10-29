@@ -5,6 +5,8 @@ All notable user-visible changes to eVi. Format loosely follows
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-29
+
 ### Security
 - **Safe mode no longer offers slash commands from the system temp folder.**
   Safe mode pointed the command store at a fresh temp folder, but the store

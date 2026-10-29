@@ -552,9 +552,9 @@ def test_roadmap_dependencies_name_listed_items():
 def test_roadmap_marks_the_shipped_items():
     _, _, status = _roadmap_items()
     assert status["fix-security-hotfix"].startswith("Shipped in 1.0.53")
-    done = {i for i, s in status.items() if s.startswith("Done")}
+    shipped = {i for i, s in status.items() if s.startswith("Shipped in 1.1.0")}
     assert {"loose-ci-release-gates", "safety-project-trust-gate",
-            "fix-managed-runtime-ctx"} <= done
+            "fix-managed-runtime-ctx"} <= shipped
     assert all(s.startswith(("Shipped", "Done", "Planned")) for s in status.values())
     assert status["acp-server"].startswith("Planned")
 
