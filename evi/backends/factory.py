@@ -62,10 +62,12 @@ def get_backend(settings) -> Backend:
 
     kind = (getattr(settings, "backend", None) or "lmstudio").strip().lower()
     cls = KNOWN_BACKENDS.get(kind, OpenAICompatBackend)
+    extra = {"native": bool(getattr(settings, "ollama_native", True))} if kind == "ollama" else {}
     return cls(
         base_url=settings.base_url,
         # An `env:VARNAME` api_key is read from the environment here, so online
         # provider secrets can stay out of config.toml.
         api_key=resolve_api_key(settings.api_key),
         request_timeout=settings.request_timeout,
+        **extra,
     )

@@ -103,6 +103,10 @@ class LLMSettings:
     # boilerplate. Empty fast_model = fast_mode is a no-op.
     fast_mode: bool = False
     fast_model: str = ""
+    # Ollama: chat through its native /api/chat, which takes the context
+    # window (num_ctx = context_size) with each request; false = its
+    # OpenAI-compatible /v1, which ignores it (evi.llm.ollama_native).
+    ollama_native: bool = True
     # Sampling knobs. Defaults match OpenAI's "no-op" values; agent code
     # only forwards them when they deviate.
     top_p: float = 1.0

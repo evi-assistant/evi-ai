@@ -478,6 +478,24 @@ All notable user-visible changes to eVi. Format loosely follows
   docs/features/permissions-and-sandbox.md.
 
 ### Changed
+- **Ollama models run with the context window eVi budgets for.** eVi now chats
+  with Ollama through its native `/api/chat` instead of the OpenAI-compatible
+  `/v1`, which ignores the window: each request carries `num_ctx` =
+  `[llm] context_size`, so a model no longer loads with the server's default
+  (often 4K) and silently loses the start of a longer conversation. Tools,
+  images, thinking (`think`), JSON output and token counts all go through it.
+  A larger window needs more memory: lower `context_size` if a model stops
+  fitting on the GPU. `[llm] ollama_native = false` keeps `/v1`.
+- **On Windows, commands run in PowerShell.** `run_command` and `monitor`'s
+  command watch now use PowerShell (`pwsh` when it's installed, else Windows
+  PowerShell 5.1) instead of `cmd.exe`, so the PowerShell lines models write
+  work as written, a folder on a network share works without the mapped-drive
+  workaround, and the exit code is the last native command's (or 1 when the
+  last statement failed). Permission rules read lines in PowerShell's syntax
+  too. Windows PowerShell 5.1 has no `&&` or `||`: separate steps with `;`, or
+  install PowerShell 7. A line that starts with a quoted program path gets
+  PowerShell's call operator. `[tools] windows_shell = "cmd"` keeps
+  `cmd.exe`.
 - **Worktrees made from inside another worktree go under the main checkout.**
   `evi worktree create` started inside a linked worktree put the new one in
   that worktree's own `.worktrees/`, so worktrees nested, and removing the

@@ -45,6 +45,7 @@ scopes    = ["Mail.Read", "User.Read"]
 fs          = true     # read_file / write_file / list_dir
 code        = true     # run_python, python_symbols, check_file, monitor
 shell       = false    # run_command (and monitor's commands); never default-on
+windows_shell = "powershell"  # Windows: "powershell" (pwsh if installed) or "cmd"
 gmail       = false    # Phase 2
 outlook     = false    # Phase 2
 image       = false    # ComfyUI text2img
@@ -183,6 +184,14 @@ short stub naming a spill file that holds the whole result (`read_file` can
 bring it back), which needs no summary call. A backend that refuses a prompt
 as too long gets it again once, masked and compacted; a second refusal ends the turn with
 the error.
+
+With Ollama, eVi chats through its native `/api/chat`, which takes the window
+with every request (`num_ctx` = `context_size`), so a model loads with the
+window eVi budgets for instead of the server's default (`OLLAMA_CONTEXT_LENGTH`,
+often 4K), which silently cut the start of a longer prompt. A larger window
+needs more memory: lower `context_size` if a model no longer fits on the GPU.
+`[llm] ollama_native = false` goes back to Ollama's OpenAI-compatible `/v1`,
+which ignores the window.
 
 ### `context_size` and the managed llama.cpp runtime
 

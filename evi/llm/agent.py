@@ -2598,6 +2598,10 @@ class Agent:
         # KV-cache prompt reuse hint (llama.cpp honours it; others ignore).
         if self.config.llm.cache_prompt:
             extra_body["cache_prompt"] = True
+        # Ollama's native API loads the model with this window (num_ctx);
+        # /v1 ignores the key (evi.llm.ollama_native).
+        if (getattr(self.config.llm, "backend", "") or "").strip().lower() == "ollama"                 and int(self.config.llm.context_size or 0) > 0:
+            extra_body["options"] = {"num_ctx": int(self.config.llm.context_size)}
         # The verify gate's state for this turn: what it wrote, the checks
         # and stop-hook blocks so far.
         vstate = self._turn_verify = self._start_verify(plan_only)
