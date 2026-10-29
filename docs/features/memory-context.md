@@ -105,7 +105,7 @@ Core memory and compaction need **no extra dependencies** — it's plain Markdow
 
 - `/context` or `/ctx` — show the per-bucket context breakdown (system prompt / tool schemas / you / assistant / tools), the system prompt by part, the tool schemas by group, total tokens, ceiling, and percent full. The bar turns green/yellow/red as you approach the limit.
 - `/compact` — force compaction now (summarise older history into one summary to free context). Prints how many messages were collapsed, or notes that history is too short.
-- **Compact up to here** (web and desktop) — the 🗜 action on one of your messages or a reply summarises everything before it and keeps it and everything after it verbatim. Picking a tool result keeps from the next step on.
+- **Compact up to here** (web and desktop) — the 🗜 action on one of your messages or a reply summarises everything before it and keeps it and everything after it verbatim. Picking a tool result keeps from the next step on. It calls `POST /api/session/{session_id}/compact` with `{upto, focus}` (the message's history index; `collapsed` in the reply is 0 when there was nothing before it).
 
 The assistant uses the `remember` / `recall` / `forget` / `list_memories` / `recall_by_tag` tools on its own during conversation — just talk to it ("remember that I prefer tabs over spaces", "what do you have stored about project-x?").
 
