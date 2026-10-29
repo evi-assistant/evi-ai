@@ -58,15 +58,47 @@ def tool_schema_tokens(tools: Iterable[Any]) -> dict[str, int]:
     return dict(sorted(((g, c // 4) for g, c in chars.items()), key=lambda kv: (-kv[1], kv[0])))
 
 
+def system_prompt_tokens(
+    history: list[dict[str, Any]], parts: Iterable[tuple[str, str]]
+) -> dict[str, int]:
+    """Estimated tokens of the system messages in `history`, per part of the
+    prompt: `parts` is (label, text) in the order the agent joined them with
+    blank lines. A part counts where it is found in the first system message
+    (with the blank line after it); what no part accounts for (a part changed
+    since the prompt was sent, a later system message) is "other". Largest
+    first; the same ~4 chars/token estimate as the buckets."""
+    system = [m for m in history if m.get("role") == "system"]
+    total = sum(_text_chars(m) for m in system)
+    first = system[0].get("content") if system else None
+    first = first if isinstance(first, str) else ""
+    chars: dict[str, int] = {}
+    pos = 0
+    for label, text in parts:
+        at = first.find(text, pos) if text else -1
+        if at < 0:
+            continue  # empty, or not in the prompt as sent
+        end = at + len(text)
+        if first.startswith("\n\n", end):
+            end += 2  # the separator after it
+        chars[label] = chars.get(label, 0) + (end - at)
+        pos = end
+    other = total - sum(chars.values())
+    if other > 0:
+        chars["other"] = chars.get("other", 0) + other
+    return dict(sorted(((g, c // 4) for g, c in chars.items()), key=lambda kv: (-kv[1], kv[0])))
+
+
 def context_breakdown(
-    history: list[dict[str, Any]], ceiling: int, tools: Iterable[Any] = ()
+    history: list[dict[str, Any]], ceiling: int, tools: Iterable[Any] = (),
+    system_parts: Iterable[tuple[str, str]] = (),
 ) -> dict[str, Any]:
     """Categorise `history` tokens into system/user/assistant/tools buckets.
 
     The schemas of `tools` (the session's tools) go into the schemas bucket.
     Returns a dict with `buckets` (token count per category), `used` (their
-    sum), `ceiling`, `pct`, `messages`, `schema_groups`, and per-bucket
-    `pct_of_used`.
+    sum), `ceiling`, `pct`, `messages`, `schema_groups`, `system_groups` (the
+    system bucket per part of `system_parts`, see system_prompt_tokens), and
+    per-bucket `pct_of_used`.
     """
     chars = {b: 0 for b in BUCKETS}
     for m in history:
@@ -93,6 +125,7 @@ def context_breakdown(
         "pct": (used * 100 // ceiling) if ceiling else 0,
         "messages": len(history),
         "schema_groups": schema_groups,
+        "system_groups": system_prompt_tokens(history, system_parts) if system_parts else {},
         "pct_of_used": {
             b: (buckets[b] * 100 // used) if used else 0 for b in BUCKETS
         },
