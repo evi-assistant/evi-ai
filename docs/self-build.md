@@ -374,7 +374,9 @@ both fixed, that matter for any local-model use:
   a tool call as JSON *content* instead of using the structured `tool_calls`
   field, sometimes as a Python/JSON hybrid (single-quoted strings, lowercase
   `false`). eVi recovers these (`recover_text_tool_calls` in
-  `evi/llm/agent.py`), so the call still runs. Frontier models over real APIs
+  `evi/llm/agent.py`), so the call still runs. gpt-oss:20b has printed just a
+  call's arguments with no tool name (`{"patch": ...}`); that is recovered
+  when one file or read-only tool fits it. Frontier models over real APIs
   always return structured calls.
 
 Worked dogfood: with `qwen2.5-coder:14b` as the model, eVi fixed a real bug in

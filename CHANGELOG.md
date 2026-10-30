@@ -30,6 +30,15 @@ All notable user-visible changes to eVi. Format loosely follows
 - **Dev: ruff below 0.18** (the pinned rule set lints clean on 0.17), and the
   desktop CI jobs use `actions/checkout@v7` and `actions/cache@v6`.
 
+### Fixed
+- **A tool call written as bare arguments runs.** gpt-oss:20b ended a run by
+  replying with only `{"patch": "..."}`, an apply_patch call's arguments
+  with no tool name, and eVi took it as the answer. A reply that is only such
+  an object now runs as a call to the one file or read-only tool it fits
+  (when it lacks a required argument, the model is told which). A tool that
+  runs code, clicks or writes elsewhere is never guessed, and an object
+  several tools fit stays text.
+
 ### Security
 - **Desktop dependencies with advisories updated.** rustls 0.23.46,
   rustls-webpki 0.103.16, webpki-root-certs 1.0.11 and webpki-roots 1.0.11

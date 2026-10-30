@@ -59,6 +59,12 @@ mid-object are closed only for a read-only tool. A call that can't be used
 is answered with the tool's arguments and an example; an unknown tool with
 the close names (or `search_tools`, or the list of tools). A reply that
 starts with a call written as `<tool_call>` or `<function=...>` text runs it.
+So does a reply that is nothing but a tool's arguments with no tool name
+(`{"path": ..., "old_string": ..., "new_string": ...}`), when exactly one
+file tool or read-only tool fits them: the one given all its required
+arguments, or failing that the one given some of them (the model is then told
+what's missing). It never guesses a tool that runs code, clicks or writes
+anywhere else, and an object several tools fit stays text.
 
 A tool result may fill about 15% of the context window (between 2,000 and
 60,000 characters; 16,000 when the window is unknown). A longer one enters the

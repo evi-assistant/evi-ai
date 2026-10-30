@@ -309,7 +309,51 @@ def _recover_tagged_calls(text: str, known: set[str]) -> list[dict[str, str]]:
     return out
 
 
-def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
+def _recover_nameless_call(
+    text: str, schemas: dict[str, dict[str, Any]]
+) -> list[dict[str, str]]:
+    """A call written as its bare arguments, with no tool name (gpt-oss
+    printing ``{"patch": "*** Begin Patch..."}``): recovered when the reply is
+    that one JSON object and nothing else (fenced or not) and one tool fits
+    it. A tool fits when it declares every key and requires some of them: the
+    one tool given all its required parameters wins; failing that, the one
+    tool given only some (preparing the call then tells the model what's
+    missing). Several fits at either step, or none: ``[]``."""
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.split("\n", 1)[1] if "\n" in body else ""
+        body = body.rstrip()
+        if body.endswith("```"):
+            body = body[:-3]
+        body = body.strip()
+    blobs = _find_json_blobs(body)
+    if len(blobs) != 1 or blobs[0] != body:
+        return []
+    obj = _loads_tolerant(body)
+    if not isinstance(obj, dict) or not obj or "arguments" in obj or "function" in obj:
+        return []
+    keys = set(obj)
+    whole: list[str] = []
+    partial: list[str] = []
+    for name, params in schemas.items():
+        props = (params or {}).get("properties")
+        required = (params or {}).get("required")
+        if not (isinstance(props, dict) and isinstance(required, list) and required
+                and keys <= set(props)):
+            continue
+        if set(required) <= keys:
+            whole.append(name)
+        elif keys & set(required):
+            partial.append(name)
+    fits = whole or partial
+    if len(fits) != 1:
+        return []
+    return [{"name": fits[0], "arguments": json.dumps(obj)}]
+
+
+def recover_text_tool_calls(
+    text: str, known: set[str], schemas: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, str]]:
     """Recover tool calls that a model emitted as TEXT instead of via the
     structured ``tool_calls`` field — a common local-model (e.g. qwen via
     Ollama) behaviour where the assistant prints a ``{"name": ..., "arguments":
@@ -318,9 +362,11 @@ def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
     Returns ``[{"name", "arguments"(json str)}, …]`` for blobs whose ``name`` is
     a known tool. Only the first blob that yields calls is used. Calls written
     as tags (``<tool_call>``, ``<function=...>``) are read by
-    `_recover_tagged_calls`. The reply must START with the call (JSON, a code
-    fence or a tag): one shown inside prose is an example and never runs.
-    Returns ``[]`` when nothing matches.
+    `_recover_tagged_calls`. Given `schemas` (tool name -> its parameters'
+    JSON schema), a reply that is only a nameless arguments object becomes a
+    call to the one tool it fits (`_recover_nameless_call`). The reply must
+    START with the call (JSON, a code fence or a tag): one shown inside prose
+    is an example and never runs. Returns ``[]`` when nothing matches.
     """
     text = (text or "").lstrip()
     if text.startswith(TAGGED_CALL_STARTS):
@@ -348,6 +394,8 @@ def recover_text_tool_calls(text: str, known: set[str]) -> list[dict[str, str]]:
                 out.append({"name": str(name), "arguments": args_str})
         if out:
             return out
+    if schemas:
+        return _recover_nameless_call(text, schemas)
     return []
 
 
@@ -3026,7 +3074,11 @@ class Agent:
                     or _stripped.startswith(TAGGED_CALL_STARTS)
                 ):
                     _recovered = recover_text_tool_calls(
-                        _stripped, set(self.tools) | set(getattr(self, "_from_wire", {}))
+                        _stripped, set(self.tools) | set(getattr(self, "_from_wire", {})),
+                        # A nameless call may only be a file tool or a read-only
+                        # one: a JSON reply must never turn into code or a click.
+                        {n: t.parameters for n, t in self.tools.items()
+                         if t.category == "fs" or t.read_only},
                     )
                     if _recovered:
                         for _idx, _rc in enumerate(_recovered):
