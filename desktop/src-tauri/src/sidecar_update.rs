@@ -207,8 +207,9 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> std::io::Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
+                // rwx only: never carry setuid/setgid/sticky bits out of an archive.
                 if let Some(mode) = entry.unix_mode() {
-                    let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode));
+                    let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode & 0o777));
                 }
             }
         }
@@ -325,7 +326,7 @@ fn config_auto_update_enabled(evi_home: &Path) -> bool {
         Ok(t) => t,
         Err(_) => return true,
     };
-    text.parse::<toml::Value>()
+    text.parse::<toml::Table>()
         .ok()
         .and_then(|v| {
             v.get("desktop")

@@ -71,14 +71,15 @@ const TOKEN_ENV: &str = "EVI_WEB_AUTH_TOKEN";
 const DESKTOP_TOKEN_FILE: &str = "desktop-token";
 
 /// `<evi_home>/config.toml`, parsed — None when absent or unparsable.
-fn read_config(home: &Path) -> Option<toml::Value> {
+fn read_config(home: &Path) -> Option<toml::Table> {
+    // A Table, not a Value: since toml 1.x, `Value` parses a single value.
     std::fs::read_to_string(home.join("config.toml"))
         .ok()
-        .and_then(|t| t.parse::<toml::Value>().ok())
+        .and_then(|t| t.parse::<toml::Table>().ok())
 }
 
 /// A non-empty string at `[section] key`.
-fn config_str(cfg: Option<&toml::Value>, section: &str, key: &str) -> Option<String> {
+fn config_str(cfg: Option<&toml::Table>, section: &str, key: &str) -> Option<String> {
     cfg?.get(section)?
         .get(key)?
         .as_str()
@@ -87,7 +88,7 @@ fn config_str(cfg: Option<&toml::Value>, section: &str, key: &str) -> Option<Str
 }
 
 /// `[federation] bind_lan` — serve on 0.0.0.0 so this machine can be a peer.
-fn config_bind_lan(cfg: Option<&toml::Value>) -> bool {
+fn config_bind_lan(cfg: Option<&toml::Table>) -> bool {
     cfg.and_then(|v| v.get("federation"))
         .and_then(|f| f.get("bind_lan"))
         .and_then(|b| b.as_bool())

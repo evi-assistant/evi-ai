@@ -23,6 +23,20 @@ All notable user-visible changes to eVi. Format loosely follows
   compacting. A stretch longer than the window can take is summarised a
   chunk at a time, each chunk updating the summary so far, instead of in one
   request whose start the model would silently drop.
+- **Desktop: toml 1.x.** The desktop shell reads `config.toml` as a document
+  (`toml::Table`); toml 1.x parses a `Value` as one value, which would have
+  turned `[federation] bind_lan`, `[web] auth_token` and `[desktop]
+  sidecar_auto_update` back to their defaults.
+- **Dev: ruff below 0.18** (the pinned rule set lints clean on 0.17), and the
+  desktop CI jobs use `actions/checkout@v7` and `actions/cache@v6`.
+
+### Security
+- **Desktop dependencies with advisories updated.** rustls 0.23.46,
+  rustls-webpki 0.103.16, webpki-root-certs 1.0.11 and webpki-roots 1.0.11
+  (TLS handshake and certificate-trust fixes, reached through the update
+  check's HTTP client), and zip 9 with tauri-plugin-updater 2.14.1 (zip's
+  extraction advisories). The sidecar update's own extraction now keeps only
+  a file's rwx bits from the archive, never setuid, setgid or sticky.
 
 ## [1.1.0] — 2026-10-29
 

@@ -27,10 +27,9 @@ tauri-plugin-updater = "2.0"
 tauri-plugin-deep-link = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Held at 0.8: toml 1.x's `Value::from_str` parses one value, not a document, so
-# the config.toml reads in main.rs and sidecar_update.rs would silently fall back
-# to their defaults. Move both to `toml::Table` before taking 1.x.
-toml = "0.8"   # read [federation] bind_lan from config.toml at spawn
+# config.toml is read as a `toml::Table`: since 1.x, `Value::from_str` parses one
+# value, not a document, so a `Value` read would silently fall back to defaults.
+toml = "1.1"   # read [federation] bind_lan from config.toml at spawn
 ureq = "3"
 url = "2"
 # Sidecar update channel (sidecar_update.rs): verify the minisign-signed manifest,
@@ -40,7 +39,7 @@ url = "2"
 minisign-verify = "0.2"
 sha2 = "0.11"
 base64 = "0.23"  # decode the tauri-signer manifest signature before minisign-verify
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # The OS CSPRNG for the desktop's generated LAN access token (main.rs). Already
 # in the tree via tauri; named directly so the token never depends on a
 # transitive pick.
