@@ -28,6 +28,7 @@ TestClient runs one streamed response to completion before the next request
 from __future__ import annotations
 
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -1176,8 +1177,9 @@ def _cli(*args: str):
 
 
 def _flat(text: str) -> str:
-    """Rich wraps long lines at the console width: compare the words."""
-    return " ".join(text.split())
+    """Rich wraps long lines at the console width (and colours them on GitHub
+    Actions): compare the words."""
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
 
 
 @pytest.fixture

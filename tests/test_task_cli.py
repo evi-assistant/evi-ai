@@ -326,7 +326,9 @@ def test_start_never_prints_control_characters_from_a_task_files_checks(repo, mo
     ])))
     res = _cli("task", "start", "T1")
     assert res.exit_code == 0, res.output
-    assert "required check " in res.stderr and "]0;pwned[2Jtail: passed" in res.stderr
+    # The command is shown as the platform quotes it (shlex on POSIX adds '...').
+    [line] = [x for x in res.stderr.splitlines() if x.startswith("required check ")]
+    assert "]0;pwned[2Jtail" in line and line.endswith(": passed")
     assert "(round 1) passed" in res.stderr  # the verify gate's line
     assert "\x1b" not in res.output and "\x07" not in res.output
 

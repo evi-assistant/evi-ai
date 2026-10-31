@@ -42,8 +42,10 @@ for path in event.get("files_changed") or []:
         targets.append(candidate)
 if not targets:
     sys.exit(0)  # no test touched: nothing to gate
+# -B: no bytecode cache, so a module rewritten within the second, at the same
+# size, is never run from the previous version's .pyc.
 proc = subprocess.run(
-    [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets],
+    [sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", *targets],
     cwd=cwd, capture_output=True, text=True,
 )
 if proc.returncode in (0, 5):  # 5: no tests collected

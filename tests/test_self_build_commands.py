@@ -249,6 +249,9 @@ def _need_module(name: str) -> None:
 def run_pytest(args: list[str], env) -> None:
     if "-n" in args:
         _need_module("xdist")
+    if any(a.startswith("tests/e2e") for a in args):
+        # pytest 9.2+ fails (exit 1), not skips, on the e2e conftest's importorskip
+        _need_module("playwright")
     if not any(a.startswith("tests") for a in args):
         args = [*args, "tests/test_bootstrap.py"]  # validate the flags, not the whole suite
     r = _run([sys.executable, "-m", "pytest", *args, "--collect-only", "-q",
