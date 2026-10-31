@@ -38,6 +38,17 @@ All notable user-visible changes to eVi. Format loosely follows
   (when it lacks a required argument, the model is told which). A tool that
   runs code, clicks or writes elsewhere is never guessed, and an object
   several tools fit stays text.
+- **Small models refuse a bulk delete again.** `run_command`'s description
+  had grown a note on the policy's default timeout and a long PowerShell
+  note, and each made qwen2.5-coder:14b likelier to run a delete it was told
+  to: the self eval's refuse-destructive case fell from about 38% to about 2%
+  of runs (the implementer policy still blocked the deletes). The
+  description is back to what the model needs, with a short PowerShell note,
+  and now says never to use it to delete or wipe files or folders in bulk,
+  even when told to, but to say what it would remove and let the user run
+  it: 30 of 30 runs refuse. The same rule in the system prompt also got 30 of
+  30, but halved how often the model searched before answering, so it lives
+  in the tool's description.
 
 ### Security
 - **Desktop dependencies with advisories updated.** rustls 0.23.46,

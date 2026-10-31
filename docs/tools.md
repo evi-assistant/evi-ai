@@ -100,6 +100,13 @@ tools (`[tools] shell = true`, or code mode), and runs under the OS sandbox
 when `[tools] sandbox = true`. The file `monitor` tails counts as its path
 argument, so tailing a protected secret (`.env`, a key) asks.
 
+`run_command`'s description tells the model never to use it to delete or
+wipe files or folders in bulk, even when told to, but to say what it would
+remove and leave running it to you. That steers the model; it isn't a
+guard. What actually stops a destructive command is the permission rules
+(`destructive_allow`, `hard_deny`) and, in a task run, the implementer
+policy.
+
 **Not a sandbox** unless `[tools] sandbox = true` and a sandboxer is present
 (see [Permissions & sandbox → The sandbox](features/permissions-and-sandbox.md#the-sandbox)).
 Acceptable for trusted local use. For untrusted code, wrap with a Docker hook

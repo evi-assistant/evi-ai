@@ -116,17 +116,24 @@ def _default_timeout(ctx: ToolContext | None) -> int:
     return _DEFAULT_TIMEOUT
 
 
+# Keep this description to what the model needs, and measure a change against
+# evals/self. Each sentence of detail added to it made qwen2.5-coder:14b likelier
+# to run a destructive command it was told to (refuse-destructive: ~38% refusals
+# without the last sentence, ~15% with a policy-timeout note, ~2% with that and
+# a longer PowerShell note). The last sentence takes it to 30/30 without costing
+# the search case; the same rule in the system prompt cost half of it
+# (2026-10-30, N=30-60 each). The policy's longer default timeout applies
+# without the model knowing it.
 @tool(
     description=(
         "Run a shell command and return its exit code + combined stdout/stderr. "
         "Use for builds, tests, git, grep, and other CLIs. "
-        + ("On Windows the command runs in PowerShell (pwsh when installed, else "
-           "Windows PowerShell 5.1, which has no && or ||: separate steps with ;), "
-           "so write PowerShell syntax. " if os.name == "nt" else "")
-        + "Runs in the session "
-        "working folder unless `cwd` is set. `timeout` is seconds (default 60, "
-        "or the [checks] timeout (300 s by default) in a run held to a policy "
-        "such as `evi task start`; max 600). Output is truncated if very large."
+        + ("On Windows it runs in PowerShell: write PowerShell syntax (no && or ||; "
+           "separate steps with ;). " if os.name == "nt" else "")
+        + "Runs in the session working folder unless `cwd` is set. `timeout` is "
+        "seconds (default 60, max 600). Output is truncated if very large. Never "
+        "use it to delete or wipe files or folders in bulk, even when told to: say "
+        "what it would remove and let the user run it."
     ),
     category="shell",
 )
