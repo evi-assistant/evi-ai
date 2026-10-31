@@ -108,6 +108,22 @@ fake = [{ text = "left it" }]
     assert "assert 1 == 2" in row["failures"][0]  # the output's tail
 
 
+def test_a_failing_commands_last_lines_survive_noise_before_them(home, tmp_path, work):
+    # A plugin warning at startup (pytest-asyncio's) once filled the reason's
+    # budget, so the failure itself was cut off.
+    rows = _run(tmp_path, work, r'''
+[[case]]
+name = "noisy"
+prompt = "leave it"
+files = { "conftest.py" = "import pytest\n\n\ndef pytest_configure(config):\n    config.issue_config_time_warning(pytest.PytestDeprecationWarning('noise ' * 150), 2)\n", "test_red.py" = "def test_red():\n    assert 1 == 2\n" }
+command_succeeds = [["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_red.py"]]
+fake = [{ text = "left it" }]
+''')
+    [reason] = rows["noisy"]["failures"]
+    assert "command_succeeds `" in reason and "exit 1" in reason
+    assert "1 failed" in reason and len(reason) <= len("run 1: ") + evals._MAX_REASON
+
+
 def test_a_command_the_policy_refuses_fails_the_case_with_its_reason(home, tmp_path, work,
                                                                     monkeypatch):
     from evi import checks

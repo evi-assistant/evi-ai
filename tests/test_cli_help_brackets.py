@@ -19,8 +19,9 @@ _WORD = re.compile(r"\\?\[([a-z_][a-z0-9_.-]*)\]")
 
 
 def _help(*path: str) -> str:
-    """The rendered --help as one line: Rich wraps it in a box at its own width."""
-    out = runner.invoke(app, [*path, "--help"]).stdout
+    """The rendered --help as one line: Rich wraps it in a box at its own width
+    (and colours it on GitHub Actions, so the escapes go too)."""
+    out = re.sub(r"\x1b\[[0-9;]*m", "", runner.invoke(app, [*path, "--help"]).stdout)
     return " ".join(out.replace("│", " ").split())
 
 

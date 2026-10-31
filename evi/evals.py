@@ -1154,9 +1154,17 @@ def run_command_gates(case: EvalCase, workspace: Path, pol: Any,
                                tail_lines=20)
         if run.exit != 0:
             status = f"exit {run.exit}" if run.exit is not None else (run.note or "did not run")
-            fails.append(_redact(f"command_succeeds `{shown}`: {status}\n{run.tail}")
-                         [:_MAX_REASON])
+            fails.append(_clip_tail(_redact(f"command_succeeds `{shown}`: {status}\n"),
+                                    _redact(run.tail)))
     return fails
+
+
+def _clip_tail(head: str, tail: str) -> str:
+    """`head`, then as much of the end of `tail` as fits in _MAX_REASON: a
+    command's last lines say why it failed, its first ones are often noise
+    (a plugin's deprecation warning)."""
+    room = max(0, _MAX_REASON - len(head))
+    return head + (tail if len(tail) <= room else "..." + tail[len(tail) - room + 3:])
 
 
 def evaluate(case: EvalCase, res: Any, workspace: Path, pol: Any, *,
@@ -1295,7 +1303,7 @@ def case_row(case: EvalCase, outcomes: Sequence[RunOutcome],
         stops[key] = stops.get(key, 0) + 1
     row.update(
         passes=passes, pass_rate=round(rate, 4), passed=rate + 1e-9 >= case.pass_rate,
-        failures=[f"run {i}: {'; '.join(o.failures[:3])}"[:_MAX_REASON]
+        failures=[f"run {i}: {'; '.join(o.failures[:3])[:_MAX_REASON]}"
                   for i, o in enumerate(outcomes, 1) if not o.passed][:_MAX_LISTED_RUNS],
         mean_turns=round(sum(o.turns for o in outcomes) / n, 2),
         mean_duration_s=round(sum(o.duration_s for o in outcomes) / n, 3),
