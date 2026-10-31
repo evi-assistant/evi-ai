@@ -1,0 +1,3 @@
+# gitleaks findings that aren't secrets, by fingerprint (commit:file:rule:line).
+# The sample attestation line in the evidence docs: key= is a made-up director key id.
+08c6590ee93a8ade028cdb5c15d1041ae0c0276b:docs/features/evidence.md:generic-api-key:369
