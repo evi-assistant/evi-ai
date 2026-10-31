@@ -1,6 +1,6 @@
 id = "SK12-3"
 title = "evals: a case can seed a conversation and compact it first (the recall eval's harness)"
-status = "open"
+status = "verified"
 why = "Part of roadmap item memory-sessions-structured-compaction (a recall eval). Compaction's quality is untested against a real model: nothing checks that a fact from early in a conversation is still there after the summary. This task lets an eval case seed a conversation (`history`) and compact it before the prompt (`compact`); the recall cases themselves and recording them are the director's."
 hints = "Make exactly these five edits to evi/evals.py and nothing else (the code was run against every acceptance criterion before filing):\n\n1. In the EvalCase dataclass, directly after the line `    tags: list[str] = field(default_factory=list)`, add:\n\n    # A conversation before the prompt ({role, content}, user or assistant),\n    # and whether to compact it first: a recall case asks about a fact the\n    # summary has to keep.\n    history: list[dict[str, str]] = field(default_factory=list)\n    compact: bool = False\n\n2. In _CASE_KEYS, change the line `    \"max_turns\", \"runs\", \"pass_rate\", \"fake\", \"expected_fail\", \"tags\",` to:\n\n    \"max_turns\", \"runs\", \"pass_rate\", \"fake\", \"expected_fail\", \"tags\", \"history\", \"compact\",\n\n3. Directly above `def _expect_tools(`, add this function (two blank lines before and after):\n\ndef _history(raw: Any, where: str) -> list[dict[str, str]]:\n    if raw is None:\n        return []\n    if not isinstance(raw, list):\n        raise EvalError(f\"{where}: `history` is a list of {{role, content}} messages\")\n    out = []\n    for m in raw:\n        if not isinstance(m, dict) or set(m) != {\"role\", \"content\"} \\\n                or m[\"role\"] not in (\"user\", \"assistant\") or not isinstance(m[\"content\"], str):\n            raise EvalError(f\"{where}: each `history` message is {{role = \\\"user\\\" or \"\n                            \"\\\"assistant\\\", content = \\\"...\\\"}\")\n        out.append({\"role\": m[\"role\"], \"content\": m[\"content\"]})\n    return out\n\n4. In _parse_case, directly after the line `    diff_only = c.get(\"diff_touches_only\")`, add:\n\n    history = _history(c.get(\"history\"), where)\n    compact = _bool(c.get(\"compact\", False), where, \"compact\")\n    if compact and not history:\n        raise EvalError(f\"{where}: `compact` compacts the case's `history`, which it doesn't have\")\n\nand in the EvalCase(...) it returns, directly after `        tags=_str_list(c.get(\"tags\"), where, \"tags\"),`, add:\n\n        history=history,\n        compact=compact,\n\n5. In run_once, replace\n\n        with unattended(ENTRY, None if ctx.fake else cfg):\n            res = run_headless(\n\nwith\n\n        with unattended(ENTRY, None if ctx.fake else cfg):\n            if case.history:\n                # The conversation before the prompt, compacted first in a\n                # recall case (the fake backend writes no summary, so there it\n                # stays as it is).\n                agent.history = [agent.history[0], *(dict(m) for m in case.history)]\n                if case.compact and not agent.compact_history(keep_recent=2) and not ctx.fake:\n                    return failed(\"compacting the case's history summarised nothing\")\n            res = run_headless(\n\n(the rest of the run_headless call stays as it is).\n\nTests go in a NEW file tests/test_evals_history.py (do not edit other test files). Use the `home` fixture and the _suite/_run pattern of tests/test_evals_tool_assertions.py (copy them into the new file). For the \"real model\" criteria, build an EvalContext with backend=\"rtx\" whose make_agent wraps evals.fake_agent_factory() and replaces the agent's client with a small client that answers stream=False requests with a fixed summary (a SimpleNamespace with choices[0].message.content) and passes stream=True requests on to an evi.evals_fake.ScriptedClient(case.fake or []), recording the messages of the last streamed request. Comments state why in one line."
 acceptance = ["A case with history = [{role = \"user\", content = \"...\"}, {role = \"assistant\", content = \"...\"}] and compact = true loads with case.history equal to those two messages (as dicts) and case.compact True; a case without them has history [] and compact False.", "Loading fails with an EvalError naming `history` when history is not a list, when a message's role is not user or assistant, or when a message lacks content or has another key; the role message ends with content = \"...\"} (one closing brace).", "compact = true without a history fails to load with an EvalError naming `compact`.", "On the fake backend, a recall case (six seeded messages, compact = true, a fake text reply matching its regex) passes, and no workspace is left behind.", "On a real-model context (backend 'rtx') whose client answers the summary request with a non-empty summary, the case passes, and the streamed request's messages carry the compaction summary note ('[compacted: ...') while the first seeded message's text is no longer in them verbatim.", "On that context with an empty summary, the run fails with the reason \"compacting the case's history summarised nothing\".", "A case with a history and no compact runs with the seeded messages, in order, between the system prompt and the prompt.", "The existing tests in tests/test_evals.py, tests/test_evals_tool_assertions.py and tests/test_evals_api.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/evals.py", "tests/test_evals_history.py"]
 required_checks = ["python -m pytest -q tests/test_evals_history.py tests/test_evals.py tests/test_evals_tool_assertions.py tests/test_evals_api.py", "python -m ruff check evi/evals.py tests/test_evals_history.py"]
 implementer = "evi-local"
 created = "2026-10-29T23:06:36Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 4
+backend = "rtx"
+model = "gpt-oss:20b"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK12-3"
+branch = "task/SK12-3"
+base = "dbd621732d5181e0e4d61a0bcf158f62e8a94902"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK12-3\\4"
+reviewer_notes = [{at = "2026-10-31T21:07:58Z", verdict = "director", note = "finished by the director on task/SK12-3 after 4 implementer attempt(s)"}]
+
+[evidence_summary]
+hash = "sha256:1ffdb289f59021457dc8f8b06730b195227ab544913f35916085007ad9a773b4"
+files = 2
+insertions = 237
+deletions = 1
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 91
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "checks_failed"
+exit_code = 5
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK12-3\\4\\report.json"
+summary = "required check failed: python -m pytest -q tests/test_evals_history.py tests/test_evals.py tests/test_evals_tool_assertions.py tests/test_evals_api.py (exit 4)"
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK12-3"
+digest = "sha256:d0f880342a52b7f2cbfc7e573b862d49f07c7bb812a7251a4b0aa8ab1dbe1e64"
+head = "128f39bf4f5b587990868d4f575299b657c8bd7c"
+evidence = "sha256:1ffdb289f59021457dc8f8b06730b195227ab544913f35916085007ad9a773b4"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-10-31T21:10:15Z"
+key = "302b45cb92785c8d"
+sig = "e904ffd4a2493a0f308f6e5f24050e1a1d2fb6dfdf08cfc049a75019d1f8cddf"
+
+[attestation.review]
+base = "dbd621732d5181e0e4d61a0bcf158f62e8a94902"
+exit_code = 0
+report_sha256 = "3627a0218fd544a46b25a517e8e1e75b779b1c69d7c66ed0c2c01648dac6c2cd"
