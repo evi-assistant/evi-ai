@@ -255,6 +255,11 @@ class EvalCase:
     fake: list[dict[str, Any]] | None = None
     expected_fail: bool = False
     tags: list[str] = field(default_factory=list)
+    # A conversation before the prompt ({role, content}, user or assistant),
+    # and whether to compact it first: a recall case asks about a fact the
+    # summary has to keep.
+    history: list[dict[str, str]] = field(default_factory=list)
+    compact: bool = False
     # The folder of the suite file the case came from (`fixture` is relative
     # to it); None for a case built in code.
     base_dir: Path | None = None
@@ -276,7 +281,7 @@ _CASE_KEYS = frozenset({
     "name", "prompt", "contains", "not_contains", "regex", "equals", "ignore_case", "mode",
     "judge", "expect_tools", "forbid_tools", "tool_order", "tool_args", "stop_reason",
     "command_succeeds", "file_contains", "diff_touches_only", "files", "fixture", "workspace",
-    "max_turns", "runs", "pass_rate", "fake", "expected_fail", "tags",
+    "max_turns", "runs", "pass_rate", "fake", "expected_fail", "tags", "history", "compact",
 })
 _TOOL_ARG_KEYS = frozenset({"tool", "arg", "glob", "regex", "absent", "status", "ignore_case"})
 _FILE_KEYS = frozenset({"path", "contains", "regex"})
@@ -448,6 +453,21 @@ def _fake(raw: Any, where: str) -> list[dict[str, Any]] | None:
     return out
 
 
+def _history(raw: Any, where: str) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise EvalError(f"{where}: `history` is a list of {{role, content}} messages")
+    out = []
+    for m in raw:
+        if not isinstance(m, dict) or set(m) != {"role", "content"} \
+                or m["role"] not in ("user", "assistant") or not isinstance(m["content"], str):
+            raise EvalError(f"{where}: each `history` message is {{role = \"user\" or "
+                            "\"assistant\", content = \"...\"}")
+        out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
 def _expect_tools(raw: Any, where: str) -> list[str | list[str]]:
     if raw is None:
         return []
@@ -514,6 +534,10 @@ def _parse_case(c: Any, i: int, path: Path) -> EvalCase:
     if pass_rate <= 0:
         raise EvalError(f"{where}: `pass_rate` must be above 0")
     diff_only = c.get("diff_touches_only")
+    history = _history(c.get("history"), where)
+    compact = _bool(c.get("compact", False), where, "compact")
+    if compact and not history:
+        raise EvalError(f"{where}: `compact` compacts the case's `history`, which it doesn't have")
     for key in ("regex",):
         if c.get(key):
             try:
@@ -549,6 +573,8 @@ def _parse_case(c: Any, i: int, path: Path) -> EvalCase:
         fake=_fake(c.get("fake"), where),
         expected_fail=_bool(c.get("expected_fail", False), where, "expected_fail"),
         tags=_str_list(c.get("tags"), where, "tags"),
+        history=history,
+        compact=compact,
         base_dir=path.parent,
     )
 
@@ -1224,6 +1250,13 @@ def run_once(case: EvalCase, ctx: EvalContext) -> RunOutcome:
                 verify_skipped = True
 
         with unattended(ENTRY, None if ctx.fake else cfg):
+            if case.history:
+                # The conversation before the prompt, compacted first in a
+                # recall case (the fake backend writes no summary, so there it
+                # stays as it is).
+                agent.history = [agent.history[0], *(dict(m) for m in case.history)]
+                if case.compact and not agent.compact_history(keep_recent=2) and not ctx.fake:
+                    return failed("compacting the case's history summarised nothing")
             res = run_headless(agent, case.prompt, max_turns=case.max_turns, on_event=on_event,
                                track_files=workspace, report_errors=True)
         fails = evaluate(case, res, workspace, pol, raw_args=raw_args, judge=ctx.judge,
