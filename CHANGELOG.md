@@ -66,7 +66,7 @@ All notable user-visible changes to eVi. Format loosely follows
   extraction advisories). The sidecar update's own extraction now keeps only
   a file's rwx bits from the archive, never setuid, setgid or sticky.
 
-## [1.1.0] — 2026-10-29
+## [1.1.0] — 2026-10-31
 
 ### Security
 - **Safe mode no longer offers slash commands from the system temp folder.**
