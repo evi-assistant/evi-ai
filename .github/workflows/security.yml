@@ -77,7 +77,8 @@ jobs:
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
 
       - name: Scan for secrets
-        run: gitleaks detect --source . --no-banner --redact --config .gitleaks.toml
+        # --verbose names each finding's rule, file, line and commit (--redact masks the value).
+        run: gitleaks detect --source . --no-banner --redact --verbose --config .gitleaks.toml
 
   codeql:
     name: CodeQL (${{ matrix.language }})
