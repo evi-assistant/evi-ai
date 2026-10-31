@@ -921,6 +921,13 @@ function mdSameOrigin(url) {
   try { return new URL(url, location.href).origin === location.origin; } catch { return true; }
 }
 
+// Event-handler attributes renamed (onerror= becomes x-onerror=) inside every
+// tag, before anything parses the markup. Since Chromium 156 parsing one logs
+// a CSP violation even in an inert document, where it could never run; the
+// renamed attribute is one DOMPurify drops like any other unknown name.
+function neutralizeHandlers(html) {
+  return html.replace(/<[a-z][^>]*>/gi, tag => tag.replace(/([\s/])on([a-z]+\s*=)/gi, '$1x-on$2'));
+}
 // Sanitized DOM for marked's HTML, or null when DOMPurify isn't available (the
 // caller then shows escaped text — never unsanitized HTML).
 function sanitizeMarkdown(html) {
@@ -929,7 +936,7 @@ function sanitizeMarkdown(html) {
   // DOMPurify parses in an inert document that inherits this page's CSP, so a
   // raw <base> would log a base-uri violation there before being dropped. Show
   // it as text instead (marked has already escaped any inside code).
-  html = html.replace(/<(\/?)base\b/gi, '&lt;$1base');
+  html = neutralizeHandlers(html.replace(/<(\/?)base\b/gi, '&lt;$1base'));
   const frag = purify.sanitize(html, MD_PURIFY);
   for (const el of frag.querySelectorAll('[class]')) {
     const keep = el.getAttribute('class').split(/\s+/).filter(c => /^language-[\w+#.-]+$/.test(c));
@@ -1056,7 +1063,8 @@ async function renderDiagramNow(src) {
   frame.refused = 0;
   let svg;
   try {
-    ({ svg } = await frame.contentWindow.mermaid.render(id, src));
+    // A label's handler would otherwise count as a refused load (see neutralizeHandlers).
+    ({ svg } = await frame.contentWindow.mermaid.render(id, neutralizeHandlers(src)));
   } finally {
     await new Promise(r => setTimeout(r, 50));  // a refused load reports async
     frame.contentDocument.body.replaceChildren();
