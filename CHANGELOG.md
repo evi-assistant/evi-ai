@@ -34,6 +34,9 @@ All notable user-visible changes to eVi. Format loosely follows
   sidecar_auto_update` back to their defaults.
 - **Dev: ruff below 0.18** (the pinned rule set lints clean on 0.17), and the
   desktop CI jobs use `actions/checkout@v7` and `actions/cache@v6`.
+- **Desktop: tauri-plugin-deep-link 2.6.3.** 2.6.2 doesn't build on Linux
+  against rust-ini 0.21.3 (it fills in `ParseOption` without the fields
+  rust-ini added), so the desktop shell skips it.
 
 ### Fixed
 - **A tool call written as bare arguments runs.** gpt-oss:20b ended a run by
