@@ -114,7 +114,7 @@ def test_lost_update_edit_file(tmp_path, monkeypatch):
     t1.join()
     t2.join()
 
-    assert p.read_text(encoding="utf-8", newline="").strip() == "A1\nB1"
+    assert p.read_bytes().decode("utf-8").strip() == "A1\nB1"  # read_text(newline=) is 3.13+
 
 
 def test_lost_update_mixed_edit_patch(tmp_path, monkeypatch):
@@ -148,7 +148,7 @@ def test_lost_update_mixed_edit_patch(tmp_path, monkeypatch):
     t1.join()
     t2.join()
 
-    assert p.read_text(encoding="utf-8", newline="").strip() == "A1\nB1"
+    assert p.read_bytes().decode("utf-8").strip() == "A1\nB1"  # read_text(newline=) is 3.13+
 
 
 def test_parallel_seq_write_file(tmp_path, monkeypatch):
