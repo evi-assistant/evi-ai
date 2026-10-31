@@ -121,3 +121,48 @@ fake = [
   { tool = "edit_file", args = { path = "notes.txt", old_string = "second line", new_string = "2nd line" } },
   { text = "Changed \"second line\" to \"2nd line\" in notes.txt." },
 ]
+
+# Compaction keeps what matters: a fact from the start of a conversation is
+# still known after the summary replaces it (the seeded history is compacted
+# before the prompt, keeping only the last exchange verbatim).
+[[case]]
+name = "recall-after-compaction"
+prompt = "Which host and port do we deploy to? Answer from our conversation."
+history = [
+  { role = "user", content = "Before we start: we deploy to the host atlas-07, on port 8443. Keep that in mind for later." },
+  { role = "assistant", content = "Noted: deploys go to atlas-07 on port 8443." },
+  { role = "user", content = "Explain what a race condition is in two sentences." },
+  { role = "assistant", content = "A race condition is when the result depends on the timing of threads or processes touching shared state. It shows up as bugs that come and go with scheduling." },
+  { role = "user", content = "Give me three tips for naming variables." },
+  { role = "assistant", content = "Say what the value is, not its type; keep scope and length in step; avoid abbreviations only you know." },
+  { role = "user", content = "What does HTTP status 409 mean?" },
+  { role = "assistant", content = "409 Conflict: the request clashes with the resource's current state, such as an edit to an outdated version." },
+]
+compact = true
+tags = ["recall", "compaction"]
+regex = '(?is)atlas-07.*8443|8443.*atlas-07'
+max_turns = 4
+fake = [
+  { text = "We deploy to atlas-07 on port 8443." },
+]
+
+[[case]]
+name = "recall-decision-after-compaction"
+prompt = "Which database did we settle on, and why? Answer from our conversation."
+history = [
+  { role = "user", content = "Decision for the ledger app: we use SQLite, not Postgres, because it's single-user and runs offline." },
+  { role = "assistant", content = "Agreed: SQLite, since the ledger is single-user and offline." },
+  { role = "user", content = "What's the difference between a list and a tuple in Python?" },
+  { role = "assistant", content = "A list is mutable and a tuple isn't; tuples can be dict keys when their items are hashable." },
+  { role = "user", content = "Suggest a name for a function that removes duplicate rows." },
+  { role = "assistant", content = "dedupe_rows, or drop_duplicate_rows if you want it spelled out." },
+  { role = "user", content = "How do I undo the last git commit but keep the changes?" },
+  { role = "assistant", content = "git reset --soft HEAD~1 keeps the changes staged." },
+]
+compact = true
+tags = ["recall", "compaction"]
+regex = '(?is)sqlite.*(single|offline)|(single|offline).*sqlite'
+max_turns = 4
+fake = [
+  { text = "SQLite: the ledger is single-user and runs offline." },
+]

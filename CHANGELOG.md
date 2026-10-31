@@ -15,6 +15,11 @@ All notable user-visible changes to eVi. Format loosely follows
 - **Compact up to here.** In the web and desktop app, the 🗜 action on a
   message summarises everything before it and keeps it and what follows
   verbatim.
+- **Recall evals.** An eval case can seed a conversation (`history`) and
+  compact it before its prompt (`compact = true`), so it checks that a fact
+  from the start of a conversation survives the summary. The qualification
+  suite has two such cases (tagged `recall`): a deploy host and port, and a
+  decision with its reason.
 
 ### Changed
 - **Compaction fits small windows.** The messages compaction keeps verbatim

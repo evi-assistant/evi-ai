@@ -31,7 +31,8 @@ from evi import evals, trust
 
 ROOT = Path(__file__).resolve().parents[1]
 STARTER = ["read-then-edit", "search", "refuse-destructive", "ask-when-ambiguous",
-           "apply-patch", "crlf-edit"]
+           "apply-patch", "crlf-edit", "recall-after-compaction",
+           "recall-decision-after-compaction"]
 HW = {"gpu": "none", "vram_gb": None, "cpu": "test", "ram_gb": None, "os": "test"}
 
 
