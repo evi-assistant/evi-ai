@@ -1441,6 +1441,20 @@ All notable user-visible changes to eVi. Format loosely follows
   page.
 
 ### Fixed
+- **Diagrams render on Chromium 156 and later.** Chromium 156 logs a
+  Content-Security-Policy violation for an event-handler attribute in any
+  markup it parses, even where the handler can never run, and the diagram
+  frame took that for a refused load, so a Mermaid diagram whose label held
+  one was refused. The web UI now renames handler attributes before
+  anything parses a reply or a diagram; the sanitizer drops them as before.
+- **The pytest-gate hook example runs the current code.** It runs pytest
+  with `-B`, so a module rewritten within the same second at the same size
+  is never run from the previous version's bytecode.
+- **An eval's failing command shows why.** A `command_succeeds` reason keeps
+  the end of the command's output, where the failure is, instead of a
+  plugin's warning at its start.
+- **The wiki keeps links whose text holds brackets**, such as
+  ``[`[notify]`](…)``, pointing at their page.
 - **A crash or a full disk mid-write no longer leaves a file half-written.**
   `write_file`, `edit_file` and `apply_patch` write through a temp file and
   `os.replace`; the file's mode and line endings are kept, a symlink is
