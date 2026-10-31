@@ -1244,7 +1244,9 @@ def test_evi_web_on_loopback_without_a_token_says_only_this_machine(
     # The desktop app's LAN token in the home is not this server's.
     (cli_home.home / "desktop-token").write_text("ab" * 32, encoding="utf-8")
     text = _flat(_cli("web").output)
-    assert "desktop-token is the desktop app's LAN token" in text
+    # The note starts with the file's path, which Rich folds mid-word when it is
+    # longer than the console (an xdist worker's tmp path is): compare unspaced.
+    assert "desktop-tokenisthedesktopapp'sLANtoken" in text.replace(" ", "")
     assert "this server does not use it" in text
 
 
