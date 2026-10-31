@@ -21,6 +21,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 REPO_URL = "https://github.com/evi-assistant/evi-ai"
+# A link's label may hold one level of brackets, as in [`[notify]`](../configuration.md).
+LABEL = r"\[((?:[^\[\]]|\[[^\[\]]*\])+)\]"
 
 # Grouped nav for Home/_Sidebar. Names are asserted against docs/ below, so a
 # renamed doc fails the build instead of quietly dropping out of the sidebar.
@@ -91,7 +93,7 @@ def rewrite(
             broken.append(f"{src_dir}: link to missing file {href!r}")
         return f"[{label}]({REPO_URL}/blob/main/{rel}{frag})"
 
-    return re.sub(r"\[([^\]]+)\]\(([^)\s#]+)(#[^)\s]*)?\)", fix, md)
+    return re.sub(LABEL + r"\(([^)\s#]+)(#[^)\s]*)?\)", fix, md)
 
 
 def verify(wiki: Path) -> list[str]:
@@ -101,7 +103,7 @@ def verify(wiki: Path) -> list[str]:
     pages = {p.stem for p in wiki.glob("*.md")}
     for p in sorted(wiki.glob("*.md")):
         md = p.read_text(encoding="utf-8")
-        for label, href in re.findall(r"\[([^\]]+)\]\(([^)\s]+)\)", md):
+        for label, href in re.findall(LABEL + r"\(([^)\s]+)\)", md):
             if href.startswith(("http://", "https://", "#", "mailto:")):
                 continue
             target = href.split("#")[0]
