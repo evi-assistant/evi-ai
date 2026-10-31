@@ -188,7 +188,7 @@ def test_mermaid_runs_in_a_frame_that_can_load_nothing():
     assert d["script-src"] == ["'self'"]        # the pinned mermaid.min.js
     assert set(d) == {"default-src", "img-src", "script-src", "style-src"}
     # Mermaid runs in that frame's window, never in the page's.
-    assert "frame.contentWindow.mermaid.render(id, src)" in app
+    assert "frame.contentWindow.mermaid.render(id, neutralizeHandlers(src))" in app
     assert "window.mermaid" not in app
     assert "if (frame.refused) throw" in app
     # A diagram's %%{init}%% / front matter can't set CSS or the label sanitizer,
