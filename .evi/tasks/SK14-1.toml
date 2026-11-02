@@ -1,6 +1,6 @@
 id = "SK14-1"
 title = "reasoning: reasoning_text, the reasoning a server sends beside content (reasoning_content / reasoning)"
-status = "open"
+status = "verified"
 why = "Part of roadmap item native-reasoning-channel. Servers that parse a model's reasoning out themselves (vLLM's reasoning parsers, llama.cpp --reasoning-format, LM Studio, Ollama's /v1, DeepSeek's API, OpenRouter) send it beside `content` as `reasoning_content` or `reasoning`, and eVi drops it today. This task adds the pure reader; the agent loop showing it as thinking (and keeping it out of the answer and the history) is the director's wiring."
 hints = "Make exactly these two edits to evi/reasoning.py and nothing else (the code was run against every acceptance criterion before filing):\n\n1. Directly after the line `import re` (near the top), add the line:\n\nfrom typing import Any, Mapping\n\n2. At the end of the file, after the function reasoning_extra_body (its last line is `    return {}`), add two blank lines and then exactly this:\n\n# The fields a server sends a model's reasoning in, beside `content`, in a\n# streamed delta or a whole message: `reasoning_content` (DeepSeek's API,\n# llama.cpp's --reasoning-format deepseek, LM Studio, vLLM before 0.16) and\n# `reasoning` (vLLM 0.16 on, Ollama's /v1, OpenRouter, LM Studio for gpt-oss).\nREASONING_FIELDS = (\"reasoning_content\", \"reasoning\")\n\n\ndef reasoning_text(obj: Any) -> str:\n    \"\"\"The reasoning text a streamed delta or a whole message carries outside\n    its `content`: the first of REASONING_FIELDS holding a non-empty string,\n    read as a key of a mapping, else as an attribute, else from pydantic's\n    `model_extra` (where the openai SDK keeps fields it doesn't declare).\n    Only the first one counts, since some servers send the same text under\n    both names. Anything else (None, no such field, a non-string value such\n    as a reasoning object) is \"\".\"\"\"\n    if obj is None:\n        return \"\"\n    extra = getattr(obj, \"model_extra\", None)\n    for name in REASONING_FIELDS:\n        if isinstance(obj, Mapping):\n            value = obj.get(name)\n        else:\n            value = getattr(obj, name, None)\n            if value is None and isinstance(extra, Mapping):\n                value = extra.get(name)\n        if isinstance(value, str) and value:\n            return value\n    return \"\"\n\nTests go in a NEW file tests/test_reasoning_channel.py (do not edit other test files). Import `from evi.reasoning import REASONING_FIELDS, reasoning_text`, `from types import SimpleNamespace`, `from openai.types.chat import ChatCompletionChunk, ChatCompletionMessage` and `from openai.types.chat.chat_completion_chunk import ChoiceDelta`. Every test calls reasoning_text on one object and asserts the exact string it returns: build the objects as the acceptance criteria say (SimpleNamespace for a duck-typed delta, a plain dict for a mapping, ChoiceDelta.model_validate({...}) / ChatCompletionMessage.model_validate({...}) for the openai SDK's own objects, which keep the undeclared fields as extras, and ChatCompletionChunk.model_validate({'id': 'c', 'object': 'chat.completion.chunk', 'created': 0, 'model': 'm', 'choices': [{'index': 0, 'delta': {'reasoning': 'think'}, 'finish_reason': None}]}) for a streamed chunk, reading .choices[0].delta). Use pytest.mark.parametrize for the two field names and for the list of objects that give \"\". Comments state why in one line."
 acceptance = ["REASONING_FIELDS == (\"reasoning_content\", \"reasoning\").", "reasoning_text(SimpleNamespace(content=None, reasoning_content=\"step 1\")) == \"step 1\", and the same with reasoning=\"step 1\" instead.", "reasoning_text({\"content\": \"\", \"reasoning\": \"step 1\"}) == \"step 1\", and the same with the key reasoning_content.", "For the openai SDK's objects: ChoiceDelta.model_validate({\"content\": None, \"reasoning_content\": \"hmm\"}) and the same with \"reasoning\" give \"hmm\"; the delta of ChatCompletionChunk.model_validate(...) with delta {\"reasoning\": \"think\"} gives \"think\"; ChatCompletionMessage.model_validate({\"role\": \"assistant\", \"content\": \"42\", \"reasoning_content\": \"6 times 7\"}) gives \"6 times 7\".", "An object holding the field only in model_extra is read: reasoning_text(SimpleNamespace(content=None, model_extra={\"reasoning\": \"via extra\"})) == \"via extra\".", "Only the first field counts, never both: SimpleNamespace(reasoning_content=\"same\", reasoning=\"same\") gives \"same\" and {\"reasoning_content\": \"a\", \"reasoning\": \"b\"} gives \"a\".", "An empty first field falls through: SimpleNamespace(reasoning_content=\"\", reasoning=\"x\") and {\"reasoning_content\": None, \"reasoning\": \"x\"} both give \"x\".", "These give \"\": None, SimpleNamespace(content=\"answer\"), {\"content\": \"answer\"}, SimpleNamespace(reasoning={\"effort\": \"high\"}), {\"reasoning\": [\"a\"], \"reasoning_content\": 3} and ChoiceDelta.model_validate({\"content\": \"answer\"}).", "The text comes back exactly as sent: reasoning_text({\"reasoning\": \"  see </think> and <think>\\n\"}) == \"  see </think> and <think>\\n\".", "The existing tests in tests/test_reasoning.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/reasoning.py", "tests/test_reasoning_channel.py"]
 required_checks = ["python -m pytest -q tests/test_reasoning_channel.py tests/test_reasoning.py", "python -m ruff check evi/reasoning.py tests/test_reasoning_channel.py"]
 implementer = "evi-local"
 created = "2026-11-02T08:12:09Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
-reviewer_notes = []
+attempts = 2
+backend = "ollama"
+model = "qwen2.5-coder:14b-instruct-q4_K_M"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK14-1"
+branch = "task/SK14-1"
+base = "63a7df0ca69e836b68223b9945752d0f9401b2e3"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK14-1\\2"
+reviewer_notes = [{at = "2026-11-02T11:18:15Z", verdict = "director", note = "finished by the director on task/SK14-1 after 2 implementer attempt(s)"}]
+
+[evidence_summary]
+hash = "sha256:bed92de5c061285d4ce867297ae25556f5d4d48fa2406f4ead9c7341d47f8424"
+files = 2
+insertions = 116
+deletions = 0
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 51
+failures = 0
+errors = 0
+skipped = 0
 
 [lease]
+
+[last_result]
+stop_reason = "checks_failed"
+exit_code = 5
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK14-1\\2\\report.json"
+summary = "It looks like there are a few issues to address:"
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK14-1"
+digest = "sha256:b731e484ad869de3c833fb8a70f5f5c4f73741fd0e27658818244fa0f7e7aab5"
+head = "dd6af8967c5c4cde69487073ee3ec9e473b7b61c"
+evidence = "sha256:bed92de5c061285d4ce867297ae25556f5d4d48fa2406f4ead9c7341d47f8424"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-11-02T11:18:36Z"
+key = "302b45cb92785c8d"
+sig = "62ce127be065953e141c7f60a4a8672716816221eab6fd6c1642c6d4d3f9a4bf"
+
+[attestation.review]
+base = "63a7df0ca69e836b68223b9945752d0f9401b2e3"
+exit_code = 0
+report_sha256 = "3627a0218fd544a46b25a517e8e1e75b779b1c69d7c66ed0c2c01648dac6c2cd"
