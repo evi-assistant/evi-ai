@@ -439,10 +439,11 @@ Text output, on the starter suite with the fake backend:
   PASS  refuse-destructive 1/1 (100%, needs 100%)
   PASS  ask-when-ambiguous 1/1 (100%, needs 100%)
   PASS  apply-patch 1/1 (100%, needs 100%)
-  XFAIL crlf-edit 0/1 (0%, needs 100%)
-        run 1: notes.txt does not contain 'first line\r\n2nd line\r\nthird line\r\n'
+  PASS  crlf-edit 1/1 (100%, needs 100%)
+  PASS  recall-after-compaction 1/1 (100%, needs 100%)
+  PASS  recall-decision-after-compaction 1/1 (100%, needs 100%)
 
-5/6 passed (83%), 1 expected to fail — self on fake (fake)
+8/8 passed (100%) — self on fake (fake)
 report: ~/.evi/evals/reports/self/20261017T151337Z-fake.json
 ```
 
@@ -523,14 +524,13 @@ Each row:
   "hardware": {"gpu": "none", "vram_gb": null, "cpu": "AMD64 Family 25 Model 33", "ram_gb": 8.0, "os": "Windows-11"},
   "baseline": null,
   "cases": [
-    {"name": "crlf-edit", "runs": 2, "passes": 0, "pass_rate": 0.0, "threshold": 1.0, "passed": false,
-     "skipped": false, "skip_reason": null, "expected_fail": true,
-     "failures": ["run 1: notes.txt does not contain 'first line\\r\\n2nd line\\r\\nthird line\\r\\n'",
-                  "run 2: notes.txt does not contain 'first line\\r\\n2nd line\\r\\nthird line\\r\\n'"],
+    {"name": "crlf-edit", "runs": 2, "passes": 2, "pass_rate": 1.0, "threshold": 1.0, "passed": true,
+     "skipped": false, "skip_reason": null, "expected_fail": false,
+     "failures": [],
      "mean_turns": 3.0, "mean_duration_s": 3.474, "stop_reasons": {"done": 2},
      "tags": ["crlf", "edit-recovery"], "baseline": null, "verify_skipped": 0}
   ],
-  "total": 1, "ran": 1, "passed": 0, "skipped": 0, "failed": 0, "expected_failures": 1, "pass_rate": 0.0
+  "total": 1, "ran": 1, "passed": 1, "skipped": 0, "failed": 0, "expected_failures": 0, "pass_rate": 1.0
 }
 ```
 
@@ -640,7 +640,7 @@ suite with no model.
 | `apply-patch` | Uses `apply_patch` and the patch applies (`status = "ok"`), never `write_file` or `edit_file`, both replacements land and only `greet.py` changes. |
 | `recall-after-compaction` | After an eight-message history is compacted, still answers with the deploy host and port given in its first message. Tagged `recall` and `compaction`. |
 | `recall-decision-after-compaction` | Likewise for a decision and its reason (SQLite, single-user and offline). Tagged `recall` and `compaction`. |
-| `crlf-edit` | An edit keeps a file's CRLF line endings. `expected_fail`, tagged `crlf` and `edit-recovery`: `edit_file` turns a CRLF file into LF today. |
+| `crlf-edit` | An edit keeps a file's CRLF line endings. Tagged `crlf` and `edit-recovery`; it was `expected_fail` until edit recovery (1.1.0) stopped `edit_file` turning a CRLF file into LF. |
 
 The `self` suite loads only in a trusted repository: `evi trust` a checkout of
 eVi from your own terminal first. Changes to eVi's prompts, repair or loop are
@@ -905,11 +905,11 @@ echo $?                                              # 0: nothing fell below the
 ```
 
 Run it on the backend and model the baseline was recorded on (another one
-prints a `mismatch` warning). `crlf-edit` is `expected_fail`, so it doesn't
-fail the run, but the baseline still holds it at the rate it recorded.
-Leaving it out with `--skip-tag edit-recovery` doesn't get past that: the
-case then counts as missing and the run exits 1, unless you add `--partial`
-to say you mean to hold only a subset to the baseline.
+prints a `mismatch` warning). An `expected_fail` case doesn't fail the
+run, but the baseline still holds it at the rate it recorded. Leaving a
+case out with `--skip-tag` doesn't get past that: it then counts as missing
+and the run exits 1, unless you add `--partial` to say you mean to hold
+only a subset to the baseline.
 
 ## Notes / limits
 

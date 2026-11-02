@@ -115,9 +115,9 @@ def test_eval_run_self_on_the_fake_backend_exits_0_with_a_row_per_case(home, tmp
     assert [r["name"] for r in report["cases"]] == STARTER
     assert report["suite"] == "self" and report["backend"] == "fake"
     by = {r["name"]: r for r in report["cases"]}
-    assert all(by[n]["passed"] for n in STARTER if n != "crlf-edit"), report["cases"]
-    # The CRLF case is a known gap: it reports but doesn't fail the run.
-    assert by["crlf-edit"]["expected_fail"] and by["crlf-edit"]["runs"] == 1
+    assert all(by[n]["passed"] for n in STARTER), report["cases"]
+    # The CRLF case was expected_fail until edit recovery kept line endings.
+    assert not by["crlf-edit"]["expected_fail"] and by["crlf-edit"]["runs"] == 1
     assert not any(r["skipped"] for r in report["cases"])
     [path] = _reports(home)
     assert json.loads(path.read_text(encoding="utf-8")) == report

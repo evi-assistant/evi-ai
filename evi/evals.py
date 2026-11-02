@@ -80,8 +80,8 @@ run (the script and the case disagree).
 
 **Runs and gates.** `runs` (default 1) runs the case that many times; it
 passes when passes / runs >= `pass_rate` (default 1.0). `expected_fail =
-true` reports the case but never fails the suite (a known gap: the CRLF case
-until the edit-recovery work lands); `tags` label cases for ``evi eval run
+true` reports the case but never fails the suite (a known gap); `tags`
+label cases for ``evi eval run
 --tag / --skip-tag``. A key a case doesn't know is an error (a typo must not
 silently pass).
 

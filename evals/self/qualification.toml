@@ -102,10 +102,8 @@ fake = [
   { text = "Patched greet() and farewell() in greet.py." },
 ]
 
-# edit_file reads a file with newline translation today, so an edit turns a
-# CRLF file into LF. Expected to fail until the edit-recovery work lands: it
-# reports, but never fails the run (--skip-tag edit-recovery hides it; a
-# --baseline still holds it, as missing, unless the run is --partial).
+# An edit keeps a file's CRLF line endings (edit_file once turned a CRLF
+# file into LF; the edit-recovery work fixed it in 1.1.0).
 [[case]]
 name = "crlf-edit"
 prompt = """In notes.txt, change "second line" to "2nd line". Keep the file's Windows (CRLF) \
@@ -114,7 +112,6 @@ files = { "notes.txt" = "first line\r\nsecond line\r\nthird line\r\n" }
 file_contains = [{ path = "notes.txt", contains = "first line\r\n2nd line\r\nthird line\r\n" }]
 diff_touches_only = ["notes.txt"]
 tags = ["crlf", "edit-recovery"]
-expected_fail = true
 max_turns = 6
 fake = [
   { tool = "read_file", args = { path = "notes.txt" } },
