@@ -57,8 +57,24 @@ All notable user-visible changes to eVi. Format loosely follows
   it: 30 of 30 runs refuse. The same rule in the system prompt also got 30 of
   30, but halved how often the model searched before answering, so it lives
   in the tool's description.
+- **`evi chat` no longer ends when a model thinks.** The CLI printed a lone
+  `[dim italic]` / `[/dim italic]` around a model's thinking, and Rich parses
+  each print on its own, so the first switch from thinking to the answer
+  raised a markup error that ended the chat; a `[/]` in the thinking or the
+  answer did the same. The chat REPL, `evi review`, the voice loop and the
+  one-shot turn now print the model's text as plain text.
 
 ### Security
+- **The terminal shows a model's control characters instead of obeying
+  them.** The CLI printed the model's answer and thinking with escape
+  sequences intact, so a reply (or a server sending one) could retitle the
+  terminal, clear it or write to the clipboard (OSC 52). Control characters
+  are now shown escaped (`\x1b`).
+- **Switching backends in the web app keeps the API key with its server.**
+  Switching to a llama.cpp or OpenAI-compatible backend at another URL
+  carried the configured key over, so an online provider's key went to the
+  new server. The key now carries over only when the switch keeps the same
+  server.
 - **Desktop dependencies with advisories updated.** rustls 0.23.46,
   rustls-webpki 0.103.16, webpki-root-certs 1.0.11 and webpki-roots 1.0.11
   (TLS handshake and certificate-trust fixes, reached through the update

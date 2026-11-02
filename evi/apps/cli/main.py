@@ -364,6 +364,18 @@ def _shown_output(output: object, limit: int = 400) -> str:
     return escape(text if len(text) < limit else text[:limit] + "…")
 
 
+def _print_model_text(text: str, style: str | None = None) -> None:
+    """One streamed piece of a turn's answer or thinking (ThinkingDelta, which
+    may be a server's native reasoning) printed as it is: no Rich markup,
+    highlighting or :emoji: codes (a '[/]' in it raised MarkupError and ended
+    `evi chat`) and every control character escaped (evi.companion.printable),
+    so the model's or the server's text can't drive the terminal."""
+    from evi.companion import printable
+
+    console.print(printable(text), end="", soft_wrap=True, highlight=False, markup=False,
+                  emoji=False, style=style)
+
+
 def _tool_call_line(event: ToolCall) -> str:
     """`→ tool <name> <arguments>`, redacted."""
     from rich.markup import escape
@@ -1622,7 +1634,6 @@ def _run_repl(agent: Agent) -> None:
         pending_audio = getattr(agent, "_pending_audio", None) or []
         if pending_audio:
             agent._pending_audio = []  # type: ignore[attr-defined]
-        in_thinking = False
         events = agent.chat(
             user_msg,
             images=pending_images or None,
@@ -1636,17 +1647,11 @@ def _run_repl(agent: Agent) -> None:
             with _ReplCtrlC(agent):
                 for event in events:
                     if isinstance(event, ThinkingDelta):
-                        if not in_thinking:
-                            console.print("[dim italic]", end="")
-                            in_thinking = True
-                        console.print(event.text, end="", soft_wrap=True, highlight=False, style="dim italic")
+                        _print_model_text(event.text, "dim italic")
                         continue
-                    if in_thinking:
-                        console.print("[/dim italic]", end="")
-                        in_thinking = False
                     if isinstance(event, TextDelta):
                         text_acc.append(event.text)
-                        console.print(event.text, end="", soft_wrap=True, highlight=False)
+                        _print_model_text(event.text)
                         if speaker is not None:
                             speaker.feed(event.text)
                     elif isinstance(event, ToolCall):
@@ -2749,25 +2754,15 @@ def review(
 
     prompt = review_prompt(diff, context=review_context)
     text_acc: list[str] = []
-    in_thinking = False
     for event in agent.chat(prompt):
         if isinstance(event, ThinkingDelta):
             if not json_out:
-                if not in_thinking:
-                    console.print("[dim italic]", end="")
-                    in_thinking = True
-                console.print(
-                    event.text, end="", soft_wrap=True,
-                    highlight=False, style="dim italic",
-                )
+                _print_model_text(event.text, "dim italic")
             continue
-        if in_thinking and not json_out:
-            console.print("[/dim italic]", end="")
-            in_thinking = False
         if isinstance(event, TextDelta):
             text_acc.append(event.text)
             if not json_out:
-                console.print(event.text, end="", soft_wrap=True, highlight=False)
+                _print_model_text(event.text)
         elif isinstance(event, ToolCall):
             if not json_out:
                 console.print()
@@ -3068,25 +3063,13 @@ def voice_loop(
             try:
                 console.print("[bold magenta]evi ›[/bold magenta] ", end="")
                 text_acc: list[str] = []
-                in_thinking = False
                 for event in agent.chat(text):
                     if isinstance(event, ThinkingDelta):
-                        if not in_thinking:
-                            console.print("[dim italic]", end="")
-                            in_thinking = True
-                        console.print(
-                            event.text, end="", soft_wrap=True,
-                            highlight=False, style="dim italic",
-                        )
+                        _print_model_text(event.text, "dim italic")
                         continue
-                    if in_thinking:
-                        console.print("[/dim italic]", end="")
-                        in_thinking = False
                     if isinstance(event, TextDelta):
                         text_acc.append(event.text)
-                        console.print(
-                            event.text, end="", soft_wrap=True, highlight=False,
-                        )
+                        _print_model_text(event.text)
                         if speaker is not None:
                             speaker.feed(event.text)
                     elif isinstance(event, ToolCall):
@@ -3777,19 +3760,12 @@ app.add_typer(recipe_app, name="recipe")
 
 def _print_turn(agent: Agent, prompt: str) -> None:
     """Stream one agent turn to the console (text + tool activity)."""
-    in_thinking = False
     for event in agent.chat(prompt):
         if isinstance(event, ThinkingDelta):
-            if not in_thinking:
-                console.print("[dim italic]", end="")
-                in_thinking = True
-            console.print(event.text, end="", soft_wrap=True, highlight=False, style="dim italic")
+            _print_model_text(event.text, "dim italic")
             continue
-        if in_thinking:
-            console.print("[/dim italic]", end="")
-            in_thinking = False
         if isinstance(event, TextDelta):
-            console.print(event.text, end="", soft_wrap=True, highlight=False)
+            _print_model_text(event.text)
         elif isinstance(event, ToolCall):
             console.print()
             console.print(_tool_call_line(event))
