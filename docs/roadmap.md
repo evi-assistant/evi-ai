@@ -9,11 +9,11 @@ second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
 
-**Status (2026-10-29):** 43 items shipped in 1.1.0 and 1 more are
+**Status (2026-11-01):** 43 items shipped in 1.1.0 and 2 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
 of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows and the context-window probe. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe and structured compaction. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -117,7 +117,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `loop-tools-loop-guard-step-budget` | Loop detection and a graceful step budget | M | director | `loop-eval-gates`, `loop-tools-tool-call-repair`, `loop-agent-cancel` | Shipped in 1.1.0 (Phase 2 batch 2); a repeated-text detector and a Continue button are left |
 | `loop-tools-edit-recovery` | Forgiving, safe edits: near-miss recovery, already-applied detection, read-before-edit, atomic writes | M | evi-local | `loop-shakedown-batch-1`, `fix-loop-state-propagation`, `fix-tool-context-binding` | Shipped in 1.1.0 (Phase 2 batch 1) |
 | `tool-schema-safe-names` | Provider-safe tool names and schema normalization for local grammars | M | evi-frontier | `extensibility-interop-mcp-sdk2-migration`, `loop-eval-gates` | Shipped in 1.1.0 (Phase 2 batch 4) |
-| `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Planned; the sectioned, incremental summary, /compact <focus> and compaction_model are done (Phase 2 batch 5, in 1.1.0), and a token-budgeted tail, chunking an oversized middle and 'compact up to here' (Phase 2 batch 9, unreleased); a recall eval is left |
+| `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Done (Phase 2 batch 9, unreleased; the sectioned, incremental summary, /compact <focus> and compaction_model shipped in 1.1.0 as batch 5). Batch 9 adds a token-budgeted tail, chunked summaries of an oversized middle, 'compact up to here', and two recall cases in the self suite |
 | `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names` | Planned |
 | `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Shipped in 1.1.0 (Phase 2 batch 7) |
 | `stream-loop-resilience-reasoning` | Resilient streaming and a native reasoning channel | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair` | Planned |
