@@ -20,6 +20,15 @@ All notable user-visible changes to eVi. Format loosely follows
   from the start of a conversation survives the summary. The qualification
   suite has two such cases (tagged `recall`): a deploy host and port, and a
   decision with its reason.
+- **Thinking from servers that parse it out.** vLLM (with a reasoning
+  parser), llama.cpp, LM Studio, Ollama's OpenAI endpoint and DeepSeek's API
+  send a model's reasoning beside the answer (`reasoning_content` or
+  `reasoning`), and eVi dropped it. It now shows as thinking in the CLI, the
+  web app and stream-json, and stays out of the answer, the history and
+  later requests; a `</think>` inside it can't cut the thinking short. When a
+  server sends the thinking both ways (llama.cpp's
+  `--reasoning-format deepseek-legacy` also puts it in `<think>` tags), it is
+  shown once.
 
 ### Changed
 - **Compaction fits small windows.** The messages compaction keeps verbatim

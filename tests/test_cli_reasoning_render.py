@@ -62,6 +62,21 @@ def test_the_repl_survives_thinking_followed_by_an_answer(fake_llm, monkeypatch,
     assert thinking in out.getvalue() and "It is 42." in out.getvalue()
 
 
+@pytest.mark.parametrize("reasoning", ["see [/dim] tag", "a [/] b",
+                                       "osc \x1b]52;c;ZXZpbA==\x07 end"])
+def test_print_turn_shows_native_reasoning_as_typed_and_escaped(fake_llm, monkeypatch,
+                                                                reasoning):
+    # A server's native reasoning channel reaches the same renderer.
+    out = _console(monkeypatch, terminal=True)
+    client = fake_llm([[_ns_chunk(reasoning=reasoning),
+                        _ns_chunk(content="It is 42.", finish="stop")]])
+    cli_main._print_turn(Agent(client=client, config=Config(), tools=[], transcripts=None), "q")
+    text = out.getvalue()
+    assert "\x1b]52;" not in text and "\x07" not in text
+    shown = reasoning.replace("\x1b", "\\x1b").replace("\x07", "\\x07")
+    assert shown in text and text.index(shown) < text.index("It is 42.")
+
+
 def test_no_escape_sequence_from_the_model_reaches_the_terminal(fake_llm, monkeypatch):
     # Exploit regression: an OSC title change, a screen clear and an OSC 52
     # clipboard write in the thinking and the answer are shown escaped.

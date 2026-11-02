@@ -60,7 +60,7 @@ Status legend: ✅ done · ➕ proposed · ❌ not relevant for local-first
 
 | Feature | Verdict |
 |---|---|
-| Extended thinking (`<think>`) | ✅ Have it — Phase 16.1. |
+| Extended thinking (`<think>`) | ✅ Have it — Phase 16.1. Reasoning a server sends beside the reply (`reasoning_content` / `reasoning`: vLLM, llama.cpp, LM Studio, Ollama, DeepSeek, OpenRouter) is shown as thinking too, and kept out of the answer and the history. |
 | Computer use (mouse/keyboard) | ✅ Have it — Phase 12. |
 | **Prompt caching** (`cache_control: {"type": "ephemeral"}`) | ✅ **Shipped Phase 37 (0.19.0)** as `[llm] cache_prompt`. When on, forwards `extra_body.cache_prompt=true` — llama.cpp's server reuses the KV cache for the stable prefix; vLLM does the same via `--enable-prefix-caching`. Our system+memory+project prefix is already stable across turns. |
 | **Citations** (`citations: enabled`) | ✅ **Shipped Phase 30 (0.13.0).** `read_file` / `find_in_project` / `web_fetch` return a `ToolOutput(text, citations)`; the `ToolResult` event carries them and the web UI renders `[1] path/to/file:42` chips under each tool bubble. |

@@ -148,7 +148,7 @@ Event types (all exported from `evi.sdk`):
 | Event | Fields | Meaning |
 |---|---|---|
 | `TextDelta` | `text` | A chunk of assistant text. |
-| `ThinkingDelta` | `text` | Reasoning chunk (models that emit `<think>`). |
+| `ThinkingDelta` | `text` | Reasoning chunk: `<think>` text in the reply, or the reasoning a server sends beside it as `reasoning_content` / `reasoning` (vLLM with `--reasoning-parser`, llama.cpp `--reasoning-format deepseek`, LM Studio, Ollama, DeepSeek, OpenRouter). Never part of the answer or the history. |
 | `ToolCall` | `name`, `arguments` | The model asked to call a tool. |
 | `ToolResult` | `name`, `output`, `citations` | A tool finished. |
 | `ToolProgress` | `names`, `elapsed` | A slow (`long=True`) tool is still running. |

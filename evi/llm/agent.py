@@ -88,7 +88,7 @@ from evi.audio_input import (
     model_supports_audio,
     transcribe_for_fallback,
 )
-from evi.reasoning import reasoning_extra_body
+from evi.reasoning import reasoning_extra_body, reasoning_text
 from evi.vision import build_image_content, describe_for_fallback, model_supports_vision
 
 
@@ -630,12 +630,18 @@ class TextDelta:
 
 @dataclass
 class ThinkingDelta:
-    """Incremental text from inside a <think>…</think> block.
+    """Incremental reasoning text: from inside a <think>…</think> block, or
+    from the native reasoning channel.
 
     Reasoning models (DeepSeek-R1, QwQ, Llama-Nemotron-Reasoning, …) wrap
     their chain-of-thought in `<think>` tags. We strip those out of the
     visible TextDelta stream and route the inner content here so the UI
-    can render it dim or behind a "show thinking" toggle.
+    can render it dim or behind a "show thinking" toggle. Servers that
+    parse the reasoning out themselves (vLLM's reasoning parsers, llama.cpp,
+    LM Studio, Ollama's /v1, DeepSeek's API) send it beside `content` as
+    `reasoning_content` or `reasoning` (evi.reasoning.reasoning_text); it
+    comes here as it is, never through the tag parser. Neither kind is kept
+    in the history: the assistant message holds only the visible text.
     """
 
     text: str
@@ -2945,6 +2951,31 @@ class Agent:
             hold_decided = False
             stream_failed: list[Exception] = []  # set by _iter_stream when the stream breaks
             stream_cancelled: list[bool] = []  # set by _read_stream on a cancel
+            # This stream's native reasoning with whitespace removed, and how
+            # much of it <think> text in the content has repeated so far:
+            # llama.cpp's --reasoning-format deepseek-legacy sends the thinking
+            # both ways. Tag text that repeats it is still taken out of the
+            # answer but not shown twice; any other tag text (a literal
+            # <think> in an answer) is shown as thinking, as before.
+            native_norm = ""
+            native_pos = 0
+            tags_diverged = False  # tag text stopped repeating it: show the rest
+
+            def _beyond_native(thinking: str) -> str:
+                """The part of tag thinking that doesn't repeat native reasoning."""
+                nonlocal native_pos, tags_diverged
+                if not native_norm or tags_diverged:
+                    return thinking
+                cut = 0  # just past the last character that repeated it
+                for i, ch in enumerate(thinking):
+                    if ch.isspace():
+                        continue
+                    if native_pos >= len(native_norm) or ch != native_norm[native_pos]:
+                        tags_diverged = True
+                        return thinking[cut:]
+                    native_pos += 1
+                    cut = i + 1
+                return ""
 
             def _maybe_hold() -> None:
                 nonlocal hold_text, hold_decided
@@ -2974,8 +3005,18 @@ class Agent:
                 delta = choice.delta
                 if delta is None:
                     continue
+                # The native reasoning channel: reasoning the server parsed
+                # out of the reply itself. Shown as thinking as it is (never
+                # through the tag parser, so a literal `</think>` in it can't
+                # end a block and leak the rest into the answer), and never
+                # added to text_buf, so it stays out of the history.
+                native_thinking = reasoning_text(delta)
+                if native_thinking:
+                    native_norm += "".join(native_thinking.split())
+                    yield ThinkingDelta(native_thinking)
                 if delta.content:
                     visible, thinking = think_parser.feed(delta.content)
+                    thinking = _beyond_native(thinking)
                     if thinking:
                         yield ThinkingDelta(thinking)
                     if visible:
@@ -3017,6 +3058,7 @@ class Agent:
             # Drain any trailing buffered content (chunk boundaries can leave
             # a partial tag or trailing text in the parser).
             tail_visible, tail_thinking = think_parser.flush()
+            tail_thinking = _beyond_native(tail_thinking)
             if tail_thinking:
                 yield ThinkingDelta(tail_thinking)
             if tail_visible:
