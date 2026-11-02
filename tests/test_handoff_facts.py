@@ -538,7 +538,7 @@ def _roadmap_items() -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
 def test_roadmap_lists_six_phases_and_its_items():
     phases, deps, status = _roadmap_items()
     assert phases == [f"Phase {n}" for n in range(6)]
-    assert len(deps) == 78
+    assert len(deps) == 80
     assert {"fix-security-hotfix", "loose-docs-catch-up", "acp-server",
             "mcp-oauth-and-secrets"} <= set(deps)
 

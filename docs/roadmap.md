@@ -4,7 +4,7 @@ What eVi builds next, in order, and why. This replaces the phase-numbered
 backlog that ran up to 1.0: everything shipped is in
 [CHANGELOG.md](../CHANGELOG.md), and this page is the plan from 1.0.53 on.
 
-The plan has 78 items in six phases, ordered by risk first and value
+The plan has 80 items in six phases, ordered by risk first and value
 second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
@@ -121,9 +121,11 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout (on vLLM: reused-prefix tokens from `cached_tokens`, exact counts from `/tokenize`) | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names`, `vllm-backend` | Planned |
 | `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Shipped in 1.1.0 (Phase 2 batch 7) |
 | `stream-loop-resilience-reasoning` | Resilient streaming over local-server hiccups (the reasoning channel moved to `native-reasoning-channel`) | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair`, `native-reasoning-channel` | Planned |
-| `native-reasoning-channel` | A native reasoning channel: thinking sent as `reasoning_content` (vLLM's reasoning parsers, LM Studio and similar servers) is read alongside `<think>` tags, shown as thinking and kept out of the answer | M | director | `loop-tools-tool-call-repair`, `fix-history-validity` | Planned; split out of `stream-loop-resilience-reasoning`. Today that field is dropped |
+| `native-reasoning-channel` | A native reasoning channel: thinking sent as `reasoning_content` or `reasoning` (vLLM's reasoning parsers, llama.cpp, LM Studio, Ollama and similar servers) is read alongside `<think>` tags, shown as thinking and kept out of the answer and the history; when a server sends the thinking both ways, it is shown once | M | director | `loop-tools-tool-call-repair`, `fix-history-validity` | Planned; under way in Phase 2 batch 10. Split out of `stream-loop-resilience-reasoning` |
+| `reasoning-responses-api` | Reasoning on the opt-in Responses API path (`[llm] api = "responses"`): reasoning text and summary events shown as thinking, as on chat completions | S | evi-local | `native-reasoning-channel` | Planned |
+| `reasoning-cli-agent-adapters` | The Claude Code and Codex agent backends hand their thinking to the native reasoning channel instead of wrapping it in `<think>` tags | S | director | `native-reasoning-channel` | Planned |
 | `vllm-backend` | First-class vLLM backend: the true window from `/v1/models`, model and LoRA-adapter listing, health and version, an error that names missing tool-calling flags, a warning for a LAN endpoint without an API key, and the kind in every CLI, setup and web surface | M | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names` | Planned |
-| `vllm-recipe` | `evi vllm recipe`: the `vllm serve` command for a model and machine (tool and reasoning parsers, max model length, GPU memory share), natively on Linux, under WSL2 or in Docker | S | evi-frontier | `vllm-backend` | Planned |
+| `vllm-recipe` | `evi vllm recipe`: the `vllm serve` command for a model and machine (tool and reasoning parsers, max model length, GPU memory share), natively on Linux, under WSL2 or in Docker; it serves on port 8001 (the `vllm` kind's default URL, since `evi web` uses 8000) and binds to 127.0.0.1 unless it also sets an API key | S | evi-frontier | `vllm-backend` | Planned |
 | `tool-call-structured-fallback` | Structured-output fallback: on servers that support it (vLLM's `structured_outputs`), a malformed tool call that repair cannot fix is retried once under the tool's schema | S | director | `loop-tools-tool-call-repair`, `vllm-backend` | Planned |
 | `vllm-baseline` | A second reference baseline: the self suite recorded on vLLM (an AWQ build of qwen2.5-coder:14b) beside the Ollama one | S | director | `vllm-backend`, `native-reasoning-channel`, `loop-eval-gates` | Planned |
 
