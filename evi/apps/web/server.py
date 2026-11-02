@@ -3271,10 +3271,14 @@ def create_app() -> FastAPI:
         # first-run switch that leaves config pointing at something that doesn't
         # answer is worse than not switching at all.
         prev = (cfg.llm.backend, cfg.llm.base_url, cfg.llm.api_key, cfg.llm.model)
+        # A key belongs to the server it was set for: carry it over only when
+        # the switch keeps that server, so an online provider's key never goes
+        # to the new URL.
+        same_server = base_url.rstrip("/") == (cfg.llm.base_url or "").strip().rstrip("/")
         cfg.llm.backend = kind
         cfg.llm.base_url = base_url
         cfg.llm.api_key = {"ollama": "ollama", "lmstudio": "lm-studio"}.get(
-            kind, cfg.llm.api_key or "sk-noauth"
+            kind, (cfg.llm.api_key if same_server else "") or "sk-noauth"
         )
 
         model = (req.model or "").strip()
