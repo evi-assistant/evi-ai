@@ -12,6 +12,7 @@ mirroring :func:`evi.vision.model_supports_vision` /
 from __future__ import annotations
 
 import re
+from typing import Any, Mapping
 
 # Substring hints for reasoning-capable model ids (matched case-insensitively).
 _REASONING_HINTS = (
@@ -77,3 +78,33 @@ def reasoning_extra_body(effort: str, model_id: str) -> dict:
     if effort and effort != "medium":
         return {"reasoning_effort": effort}
     return {}
+
+
+# The fields a server sends a model's reasoning in, beside `content`, in a
+# streamed delta or a whole message: `reasoning_content` (DeepSeek's API,
+# llama.cpp's --reasoning-format deepseek, LM Studio, vLLM before 0.16) and
+# `reasoning` (vLLM 0.16 on, Ollama's /v1, OpenRouter, LM Studio for gpt-oss).
+REASONING_FIELDS = ("reasoning_content", "reasoning")
+
+
+def reasoning_text(obj: Any) -> str:
+    """The reasoning text a streamed delta or a whole message carries outside
+    its `content`: the first of REASONING_FIELDS holding a non-empty string,
+    read as a key of a mapping, else as an attribute, else from pydantic's
+    `model_extra` (where the openai SDK keeps fields it doesn't declare).
+    Only the first one counts, since some servers send the same text under
+    both names. Anything else (None, no such field, a non-string value such
+    as a reasoning object) is ""."""
+    if obj is None:
+        return ""
+    extra = getattr(obj, "model_extra", None)
+    for name in REASONING_FIELDS:
+        if isinstance(obj, Mapping):
+            value = obj.get(name)
+        else:
+            value = getattr(obj, name, None)
+            if value is None and isinstance(extra, Mapping):
+                value = extra.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return ""
