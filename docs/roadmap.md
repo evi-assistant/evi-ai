@@ -4,7 +4,7 @@ What eVi builds next, in order, and why. This replaces the phase-numbered
 backlog that ran up to 1.0: everything shipped is in
 [CHANGELOG.md](../CHANGELOG.md), and this page is the plan from 1.0.53 on.
 
-The plan has 69 items in six phases, ordered by risk first and value
+The plan has 78 items in six phases, ordered by risk first and value
 second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs.
@@ -104,7 +104,7 @@ Progress: 11 of 12 items shipped or done.
 
 ## Phase 2 — Context economy and small-model reliability
 
-Make 8-32K local models reliable in the agent loop. Every budget comes from the true context window. Tool output cannot flood the window. Malformed or looping tool calls are repaired or stopped. Edits recover from near misses. Compaction keeps the plot. The prompt prefix stays byte-stable for KV reuse. Streams survive local-server hiccups. Entry criterion: evals/self/baseline.json is recorded (loop-eval-gates).
+Make 8-32K local models reliable in the agent loop. Every budget comes from the true context window. Tool output cannot flood the window. Malformed or looping tool calls are repaired or stopped. Edits recover from near misses. Compaction keeps the plot. The prompt prefix stays byte-stable for KV reuse. Streams survive local-server hiccups. vLLM becomes a first-class local backend, and the phase's KV and reasoning work uses what it reports. Entry criterion: evals/self/baseline.json is recorded (loop-eval-gates).
 
 **Why now:** These are the highest-scored candidates: context-window truth 5.0, spill 4.67, loop detection 4.67, and repair, edit recovery and resilience at 4.33. They are also foundations later features consume. With the Phase 1 loop, the periphery work is delegable; loop control-flow cores stay with the director, and eval gates against the recorded baseline guard against regressions.
 
@@ -118,15 +118,20 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `loop-tools-edit-recovery` | Forgiving, safe edits: near-miss recovery, already-applied detection, read-before-edit, atomic writes | M | evi-local | `loop-shakedown-batch-1`, `fix-loop-state-propagation`, `fix-tool-context-binding` | Shipped in 1.1.0 (Phase 2 batch 1) |
 | `tool-schema-safe-names` | Provider-safe tool names and schema normalization for local grammars | M | evi-frontier | `extensibility-interop-mcp-sdk2-migration`, `loop-eval-gates` | Shipped in 1.1.0 (Phase 2 batch 4) |
 | `memory-sessions-structured-compaction` | Structured, incremental compaction that fits small windows | M | evi-frontier | `models-ops-token-budget-recovery`, `fix-history-validity` | Done (Phase 2 batch 9, unreleased; the sectioned, incremental summary, /compact <focus> and compaction_model shipped in 1.1.0 as batch 5). Batch 9 adds a token-budgeted tail, chunked summaries of an oversized middle, 'compact up to here', and two recall cases in the self suite |
-| `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names` | Planned |
+| `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout (on vLLM: reused-prefix tokens from `cached_tokens`, exact counts from `/tokenize`) | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names`, `vllm-backend` | Planned |
 | `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Shipped in 1.1.0 (Phase 2 batch 7) |
-| `stream-loop-resilience-reasoning` | Resilient streaming and a native reasoning channel | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair` | Planned |
+| `stream-loop-resilience-reasoning` | Resilient streaming over local-server hiccups (the reasoning channel moved to `native-reasoning-channel`) | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair`, `native-reasoning-channel` | Planned |
+| `native-reasoning-channel` | A native reasoning channel: thinking sent as `reasoning_content` (vLLM's reasoning parsers, LM Studio and similar servers) is read alongside `<think>` tags, shown as thinking and kept out of the answer | M | director | `loop-tools-tool-call-repair`, `fix-history-validity` | Planned; split out of `stream-loop-resilience-reasoning`. Today that field is dropped |
+| `vllm-backend` | First-class vLLM backend: the true window from `/v1/models`, model and LoRA-adapter listing, health and version, an error that names missing tool-calling flags, a warning for a LAN endpoint without an API key, and the kind in every CLI, setup and web surface | M | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names` | Planned |
+| `vllm-recipe` | `evi vllm recipe`: the `vllm serve` command for a model and machine (tool and reasoning parsers, max model length, GPU memory share), natively on Linux, under WSL2 or in Docker | S | evi-frontier | `vllm-backend` | Planned |
+| `tool-call-structured-fallback` | Structured-output fallback: on servers that support it (vLLM's `structured_outputs`), a malformed tool call that repair cannot fix is retried once under the tool's schema | S | director | `loop-tools-tool-call-repair`, `vllm-backend` | Planned |
+| `vllm-baseline` | A second reference baseline: the self suite recorded on vLLM (the same model family, a vLLM-native quantization) beside the Ollama one | S | director | `vllm-backend`, `native-reasoning-channel`, `loop-eval-gates` | Planned |
 
 ## Phase 3 — Safe autonomy: effects, policy, approvals, plans and goals
 
-Let eVi work longer without supervision, and without trading away safety. Every tool declares its side effects. One policy object generalizes the Phase 1 implementer policy. Approvals become durable and explained. Plan mode does real read-only research. Goals iterate on deterministic evidence. Long processes run in the background.
+Let eVi work longer without supervision, and without trading away safety. Every tool declares its side effects. One policy object generalizes the Phase 1 implementer policy. Approvals become durable and explained. Plan mode does real read-only research. Goals iterate on deterministic evidence. Long processes run in the background. Alongside, eVi runs vLLM itself, from one machine to a cluster: it starts and stops the servers, brings a multi-node model up from one spec, and routes sessions across endpoints.
 
-**Why now:** Phases 0-1 made unattended runs fail closed and built cancel, verify, the implementer policy and evidence. Side-effect annotations replace Phase 0's pinned read-only lists and are prerequisites for plan mode, the policy object and durable approvals, so they come first.
+**Why now:** Phases 0-1 made unattended runs fail closed and built cancel, verify, the implementer policy and evidence. Side-effect annotations replace Phase 0's pinned read-only lists and are prerequisites for plan mode, the policy object and durable approvals, so they come first. The vLLM cluster work builds on Phase 2's vLLM backend and recipe. Node control belongs to the user, never the agent: nodes are declared only in user config (never project config), the commands come only from the recipe's templates (no free-form command), SSH uses the user's own keys with pinned host keys, and no agent tool can start or stop a node.
 
 | Item | What | Size | Owner | Depends on | Status |
 |---|---|---|---|---|---|
@@ -137,6 +142,10 @@ Let eVi work longer without supervision, and without trading away safety. Every 
 | `plan-todo-ui` | Todo dock, REPL todo segment and editable plan view | M | evi-frontier | `plan-mode-and-todo-core` | Planned |
 | `loop-tools-goal-loop` | Goal loop judged on evidence, with budgets and advisor escalation | M | director | `loop-verify-gate`, `loop-agent-cancel`, `plan-mode-and-todo-core`, `loop-tools-loop-guard-step-budget` | Planned |
 | `loop-tools-background-processes` | Background processes: start, tail, await, stop, notify | M | evi-frontier | `loop-agent-cancel`, `tool-result-pipeline`, `loop-tools-side-effect-annotations`, `fix-tool-context-binding` | Planned |
+| `vllm-node-control` | eVi starts and stops vLLM: on this machine (natively, under WSL2 or in Docker) and on declared nodes over SSH, running only `vllm-recipe`'s templates, with supervision, logs, readiness checks and a stop on exit | L | director | `vllm-recipe`, `loop-agent-cancel`, `safety-project-trust-gate`, `safety-secret-redaction` | Planned |
+| `vllm-cluster` | A cluster from one spec: nodes, GPUs, the model and a parallelism plan (tensor, pipeline or data parallel, over Ray or multiprocessing), brought up and torn down in order, with join checks and a health watch, registered as one backend | L | director | `vllm-node-control` | Planned |
+| `vllm-pool-routing` | Several vLLM endpoints serving one model as one backend: a session stays on its endpoint for prefix-cache reuse, unhealthy endpoints are skipped with failover, and new sessions go to the least-loaded endpoint by `/metrics` | M | director | `vllm-backend`, `stream-loop-resilience-reasoning` | Planned |
+| `vllm-cluster-ui` | `evi vllm status` and a web Cluster panel: nodes, GPUs, health and load, and start/stop behind a confirmation | M | evi-frontier | `vllm-cluster`, `vllm-pool-routing`, `fix-web-request-hardening` | Planned |
 
 ## Phase 4 — Live sessions, phone and review surfaces
 
@@ -190,9 +199,9 @@ Considered and deliberately left out, with the reason. Several are deferred, not
 - **In-process Python middleware and drop-in Python tools.** Arbitrary in-process code with no trust store, and request mutation breaks prefix caching. The hook JSON protocol plus MCP covers realistic needs.
 - **Skills over MCP (SEP-2640) and MCP async events/Tasks.** Built on an unverified SEP and an experimental SDK API. Remote skills would be persistent injection. Revisit once the 2.x SDK ships them stably.
 - **Active recall and a shared 'main session' across phone and desktop.** Cue-triggered recall has false positives and re-injects untrusted content every turn; explicit search_sessions is safer. A shared Agent without re-entrancy protection is rejected. Channel /attach is allowed only through server-owned turns, under the channel ceiling and the busy guard.
-- **Sandbox breadth: Windows AppContainer, network allowlist proxy, sandbox expansion prompts, container/SSH execution backends.** All L-sized, and Windows cannot enforce bwrap-style policies. This cycle ships Job Object tree kill, env scrubbing, fail-closed policies and the implementer policy. A container backend is a candidate for next cycle.
+- **Sandbox breadth: Windows AppContainer, network allowlist proxy, sandbox expansion prompts, container/SSH execution backends.** All L-sized, and Windows cannot enforce bwrap-style policies. This cycle ships Job Object tree kill, env scrubbing, fail-closed policies and the implementer policy. A container backend is a candidate for next cycle. The SSH in `vllm-node-control` is not an execution backend: it runs only vLLM's own command templates on nodes the user declared, never agent tool calls.
 - **Local-judge auto-review approval mode (safety-auto-review-judge).** A small local judge is not a security boundary and is itself injectable, and it adds a model call per tool call. Segment-aware rules and durable grants remove most prompts deterministically.
-- **Managed-runtime breadth: Vulkan/ROCm/Linux CUDA builds, 2026 model catalog refresh, router mode, model manager, speculative decoding, runtime self-update.** This cycle fixes runtime correctness (context sizing, RAM probe, true window, download integrity). The new families and flags are unverified, would need a pin bump from b10453, and are L-sized. They belong to a dedicated runtime cycle.
+- **Managed-runtime breadth: Vulkan/ROCm/Linux CUDA builds, 2026 model catalog refresh, router mode, model manager, speculative decoding, runtime self-update.** This cycle fixes runtime correctness (context sizing, RAM probe, true window, download integrity). The new families and flags are unverified, would need a pin bump from b10453, and are L-sized. They belong to a dedicated runtime cycle. vLLM is the one addition: eVi starts and stops it (`vllm-node-control`) but never downloads or builds it; it runs the vLLM the user installed, or vLLM's official Docker image.
 - **ACP client backend and running vendor CLI agents on local models.** The chat.completions shim does not map cleanly onto ACP-driven agents, and vendor harnesses assume 100K+ windows. Phase 0 makes the existing drivers safe and current.
 - **UI-heavy single-file refactors: split panes/pop-out, app preview picker, quick-chat overlay, document pane, next-edit prediction, watch-comments, session library/browser, command palette, transcript density.** Poor cost/benefit in the single-file web UI, and poor tasks for small-model implementers. ACP gives editors a better integration.
 - **Personal-assistant breadth: email/IMAP tools, Gmail/Drive plugins, office documents, browser automation preset, voice (barge-in, talk mode, dictation, meeting notes), image editing, video attachments.** Mail plus web fetch plus send is the classic exfiltration chain, and voice work involves unsolved echo cancellation. The voice-loop engine/mic bug is fixed in shakedown batch 2, and inbound voice notes ship in channel-progress-media-delivery.
@@ -214,6 +223,7 @@ Decisions the maintainer still has to make; items that depend on them say so.
 10. Director credential: is the OS keyring (with a user-only file fallback) enough, or should verification run as a separate OS user so an agent under your account cannot reach the key at all?
 11. Managed runtime next cycle: prioritize Vulkan/ROCm/Linux-CUDA builds and a 2026 model catalog?
 12. Editor strategy: once `evi acp` ships, keep maintaining the VS Code extension beyond the approval-handling fix, or deprecate it in favour of ACP-capable editors?
+13. vLLM nodes: is SSH (with the user's keys) the only way eVi reaches another machine, or should a small eVi node service cover machines without SSH? And which model and quantization become the vLLM reference for `vllm-baseline`?
 
 ## Before this roadmap
 
