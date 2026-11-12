@@ -1101,8 +1101,7 @@ def _summary(res: Any, stop_reason: str, runs: Sequence[Any]) -> str:
     if stop_reason == "checks_failed" and runs:
         bad = next((r for r in runs if not r.ok), None)
         if bad is not None:
-            status = f"exit {bad.exit}" if bad.exit is not None else (bad.note or "did not finish")
-            return line(f"required check failed: {bad.check.cmd} ({status})")
+            return line(f"required check failed: {bad.check.cmd} ({bad.status})")
     if stop_reason == "error" and getattr(res, "error", None):
         return line(res.error) or stop_reason
     return line(getattr(res, "text", "")) or stop_reason
@@ -1117,7 +1116,8 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
                scope: tuple[str, ...]) -> None:
     """Hold `agent` to the task: its worktree, nobody to ask, the implementer
     policy with the required checks allowed, and the verify gate on with
-    them. TaskError for a backend the policy can't hold."""
+    them (and its files_in_scope's tests expected). TaskError for a backend
+    the policy can't hold."""
     from evi import checks, policy
     from evi.llm.agent import make_unattended
     from evi.llm.cli_agent import DELEGATE_BACKENDS, _configured_backends
@@ -1159,6 +1159,9 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
     allowed = [*argvs, *checks.allowlist(wt.path, config, trusted)]
     agent.policy = policy.implementer_policy(wt.path, files_in_scope=scope, checks=allowed,
                                              trusted=trusted, confine=True)
+    # Its verify gate fails a pytest check naming a test file in scope that
+    # collected no tests (evi.checks.expected_tests), as its outcome does.
+    agent.test_scope = scope
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> Path | None:
@@ -1311,7 +1314,9 @@ def run_task(
                 if cancel_token is not None and cancel_token.is_set():
                     break
                 name = Path(argv[0]).name or argv[0]
-                runs.append(checks.run_check(checks.Check(name, argv, "test", "task"), wt.path,
+                check = checks.Check(name, argv, "test", "task",
+                                     expect_tests=checks.expected_tests(argv, scope))
+                runs.append(checks.run_check(check, wt.path,
                                              timeout=cs.timeout, tail_lines=cs.tail_lines,
                                              cancel_token=cancel_token))
             if cancel_token is not None and cancel_token.is_set():
