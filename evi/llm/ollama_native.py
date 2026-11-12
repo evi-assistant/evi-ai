@@ -16,8 +16,10 @@ streamed chunks with ``choices[0].delta`` and a closing usage chunk, the
   reload the model with the server's default window), ``temperature``, ``top_p``, ``num_predict``
   (``max_tokens``), ``seed``, ``stop``, the penalties; ``response_format`` as
   ``format``; ``think`` / ``reasoning_effort`` as ``think``;
-- replies: ``message.content`` as text, ``message.thinking`` inside
-  ``<think>`` tags (the agent's think parser takes it out), whole tool calls
+- replies: ``message.content`` as text, ``message.thinking`` as the delta's
+  or message's ``reasoning`` (the native reasoning channel the agent shows as
+  thinking, evi.reasoning.reasoning_text; never wrapped in ``<think>`` tags,
+  so a literal tag in either can't move text between them), whole tool calls
   (Ollama sends each one complete), ``done_reason``, and the prompt and reply
   token counts as usage.
 
@@ -143,8 +145,8 @@ def _error_text(resp: httpx.Response) -> str:
 
 
 class _Stream:
-    """The streamed reply as chunks: text (thinking in <think> tags), whole
-    tool calls, a finish reason, then usage. `close` ends the request."""
+    """The streamed reply as chunks: text (thinking as the delta's `reasoning`),
+    whole tool calls, a finish reason, then usage. `close` ends the request."""
 
     def __init__(self, client: httpx.Client, url: str, body: dict) -> None:
         self._ctx = client.stream("POST", url, json=body)
@@ -168,7 +170,6 @@ class _Stream:
             pass
 
     def _chunks(self) -> Iterator[Any]:
-        thinking = False
         calls = 0
         try:
             for line in self._resp.iter_lines():
@@ -179,15 +180,12 @@ class _Stream:
                     raise OllamaError(f"Ollama: {data['error']}")
                 msg = data.get("message") or {}
                 think_text, text = msg.get("thinking") or "", msg.get("content") or ""
-                piece = ""
-                if think_text:
-                    piece += ("" if thinking else "<think>") + think_text
-                    thinking = True
-                if text:
-                    piece += ("</think>" if thinking else "") + text
-                    thinking = False
-                if piece:
-                    yield delta_chunk(content=piece)
+                if think_text or text:
+                    chunk = delta_chunk(content=text or None)
+                    # Thinking goes out as the delta's `reasoning`: the native
+                    # reasoning channel (evi.reasoning.reasoning_text).
+                    chunk.choices[0].delta.reasoning = think_text or None
+                    yield chunk
                 for tc in msg.get("tool_calls") or []:
                     fn = tc.get("function") or {}
                     args = fn.get("arguments")
@@ -196,8 +194,6 @@ class _Stream:
                         args if isinstance(args, str) else json.dumps(args or {}))
                     calls += 1
                 if data.get("done"):
-                    if thinking:
-                        yield delta_chunk(content="</think>")
                     reason = "tool_calls" if calls else (data.get("done_reason") or "stop")
                     yield delta_chunk(finish_reason=reason)
                     yield usage_chunk(int(data.get("prompt_eval_count") or 0),
@@ -233,10 +229,8 @@ class _Completions:
                 arguments=json.dumps((tc.get("function") or {}).get("arguments") or {})))
             for i, tc in enumerate(msg.get("tool_calls") or [])
         ]
-        content = msg.get("content") or ""
-        if msg.get("thinking"):
-            content = f"<think>{msg['thinking']}</think>{content}"
-        message = SimpleNamespace(role="assistant", content=content,
+        message = SimpleNamespace(role="assistant", content=msg.get("content") or "",
+                                  reasoning=msg.get("thinking") or None,
                                   tool_calls=tool_calls or None)
         prompt, completion = int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0)
         usage = SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion,
