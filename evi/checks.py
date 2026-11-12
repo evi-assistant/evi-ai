@@ -28,6 +28,12 @@ run's folder), never the whole suite by default:
   is trusted and that version of the file approved (`evi.trust`).
   ``[checks] detect = false`` runs only these.
 
+In a run confined to its files_in_scope (`evi task start`), a pytest check
+that names a test file in scope on its command line must collect a test from
+it (`expected_tests`, read off pytest's junit report): a file of imports or
+comments alone collects none, and pytest still exits 0 when the other files
+it names pass, so the check fails and says which file.
+
 In an untrusted folder no check runs at all (pytest runs the repository's
 code): the caller reports that the checks were skipped and why.
 
@@ -49,6 +55,7 @@ adds at run start.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -57,6 +64,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -89,13 +97,16 @@ class Check:
     """One check to run: `argv` (no shell), a lint or a test, and where it
     came from ("pyproject", "ruff.toml", "pytest", "package.json",
     "Cargo.toml", "config", "project"). `ok_codes` are the exit codes that
-    pass (pytest's 5, no tests collected, too)."""
+    pass (pytest's 5, no tests collected, too). `expect_tests`: the test
+    files a pytest check names that must each collect a test, or the check
+    fails whatever pytest's exit (`expected_tests`)."""
 
     name: str
     argv: tuple[str, ...]
     kind: str  # "lint" | "test"
     source: str
     ok_codes: tuple[int, ...] = (0,)
+    expect_tests: tuple[str, ...] = ()
 
     @property
     def cmd(self) -> str:
@@ -105,7 +116,9 @@ class Check:
 @dataclass
 class CheckRun:
     """What running one check gave. `exit` is None when it didn't finish
-    (timed out, cancelled, could not start, refused): `note` says which."""
+    (timed out, cancelled, could not start, refused): `note` says which.
+    `empty`: the check's `expect_tests` that collected no test; any of them
+    fails it."""
 
     check: Check
     exit: int | None
@@ -114,10 +127,21 @@ class CheckRun:
     round: int = 1
     note: str = ""
     cancelled: bool = False
+    empty: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
-        return self.exit is not None and self.exit in self.check.ok_codes
+        return (self.exit is not None and self.exit in self.check.ok_codes
+                and not self.empty)
+
+    @property
+    def status(self) -> str:
+        """How it ended in a few words: its exit, or why it has none."""
+        if self.exit is None:
+            return self.note or "did not finish"
+        if self.empty:
+            return f"exit {self.exit}, but {_names(self.empty)} collected no tests"
+        return f"exit {self.exit}"
 
     def record(self) -> dict[str, Any]:
         """The run report's entry (`evi.events` ``$defs/check``)."""
@@ -425,6 +449,119 @@ def allowlist(root: str | Path, config: Any, trusted: bool) -> list[tuple[str, .
     return list(dict.fromkeys(out))
 
 
+# ---- named test files that must hold tests -------------------------------------
+
+# pytest options that leave out some of a named file's tests: with one, a file
+# that collected nothing may only have been filtered, so nothing is expected.
+_PYTEST_FILTERS = ("-k", "-m", "--deselect", "--lf", "--last-failed", "--sw", "--stepwise",
+                   "--pyargs")
+# pytest options whose value is the next word, not a path to test.
+_PYTEST_VALUED = frozenset({
+    "-p", "-c", "-o", "-W", "-n", "--ignore", "--ignore-glob", "--rootdir", "--confcutdir",
+    "--basetemp", "--junitxml", "--junit-xml", "--tb", "--import-mode", "--maxfail",
+    "--durations", "--override-ini", "--config-file",
+})
+
+
+def _is_test_file(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
+def expected_tests(argv: Sequence[str], scope: Iterable[str]) -> tuple[str, ...]:
+    """The test files (``test_*.py``, ``*_test.py``) the pytest check `argv`
+    names on its command line, a node id's file too, that match the
+    files_in_scope `scope`: the files the run is there to write, so each
+    must collect at least one test (pytest exits 0 when one of several named
+    files collects nothing). () for a check that isn't pytest's, or that
+    filters what it runs (``-k``, ``-m``, ``--deselect`` ...: an empty file
+    can't be told from a filtered one). A folder it names is not a file it
+    names, and expects nothing."""
+    from evi.evidence import _pytest_at
+    from evi.policy import in_scope
+
+    words = [str(w) for w in argv]
+    at = _pytest_at(words)
+    scope = tuple(scope)
+    if at is None or not scope:
+        return ()
+    rest = words[at + 1:]
+    if any(w == f or w.startswith(f + "=") or (len(f) == 2 and w.startswith(f))
+           for w in rest if w != "--" for f in _PYTEST_FILTERS):
+        return ()
+    out: list[str] = []
+    paths_only = False
+    for prev, word in zip(["", *rest], rest):
+        if word == "--" and not paths_only:
+            paths_only = True
+            continue
+        if not paths_only and (word.startswith("-") or prev in _PYTEST_VALUED):
+            continue
+        rel = word.split("::", 1)[0].replace("\\", "/")
+        while rel.startswith("./"):
+            rel = rel[2:]
+        if _is_test_file(rel) and in_scope(scope, rel) and rel not in out:
+            out.append(rel)
+    return tuple(out)
+
+
+def _test_address(rel: str) -> list[str]:
+    parts = rel.removesuffix(".py").split("/")
+    return [p.lower() for p in parts] if os.name == "nt" else parts
+
+
+def _addresses(rel: str, ids: Sequence[list[str]]) -> bool:
+    """A junit testcase in `ids` came from the file `rel` (relative to the
+    check's folder). pytest's classname is the node id's file as a dotted
+    path (``tests.test_x``, then any class), relative to its rootdir, with
+    any junit_prefix in front: the whole path anywhere in it, or the path's
+    end at its start (a rootdir below the folder) matches."""
+    want = _test_address(rel)
+    n = len(want)
+    for got in ids:
+        if any(got[i:i + n] == want for i in range(len(got) - n + 1)):
+            return True
+        if any(got[:k] == want[n - k:] for k in range(1, n)):
+            return True
+    return False
+
+
+def empty_tests(junit: str | bytes, files: Sequence[str]) -> tuple[str, ...]:
+    """Which of `files` no testcase of the junit report `junit` came from: a
+    skipped test counts (it is a test, and the report's skipped total shows
+    it), a module skipped whole too. () when the report doesn't parse:
+    what can't be read fails nothing."""
+    import xml.etree.ElementTree as ET
+
+    if not files:
+        return ()
+    data = junit.encode("utf-8") if isinstance(junit, str) else junit
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return ()
+    ids = []
+    for case in root.iter("testcase"):
+        # A module skipped whole has no classname: its name is the module's.
+        dotted = case.get("classname") or case.get("name") or ""
+        ids.append(dotted.lower().split(".") if os.name == "nt" else dotted.split("."))
+    return tuple(f for f in files if not _addresses(f, ids))
+
+
+def _names(files: Sequence[str]) -> str:
+    return files[0] if len(files) == 1 else ", ".join(files[:-1]) + " and " + files[-1]
+
+
+def empty_note(files: Sequence[str]) -> str:
+    """What the model is told about `files`, named by a pytest check, that
+    collected no tests."""
+    one = len(files) == 1
+    return (f"eVi: {_names(files)} {'is' if one else 'are'} named by this check but collected "
+            f"no tests (pytest still exits 0 when the other files it names pass), so the check "
+            f"shows nothing about {'it' if one else 'them'}: write the tests "
+            f"{'it' if one else 'they'} should hold.")
+
+
 # ---- running -------------------------------------------------------------------
 
 
@@ -501,21 +638,46 @@ def run_check(
     def elapsed() -> int:
         return max(0, int((time.monotonic() - started) * 1000))
 
+    argv = list(check.argv)
+    junit: Path | None = None
+    if check.expect_tests:
+        # Which named file collected nothing is in pytest's junit report only.
+        from evi.evidence import junit_argv
+
+        fd, name = tempfile.mkstemp(prefix="evi-junit-", suffix=".xml")
+        os.close(fd)
+        junit = Path(name)
+        argv = junit_argv(argv, junit)
     try:
-        res = proc.run(resolve_argv(check.argv, Path(root), env), cwd=str(root), timeout=timeout,
-                       cancel_token=cancel_token, env=env, merge_stderr=True,
-                       encoding="utf-8")
-    except OSError as exc:
-        return CheckRun(check, None, elapsed(), red(f"could not start: {exc}"), round,
-                        note="could not start")
-    tail = tail_text(red(res.output), tail_lines)
+        try:
+            res = proc.run(resolve_argv(argv, Path(root), env), cwd=str(root), timeout=timeout,
+                           cancel_token=cancel_token, env=env, merge_stderr=True,
+                           encoding="utf-8")
+        except OSError as exc:
+            return CheckRun(check, None, elapsed(), red(f"could not start: {exc}"), round,
+                            note="could not start")
+        output = res.output or ""
+        empty: tuple[str, ...] = ()
+        if junit is not None:
+            # pytest names the report it wrote: eVi's, not the check's.
+            output = "\n".join(ln for ln in output.splitlines() if junit.name not in ln)
+            if not (res.cancelled or res.timed_out) and res.returncode in check.ok_codes:
+                with contextlib.suppress(OSError):
+                    empty = empty_tests(junit.read_bytes(), check.expect_tests)
+    finally:
+        if junit is not None:
+            with contextlib.suppress(OSError):
+                junit.unlink()
+    tail = tail_text(red(output), tail_lines)
     if res.cancelled:
         return CheckRun(check, None, elapsed(), tail, round, note="cancelled", cancelled=True)
     if res.timed_out:
         note = f"timed out after {timeout:g}s (its process tree was killed)"
         return CheckRun(check, None, elapsed(), tail_text(f"{tail}\n({note})", tail_lines),
                         round, note=note)
-    return CheckRun(check, res.returncode, elapsed(), tail, round)
+    if empty:
+        tail = tail_text(f"{tail}\n{empty_note(empty)}", tail_lines)
+    return CheckRun(check, res.returncode, elapsed(), tail, round, empty=empty)
 
 
 def refused(check: Check, reason: str, round: int = 1) -> CheckRun:
@@ -531,6 +693,5 @@ def failure_note(runs: Sequence[CheckRun], round: int, max_rounds: int) -> str:
     for run in runs:
         if run.ok:
             continue
-        status = f"exit {run.exit}" if run.exit is not None else (run.note or "did not finish")
-        parts.append(f"$ {run.check.cmd}\n{status}\n{run.tail}".rstrip())
+        parts.append(f"$ {run.check.cmd}\n{run.status}\n{run.tail}".rstrip())
     return "\n\n".join(parts)

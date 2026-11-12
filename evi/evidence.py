@@ -564,12 +564,15 @@ def _cut_start(text: str, limit: int) -> tuple[str, bool]:
 
 
 def _run_check(argv: Sequence[str], cwd: Path, out: Path, n: int, red: Any, *,
-               timeout: float, cancel_token: threading.Event | None = None) -> dict[str, Any]:
+               timeout: float, cancel_token: threading.Event | None = None,
+               expect: Sequence[str] = ()) -> dict[str, Any]:
     """Run one check in `cwd`, its output (and a pytest check's junit
     report) into `out`; its report.json entry. Its process tree is killed
-    once `cancel_token` is set."""
+    once `cancel_token` is set. `expect`: test files it names that must
+    collect a test (`evi.checks.expected_tests`); one that collected none
+    fails it, the note says which."""
     from evi import proc
-    from evi.checks import display, resolve_argv
+    from evi.checks import display, empty_tests, resolve_argv
 
     words = [str(w) for w in argv]
     slug = f"{n:02d}-{_slug(Path(words[0]).name or words[0])}"
@@ -595,13 +598,20 @@ def _run_check(argv: Sequence[str], cwd: Path, out: Path, n: int, red: Any, *,
     _write_text(out / f"{slug}.txt", text)
     junit = None
     junit_rel = None
+    empty: tuple[str, ...] = ()
     if junit_file is not None and junit_file.is_file() and not _is_link(junit_file):
         junit = _redact_junit(junit_file, red)
         if junit_file.exists():
             junit_rel = f"{CHECKS_DIR}/{junit_file.name}"
+            if code == 0 and expect:
+                with contextlib.suppress(OSError):
+                    empty = empty_tests(junit_file.read_bytes(), expect)
+    if empty:
+        note = f"{', '.join(empty)} collected no tests"
     return {
         "name": Path(words[0]).name or words[0], "cmd": display(words), "exit": code,
-        "ok": code == 0, "duration_ms": duration, "note": note, "source": "required",
+        "ok": code == 0 and not empty, "duration_ms": duration, "note": note,
+        "source": "required",
         "output": f"{CHECKS_DIR}/{slug}.txt", "junit_file": junit_rel, "junit": junit,
         "reported": pytest_counts(output) if junit_file is not None else None,
     }
@@ -1069,6 +1079,7 @@ def collect(
     run_report: Mapping[str, Any] | None = None,
     checks: Sequence[Sequence[str]] = (),
     check_records: Sequence[Mapping[str, Any]] = (),
+    test_scope: Sequence[str] = (),
     task: Mapping[str, Any] | None = None,
     attempt: int | None = None,
     repo: str | os.PathLike[str] | None = None,
@@ -1080,7 +1091,9 @@ def collect(
     return it.
 
     `folder`: the git work tree the work is in (the diff against `base`, and
-    where `checks`, argv lists, run: only when it is trusted). `run_report`:
+    where `checks`, argv lists, run: only when it is trusted). `test_scope`:
+    the task's files_in_scope; a test file in it that a pytest check names
+    must collect a test, or the check fails (`evi.checks.expected_tests`). `run_report`:
     the v1 run report (its transcript is excerpted); `check_records`: checks
     the run ran itself (its report's ``checks``). `task` and `attempt` name
     the task, `repo` the main checkout; `config` gives ``[checks] timeout``.
@@ -1125,8 +1138,10 @@ def collect(
                 for n, argv in enumerate(checks, 1):
                     if cancel_token is not None and cancel_token.is_set():
                         break
-                    records.append(_run_check(argv, where, out_checks, n, red, timeout=timeout,
-                                              cancel_token=cancel_token))
+                    records.append(_run_check(
+                        argv, where, out_checks, n, red, timeout=timeout,
+                        cancel_token=cancel_token,
+                        expect=_checks.expected_tests(argv, test_scope)))
                 if cancel_token is not None and cancel_token.is_set():
                     skipped = (f"cancelled: eVi stopped running the checks after {len(records)} "
                                f"of {len(checks)}")
@@ -1254,6 +1269,7 @@ def collect_task(
     folder = Path(worktree) if worktree is not None else task_worktree(root, record)
     try:
         argvs = tasks.required_argvs(record)
+        scope = tasks.scope_of(record)
     except tasks.TaskError as exc:
         raise EvidenceError(str(exc)) from exc
     if run_report is None:
@@ -1267,7 +1283,7 @@ def collect_task(
     return collect(
         task_bundle_path(root, task_id, attempt), folder=folder,
         base=str(record.get("base") or "") or None, run_report=run_report, checks=argvs,
-        task=record, attempt=attempt, repo=root, config=config, no_checks=no_checks,
+        test_scope=scope, task=record, attempt=attempt, repo=root, config=config, no_checks=no_checks,
         cancel_token=cancel_token,
     )
 
@@ -1424,7 +1440,8 @@ def _check_line(check: Mapping[str, Any]) -> str:
     if check.get("ok"):
         status = "passed"
     elif check.get("exit") is not None:
-        status = f"failed (exit {check.get('exit')})"
+        note = f": {_line(check['note'])}" if check.get("note") else ""
+        status = f"failed (exit {check.get('exit')}{note})"
     else:
         status = f"did not finish ({_line(check.get('note') or 'no exit code')})"
     junit = check.get("junit")

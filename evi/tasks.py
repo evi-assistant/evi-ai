@@ -1101,8 +1101,7 @@ def _summary(res: Any, stop_reason: str, runs: Sequence[Any]) -> str:
     if stop_reason == "checks_failed" and runs:
         bad = next((r for r in runs if not r.ok), None)
         if bad is not None:
-            status = f"exit {bad.exit}" if bad.exit is not None else (bad.note or "did not finish")
-            return line(f"required check failed: {bad.check.cmd} ({status})")
+            return line(f"required check failed: {bad.check.cmd} ({bad.status})")
     if stop_reason == "error" and getattr(res, "error", None):
         return line(res.error) or stop_reason
     return line(getattr(res, "text", "")) or stop_reason
@@ -1311,7 +1310,9 @@ def run_task(
                 if cancel_token is not None and cancel_token.is_set():
                     break
                 name = Path(argv[0]).name or argv[0]
-                runs.append(checks.run_check(checks.Check(name, argv, "test", "task"), wt.path,
+                check = checks.Check(name, argv, "test", "task",
+                                     expect_tests=checks.expected_tests(argv, scope))
+                runs.append(checks.run_check(check, wt.path,
                                              timeout=cs.timeout, tail_lines=cs.tail_lines,
                                              cancel_token=cancel_token))
             if cancel_token is not None and cancel_token.is_set():

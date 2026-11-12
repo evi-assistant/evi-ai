@@ -3779,6 +3779,13 @@ class Agent:
             return None
         round_no = state.rounds_run + 1
         state.rounds_run = round_no
+        # A run confined to its files_in_scope is there to write them: a test
+        # file in scope that a pytest check names must hold a test.
+        pol = getattr(self, "policy", None)
+        if pol is not None and getattr(pol, "confine", False):
+            scope = tuple(pol.extra_writable)
+            found = [dataclasses.replace(c, expect_tests=checks.expected_tests(c.argv, scope))
+                     for c in found]
         runs = []
         for check in found:
             if self._cancelled():
