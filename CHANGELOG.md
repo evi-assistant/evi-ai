@@ -31,6 +31,11 @@ All notable user-visible changes to eVi. Format loosely follows
   shown once.
 
 ### Changed
+- **`evi models recommend` rates qwen2.5-coder:14b's tool calling poor.** On
+  Ollama it writes its calls as JSON text instead of the `<tool_call>` tags its
+  template asks for (no native call in ~300 samples), so eVi can only run a
+  call that starts the reply. qwen2.5:14b, which makes native calls, is named
+  as the alternative.
 - **Compaction fits small windows.** The messages compaction keeps verbatim
   now also fit `[llm] compact_keep_pct` of the window (30% by default), so a
   big tool result near the end can't leave the window full right after

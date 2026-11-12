@@ -84,9 +84,13 @@ REGISTRY: list[ModelRec] = [
         quantization="Q4_K_M",
         min_vram_mb=10500,
         min_ram_mb=18000,
-        tool_calling="excellent",
+        # Measured on Ollama 0.40.13: no native call in ~300 samples (it writes
+        # fenced JSON, not the <tool_call> tags its template asks for).
+        tool_calling="poor",
         role="coder",
-        notes="Pair with `qwen2.5:14b` for chat; switch via `evi models use`.",
+        notes="Pair with `qwen2.5:14b` for chat; switch via `evi models use`. On Ollama it "
+              "writes tool calls as JSON text: eVi runs one that starts the reply, not one "
+              "after prose, so long tasks can stall. qwen2.5:14b makes native calls.",
     ),
     # --- 8–12 GB VRAM (3060 Ti / 4060 Ti / 7B sweet spot) ---------------
     ModelRec(
