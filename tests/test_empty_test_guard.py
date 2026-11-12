@@ -81,21 +81,45 @@ def test_a_folder_a_filter_an_option_value_or_another_tool_expects_nothing():
         "tests/test_new.py",)
 
 
+def _junit(*cases: tuple[str, str]) -> str:
+    return ('<testsuites><testsuite>' + "".join(
+        f'<testcase classname="{c}" name="{n}"/>' for c, n in cases)
+        + '</testsuite></testsuites>')
+
+
 def test_junit_testcases_are_matched_to_their_files():
-    junit = ('<testsuites><testsuite tests="3">'
-             '<testcase classname="tests.test_old" name="test_one"/>'
-             '<testcase classname="tests.test_cls.TestA" name="test_a[1.5]"/>'
-             '<testcase classname="" name="tests.test_mod"><skipped/></testcase>'
-             '<testcase classname="pkg.sub.tests.test_deep" name="t"/>'
-             '<testcase classname="test_low" name="t"/>'
-             '</testsuite></testsuites>')
-    files = ["tests/test_old.py", "tests/test_cls.py", "tests/test_mod.py",
-             "sub/tests/test_deep.py", "here/test_low.py", "tests/test_new.py",
+    junit = _junit(("tests.test_old", "test_one"), ("tests.test_cls.TestA", "test_a[1.5]"),
+                   ("", "tests.test_mod"))
+    files = ["tests/test_old.py", "tests/test_cls.py", "tests/test_mod.py", "tests/test_new.py",
              "tests/test_old_more.py"]
-    # A class's tests, a module skipped whole, a rootdir above the check's
-    # folder or below it all count; a longer name sharing a prefix does not.
+    # A class's tests and a module skipped whole count; a longer name sharing
+    # a prefix does not.
     assert checks.empty_tests(junit, files) == ("tests/test_new.py", "tests/test_old_more.py")
     assert checks.empty_tests("not xml", files) == ()
+    # A rootdir above the check's folder, or a junit_prefix: words in front.
+    junit = _junit(("pkg.sub.tests.test_deep", "t"))
+    assert checks.empty_tests(junit, ["sub/tests/test_deep.py", "sub/tests/test_new.py"]) == (
+        "sub/tests/test_new.py",)
+    # A rootdir below it (the common folder of the files named): words gone.
+    junit = _junit(("test_low", "t"))
+    assert checks.empty_tests(junit, ["here/test_new.py"], ["here/test_low.py"]) == (
+        "here/test_new.py",)
+    assert checks.empty_tests(junit, ["here/test_low.py"]) == ()
+
+
+def test_a_dot_in_a_folder_or_file_name_splits_as_pytest_splits_it():
+    junit = _junit(("tests.v1.0.test_x", "t"), ("tests.test_y.int", "t"))
+    assert checks.empty_tests(junit, ["tests/v1.0/test_x.py", "tests/test_y.int.py"]) == ()
+
+
+def test_a_file_is_not_matched_to_another_named_file_that_ends_the_same():
+    """tests/test_api.py and pkg/tests/test_api.py both named: a placeholder
+    in either is found, whichever holds the tests."""
+    named = ["tests/test_api.py", "pkg/tests/test_api.py"]
+    assert checks.empty_tests(_junit(("tests.test_api", "t")), ["pkg/tests/test_api.py"],
+                              named) == ("pkg/tests/test_api.py",)
+    assert checks.empty_tests(_junit(("pkg.tests.test_api", "t")), ["tests/test_api.py"],
+                              named) == ("tests/test_api.py",)
 
 
 # ---- running the check ------------------------------------------------------------
@@ -126,6 +150,48 @@ def test_a_file_whose_tests_are_all_skipped_passes(folder, body):
     (folder / "tests" / "test_new.py").write_text(body, encoding="utf-8")
     run = _run(folder, _pytest("tests/test_new.py", "tests/test_old.py"))
     assert run.ok, run.tail
+
+
+def test_a_dotted_folder_with_real_tests_passes(folder):
+    (folder / "tests" / "v1.0").mkdir()
+    (folder / "tests" / "v1.0" / "test_x.py").write_text(REAL, encoding="utf-8")
+    run = _run(folder, _pytest("tests/v1.0/test_x.py", "tests/test_old.py"),
+               scope=("tests/v1.0/test_x.py",))
+    assert run.ok, run.tail
+
+
+def test_same_named_files_in_two_packages_are_told_apart(folder):
+    for pkg in ("tests", "pkg", "pkg/tests"):
+        (folder / pkg).mkdir(exist_ok=True)
+        (folder / pkg / "__init__.py").write_text("", encoding="utf-8")
+    (folder / "tests" / "test_api.py").write_text(REAL, encoding="utf-8")
+    (folder / "pkg" / "tests" / "test_api.py").write_text(PLACEHOLDER, encoding="utf-8")
+    argv = _pytest("tests/test_api.py", "pkg/tests/test_api.py")
+    run = _run(folder, argv, scope=("pkg/tests/test_api.py",))
+    assert run.empty == ("pkg/tests/test_api.py",)
+
+
+def test_a_check_that_turns_junit_off_runs_as_written(folder):
+    """eVi's --junitxml would be a usage error (exit 4): the check runs again
+    as it is written, and pytest's exit decides."""
+    (folder / "tests" / "test_new.py").write_text(REAL, encoding="utf-8")
+    run = _run(folder, _pytest("-p", "no:junitxml", "tests/test_new.py", "tests/test_old.py"))
+    assert run.ok and run.exit == 0, run.tail
+
+
+def test_a_usage_error_keeps_its_message(folder):
+    run = _run(folder, _pytest("--no-such-option", "tests/test_new.py"))
+    assert run.exit == 4 and "--no-such-option" in run.tail
+
+
+def test_tests_deselected_by_the_ini_leave_the_file_as_pytest_says(folder):
+    (folder / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = '-m \"not slow\"'\nmarkers = ['slow: slow']\n",
+        encoding="utf-8")
+    (folder / "tests" / "test_new.py").write_text(
+        "import pytest\n\n\n@pytest.mark.slow\ndef test_big():\n    pass\n", encoding="utf-8")
+    run = _run(folder, _pytest("tests/test_new.py", "tests/test_old.py"))
+    assert run.ok and run.empty == (), run.tail
 
 
 def test_a_check_naming_a_folder_is_left_as_pytest_says(folder):

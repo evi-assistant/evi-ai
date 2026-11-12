@@ -1088,6 +1088,9 @@ class Agent:
         # decides every tool call, allow or deny, instead of the permission
         # flow; None for the normal flow.
         self.policy: Any = None
+        # A task's files_in_scope (`evi task start`): a test file in it that a
+        # pytest check names must collect a test (evi.checks.expected_tests).
+        self.test_scope: tuple[str, ...] = ()
         # The session's mode preset ("chat" | "cowork" | "code", evi.modes;
         # "" when none was picked): [checks] verify = "always" runs the
         # checks in Code mode.
@@ -3779,11 +3782,12 @@ class Agent:
             return None
         round_no = state.rounds_run + 1
         state.rounds_run = round_no
-        # A run confined to its files_in_scope is there to write them: a test
-        # file in scope that a pytest check names must hold a test.
-        pol = getattr(self, "policy", None)
-        if pol is not None and getattr(pol, "confine", False):
-            scope = tuple(pol.extra_writable)
+        # A task is there to write its files_in_scope: a test file in scope
+        # that a pytest check names must hold a test. Only a task: its
+        # required checks run again for its outcome and evidence, which say
+        # why one failed (the CheckResult event has only the exit).
+        scope = tuple(getattr(self, "test_scope", ()) or ())
+        if scope:
             found = [dataclasses.replace(c, expect_tests=checks.expected_tests(c.argv, scope))
                      for c in found]
         runs = []

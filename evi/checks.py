@@ -28,8 +28,8 @@ run's folder), never the whole suite by default:
   is trusted and that version of the file approved (`evi.trust`).
   ``[checks] detect = false`` runs only these.
 
-In a run confined to its files_in_scope (`evi task start`), a pytest check
-that names a test file in scope on its command line must collect a test from
+In a task's run (`evi task start`), a pytest check that names a test file
+in its files_in_scope on its command line must collect a test from
 it (`expected_tests`, read off pytest's junit report): a file of imports or
 comments alone collects none, and pytest still exits 0 when the other files
 it names pass, so the check fails and says which file.
@@ -468,27 +468,21 @@ def _is_test_file(rel: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
-def expected_tests(argv: Sequence[str], scope: Iterable[str]) -> tuple[str, ...]:
-    """The test files (``test_*.py``, ``*_test.py``) the pytest check `argv`
-    names on its command line, a node id's file too, that match the
-    files_in_scope `scope`: the files the run is there to write, so each
-    must collect at least one test (pytest exits 0 when one of several named
-    files collects nothing). () for a check that isn't pytest's, or that
-    filters what it runs (``-k``, ``-m``, ``--deselect`` ...: an empty file
-    can't be told from a filtered one). A folder it names is not a file it
-    names, and expects nothing."""
+def named_files(argv: Sequence[str]) -> list[str] | None:
+    """The ``.py`` files the pytest check `argv` names on its command line,
+    a node id's file too, relative and with ``/``; None when it isn't
+    pytest's or filters what it runs (``-k``, ``-m``, ``--deselect`` ...: an
+    empty file can't be told from a filtered one)."""
     from evi.evidence import _pytest_at
-    from evi.policy import in_scope
 
     words = [str(w) for w in argv]
     at = _pytest_at(words)
-    scope = tuple(scope)
-    if at is None or not scope:
-        return ()
+    if at is None:
+        return None
     rest = words[at + 1:]
     if any(w == f or w.startswith(f + "=") or (len(f) == 2 and w.startswith(f))
            for w in rest if w != "--" for f in _PYTEST_FILTERS):
-        return ()
+        return None
     out: list[str] = []
     paths_only = False
     for prev, word in zip(["", *rest], rest):
@@ -500,37 +494,51 @@ def expected_tests(argv: Sequence[str], scope: Iterable[str]) -> tuple[str, ...]
         rel = word.split("::", 1)[0].replace("\\", "/")
         while rel.startswith("./"):
             rel = rel[2:]
-        if _is_test_file(rel) and in_scope(scope, rel) and rel not in out:
+        if rel.endswith(".py") and rel not in out:
             out.append(rel)
-    return tuple(out)
+    return out
 
 
-def _test_address(rel: str) -> list[str]:
-    parts = rel.removesuffix(".py").split("/")
-    return [p.lower() for p in parts] if os.name == "nt" else parts
+def expected_tests(argv: Sequence[str], scope: Iterable[str]) -> tuple[str, ...]:
+    """The test files (``test_*.py``, ``*_test.py``) the pytest check `argv`
+    names on its command line, a node id's file too, that match the
+    files_in_scope `scope`: the files the run is there to write, so each
+    must collect at least one test (pytest exits 0 when one of several named
+    files collects nothing). () for a check that isn't pytest's, or that
+    filters what it runs (``-k``, ``-m``, ``--deselect`` ...: an empty file
+    can't be told from a filtered one). A folder it names is not a file it
+    names, and expects nothing."""
+    from evi.policy import in_scope
+
+    scope = tuple(scope)
+    named = named_files(argv) if scope else None
+    if not named:
+        return ()
+    return tuple(rel for rel in named if _is_test_file(rel) and in_scope(scope, rel))
 
 
-def _addresses(rel: str, ids: Sequence[list[str]]) -> bool:
-    """A junit testcase in `ids` came from the file `rel` (relative to the
-    check's folder). pytest's classname is the node id's file as a dotted
-    path (``tests.test_x``, then any class), relative to its rootdir, with
-    any junit_prefix in front: the whole path anywhere in it, or the path's
-    end at its start (a rootdir below the folder) matches."""
-    want = _test_address(rel)
-    n = len(want)
-    for got in ids:
-        if any(got[i:i + n] == want for i in range(len(got) - n + 1)):
-            return True
-        if any(got[:k] == want[n - k:] for k in range(1, n)):
-            return True
-    return False
+def _dotted(text: str) -> tuple[str, ...]:
+    """`text` (a path without .py, or a junit classname) as pytest's dotted
+    words: a folder or file name with a dot in it splits the same way."""
+    text = text.replace("/", ".")
+    return tuple((text.lower() if os.name == "nt" else text).split("."))
 
 
-def empty_tests(junit: str | bytes, files: Sequence[str]) -> tuple[str, ...]:
+def empty_tests(junit: str | bytes, files: Sequence[str],
+                named: Sequence[str] = ()) -> tuple[str, ...]:
     """Which of `files` no testcase of the junit report `junit` came from: a
     skipped test counts (it is a test, and the report's skipped total shows
     it), a module skipped whole too. () when the report doesn't parse:
-    what can't be read fails nothing."""
+    what can't be read fails nothing.
+
+    pytest's classname is the node id's file as a dotted path relative to
+    its rootdir (``tests.test_x``, then any class), with any junit_prefix in
+    front. The rootdir may sit above the check's folder (more words in
+    front) or below it (the path's first words gone), the same for every
+    file of the run: that offset is the one that accounts for the most of
+    the files the check names (`named`, `files` among them), the least
+    shifted on a tie, so a file is never matched to another named file that
+    only ends the same way."""
     import xml.etree.ElementTree as ET
 
     if not files:
@@ -540,12 +548,29 @@ def empty_tests(junit: str | bytes, files: Sequence[str]) -> tuple[str, ...]:
         root = ET.fromstring(data)
     except ET.ParseError:
         return ()
-    ids = []
-    for case in root.iter("testcase"):
-        # A module skipped whole has no classname: its name is the module's.
-        dotted = case.get("classname") or case.get("name") or ""
-        ids.append(dotted.lower().split(".") if os.name == "nt" else dotted.split("."))
-    return tuple(f for f in files if not _addresses(f, ids))
+    # A module skipped whole has no classname: its name is the module's.
+    ids = {_dotted(case.get("classname") or case.get("name") or "")
+           for case in root.iter("testcase")}
+    want = {f: _dotted(f.removesuffix(".py")) for f in dict.fromkeys([*files, *named])}
+    covers: dict[tuple[tuple[str, ...], int], set[str]] = {}
+    for f, path in want.items():
+        for cut in range(len(path)):
+            tail = path[cut:]
+            for got in ids:
+                for at in range(len(got) - len(tail) + 1):
+                    if got[at:at + len(tail)] == tail:
+                        covers.setdefault((got[:at], cut), set()).add(f)
+    if not covers:
+        return tuple(files)
+    best = max(covers, key=lambda k: (len(covers[k]), -k[1], -len(k[0])))
+    return tuple(f for f in files if f not in covers[best])
+
+
+def _written(path: Path) -> bool:
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _names(files: Sequence[str]) -> str:
@@ -638,32 +663,50 @@ def run_check(
     def elapsed() -> int:
         return max(0, int((time.monotonic() - started) * 1000))
 
-    argv = list(check.argv)
+    def run(argv: Sequence[str]) -> Any:
+        return proc.run(resolve_argv(argv, Path(root), env), cwd=str(root), timeout=timeout,
+                        cancel_token=cancel_token, env=env, merge_stderr=True, encoding="utf-8")
+
     junit: Path | None = None
     if check.expect_tests:
         # Which named file collected nothing is in pytest's junit report only.
-        from evi.evidence import junit_argv
-
         fd, name = tempfile.mkstemp(prefix="evi-junit-", suffix=".xml")
         os.close(fd)
         junit = Path(name)
-        argv = junit_argv(argv, junit)
+    empty: tuple[str, ...] = ()
     try:
         try:
-            res = proc.run(resolve_argv(argv, Path(root), env), cwd=str(root), timeout=timeout,
-                           cancel_token=cancel_token, env=env, merge_stderr=True,
-                           encoding="utf-8")
+            if junit is None:
+                res = run(check.argv)
+            else:
+                from evi.evidence import junit_argv, pytest_counts
+
+                res = run(junit_argv(check.argv, junit))
+                if (res.returncode == 4 and not (res.cancelled or res.timed_out)
+                        and not _written(junit)):
+                    # A usage error before any test ran, maybe over eVi's own
+                    # flag (``-p no:junitxml`` in the check, its ini or
+                    # PYTEST_ADDOPTS): the check as written says what it says.
+                    with contextlib.suppress(OSError):
+                        junit.unlink()
+                    junit = None
+                    res = run(check.argv)
         except OSError as exc:
             return CheckRun(check, None, elapsed(), red(f"could not start: {exc}"), round,
                             note="could not start")
         output = res.output or ""
-        empty: tuple[str, ...] = ()
         if junit is not None:
             # pytest names the report it wrote: eVi's, not the check's.
-            output = "\n".join(ln for ln in output.splitlines() if junit.name not in ln)
-            if not (res.cancelled or res.timed_out) and res.returncode in check.ok_codes:
+            output = "\n".join(ln for ln in output.splitlines()
+                               if not ("generated xml file" in ln and junit.name in ln))
+            counts = pytest_counts(output) or {}
+            # Tests deselected (by the ini's addopts, say): an empty file
+            # can't be told from a filtered one.
+            if (not (res.cancelled or res.timed_out) and res.returncode in check.ok_codes
+                    and not counts.get("deselected")):
                 with contextlib.suppress(OSError):
-                    empty = empty_tests(junit.read_bytes(), check.expect_tests)
+                    empty = empty_tests(junit.read_bytes(), check.expect_tests,
+                                        named_files(check.argv) or ())
     finally:
         if junit is not None:
             with contextlib.suppress(OSError):

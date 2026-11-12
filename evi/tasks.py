@@ -1116,7 +1116,8 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
                scope: tuple[str, ...]) -> None:
     """Hold `agent` to the task: its worktree, nobody to ask, the implementer
     policy with the required checks allowed, and the verify gate on with
-    them. TaskError for a backend the policy can't hold."""
+    them (and its files_in_scope's tests expected). TaskError for a backend
+    the policy can't hold."""
     from evi import checks, policy
     from evi.llm.agent import make_unattended
     from evi.llm.cli_agent import DELEGATE_BACKENDS, _configured_backends
@@ -1158,6 +1159,9 @@ def _configure(agent: Any, wt: Any, argvs: list[tuple[str, ...]],
     allowed = [*argvs, *checks.allowlist(wt.path, config, trusted)]
     agent.policy = policy.implementer_policy(wt.path, files_in_scope=scope, checks=allowed,
                                              trusted=trusted, confine=True)
+    # Its verify gate fails a pytest check naming a test file in scope that
+    # collected no tests (evi.checks.expected_tests), as its outcome does.
+    agent.test_scope = scope
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> Path | None:

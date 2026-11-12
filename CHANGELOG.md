@@ -51,13 +51,13 @@ All notable user-visible changes to eVi. Format loosely follows
 - **A placeholder test file no longer passes a task's checks.** A required
   check like `pytest tests/test_new.py tests/test_old.py` passed when
   test_new.py held only imports and comments: pytest ran the other file's
-  tests and exited 0. In a task run (and any run confined to its
-  files_in_scope), a pytest check that names a test file in scope now fails
-  when that file collected no tests, and says which file, to the model in
-  its turn, in the task's last result and in the evidence bundle. A skipped
-  test still counts; a check that names a folder, or filters with `-k`,
-  `-m` or `--deselect`, is left as pytest says. The eval runner is
-  unchanged.
+  tests and exited 0. In `evi task start`, a pytest check that names a test
+  file in the task's files_in_scope now fails when that file collected no
+  tests, and says which file, to the model in its turn, in the task's last
+  result and in the evidence bundle. A skipped test still counts; a check
+  that names a folder, filters with `-k`, `-m` or `--deselect`, or reports
+  deselected tests (an ini's addopts, say) is left as pytest says. The eval
+  runner and `evi run` are unchanged.
 - **A tool call written as bare arguments runs.** gpt-oss:20b ended a run by
   replying with only `{"patch": "..."}`, an apply_patch call's arguments
   with no tool name, and eVi took it as the answer. A reply that is only such

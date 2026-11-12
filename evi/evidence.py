@@ -572,7 +572,7 @@ def _run_check(argv: Sequence[str], cwd: Path, out: Path, n: int, red: Any, *,
     collect a test (`evi.checks.expected_tests`); one that collected none
     fails it, the note says which."""
     from evi import proc
-    from evi.checks import display, empty_tests, resolve_argv
+    from evi.checks import display, empty_tests, named_files, resolve_argv
 
     words = [str(w) for w in argv]
     slug = f"{n:02d}-{_slug(Path(words[0]).name or words[0])}"
@@ -603,9 +603,12 @@ def _run_check(argv: Sequence[str], cwd: Path, out: Path, n: int, red: Any, *,
         junit = _redact_junit(junit_file, red)
         if junit_file.exists():
             junit_rel = f"{CHECKS_DIR}/{junit_file.name}"
-            if code == 0 and expect:
+            # Tests deselected (by the ini's addopts, say): an empty file
+            # can't be told from a filtered one.
+            if code == 0 and expect and not (pytest_counts(output) or {}).get("deselected"):
                 with contextlib.suppress(OSError):
-                    empty = empty_tests(junit_file.read_bytes(), expect)
+                    empty = empty_tests(junit_file.read_bytes(), expect,
+                                        named_files(words) or ())
     if empty:
         note = f"{', '.join(empty)} collected no tests"
     return {
