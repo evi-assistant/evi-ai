@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
+from typer.testing import CliRunner
 
 from evi import redact, secretscan
 
@@ -79,3 +81,19 @@ def test_scan_diff_sees_only_added_lines_on_their_new_line_numbers(repo):
 def test_scan_diff_refuses_an_option_as_ref(repo):
     with pytest.raises(ValueError):
         secretscan.scan_diff(repo, "--output=x")
+
+
+def test_cli_exit_codes_and_json(repo, monkeypatch):
+    import evi.apps.cli.main as cli_main
+
+    monkeypatch.chdir(repo)
+    r = CliRunner().invoke(cli_main.app, ["secrets", "scan", "--json"])
+    assert r.exit_code == 1, r.output
+    assert json.loads(r.stdout) == [{"path": "old.txt", "line": 1, "kind": "github_token"}]
+    assert GH not in r.output
+    r = CliRunner().invoke(cli_main.app, ["secrets", "scan", "--diff", "HEAD"])
+    assert r.exit_code == 0 and "no secrets found" in r.stderr
+    r = CliRunner().invoke(cli_main.app, ["secrets", "scan", "--diff", "nope-ref"])
+    assert r.exit_code == 2 and "secrets scan:" in r.stderr
+    r = CliRunner().invoke(cli_main.app, ["secrets", "scan", "old.txt", "--diff", "HEAD"])
+    assert r.exit_code == 2

@@ -4971,6 +4971,51 @@ def agents_new(
     )
 
 
+secrets_app = typer.Typer(help="Find secrets (tokens, keys) in files or a diff.")
+app.add_typer(secrets_app, name="secrets")
+
+
+@secrets_app.command("scan")
+def secrets_scan(
+    paths: list[str] = typer.Argument(
+        None, help="Files or folders to scan (default: the git work tree here)."),
+    diff: str = typer.Option(
+        "", "--diff", help="Scan only the lines `git diff REF` adds (e.g. HEAD, main)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the findings as JSON."),
+) -> None:
+    """Scan for secrets: what eVi's redaction would hide (a token or key by
+    its shape, a secret this machine holds by its value). Each finding is
+    path:line: kind, never the secret. Exit 0: none found, 1: some found,
+    2: the scan could not run (no git, a bad ref, PATHS with --diff)."""
+    from evi import secretscan
+
+    try:
+        if diff.strip():
+            if paths:
+                print("secrets scan: --diff scans the repository here; give no PATHS",
+                      file=sys.stderr)
+                raise typer.Exit(2)
+            found = secretscan.scan_diff(Path.cwd(), diff.strip())
+        elif paths:
+            found = secretscan.scan_paths(paths, Path.cwd())
+        else:
+            found = secretscan.scan_tree(Path.cwd())
+    except (secretscan.ScanError, ValueError) as exc:  # ValueError: a bad --diff ref
+        print(f"secrets scan: {exc}", file=sys.stderr)
+        raise typer.Exit(2)
+    if json_out:
+        import json as _json
+
+        print(_json.dumps([{"path": f.path, "line": f.line, "kind": f.kind} for f in found],
+                          indent=2))
+    else:
+        for f in found:
+            print(f"{f.path}:{f.line}: {f.kind}")
+        print(f"{len(found)} secret(s) found" if found else "no secrets found",
+              file=sys.stderr)
+    raise typer.Exit(1 if found else 0)
+
+
 workflow_app = typer.Typer(
     help="Dynamic workflows — multi-step, parallel multi-agent orchestration."
 )
