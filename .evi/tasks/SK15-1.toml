@@ -1,6 +1,6 @@
 id = "SK15-1"
 title = "lint: `evi lint` warns about over-broad allow rules (every tool, run_python, every shell command, code runners with any arguments)"
-status = "open"
+status = "verified"
 why = "Roadmap item safety-broad-allow-lint (Phase 6 Track A). An allow rule such as `allow run_command python*` or `allow run_command npx *` reads like a narrow grant but approves any code, since the interpreter or package runner runs whatever its arguments name; `allow *` and `allow run_command *` approve everything. evi lint already checks [auto] rules for ones that never apply (configlint._lint_rules) but says nothing about ones that apply far too widely."
 hints = "Make exactly these edits to evi/configlint.py and nothing else (the code below was run against every acceptance criterion before filing).\n\n1. Directly above the line `def lint_auto(auto: object) -> list[Issue]:` insert this block (followed by two blank lines):\n\n# A command that runs whatever code its arguments name: an allow rule for it\n# with a trailing wildcard (\"python*\", \"npx *\") allows any code.\n_CODE_RUNNERS = frozenset({\n    \"python\", \"python3\", \"py\", \"node\", \"deno\", \"bun\", \"ruby\", \"perl\", \"php\",\n    \"bash\", \"sh\", \"zsh\", \"pwsh\", \"powershell\", \"cmd\", \"npx\", \"bunx\", \"uvx\",\n    \"pipx\", \"uv run\", \"npm exec\", \"pnpm dlx\", \"yarn dlx\", \"env\", \"sudo\", \"xargs\",\n})\n\n\ndef _lint_broad_allows(auto: dict) -> list[Issue]:\n    \"\"\"`rules` allow entries that approve far more than they look: every\n    tool, run_python (any code), every shell command, or a code runner\n    (an interpreter or package runner) with any arguments.\"\"\"\n    from fnmatch import fnmatch\n\n    out: list[Issue] = []\n    for r in _str_list(auto.get(\"rules\")):\n        words = r.split()\n        if len(words) < 2 or words[0].lower() != \"allow\":\n            continue\n        tool, arg = words[1], \" \".join(words[2:]).strip()\n        why = \"\"\n        if tool in (\"*\", \"**\"):\n            why = \"allows every tool, with any arguments\"\n        elif fnmatch(\"run_python\", tool) or tool == \"code\":\n            why = \"allows run_python, which runs any code\"\n        elif fnmatch(\"run_command\", tool) or tool == \"shell\":\n            head = arg[:-1].strip().lower() if arg.endswith(\"*\") else None\n            if arg in (\"\", \"*\"):\n                why = \"allows every shell command\"\n            elif head in _CODE_RUNNERS:\n                why = f\"allows {head!r} with any arguments, which runs any code\"\n        if why:\n            out.append(Issue(\"config.toml [auto] rules\", \"warn\",\n                             f\"rule {r!r} {why}; name the commands you mean, e.g. \"\n                             \"'allow run_command python -m pytest*'\"))\n    return out\n\n2. In lint_auto, replace the line\n    out = _lint_auto_approve(auto) + _lint_rules(auto)\nwith\n    out = _lint_auto_approve(auto) + _lint_rules(auto) + _lint_broad_allows(auto)\n\n3. In lint_auto's docstring, after \"an auto_approve list from before \\\"code_read\\\",\" add \"allow rules that approve far more than they look (every tool, run_python, every shell command, a code runner with any arguments),\".\n\nTests in a NEW file tests/test_lint_broad_allow.py: call evi.configlint.lint_auto({\"rules\": [...]}) and look at the issues whose resource is \"config.toml [auto] rules\" and whose message contains \"name the commands\". Use pytest.mark.parametrize for the flagged and the unflagged rules in the acceptance criteria."
 acceptance = ["lint_auto({'rules': [r]}) gives exactly one warn issue for [auto] rules whose message contains repr(r) and 'name the commands' for each of: 'allow *', 'allow * *', 'allow run_python', 'allow code', 'allow run_command', 'allow run_command *', 'allow shell *', 'allow run_command python*', 'allow run_command npx *', 'allow run_command uv run *', 'allow run_command Bash *'.", "That message says 'every tool' for 'allow *', 'runs any code' for 'allow run_python' and 'allow code', 'every shell command' for 'allow run_command' and 'allow shell *', and \"'python' with any arguments\" / \"'npx' with any arguments\" / \"'uv run' with any arguments\" / \"'bash' with any arguments\" for the code-runner rules.", "No such issue for 'allow run_command python -m pytest*', 'allow run_command git status*', 'allow read_file', 'deny *', 'deny run_command *' or 'allow run_command npm test'.", "lint_auto({'rules': ['allow *', 'allow run_command *', 'allow read_file']}) gives exactly two such issues.", "The existing tests in tests/test_permission_engine.py, tests/test_shell_guard.py and tests/test_code_exec_parity.py pass."]
@@ -15,16 +15,21 @@ worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK15-1"
 branch = "task/SK15-1"
 base = "46d26c03eda87cd59bd7dac85792460b14d0223a"
 evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-1\\7"
-reviewer_notes = []
+reviewer_notes = [{at = "2026-11-21T16:28:13Z", verdict = "director", note = "finished by the director on task/SK15-1 after 7 implementer attempt(s)"}]
 
 [evidence_summary]
-hash = "sha256:85441e1ab9e9bf5bc2900953d24ff72a7b58576eae9f8f23f5e7f8a0ba560459"
+hash = "sha256:24f52badd6f5cb87a5c603d0b34e0d459c5cad226c4df5e9e473f0e4368a7de0"
 files = 2
-insertions = 108
+insertions = 96
 deletions = 3
-checks_passed = 0
+checks_passed = 2
 checks_failed = 0
-checks_skipped = "the run stopped (error) before its checks, so eVi ran none"
+
+[evidence_summary.junit]
+tests = 638
+failures = 0
+errors = 0
+skipped = 1
 
 [lease]
 
@@ -34,3 +39,21 @@ exit_code = 1
 report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-1\\7\\report.json"
 summary = "LLM request failed: OllamaError: Ollama 500: error parsing tool call: raw='We also need to update docstring of lint_auto. Let's edit.{\"path\":\"evi/configlint.py\",\"old_string\":\"allow rules that approve far more than they look (every tool, run_python, every shell command, a code runner with any argumen"
 out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK15-1"
+digest = "sha256:7ceb58ef0b0610b319a05ed3e444313fa537d9adb2b5df28f22c721d1e7fd7c9"
+head = "603f76c19e3b611d8dcde98dcd19b464e005d519"
+evidence = "sha256:24f52badd6f5cb87a5c603d0b34e0d459c5cad226c4df5e9e473f0e4368a7de0"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-11-21T16:28:23Z"
+key = "302b45cb92785c8d"
+sig = "c504495b46a06059ada4fcb79a243a2dd175eb0c8ae54e441bcf7aa8c1466329"
+
+[attestation.review]
+base = "46d26c03eda87cd59bd7dac85792460b14d0223a"
+exit_code = 0
+report_sha256 = "3627a0218fd544a46b25a517e8e1e75b779b1c69d7c66ed0c2c01648dac6c2cd"
