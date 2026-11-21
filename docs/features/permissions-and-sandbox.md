@@ -497,13 +497,15 @@ Eval suites hold each case to the [implementer policy](#implementer-policy)
 in a throwaway workspace, wherever they run: `evi eval run`, the web Evals
 panel's **Run** button (`POST /api/evals/run`) and scheduled eval suites,
 whose log says `# policy: implementer (each case in a throwaway workspace)`
-(see [Evals](evals.md#what-the-agent-may-do)). Still allow-all, as before:
-`evi workflow run`, which approves every tool of every step. It is still an
-unattended entry point, though: it refuses a delegate CLI-agent backend as
-above, and its steps' commands get no `*_KEY` / `*_TOKEN` / `*_SECRET`
+(see [Evals](evals.md#what-the-agent-may-do)). `evi workflow run` names
+its policy too: `--policy ask` (the default at a terminal), `deny`,
+`implementer`, or `[auto] unattended_policy` when nobody can be asked;
+only `--yes` approves every tool of every step, as it used to by default
+([Agents → Workflows](agents.md)). It refuses a delegate CLI-agent backend
+as above, and its steps' commands get no `*_KEY` / `*_TOKEN` / `*_SECRET`
 variables ([What a command's environment
 holds](#what-a-commands-environment-holds)). The web app's workflow runs
-follow the policy.
+follow the unattended policy.
 
 ### Implementer policy
 

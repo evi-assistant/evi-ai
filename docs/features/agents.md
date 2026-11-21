@@ -196,11 +196,17 @@ the known names.
 
 Workflows live at `~/.evi/workflows/<name>.toml`. Each step may set a `mode`
 (`chat` | `cowork` | `code`) to swap to that mode's tool preset; otherwise it
-uses your enabled tools. Workflow runs are **unattended**, and the two ways to
-run one differ: `evi workflow run` auto-approves every tool call of every
-step, while a run from the web app (Dispatch, `POST
-/api/dispatch/workflow/{name}`) does not: auto-approved categories run and
-anything that would ask follows `[auto] unattended_policy`, denied by default.
+uses your enabled tools. In every run your auto-approved categories run,
+and a tool call that would ask is settled by the run's policy. From the web
+app (Dispatch, `POST /api/dispatch/workflow/{name}`) it follows `[auto]
+unattended_policy`, denied by default. `evi workflow run` asks you at a
+terminal (`--policy ask`; parallel steps ask one at a time, each prompt
+naming its step) and follows `[auto] unattended_policy` with nobody to ask
+(no terminal, `--json`, or inside an eVi session); `--policy deny` refuses
+it, `--policy implementer` holds every step to the [implementer
+policy](permissions-and-sandbox.md#implementer-policy) in its folder (its
+worktree, else the git top), and `--yes` auto-approves every call, as
+workflows did before. The header (stderr with `--json`) names the policy.
 
 A step with `isolate = "worktree"` (every step, with `evi workflow run
 --worktree`) works in a git worktree of its own, branch
@@ -424,11 +430,12 @@ back" → the agent calls `delegate_explore`. For broad investigations it can ca
 evi workflow new <name>            # write a starter ~/.evi/workflows/<name>.toml
 evi workflow list                  # list saved workflows (step + parallel counts)
 evi workflow show <name>           # show steps, vars, and prompts
-evi workflow run <name> [--var k=v ...] [--json] [--worktree]
+evi workflow run <name> [--var k=v ...] [--json] [--worktree] [--policy ask|deny|implementer | --yes]
 ```
 
-`evi workflow run` executes each step as its own headless agent (tools
-auto-approved). `--var k=v` overrides a workflow var (repeatable). `--json`
+`evi workflow run` executes each step as its own headless agent; a call
+that would ask follows `--policy` (above), and `--yes` auto-approves
+everything. `--var k=v` overrides a workflow var (repeatable). `--json`
 prints `{step_id: output}` as JSON instead of the live, step-by-step console
 output. `--worktree` runs every step as if it said `isolate = "worktree"`.
 
@@ -665,12 +672,12 @@ Inside a chat (with `subagent` tools enabled), the model invokes it as
 - **Subagent depth.** Each subagent runs at most `max_turns=6` and returns text
   plus a short tool trace; it's meant for bounded, one-shot delegation, not
   open-ended sessions.
-- **Workflows are unattended.** With `evi workflow run` every step
-  auto-approves all tool calls (`enable_auto_all`); from the web app, a call
-  outside your auto-approved categories is denied unless `[auto]
-  unattended_policy = "allow"`. Don't put steps that touch dangerous tools
-  (shell, computer control, network writes) into a workflow you run
-  unsupervised unless you trust the prompts. Malformed workflow files are
+- **Workflows run unsupervised.** A call outside your auto-approved
+  categories is asked about at a terminal and denied with nobody to ask
+  (unless `[auto] unattended_policy = "allow"`); `evi workflow run --yes`
+  approves every call. Don't run a workflow whose steps touch dangerous
+  tools (shell, computer control, network writes) with `--yes` unless you
+  trust the prompts. Malformed workflow files are
   skipped by `list`, and template errors (e.g. an unknown `{ref}` or unescaped
   brace) raise a clear `WorkflowError`.
 - **Isolation is per worktree, not a sandbox.** A worktree keeps edits and

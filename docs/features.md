@@ -147,7 +147,8 @@ would ask unless `[auto] unattended_policy = "allow"`; federation, A2A, routine
 webhooks without `yes` and channel pushes always deny it and never run code by
 category (only an explicit allow rule lets `run_python` or a shell line run
 there); delegate CLI-agent backends are refused there, and by
-`evi workflow run` (which still approves every tool), unless
+`evi workflow run` (which asks at a terminal and follows the unattended
+policy otherwise; `--yes` approves every tool), unless
 `[llm] allow_cli_agent_unattended`; and the commands these runs start, like
 sandboxed ones, get no `*_KEY` / `*_TOKEN` / `*_SECRET` variables.
 [Guide](features/permissions-and-sandbox.md#unattended-runs).

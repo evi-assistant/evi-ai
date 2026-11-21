@@ -1020,10 +1020,11 @@ prompt = "Synthesize a balanced take.\nUpsides:\n{pros}\nDownsides:\n{cons}"
 - Prompts interpolate workflow `[vars]` and earlier step outputs by id —
   `{topic}`, `{plan}`, … (escape literal braces as `{{` / `}}`).
 - Each step is an unattended headless agent; set `mode` on a step for a tool
-  preset (`chat`/`cowork`/`code`). `evi workflow run` auto-approves every tool
-  call; a run from the web app's Dispatch panel runs only the auto-approved
-  categories and denies anything else unless `[auto] unattended_policy =
-  "allow"`.
+  preset (`chat`/`cowork`/`code`). Only the auto-approved categories run
+  unasked: `evi workflow run` asks about anything else at a terminal and
+  otherwise (like the web app's Dispatch panel) denies it unless `[auto]
+  unattended_policy = "allow"`; `--policy deny|implementer` picks a
+  stricter policy and `--yes` approves every call.
 
 `evi workflow new <name>` scaffolds one; `evi workflow run <name> --var topic=…`
 runs it (`--json` for machine output). The desktop **🗂 Dispatch** panel lists

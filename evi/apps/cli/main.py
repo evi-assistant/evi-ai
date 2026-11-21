@@ -5045,12 +5045,35 @@ def workflow_run(
         help='Run every step in a git worktree of its own (as if each said isolate = '
              '"worktree"). Nothing is merged back.',
     ),
+    policy: str = typer.Option(
+        "", "--policy",
+        help="How a tool call that would ask is settled: 'ask' (prompt here; the "
+             "default at a terminal), 'deny' (refuse it; the default with no terminal: "
+             "\\[auto] unattended_policy), or 'implementer' (edit files and run "
+             "tests, linters and read-only git in the step's folder; nothing else). "
+             "Not with --yes.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Auto-approve every tool call of every step (the old behaviour). "
+             "hard_deny, protected paths and the destructive guard still apply.",
+    ),
 ) -> None:
     """Run a workflow — each step is its own headless agent; parallel blocks run
-    concurrently (tools auto-approved, since runs are unattended). Like `evi
-    run`, it is an unattended entry point: a delegate CLI-agent backend is
-    refused unless \\[llm] allow_cli_agent_unattended, and the steps' commands
-    get no *_KEY / *_TOKEN / *_SECRET environment variables.
+    concurrently. Like `evi run`, it is an unattended entry point: a delegate
+    CLI-agent backend is refused unless \\[llm] allow_cli_agent_unattended,
+    and the steps' commands get no *_KEY / *_TOKEN / *_SECRET environment
+    variables.
+
+    Tool calls in your auto-approved categories run. One that would ask is
+    settled by the run's policy: at a terminal it asks you (--policy ask;
+    parallel steps ask one at a time, each prompt naming its step); with no
+    terminal, or --policy deny, it follows \\[auto] unattended_policy, denied
+    by default, as the web app's Dispatch does; --policy implementer holds
+    every step to the implementer policy (evi/policy.py) in its folder (its
+    worktree, else the git top here). --yes auto-approves everything, as
+    workflows did before. The policy is printed in the header (on stderr
+    with --json).
 
     A step with isolate = "worktree" (every step, with --worktree) works in
     a worktree of the repository here, branch fix-<workflow>-<step> under
@@ -5064,6 +5087,9 @@ def workflow_run(
     from evi.llm.cli_agent import CliAgentUnattended, check_unattended, unattended
     from evi.modes import mode_tools
 
+    # Before the process marks itself: from then on it counts as inside an
+    # eVi session, where nothing asks the user.
+    can_ask = _can_ask_about_trust()
     _proc.mark_agent_process()  # an agent-hosting entry point (evi.proc)
     try:
         w = workflows.load_workflow(name)
@@ -5076,6 +5102,7 @@ def workflow_run(
     except CliAgentUnattended as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
+    policy_name = _workflow_policy_name(policy, yes, can_ask and not json_out)
 
     variables: dict[str, str] = {}
     for kv in var or []:
@@ -5121,10 +5148,11 @@ def workflow_run(
                         console.print(out, markup=False, highlight=False)
                     return out
             try:
-                agent = _build_agent()
+                agent = _build_agent(register=False)
                 if step.mode:
                     agent.tools = {t.name: t for t in mode_tools(step.mode)}
-                agent.enable_auto_all()  # workflows are unattended
+                _apply_workflow_policy(agent, policy_name, step.id, settings,
+                                       root=iso.path if iso is not None else repo_top)
                 if iso is not None:
                     # The step's folder is its worktree: tools resolve there,
                     # its one project context is the worktree's own, and the
@@ -5157,15 +5185,32 @@ def workflow_run(
             out = f"{out}\n\n{where}"
         return out
 
+    from evi.project import git_toplevel
+
+    repo_top = git_toplevel(repo.resolve()) or repo.resolve()
+    if policy_name == "implementer" and not all(isolated(s) for s in w.steps):
+        from evi import policy as _policy
+
+        if not _policy.folder_trusted(repo_top):
+            print(f"note: {repo_top} is not a trusted folder, so --policy implementer runs "
+                  "no commands there; `evi trust` it to allow them", file=sys.stderr)
     if not json_out:
         console.print(
             Panel.fit(
                 Text.assemble(
-                    (f"workflow {w.name} ", "bold cyan"), (f"· {len(w.steps)} steps", "dim")
+                    (f"workflow {w.name} ", "bold cyan"), (f"· {len(w.steps)} steps", "dim"),
+                    (f" · policy {_workflow_policy_label(policy_name, settings)}", "dim"),
                 ),
                 border_style="cyan",
             )
         )
+    else:
+        print(f"policy: {_workflow_policy_label(policy_name, settings)}", file=sys.stderr)
+    if policy_name == "unattended":
+        print("note: nobody to ask here, so a tool call outside your auto-approved "
+              "categories follows [auto] unattended_policy; pass --yes to auto-approve "
+              "every call (as workflows used to) or --policy implementer",
+              file=sys.stderr)
     try:
         outputs = workflows.run_workflow(w, run_step=run_step, variables=variables,
                                          isolates=True)
@@ -5178,6 +5223,90 @@ def workflow_run(
         print(_json.dumps(outputs, ensure_ascii=False, indent=2))
     else:
         console.print("\n[green]workflow complete[/green]")
+
+
+# `evi workflow run --policy` values. "unattended" (no flag, nobody to ask)
+# and "allow-all" (--yes) are what the run falls back to without one.
+_WORKFLOW_POLICIES = ("ask", "deny", "implementer")
+# Parallel steps ask on threads of their own: one question at a time.
+_WORKFLOW_ASK_LOCK = threading.Lock()
+
+
+def _workflow_policy_name(policy: str, yes: bool, can_prompt: bool) -> str:
+    """The policy `evi workflow run` settles a call that would ask with:
+    "ask" | "deny" | "implementer" (--policy), "allow-all" (--yes), else
+    "ask" when a prompt can reach the user (a terminal, no --json, not
+    inside an eVi session) and "unattended" ([auto] unattended_policy)
+    when it can't. --policy with --yes, an unknown policy, or ask where
+    nobody can be asked is a usage error (exit 2)."""
+    name = (policy or "").strip().lower()
+    if name and yes:
+        console.print("[red]--policy and --yes can't be used together:[/red] "
+                      "the policy decides every call that would ask")
+        raise typer.Exit(2)
+    if yes:
+        return "allow-all"
+    if not name:
+        return "ask" if can_prompt else "unattended"
+    if name not in _WORKFLOW_POLICIES:
+        console.print(f"[red]unknown --policy {policy.strip()!r}[/red] "
+                      f"(choose: {' | '.join(_WORKFLOW_POLICIES)})")
+        raise typer.Exit(2)
+    if name == "ask" and not can_prompt:
+        console.print("[red]--policy ask needs a terminal to ask at[/red] (and no --json); "
+                      "use --policy deny or implementer, or --yes")
+        raise typer.Exit(2)
+    return name
+
+
+def _workflow_policy_label(name: str, settings) -> str:
+    """`name` as the run's header shows it."""
+    if name == "unattended":
+        from evi.llm.agent import unattended_policy_name
+
+        return unattended_policy_name(settings.auto.unattended_policy)
+    return "allow-all (--yes)" if name == "allow-all" else name
+
+
+def _apply_workflow_policy(agent, name: str, step_id: str, settings, *, root: Path) -> None:
+    """Set a workflow step's `agent` up to settle calls that would ask under
+    `name` (`_workflow_policy_name`). "ask" keeps the terminal prompts, one
+    at a time across parallel steps, each naming its step (an `s` answer
+    approves the rest of that step); "implementer" holds the step to the
+    implementer policy in `root` (its worktree, else the git top here)."""
+    from evi.llm.agent import make_unattended
+
+    if name == "allow-all":
+        agent.enable_auto_all()
+        return
+    if name == "ask":
+        one = getattr(agent, "permission_callback", None) or _cli_permission_prompt
+        batch = getattr(agent, "permission_batch_callback", None) or _cli_permission_prompt_batch
+
+        def ask(tool: str, args: str, category: str) -> bool:
+            with _WORKFLOW_ASK_LOCK:
+                console.print(f"\n[cyan]step {step_id}[/cyan] asks:", highlight=False)
+                _AUTO_STATE["agent"] = agent  # what an `s` answer turns on
+                return one(tool, args, category)
+
+        def ask_batch(calls: list[tuple[str, str, str]]) -> list[bool]:
+            with _WORKFLOW_ASK_LOCK:
+                console.print(f"\n[cyan]step {step_id}[/cyan] asks:", highlight=False)
+                _AUTO_STATE["agent"] = agent
+                return batch(calls)
+
+        agent.permission_callback = ask
+        agent.permission_batch_callback = ask_batch
+        return
+    make_unattended(agent, "deny" if name == "deny" else None)
+    if name == "implementer":
+        from evi import checks as _checks
+        from evi import policy as _policy
+
+        trusted = _policy.folder_trusted(root)
+        agent.policy = _policy.build(_policy.IMPLEMENTER, root, (),
+                                     _checks.allowlist(root, settings, trusted),
+                                     trusted=trusted)
 
 
 # `evi run`'s output formats.

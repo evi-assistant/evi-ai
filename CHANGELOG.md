@@ -61,6 +61,15 @@ All notable user-visible changes to eVi. Format loosely follows
   shown once.
 
 ### Changed
+- **`evi workflow run` no longer approves every tool call.** Your
+  auto-approved categories still run; a call that would ask is now asked
+  about at a terminal (parallel steps one at a time, each prompt naming its
+  step) and, with nobody to ask (no terminal, `--json`, inside an eVi
+  session), follows `[auto] unattended_policy`, denied by default, as the
+  web app's Dispatch already did. `--policy deny` refuses such calls,
+  `--policy implementer` holds each step to the implementer policy, and
+  `--yes` brings back the old allow-all. The header (stderr with `--json`)
+  names the policy, and an unattended run says which flag to add.
 - **`evi models recommend` rates qwen2.5-coder:14b's tool calling poor.** On
   Ollama it writes its calls as JSON text instead of the `<tool_call>` tags its
   template asks for (no native call in ~300 samples), so eVi can only run a
