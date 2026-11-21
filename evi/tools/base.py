@@ -249,6 +249,11 @@ class Tool:
     # Whether `func` takes the call's ToolContext (a ``ctx`` parameter), read
     # once here. MCP tools never do: their arguments all go to the server.
     takes_ctx: bool = field(default=False, init=False, repr=False, compare=False)
+    # MCP tools only: the per-tool rule from the server's mcp.json entry
+    # (`evi.mcp.servers.MCPServer.rule_for`): "deny" (refused in every mode),
+    # "ask" (asks in every mode), "read_only" (runs unasked: a readOnlyHint the
+    # user chose to trust) or "" for the usual policy. See `permissions.decide`.
+    mcp_rule: str = ""
 
     def __post_init__(self) -> None:
         if self.read_only is None:

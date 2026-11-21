@@ -421,6 +421,9 @@ _TOOLS_ON_ONLY = frozenset({"sandbox", "sandbox_required"})
 #   hard_deny         unioned with the user's list (never replaced / shrunk)
 #   protected_paths   unioned with the user's list (never replaced / shrunk)
 #   block_destructive honoured only when true
+#   workspace_only    honoured only when STRICTER than the user's
+#                     ("off" < "writes" < "all")
+#   workspace_allow_temp honoured only when false
 # auto_approve, trusted_dirs, trusted_domains, destructive_allow,
 # destructive_disable_rules, ultracode and anything else in [auto] is ignored.
 _AUTO_LIST_KEYS = ("rules", "hard_deny", "protected_paths")
@@ -591,6 +594,12 @@ def filter_project_overlay(overlay: dict[str, Any]) -> tuple[dict[str, Any], lis
                 ok = value in _MODE_STRICTNESS
             elif section == "auto" and key == "block_destructive":
                 ok = value is True
+            elif section == "auto" and key == "workspace_only":
+                from evi.workspace import LEVELS
+
+                ok = isinstance(value, str) and value in LEVELS
+            elif section == "auto" and key == "workspace_allow_temp":
+                ok = value is False
             else:
                 ok = False
             if ok:
@@ -664,6 +673,17 @@ def _merge_project_overlay(
         auto["rules"] = theirs + [r for r in _mine("rules") if r not in theirs]
     if project_auto.get("block_destructive") is True:
         auto["block_destructive"] = True
+    if "workspace_only" in project_auto:
+        from evi.workspace import LEVELS, level_of
+
+        mine = level_of(auto.get("workspace_only", defaults.workspace_only))
+        theirs = project_auto["workspace_only"]
+        if LEVELS.index(theirs) > LEVELS.index(mine):
+            auto["workspace_only"] = theirs
+        elif LEVELS.index(theirs) < LEVELS.index(mine):
+            ignored = sorted({*ignored, "auto.workspace_only"})
+    if project_auto.get("workspace_allow_temp") is False:
+        auto["workspace_allow_temp"] = False
     merged["auto"] = auto
     return merged, ignored
 

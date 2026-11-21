@@ -226,6 +226,14 @@ def lint_auto(auto: object) -> list[Issue]:
             out.append(Issue("config.toml [auto] destructive_disable_rules", "warn",
                              f"{rid!r} is not a destructive-guard rule id, so it disables "
                              "nothing"))
+    ws = auto.get("workspace_only")
+    if ws is not None:
+        from evi.workspace import LEVELS
+
+        if not isinstance(ws, str) or ws.strip().lower() not in LEVELS:
+            out.append(Issue("config.toml [auto] workspace_only", "warn",
+                             f"{ws!r} is not one of {', '.join(LEVELS)}; eVi reads it as "
+                             "'all' (the strictest)"))
     return out + _lint_protected_remove(auto)
 
 

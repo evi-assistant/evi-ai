@@ -217,7 +217,7 @@ class MCPManager:
             raise RuntimeError(reason) from exc
         live = _LiveServer(name=server.name, session=session, stack=stack)
         for mcp_tool in tools:
-            evi_tool = self._wrap_tool(server.name, session, mcp_tool)
+            evi_tool = self._wrap_tool(server.name, session, mcp_tool, server)
             REGISTRY[evi_tool.name] = evi_tool
             live.tool_names.append(evi_tool.name)
         self._live.append(live)
@@ -227,7 +227,9 @@ class MCPManager:
             len(live.tool_names),
         )
 
-    def _wrap_tool(self, server_name: str, session: Any, mcp_tool: Any) -> Tool:
+    def _wrap_tool(
+        self, server_name: str, session: Any, mcp_tool: Any, server: MCPServer | None = None,
+    ) -> Tool:
         bridge = self.bridge
         timeout = self._call_timeout
         cap = self._max_output_chars
@@ -255,6 +257,8 @@ class MCPManager:
             func=call,
             category="mcp",
             trust="untrusted",
+            mcp_rule=(server.rule_for(tname, getattr(mcp_tool, "annotations", None))
+                      if server is not None else ""),
         )
 
 

@@ -48,7 +48,9 @@ Layered on top of eVi's existing per-category auto-approve:
    matches a protected pattern other than the write-only defaults (``.env``,
    ``*.pem``, ``id_rsa`` ...; `protected_read`) asks, so auto-approve never
    pulls a secret into the model's context silently. An explicit allow rule
-   above still wins.
+   above still wins. A shell line that reads one (``cat .env``,
+   ``Get-Content id_rsa``, ``< .env``; `shell_protected_read`) asks before
+   the rules, so an allow rule covering the line doesn't clear it either.
 3. **Auto-approve categories** (`auto.auto_approve`), matched against the
    call's own category: ``code`` is running code (``run_python``, a linter
    that runs project code) and also covers ``code_read`` (``python_symbols``,
@@ -826,6 +828,14 @@ _WRITING_COMMANDS = frozenset({
     "copy-item", "move-item", "rename-item", "sc", "ac", "ni", "cpi", "mi",
 })
 _IN_PLACE_EDITORS = frozenset({"sed", "perl"})
+# Programs that print, search, encode or copy the files they name: a shell
+# line running one on a protected secret asks (`shell_protected_read`).
+_READING_COMMANDS = frozenset({
+    "cat", "tac", "head", "tail", "less", "more", "type", "bat", "nl", "sed", "awk",
+    "grep", "egrep", "fgrep", "rg", "findstr", "select-string", "sls", "sort", "uniq",
+    "get-content", "gc", "cp", "copy", "copy-item", "cpi", "scp", "rsync", "base64",
+    "xxd", "od", "hexdump", "strings", "iconv",
+})
 _CHDIR_COMMANDS = frozenset({"cd", "chdir", "pushd", "set-location", "sl", "push-location"})
 _POP_COMMANDS = frozenset({"popd", "pop-location"})
 # A shell expansion (or a cmd %VAR%): the word's value isn't known statically.
@@ -1085,6 +1095,58 @@ def protected_read(
     return _first_protected([(v, base, v) for v in path_args if v], pats)
 
 
+def shell_protected_read(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    protected_paths: Iterable[str],
+    *,
+    workdir: str | Path | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+) -> str | None:
+    """The first protected secret (the patterns `protected_read` uses) that
+    a shell line reads, or None: a file named to a reading command
+    (`_READING_COMMANDS`: ``cat``, ``Get-Content``, ``grep``, ``cp``,
+    ``base64`` ...) or an input redirect (``< .env``). Relative paths resolve
+    against the line's cwd and each folder a ``cd`` in it moves to. Lexical,
+    like the write checks: a script, ``python -c`` or ``bash -c`` that opens
+    the file is not seen."""
+    command = shell_command_of(tool_name, tool_category, tool_args)
+    if command is None:
+        return None
+    skip = {*WRITE_PROTECTED_PATHS, _evi_home_pattern()}
+    pats = [p for p in (protected_paths or ()) if str(p).strip() not in skip]
+    if not any(str(p).strip() for p in pats):
+        return None
+    sp = split if split is not None else shellsplit.split(command, dialect)
+    files: list[str] = [
+        r.text for r in sp.redirects
+        if "<" in r.op and r.text and not r.dynamic and r.text.lower() not in _NULL_SINKS
+    ]
+    for seg in sp.commands:
+        prog = _program(seg)
+        if prog is None or prog[1] not in _READING_COMMANDS:
+            continue
+        for a in seg.words[prog[0] + 1:]:
+            if a.startswith("-"):
+                a = _option_value(a)
+            elif sp.dialect == "cmd" and a.startswith("/"):
+                continue
+            if a and not _EXPANSION.search(a):
+                files.append(a)
+    if not files:
+        return None
+    base = _base_dir(workdir)
+    cwd = exec_cwd_of(tool_name, tool_args) or ""
+    try:
+        rbase = base / Path(cwd).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        rbase = base
+    bases = (_dir_changes(sp, rbase) if sp.changes_dir else None) or [rbase]
+    return _first_protected([(f, b, f) for f in files for b in bases], pats)
+
+
 def _admin_share_as_local(value: str) -> str | None:
     """Windows: another host's administrative share (``\\\\host\\X$\\rest``,
     also as ``\\\\?\\UNC\\host\\X$\\rest``) read as this machine's
@@ -1175,6 +1237,37 @@ def director_ground(
     return None if isinstance(written, str) else _director_target(written)
 
 
+def workspace_outside(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    level: str,
+    trusted_dirs: Iterable[str] = (),
+    *,
+    workdir: str | Path | None = None,
+    path_args: list[str] | None = None,
+    read_only: bool | None = None,
+    call_category: str | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+    allow_temp: bool = True,
+) -> str | None:
+    """The first path this call reaches outside the workspace under `level`
+    (`evi.workspace.outside_workspace`), or None. A check that can't run
+    counts as outside: `decide` then denies."""
+    from evi import workspace
+
+    try:
+        return workspace.outside_workspace(
+            tool_name, tool_category, tool_args, level,
+            workspace.roots(workdir, trusted_dirs, allow_temp=allow_temp),
+            workdir=workdir, path_args=path_args, read_only=read_only,
+            call_category=call_category, dialect=dialect, split=split,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        return f"(the workspace check could not run: {type(exc).__name__})"
+
+
 def decide(
     mode: str,
     auto_approve: Iterable[str],
@@ -1193,6 +1286,9 @@ def decide(
     read_only: bool | None = None,
     call_category: str | None = None,
     remote_trigger: bool = False,
+    workspace_only: str = "off",
+    workspace_allow_temp: bool = True,
+    tool_rule: str = "",
 ) -> str:
     """Return 'allow', 'deny', or 'ask' for one tool call.
 
@@ -1215,6 +1311,15 @@ def decide(
     accept_edits or a trusted dir, only by an explicit allow rule (or yolo,
     which such a run never gets). A local unattended run passes False: the
     user's own list decides there, "shell" or "code" included.
+
+    `workspace_only` ("off" | "writes" | "all"; `evi.workspace`) denies, in
+    every mode, a call that reaches a file outside the working folder,
+    `trusted_dirs` and (with `workspace_allow_temp`) the temp folder.
+
+    `tool_rule` is an MCP tool's per-tool rule (`evi.tools.base.Tool.mcp_rule`):
+    "deny" denies in every mode; "ask" asks in every mode (plan or a deny
+    rule denies); "read_only" allows where only an auto-approve category
+    would have (after the rules and the secret-read check).
     """
     values = _arg_values(tool_args)
     data = _arg_dict(tool_args) or {}
@@ -1242,12 +1347,24 @@ def decide(
         ):
             return "deny"
 
+    if tool_rule == "deny":
+        return "deny"
+
     # 0b. The director's ground: the attestation key and director tooling are
     #     out of an agent's reach in every mode (yolo and `/auto on` too),
     #     whatever allow rule matches or approval might be given.
     if director_ground(
         tool_name, tool_category, tool_args, workdir=workdir, path_args=path_args,
         dialect=dialect, split=sp,
+    ) is not None:
+        return "deny"
+
+    # 0c. Workspace-only file access: like the director's ground, in every
+    #     mode and whatever rule matches.
+    if workspace_only != "off" and workspace_outside(
+        tool_name, tool_category, tool_args, workspace_only, trusted_dirs,
+        workdir=workdir, path_args=path_args, read_only=read_only,
+        call_category=cat, dialect=dialect, split=sp, allow_temp=workspace_allow_temp,
     ) is not None:
         return "deny"
 
@@ -1269,6 +1386,11 @@ def decide(
                 return action
         return None
 
+    # An MCP tool the user marked always_ask: never silent, like a protected
+    # write.
+    if tool_rule == "ask":
+        return "deny" if mode == "plan" or rule_action() == "deny" else "ask"
+
     # 1. Protected paths: a write to an instruction / config / hook / CI /
     #    secret file is never silent, in any mode (yolo included) and whatever
     #    allow rule matches; plan mode or a deny rule still denies it.
@@ -1282,6 +1404,15 @@ def decide(
         return "allow"
     if mode == "plan":
         return "deny"
+
+    # A shell line that reads a secret (`cat .env`, `Get-Content id_rsa`) asks
+    # even when an allow rule covers the line (`allow run_command *`); a deny
+    # rule still denies it.
+    if command is not None and shell_protected_read(
+        tool_name, tool_category, tool_args, protected_paths, workdir=workdir,
+        dialect=dialect, split=sp,
+    ) is not None:
+        return "deny" if rule_action() == "deny" else "ask"
 
     action = rule_action()
     if action:
@@ -1299,6 +1430,8 @@ def decide(
     if exec_held:
         return "ask"
     if mode == "accept_edits" and cat in _EDIT_CATEGORIES:
+        return "allow"
+    if tool_rule == "read_only":
         return "allow"
     if cat in approved_categories(auto_approve):
         return "allow"

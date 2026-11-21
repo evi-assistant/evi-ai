@@ -165,8 +165,32 @@ serve it from a second `evi mcp serve`.
 | `url` | string | http/sse only | — | The remote server's endpoint URL |
 | `headers` | object | no | `{}` | Request headers for the remote transport (e.g. `Authorization`) |
 | `enabled` | bool | no | `true` | Set `false` to keep a server in the file but skip it |
+| `always_deny` | string[] | no | `[]` | This server's tools (by their own name; globs, ignoring case) that never run, in any mode, `yolo` included |
+| `always_ask` | string[] | no | `[]` | Tools that ask before every call, in any mode, and are refused when nothing can ask (an unattended run) |
+| `read_only_hints` | bool | no | `false` | Trust the server's `readOnlyHint` annotations: a tool it marks read-only, and not destructive, runs without asking |
 
 A stdio entry needs `command`; a remote entry needs `url` (transport defaults to `http` when a `url` is present). Entries missing the required field are skipped silently. Print the exact path any time with `evi mcp path`.
+
+**Per-tool policy.** Every MCP tool is in the `mcp` category, so without these
+keys one decision covers all of a server's tools (they ask unless you
+auto-approve `mcp`). `always_deny` and `always_ask` single tools out:
+
+```json
+[
+  { "name": "github", "command": "github-mcp-server", "args": ["stdio"],
+    "always_deny": ["delete_*"], "always_ask": ["create_pull_request", "merge_*"],
+    "read_only_hints": true }
+]
+```
+
+`always_deny` wins over everything, an allow rule and `yolo` included;
+`always_ask` asks even in `yolo` and under an allow rule (plan mode or a deny
+rule still denies). `read_only_hints` lets a tool the server marks
+`readOnlyHint: true` (and not `destructiveHint: true`) run unasked where only
+an auto-approve category would have let it; a deny rule, plan mode and the
+two lists still apply. A server can claim anything about its own tools, so
+only turn it on for one you trust; it is read from your own `mcp.json` only,
+never from a plugin's (a plugin's `mcp.json` may set the two lists).
 
 **Remote (HTTP) servers.** To connect to a hosted MCP server instead of spawning a local process:
 

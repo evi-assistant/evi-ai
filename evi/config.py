@@ -468,6 +468,12 @@ class AutoSettings:
     # web fetches to one of these hosts — without listing the whole category.
     trusted_dirs: list[str] = field(default_factory=list)
     trusted_domains: list[str] = field(default_factory=list)
+    # Workspace-only file access (evi/workspace.py), in every mode, yolo
+    # included: "off", "writes" (no file written outside the working folder,
+    # trusted_dirs and, with workspace_allow_temp, the temp folder) or "all"
+    # (no file read outside it either). A repo's .evi.toml can only raise it.
+    workspace_only: str = "off"
+    workspace_allow_temp: bool = True
     # Session flag set by `/effort ultracode`: auto-run each substantive REPL
     # turn through the ultracode pipeline (the eVi analogue of Claude Code's
     # `/effort ultracode`). Off by default; cleared by the other effort levels.

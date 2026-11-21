@@ -42,6 +42,44 @@ class MCPServer:
     transport: str = "stdio"  # stdio | http | sse
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    # Per-tool policy, by the tool's own name on this server (a glob, matched
+    # ignoring case): always_deny is refused in every mode, yolo included;
+    # always_ask asks in every mode and is refused when nothing can ask.
+    always_ask: list[str] = field(default_factory=list)
+    always_deny: list[str] = field(default_factory=list)
+    # Trust this server's readOnlyHint annotations: a tool it marks read-only
+    # (and not destructive) runs without asking. Read from the user's own
+    # mcp.json only, never a plugin's.
+    read_only_hints: bool = False
+
+    def rule_for(self, tool: str, annotations: object = None) -> str:
+        """The `evi.tools.base.Tool.mcp_rule` for `tool` on this server:
+        "deny", "ask", "read_only" or ""."""
+        import fnmatch
+
+        name = tool.lower()
+        if any(fnmatch.fnmatchcase(name, g.lower()) for g in self.always_deny if g):
+            return "deny"
+        if any(fnmatch.fnmatchcase(name, g.lower()) for g in self.always_ask if g):
+            return "ask"
+        if self.read_only_hints and _hint(annotations, "readOnlyHint", "read_only_hint") is True                 and _hint(annotations, "destructiveHint", "destructive_hint") is not True:
+            return "read_only"
+        return ""
+
+
+def _hint(annotations: object, *names: str) -> object:
+    """An MCP tool annotation, whichever SDK spelling (or a plain dict) it has."""
+    if annotations is None:
+        return None
+    for n in names:
+        v = annotations.get(n) if isinstance(annotations, dict) else getattr(annotations, n, None)
+        if v is not None:
+            return v
+    return None
+
+
+def _names(value: object) -> list[str]:
+    return [str(v) for v in value if isinstance(v, str) and v.strip()]         if isinstance(value, list) else []
 
 
 def filter_allowed(servers: list[MCPServer], allow) -> list[MCPServer]:
@@ -93,6 +131,10 @@ def _parse_server_file(p: Path, name_prefix: str = "") -> list[MCPServer]:
                 transport=transport,
                 url=url,
                 headers={str(k): str(v) for k, v in (entry.get("headers") or {}).items()},
+                always_ask=_names(entry.get("always_ask")),
+                always_deny=_names(entry.get("always_deny")),
+                # A plugin's file may tighten (ask, deny), never trust hints.
+                read_only_hints=(not name_prefix) and entry.get("read_only_hints") is True,
             )
         )
     return servers
@@ -131,6 +173,11 @@ def save_servers(servers: list[MCPServer], path: Path | None = None) -> None:
             # stdio: keep the original shape so existing files don't churn.
             entry = {"name": s.name, "command": s.command, "args": s.args, "env": s.env}
         entry["enabled"] = s.enabled
+        for key in ("always_ask", "always_deny"):
+            if getattr(s, key):
+                entry[key] = list(getattr(s, key))
+        if s.read_only_hints:
+            entry["read_only_hints"] = True
         payload.append(entry)
     p.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 

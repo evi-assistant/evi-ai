@@ -582,8 +582,8 @@ each can make a turn run on a different model (or deadline) from the one the
 
 **Tighten-only** (`[tools]` and `[auto]`): a project can switch tool categories
 off (and the `run_python` / `run_command` OS sandbox on, or required), pick a *stricter*
-`mode`, add `deny` rules, add `hard_deny` / `protected_paths` entries, and
-force `block_destructive = true` — never the reverse. `[tools] transcripts` is
+`mode`, add `deny` rules, add `hard_deny` / `protected_paths` entries, raise
+`workspace_only`, and force `block_destructive = true` — never the reverse. `[tools] transcripts` is
 not a tool category and can't be changed. Details in
 [Permissions & sandbox](features/permissions-and-sandbox.md#per-project-and-per-profile-overrides).
 

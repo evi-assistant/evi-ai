@@ -1917,19 +1917,24 @@ class Agent:
             return "(unreadable path arguments)"
 
     def _secret_read_hit(self, tool: Tool, args_json: str) -> str | None:
-        """The protected secret (``.env``, a key) this fs/code call would read,
-        or None (`permissions.protected_read`). Such a call is never
+        """The protected secret (``.env``, a key) this fs/code call or shell
+        line would read, or None (`permissions.protected_read`,
+        `permissions.shell_protected_read`). Such a call is never
         pre-approved by a category: `decide` only lets an explicit allow rule
         or yolo pass it, so here it is confirmed."""
-        from evi.permissions import protected_read
+        from evi.permissions import protected_read, shell_protected_read
 
         try:
+            folder = getattr(self, "cwd", "") or None
             return protected_read(
                 getattr(tool, "category", ""),
                 args_json,
                 self._protected_patterns(),
-                workdir=getattr(self, "cwd", "") or None,
+                workdir=folder,
                 path_args=self._tool_path_args(tool, args_json),
+            ) or shell_protected_read(
+                tool.name, getattr(tool, "category", ""), args_json,
+                self._protected_patterns(), workdir=folder,
             )
         except Exception:  # noqa: BLE001 — a check that can't run must not allow
             return "(unreadable path arguments)"
@@ -1960,7 +1965,20 @@ class Agent:
             scope = f" ({describe()})" if callable(describe) else ""
             return (f"PERMISSION DENIED: {name} was not run: {verdict.reason or 'not allowed'}"
                     f"{scope}.")
+        if tool is not None and getattr(tool, "mcp_rule", "") == "deny":
+            return (f"PERMISSION DENIED: {name} is listed in always_deny for its MCP server "
+                    "(~/.evi/mcp.json), so it never runs. Not run.")
         if tool is not None:
+            outside = self._workspace_hit(tool, args_json)
+            if outside is not None:
+                level = self._workspace_level()
+                what = "writes" if level == "writes" else "reads or writes"
+                return (
+                    f"PERMISSION DENIED: {name} {what} {outside!r}, outside the workspace "
+                    f'([auto] workspace_only = "{level}": the working folder, '
+                    "[auto] trusted_dirs and the temp folder). Not run — work inside the "
+                    "workspace, or ask the user to add the folder with /add-dir."
+                )
             guard = self._destructive_decision(tool, args_json)
             if guard is not None:
                 return (
@@ -2012,6 +2030,9 @@ class Agent:
             # not by [auto] unattended_policy, yolo or `/auto on` (`-y`).
             if decision == "ask" and self._protected_hit(tool, args_json) is not None:
                 return "deny"
+            # ...and neither is an MCP tool the user marked always_ask.
+            if decision == "ask" and getattr(tool, "mcp_rule", "") == "ask":
+                return "deny"
             if self._secret_read_hit(tool, args_json) is not None and (
                 decision == "ask" or self._decide(tool, args_json, "ask") != "allow"
             ):
@@ -2051,6 +2072,34 @@ class Agent:
             read_only=getattr(tool, "read_only", None),
             call_category=self._call_category(tool, args_json),
             remote_trigger=bool(getattr(self, "remote_trigger", False)),
+            workspace_only=self._workspace_level(),
+            workspace_allow_temp=bool(getattr(auto, "workspace_allow_temp", True)),
+            tool_rule=str(getattr(tool, "mcp_rule", "") or ""),
+        )
+
+    def _workspace_level(self) -> str:
+        """[auto] workspace_only as in force ("off" | "writes" | "all")."""
+        from evi.workspace import level_of
+
+        return level_of(getattr(getattr(self.config, "auto", None), "workspace_only", "off"))
+
+    def _workspace_hit(self, tool: Tool, args_json: str) -> str | None:
+        """The path outside the workspace that [auto] workspace_only refuses
+        this call for, or None."""
+        level = self._workspace_level()
+        if level == "off":
+            return None
+        from evi.permissions import workspace_outside
+
+        auto = getattr(self.config, "auto", None)
+        return workspace_outside(
+            tool.name, tool.category, args_json, level,
+            getattr(auto, "trusted_dirs", []) or [],
+            workdir=getattr(self, "cwd", "") or None,
+            path_args=self._tool_path_args(tool, args_json),
+            read_only=getattr(tool, "read_only", None),
+            call_category=self._call_category(tool, args_json),
+            allow_temp=bool(getattr(auto, "workspace_allow_temp", True)),
         )
 
     def _policy_verdict(self, tool: Tool, args_json: str) -> Any:
@@ -2073,6 +2122,13 @@ class Agent:
                     tool.name, getattr(tool, "category", ""), args_json,
                     workdir=folder, path_args=self._tool_path_args(tool, args_json),
                 )
+                if why is None and getattr(tool, "mcp_rule", "") == "deny":
+                    why = "its MCP server lists it in always_deny (~/.evi/mcp.json)"
+                if why is None:
+                    outside = self._workspace_hit(tool, args_json)
+                    if outside is not None:
+                        why = (f"{outside} is outside the workspace ([auto] workspace_only = "
+                               f'"{self._workspace_level()}")')
                 return Verdict(False, why or "an [auto] hard_deny or deny rule refuses it")
             verdict = self.policy.check(
                 tool, args_json, workdir=folder, protected_paths=self._protected_patterns(),
@@ -2098,6 +2154,7 @@ class Agent:
         if guard is None and (
             self._protected_hit(tool, args_json) is not None
             or self._secret_read_hit(tool, args_json) is not None
+            or getattr(tool, "mcp_rule", "") == "ask"
         ):
             guard = ("ask", "protected path")  # never pre-approved: confirm it
         if guard is not None:

@@ -17,6 +17,9 @@ from types import SimpleNamespace
 import pytest
 
 import evi.hooks as hooks_mod
+import evi.tools.code  # noqa: F401  registers run_python
+import evi.tools.monitor  # noqa: F401  registers monitor
+import evi.tools.shell  # noqa: F401  registers run_command
 from evi import doctor, sandbox
 from evi.config import Config
 from evi.llm.agent import Agent, ToolResult

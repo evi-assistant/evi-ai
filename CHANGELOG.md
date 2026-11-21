@@ -6,6 +6,27 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Per-tool MCP policy.** A server entry in `~/.evi/mcp.json` can list
+  `always_deny` tools (never run, yolo included) and `always_ask` tools
+  (ask in every mode, refused unattended), by name or glob, and can trust
+  the server's `readOnlyHint` annotations with `read_only_hints = true`, so
+  its read-only tools run without asking. A plugin's `mcp.json` can set the
+  two lists but not trust hints.
+- **Reading a secret through the shell asks.** `run_command cat .env`,
+  `Get-Content id_rsa`, `grep KEY .env`, `base64 server.pem`, `sort < .env`
+  and other reading commands on a protected secret now ask like `read_file
+  .env` does, even under an allow rule such as `allow run_command *`, and
+  an unattended run refuses them. A deny rule still denies.
+- **Workspace-only file access.** `[auto] workspace_only = "writes"` refuses
+  any call that writes a file outside the working folder, your
+  `trusted_dirs` (`/add-dir`) and the temp folder; `"all"` refuses reads
+  there too, except eVi's own spilled tool output, uploads and skills. It
+  holds in every permission mode, yolo included, over any allow rule, and
+  follows symlinks and junctions; shell redirects and writing commands
+  (`tee`, `cp`, `Set-Content` …) are checked too. The model is told which
+  path and setting refused it. It is off by default; a trusted repo's
+  `.evi.toml` can raise it but not lower it, and `evi lint` flags an
+  unknown value, which eVi reads as `"all"`.
 - **Code runs sandboxed or not at all, if you ask.** `[tools]
   sandbox_required = true` turns on the OS sandbox and makes `run_python`,
   `run_command` and `monitor` commands refuse, with an error saying why,

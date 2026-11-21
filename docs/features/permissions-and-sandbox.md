@@ -50,6 +50,11 @@ this order:
    `EVI_AGENT` / `EVI_DIRECTOR`, or runs director tooling (`evi task
    verify|reject`, `evi attest`). See [The director's
    ground](#the-directors-ground).
+
+   Then, when `[auto] workspace_only` is on, **workspace-only file access**,
+   denied the same way: a call that writes (with `"all"`, also reads) a file
+   outside the workspace. See [Workspace-only file
+   access](#workspace-only-file-access).
 1. **Protected paths** (`auto.protected_paths`, plus eVi's built-in
    write-protected paths). Right after hard-deny and before the mode: a call
    that would **write** a protected path **asks**, in every mode — `yolo` and
@@ -250,7 +255,13 @@ The patterns in force are:
   files: `.env`, `*.env`, `.env.*`, `.npmrc`, `.gitconfig`, `.pypirc`,
   `.bashrc`, `.zshrc`, `.bash_profile`, `.profile`, `*.pem`, `id_rsa`,
   `id_ed25519`. Edit the list to taste. Reading one of these asks too (step 4
-  above).
+  above), and so does a shell line that reads one: a reading command
+  (`cat`, `head`, `tail`, `type`, `Get-Content`, `grep`, `rg`, `findstr`,
+  `sort`, `cp`, `scp`, `base64`, `xxd` …) naming it, or an input redirect
+  (`< .env`). For the shell line, an `allow` rule that covers it (`allow
+  run_command *`) doesn't clear that, a `deny` rule still denies it, and an
+  unattended run refuses it. Like the write checks this is lexical: `python
+  -c`, a script or `bash -c` that opens the file is not seen.
 - **The built-in write-protected paths**, always added on top of your list:
   `.evi.toml`, `EVI.md`, `AGENTS.md`, `.evi/**`, `~/.evi/**` (and your
   `EVI_HOME` folder when it is set), `.git/hooks/**`, `.git/config`,
@@ -303,6 +314,37 @@ This is a guardrail, not a sandbox. Not inspected: command strings run through
 `core.hooksPath` folder such as `.husky/`, the contents of a recursive copy
 (`cp -r payload/. .`), hard links, and paths nested inside an MCP tool's
 arguments (`{"edits": [{"path": …}]}`).
+
+### Workspace-only file access
+
+`[auto] workspace_only` keeps the agent's file access inside the
+**workspace**: the session's working folder, your `[auto] trusted_dirs`
+(`/add-dir` adds a folder for the session) and, unless `workspace_allow_temp
+= false`, the system temp folder.
+
+| Value | Refused |
+|---|---|
+| `"off"` (default) | Nothing. |
+| `"writes"` | A call that writes a file outside the workspace. |
+| `"all"` | That, and a file or folder tool call that names a path outside it, or a glob that climbs out with `..`. eVi's own folders it shows the model files from (`tool-output`, `uploads`, `skills`, `images`, `screenshots` under the eVi home) stay readable. |
+
+A refused call is **denied** in every mode, `yolo` and `/auto on` included,
+and no `allow` rule clears it; the model is told which path and which setting,
+and to ask you to `/add-dir` the folder if it needs it. What counts as a write
+is what the protected-path check reads ([Protected paths](#protected-paths)):
+a write tool's path arguments, and for a shell line its output redirects and
+the files its writing commands name (`tee`, `cp`, `Set-Content` …). Paths are
+checked on their real path, so a symlink or junction inside the workspace that
+leads out of it is outside. A network path the model names is never opened to
+find out where it leads: it counts as outside unless it is written under a
+workspace folder on that share. A relative write after a `cd` eVi can't follow
+counts as outside.
+
+This is a guardrail, not a sandbox, with the same blind spots as protected
+paths: `run_python`, scripts and commands run through `bash -c` or `pwsh
+-Command` can still reach any file you can, and a shell command's **reads**
+are not checked (`cat ../x` runs with `"all"`). For a hard boundary on code
+execution, use the OS sandbox ([The sandbox](#the-sandbox)) where it exists.
 
 ### The director's ground
 
@@ -867,6 +909,8 @@ protected_paths = [".env", "*.env", ".env.*", ".npmrc", ".gitconfig", ".pypirc",
 protected_paths_remove = []                          # protected entries to un-protect
 trusted_dirs    = []                                 # auto-approve fs/code_read under these paths
 trusted_domains = []                                 # auto-approve web fetches to these hosts
+workspace_only  = "off"                              # off | writes | all: refuse file access outside the workspace
+workspace_allow_temp = true                          # the temp folder counts as workspace
 unattended_policy = "deny"                           # deny | allow: a call that would ask, with nobody to ask
 ```
 
@@ -880,6 +924,8 @@ unattended_policy = "deny"                           # deny | allow: a call that
 | `protected_paths_remove` | `[]` | Protected entries to un-protect, by exact text: a built-in write-protected path or one of your `protected_paths`. Not settable from a `.evi.toml`. |
 | `trusted_dirs` | `[]` | Paths whose `fs` and `code_read` calls are auto-approved when every path argument resolves inside one (`~` expanded, real path, sub-paths included). Never running code. |
 | `trusted_domains` | `[]` | Hosts whose `web` fetches are auto-approved (exact host or subdomain). Also the only way to let `web_fetch` reach a loopback or LAN address. |
+| `workspace_only` | `"off"` | `"writes"` refuses writing a file outside the working folder, `trusted_dirs` and the temp folder, in every mode; `"all"` refuses reading there too. See [Workspace-only file access](#workspace-only-file-access). An unknown value is read as `"all"`. |
+| `workspace_allow_temp` | `true` | Whether the system temp folder counts as workspace. |
 | `unattended_policy` | `"deny"` | What a call that would ask does in an [unattended run](#unattended-runs): `deny` refuses it, `allow` runs it; any other value means `deny`. Remote-triggered runs always deny. Not settable from a `.evi.toml`. |
 
 Valid modes are exactly `ask`, `accept_edits`, `plan`, `yolo`.
@@ -1073,6 +1119,9 @@ sections, judged against your config + active profile:
 | `[auto] rules` | Only `deny …` rules apply, and they are evaluated **before** your rules (so your broad `allow` can't shadow them). `allow` rules are dropped. Like all `rules`, they are **skipped in `yolo`** mode. |
 | `[auto] hard_deny`, `protected_paths` | **Added** to your lists — never replace or shrink them. `hard_deny` applies in **every** mode, `yolo` included. |
 | `[auto] block_destructive = true` | Honoured. `= false` is ignored. |
+| `[auto] workspace_only` | Applies only if **stricter** than yours (`off` < `writes` < `all`). |
+| `[auto] workspace_allow_temp = false` | Honoured. `= true` is ignored. |
+| `[tools] sandbox_required = true` | Honoured. `= false` is ignored. |
 
 Everything else that loosens is ignored: `auto_approve`, `trusted_dirs`,
 `trusted_domains`, `destructive_allow`, `destructive_disable_rules`,
@@ -1249,6 +1298,8 @@ turn returns to your normal policy.
   (`Tool.category_for`, with `classify_call` in permissions.py).
 - `C:\evi\evi\tools\monitor.py` — `monitor`'s shell-tools check, sandbox and
   tailed-file path argument.
+- `C:\evi\evi\workspace.py` — `[auto] workspace_only`: the workspace
+  folders and `outside_workspace`; `workspace_outside` in permissions.py.
 - `C:\evi\evi\configlint.py` — the `[auto]` checks `evi lint` runs.
 - `C:\evi\evi\doctor.py` — the `protected paths` and `code execution approval`
   checks.
