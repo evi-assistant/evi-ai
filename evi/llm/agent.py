@@ -895,6 +895,20 @@ def _is_overflow(err: BaseException | None) -> bool:
     if err is None:
         return False
     return bool(_OVERFLOW.search(f"{err} {getattr(err, 'code', '') or ''}"))
+
+
+# How often a request whose reply the server couldn't parse as a tool call
+# is made again before the turn fails (Ollama answers gpt-oss's malformed
+# calls with "500: error parsing tool call").
+MALFORMED_CALL_RETRIES = 2
+_MALFORMED_CALL = re.compile(r"error parsing tool call", re.IGNORECASE)
+
+
+def _malformed_call(err: BaseException) -> bool:
+    """Whether a failed request failed on the model's own malformed tool call."""
+    return bool(_MALFORMED_CALL.search(str(err)))
+
+
 # The note before a turn's last step, which runs with no tools: the hand-off
 # a run that is out of steps would otherwise end without.
 BUDGET_NOTE = ("This is your last step: the run's step budget is spent, and no tools are "
@@ -2957,8 +2971,20 @@ class Agent:
                 for ci, cand in enumerate(candidates):
                     try:
                         # On a helper thread: a cancel needn't wait for a
-                        # backend still busy with the prompt.
-                        opened, stream = self._until_cancelled(functools.partial(_open, cand))
+                        # backend still busy with the prompt. A reply the
+                        # server couldn't parse as a tool call is asked for
+                        # again (MALFORMED_CALL_RETRIES): it was the model's
+                        # sampling, not the request.
+                        for attempt in range(MALFORMED_CALL_RETRIES + 1):
+                            try:
+                                opened, stream = self._until_cancelled(
+                                    functools.partial(_open, cand))
+                                break
+                            except Exception as e:  # noqa: BLE001 — sorted below
+                                if attempt == MALFORMED_CALL_RETRIES or not _malformed_call(e):
+                                    raise
+                                dlog("llm.malformed_call_retry",
+                                     {"model": cand, "attempt": attempt + 1, "msg": str(e)[:300]})
                     except Exception as e:  # network / model not loaded / etc.
                         last_err = e
                         dlog("llm.error",

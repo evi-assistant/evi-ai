@@ -92,6 +92,17 @@ All notable user-visible changes to eVi. Format loosely follows
   rust-ini added), so the desktop shell skips it.
 
 ### Fixed
+- **gpt-oss can edit files.** gpt-oss (and other models trained on
+  OpenAI's tools) writes `apply_patch` patches as `*** Begin Patch` /
+  `*** Update File: <path>` with `@@` hunks, which eVi rejected (it took
+  SEARCH/REPLACE blocks only), so every edit to an existing file failed and
+  the run looped. `apply_patch` now takes that format too, for the one file
+  its `path` names: hunks apply in order, each after the one before it and
+  its `@@` anchor line, and an error names the hunk that doesn't fit.
+- **A malformed tool call no longer ends the turn on Ollama.** Ollama
+  answers a reply it can't parse as a tool call with a 500 ("error parsing
+  tool call"), which ended the turn with an error. The request is now made
+  again, up to twice.
 - **Compaction on a saved Ollama backend no longer reloads the model.** An
   agent bound to a saved backend (`--backend <name>`, fan-out) built its
   client from the backend entry alone, which has no window, so a side

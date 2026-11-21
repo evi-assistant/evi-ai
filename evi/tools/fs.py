@@ -548,6 +548,102 @@ def _parse_patch(patch: str) -> list[tuple[str, str]]:
     return [(m.group(1), m.group(2)) for m in _PATCH_RE.finditer(patch or "")]
 
 
+# The `*** Begin Patch` format (OpenAI's apply_patch, which gpt-oss and
+# Codex-trained models write): a file header, then hunks after `@@` lines
+# whose lines start with " " (context), "-" (removed) or "+" (added).
+_V4A_FILE = re.compile(r"^\*\*\* (Update|Add|Delete) File:[ \t]*(.+?)[ \t]*$")
+_V4A_START = re.compile(r"^[ \t]*\*\*\* (?:Begin Patch|Update File:)", re.MULTILINE)
+
+
+def _is_v4a(patch: str) -> bool:
+    return bool(_V4A_START.search(patch or "")) and not _PATCH_RE.search(patch or "")
+
+
+def _parse_v4a(patch: str) -> tuple[str, list[tuple[str, str, str]]] | str:
+    """(the file a `*** Begin Patch` patch updates, its hunks as (anchor,
+    old, new): the text after the hunk's `@@`, its context and removed
+    lines, its context and added lines), or an "ERROR: ..." string. One
+    `*** Update File` only: adding, deleting or moving a file, or a second
+    file, is refused."""
+    target: str | None = None
+    hunks: list[tuple[str, str, str]] = []
+    old: list[str] = []
+    new: list[str] = []
+    anchor = [""]
+
+    def close() -> None:
+        while old and new and old[-1] == "" and new[-1] == "":  # a trailing blank line
+            old.pop()
+            new.pop()
+        if old or new:
+            hunks.append((anchor[0], "\n".join(old), "\n".join(new)))
+        old.clear()
+        new.clear()
+
+    for line in (patch or "").replace("\r\n", "\n").split("\n"):
+        if line.startswith("*** End Patch"):
+            break
+        if line.startswith("*** Begin Patch") or line.startswith("*** End of File"):
+            continue
+        m = _V4A_FILE.match(line)
+        if m:
+            if m.group(1) != "Update":
+                return (f"ERROR: apply_patch only updates a file; for '*** {m.group(1)} File' "
+                        "use write_file (add) or run_command (delete)")
+            if target is not None:
+                return ("ERROR: apply_patch updates ONE file per call; send one "
+                        "'*** Update File' per call")
+            target = m.group(2)
+            continue
+        if line.startswith("*** "):
+            return f"ERROR: apply_patch can't apply {line.strip()!r}"
+        if target is None:
+            continue  # anything before the file header
+        if line.startswith("@@"):
+            close()
+            anchor[0] = line[2:].strip().removesuffix("@@").strip()
+        elif line.startswith("+"):
+            new.append(line[1:])
+        elif line.startswith("-"):
+            old.append(line[1:])
+        elif line.startswith(" ") or line == "":
+            old.append(line[1:])
+            new.append(line[1:])
+        else:
+            return (f"ERROR: patch line {line!r} starts with none of ' ', '-', '+' "
+                    "(context, removed, added)")
+    close()
+    if target is None:
+        return "ERROR: the patch has no '*** Update File: <path>' line"
+    if not hunks:
+        return "ERROR: the patch has no hunks ('@@' then ' ', '-' and '+' lines)"
+    return target, hunks
+
+
+def _apply_v4a(text: str, hunks: list[tuple[str, str, str]], eol: str) -> tuple[str, str]:
+    """(`text` with `hunks` applied in order, "") or (`text`, "ERROR: ...").
+    As in OpenAI's format, each hunk is looked for after the previous one,
+    and after the line its `@@ anchor` names when there is one; a hunk with
+    no removed or added line only moves past its context."""
+    pos = 0
+    for i, (anchor, old, new) in enumerate(hunks, 1):
+        if anchor:
+            at = text.find(_to_eol(anchor, eol), pos)
+            if at >= 0:
+                pos = at
+        old_n, new_n = _to_eol(old, eol), _to_eol(new, eol)
+        if not old_n:
+            return text, (f"ERROR: hunk {i} has no context or removed line to place it by; "
+                          "add the line above it as context (' ' then the line)")
+        at = text.find(old_n, pos)
+        if at < 0:
+            where = "after the hunk before it" if i > 1 else "in the file"
+            return text, f"ERROR: hunk {i}'s context and removed lines are not {where}"
+        text = text[:at] + new_n + text[at + len(old_n):]
+        pos = at + len(new_n)
+    return text, ""
+
+
 @tool(
     description=(
         "Apply several edits to ONE file in a single call. `patch` holds one or "
@@ -556,6 +652,9 @@ def _parse_patch(patch: str) -> list[tuple[str, str]]:
         "Each SEARCH must match the current file exactly and uniquely; blocks "
         "apply in order. Cheaper/safer than rewriting the whole file for "
         "multi-spot changes. Use edit_file for a single replacement."
+        # A '*** Begin Patch' patch (_parse_v4a) is accepted too, unadvertised:
+        # the models that write it need no telling, and a longer description
+        # has cost other evals before.
     ),
     category="fs",
 )
@@ -563,11 +662,24 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
     p = workdir.resolve(path)
     if not p.is_file():
         return f"ERROR: not a file: {p}"
-    blocks = _parse_patch(patch)
+    hunks: list[tuple[str, str, str]] | None = None
+    if _is_v4a(patch):
+        parsed = _parse_v4a(patch)
+        if isinstance(parsed, str):
+            return parsed
+        named, hunks = parsed
+        blocks = [(old, new) for _, old, new in hunks]
+        # The permission checks saw `path`: the header may only name it.
+        if workdir.resolve(named) != p:
+            return (f"ERROR: the patch updates {named!r} but path is {path!r}; "
+                    "they must name the same file")
+    else:
+        blocks = _parse_patch(patch)
     if not blocks:
         return (
             "ERROR: no SEARCH/REPLACE blocks found — use\n"
-            "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE"
+            "<<<<<<< SEARCH\\n<old>\\n=======\\n<new>\\n>>>>>>> REPLACE\n"
+            "or a '*** Begin Patch' / '*** Update File: <path>' patch"
         )
 
     with _path_lock(p):
@@ -578,6 +690,11 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
 
         eol = _eol_of(text)
         new_text = text
+        if hunks is not None:
+            new_text, err = _apply_v4a(text, hunks, eol)
+            if err:
+                return f"{err} ({p})"
+            blocks = []  # applied
         for i, (old, new) in enumerate(blocks, 1):
             if old == "":
                 return f"ERROR: block {i} has an empty SEARCH section"
@@ -610,7 +727,8 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
         _atomic_write(p, new_text)
         _READ_CACHE.pop(str(p.resolve()), None)
         _note_seen(ctx, p)
-        return f"applied {len(blocks)} hunk(s) to {p}{_post_write(p)}"
+        applied = len(hunks) if hunks is not None else len(blocks)
+        return f"applied {applied} hunk(s) to {p}{_post_write(p)}"
 
 
 @tool(

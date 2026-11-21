@@ -74,3 +74,42 @@ def test_all_models_fail_yields_error(tmp_path, monkeypatch):
     assert client.chat.completions.models_tried == ["primary", "backup"]
     errors = [e for e in events if isinstance(e, Error)]
     assert errors and "failed" in errors[0].message.lower()
+
+
+class _MalformedThenOk:
+    """create() fails `bad` times the way Ollama answers gpt-oss's malformed
+    tool call, then returns an empty stream."""
+
+    def __init__(self, bad: int) -> None:
+        self.bad, self.calls = bad, 0
+        self.chat = type("_Chat", (), {"completions": self})()
+
+    def create(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.bad:
+            raise RuntimeError("Ollama 500: error parsing tool call: raw='The patch...'")
+        return _EmptyStream()
+
+
+def test_a_malformed_tool_call_is_asked_for_again(tmp_path, monkeypatch):
+    cfg = _make_config(tmp_path, monkeypatch, model="m", fallbacks=[])
+    client = _MalformedThenOk(bad=2)
+    events = list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.calls == 3 and not any(isinstance(e, Error) for e in events)
+
+
+def test_malformed_tool_calls_give_up_after_the_retries(tmp_path, monkeypatch):
+    from evi.llm.agent import MALFORMED_CALL_RETRIES
+
+    cfg = _make_config(tmp_path, monkeypatch, model="m", fallbacks=[])
+    client = _MalformedThenOk(bad=99)
+    events = list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.calls == MALFORMED_CALL_RETRIES + 1
+    assert any(isinstance(e, Error) and "error parsing tool call" in e.message for e in events)
+
+
+def test_other_failures_are_not_retried(tmp_path, monkeypatch):
+    cfg = _make_config(tmp_path, monkeypatch, model="primary", fallbacks=[])
+    client = _ScriptedClient(fail={"primary"})
+    list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.chat.completions.models_tried == ["primary"]
