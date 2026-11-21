@@ -8,19 +8,19 @@ files_in_scope = ["evi/configlint.py", "tests/test_lint_broad_allow.py"]
 required_checks = ["python -m pytest -q tests/test_lint_broad_allow.py tests/test_permission_engine.py tests/test_shell_guard.py tests/test_code_exec_parity.py", "python -m ruff check evi/configlint.py tests/test_lint_broad_allow.py"]
 implementer = "evi-local"
 created = "2026-11-21T12:27:02Z"
-attempts = 6
+attempts = 7
 backend = "rtx"
 model = "gpt-oss:20b"
 worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK15-1"
 branch = "task/SK15-1"
 base = "46d26c03eda87cd59bd7dac85792460b14d0223a"
-evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-1\\6"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-1\\7"
 reviewer_notes = []
 
 [evidence_summary]
-hash = "sha256:ccafe7bebff433f506ef8a5e9ca485a90a321bddd618c507e273fea22dec26ec"
+hash = "sha256:85441e1ab9e9bf5bc2900953d24ff72a7b58576eae9f8f23f5e7f8a0ba560459"
 files = 2
-insertions = 69
+insertions = 108
 deletions = 3
 checks_passed = 0
 checks_failed = 0
@@ -31,6 +31,6 @@ checks_skipped = "the run stopped (error) before its checks, so eVi ran none"
 [last_result]
 stop_reason = "error"
 exit_code = 1
-report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-1\\6\\report.json"
-summary = "LLM stream failed mid-reply: OllamaError: Ollama: error parsing tool call: raw='{\"patch\":\"*** Begin Patch\\n*** Update File: evi/configlint.py\\n@@\\n def _lint_auto_approve(auto: dict) -> list[Issue]:\\n@@\\n     return [Issue(\\n         \\\"config.toml [auto] auto_approve\\\", \\\"warn\\\",\\n         \\\"'code' "
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-1\\7\\report.json"
+summary = "LLM request failed: OllamaError: Ollama 500: error parsing tool call: raw='We also need to update docstring of lint_auto. Let's edit.{\"path\":\"evi/configlint.py\",\"old_string\":\"allow rules that approve far more than they look (every tool, run_python, every shell command, a code runner with any argumen"
 out_of_scope = []

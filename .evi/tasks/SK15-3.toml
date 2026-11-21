@@ -1,6 +1,6 @@
 id = "SK15-3"
 title = "cli: `evi secrets scan [PATHS] [--diff REF] [--json]` reports secrets as path:line: kind, exit 1 when it finds any"
-status = "open"
+status = "verified"
 why = "Second slice of roadmap item safety-secret-scan-cli. SK15-2 added evi/secretscan.py; this puts it on the command line so a person, a CI job or a hook can scan the work tree, some paths, or the lines a change adds. DEPENDS ON SK15-2: start it with SK15-2 merged in its base."
 hints = "Make exactly this edit to evi/apps/cli/main.py and nothing else (the code was run against every acceptance criterion before filing). Directly above the line `workflow_app = typer.Typer(` insert this block, followed by two blank lines:\n\nsecrets_app = typer.Typer(help=\"Find secrets (tokens, keys) in files or a diff.\")\napp.add_typer(secrets_app, name=\"secrets\")\n\n\n@secrets_app.command(\"scan\")\ndef secrets_scan(\n    paths: list[str] = typer.Argument(\n        None, help=\"Files or folders to scan (default: the git work tree here).\"),\n    diff: str = typer.Option(\n        \"\", \"--diff\", help=\"Scan only the lines `git diff REF` adds (e.g. HEAD, main).\"),\n    json_out: bool = typer.Option(False, \"--json\", help=\"Print the findings as JSON.\"),\n) -> None:\n    \"\"\"Scan for secrets: what eVi's redaction would hide (a token or key by\n    its shape, a secret this machine holds by its value). Each finding is\n    path:line: kind, never the secret. Exit 0: none found, 1: some found,\n    2: the scan could not run (no git, a bad ref, PATHS with --diff).\"\"\"\n    from evi import secretscan\n\n    try:\n        if diff.strip():\n            if paths:\n                print(\"secrets scan: --diff scans the repository here; give no PATHS\",\n                      file=sys.stderr)\n                raise typer.Exit(2)\n            found = secretscan.scan_diff(Path.cwd(), diff.strip())\n        elif paths:\n            found = secretscan.scan_paths(paths, Path.cwd())\n        else:\n            found = secretscan.scan_tree(Path.cwd())\n    except (secretscan.ScanError, ValueError) as exc:  # ValueError: a bad --diff ref\n        print(f\"secrets scan: {exc}\", file=sys.stderr)\n        raise typer.Exit(2)\n    if json_out:\n        import json as _json\n\n        print(_json.dumps([{\"path\": f.path, \"line\": f.line, \"kind\": f.kind} for f in found],\n                          indent=2))\n    else:\n        for f in found:\n            print(f\"{f.path}:{f.line}: {f.kind}\")\n        print(f\"{len(found)} secret(s) found\" if found else \"no secrets found\",\n              file=sys.stderr)\n    raise typer.Exit(1 if found else 0)\n\nThen in tests/test_secretscan.py add the import line `import json` directly above `import subprocess` and the import line `from typer.testing import CliRunner` directly after `import pytest`, and ADD this test at the end of the file (it uses the file's `repo` fixture and GH constant):\n\ndef test_cli_exit_codes_and_json(repo, monkeypatch):\n    import evi.apps.cli.main as cli_main\n\n    monkeypatch.chdir(repo)\n    r = CliRunner().invoke(cli_main.app, [\"secrets\", \"scan\", \"--json\"])\n    assert r.exit_code == 1, r.output\n    assert json.loads(r.stdout) == [{\"path\": \"old.txt\", \"line\": 1, \"kind\": \"github_token\"}]\n    assert GH not in r.output\n    r = CliRunner().invoke(cli_main.app, [\"secrets\", \"scan\", \"--diff\", \"HEAD\"])\n    assert r.exit_code == 0 and \"no secrets found\" in r.stderr\n    r = CliRunner().invoke(cli_main.app, [\"secrets\", \"scan\", \"--diff\", \"nope-ref\"])\n    assert r.exit_code == 2 and \"secrets scan:\" in r.stderr\n    r = CliRunner().invoke(cli_main.app, [\"secrets\", \"scan\", \"old.txt\", \"--diff\", \"HEAD\"])\n    assert r.exit_code == 2"
 acceptance = ["In a repository whose old.txt holds a GitHub token on line 1, `evi secrets scan --json` exits 1 and prints exactly [{\"path\": \"old.txt\", \"line\": 1, \"kind\": \"github_token\"}] on stdout, and the token appears nowhere in the output.", "`evi secrets scan --diff HEAD` with no change exits 0 and says \"no secrets found\" on stderr.", "`evi secrets scan --diff nope-ref` exits 2 with \"secrets scan:\" on stderr; `evi secrets scan old.txt --diff HEAD` exits 2.", "The tests in tests/test_secretscan.py and tests/test_cli_help_brackets.py pass."]
@@ -15,20 +15,20 @@ worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK15-3"
 branch = "task/SK15-3"
 base = "fad6c1c4be68fc7dbc21c54519f2570acd1d230b"
 evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-3\\5"
-reviewer_notes = []
+reviewer_notes = [{at = "2026-11-21T16:23:07Z", verdict = "director", note = "finished by the director on task/SK15-3 after 5 implementer attempt(s)"}]
 
 [evidence_summary]
-hash = "sha256:575a27605d8c565925bd0098ad46ab3bf095a11984766b60e5ff0062b4cf1349"
+hash = "sha256:d28b444a30536604fab5c221dbdc525ec4a865af3f1495504219cbdf3c2baac3"
 files = 2
 insertions = 63
-deletions = 4
-checks_passed = 0
-checks_failed = 2
+deletions = 0
+checks_passed = 2
+checks_failed = 0
 
 [evidence_summary.junit]
-tests = 1
+tests = 11
 failures = 0
-errors = 1
+errors = 0
 skipped = 0
 
 [lease]
@@ -39,3 +39,21 @@ exit_code = 5
 report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-3\\5\\report.json"
 summary = "**Files changed**"
 out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK15-3"
+digest = "sha256:83c9861c57a723460b8f9604ea91abcc68d9e389b2a1a82133eed03663c6e6d5"
+head = "b4e4128e9f60ecd8d45d73b54e34606393094ee5"
+evidence = "sha256:d28b444a30536604fab5c221dbdc525ec4a865af3f1495504219cbdf3c2baac3"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-11-21T16:24:47Z"
+key = "302b45cb92785c8d"
+sig = "5ec78a41bb92dea667a59f98f1fbd4139973c09c2a5c78f8812df8ca77b79b38"
+
+[attestation.review]
+base = "fad6c1c4be68fc7dbc21c54519f2570acd1d230b"
+exit_code = 0
+report_sha256 = "3627a0218fd544a46b25a517e8e1e75b779b1c69d7c66ed0c2c01648dac6c2cd"
