@@ -638,7 +638,16 @@ def _apply_v4a(text: str, hunks: list[tuple[str, str, str]], eol: str) -> tuple[
         at = text.find(old_n, pos)
         if at < 0:
             where = "after the hunk before it" if i > 1 else "in the file"
-            return text, f"ERROR: hunk {i}'s context and removed lines are not {where}"
+            err = f"ERROR: hunk {i}'s context and removed lines are not {where}"
+            # Say what to do instead: a model resending the same patch only
+            # hits the loop guard (gpt-oss did, SK15-3).
+            if i > 1 and text.find(old_n) >= 0:
+                err += ("; they match only before it. Hunks apply top to bottom and "
+                        "each must change different lines: put the changes to the "
+                        "same lines in one hunk")
+            elif new_n.strip() and new_n in text:
+                err += "; the file already holds the new lines, so this change may be in already"
+            return text, err
         text = text[:at] + new_n + text[at + len(old_n):]
         pos = at + len(new_n)
     return text, ""

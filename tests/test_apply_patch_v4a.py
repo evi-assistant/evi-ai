@@ -80,6 +80,23 @@ def test_a_hunk_missing_after_the_one_before_it_changes_nothing(here):
     assert here.read_text(encoding="utf-8") == SRC
 
 
+def test_two_hunks_on_the_same_line_say_to_merge_them(here):
+    # What gpt-oss sent four times in SK15-3 before the loop guard stopped it.
+    patch = ("*** Begin Patch\n*** Update File: evi/lint.py\n"
+             "@@\n-import os\n+import os\n+import re\n"
+             "@@\n-import os\n+import os\n+import sys\n*** End Patch")
+    out = apply_patch("evi/lint.py", patch)
+    assert out.startswith("ERROR: hunk 2") and "in one hunk" in out, out
+    assert here.read_text(encoding="utf-8") == SRC
+
+
+def test_a_change_already_in_says_so(here):
+    here.write_text("import os\nimport re\n", encoding="utf-8")
+    patch = "*** Begin Patch\n*** Update File: evi/lint.py\n@@\n-import sys\n+import re\n*** End Patch"
+    out = apply_patch("evi/lint.py", patch)
+    assert out.startswith("ERROR") and "already" in out, out
+
+
 @pytest.mark.parametrize(("patch", "words"), [
     ("*** Begin Patch\n*** Update File: evi/other.py\n@@\n-import os\n+import sys\n", "same file"),
     ("*** Begin Patch\n*** Add File: evi/new.py\n+x\n", "write_file"),
