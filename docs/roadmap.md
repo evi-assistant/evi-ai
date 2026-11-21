@@ -24,7 +24,8 @@ what it contains in the CHANGELOG.
   [self-build.md](self-build.md).
 - Related: [future-integrations.md](future-integrations.md) (integration
   ideas), [sdk-coverage.md](sdk-coverage.md) (vendor SDK features),
-  [releasing.md](releasing.md) (how a release is cut).
+  [releasing.md](releasing.md) (how a release is cut),
+  [competitors.md](competitors.md) (other coding agents compared).
 
 ## Principles
 

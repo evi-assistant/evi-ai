@@ -33,7 +33,7 @@ GROUPS: list[tuple[str, list[str]]] = [
         [
             "architecture", "sdk", "sdk-coverage", "multi-machine", "security", "self-update",
             "self-build", "development", "releasing", "desktop-bundling",
-            "code-signing", "cli-parity", "claude-code-comparison",
+            "code-signing", "cli-parity", "claude-code-comparison", "competitors",
             "future-integrations", "roadmap",
         ],
     ),
