@@ -4,10 +4,11 @@ What eVi builds next, in order, and why. This replaces the phase-numbered
 backlog that ran up to 1.0: everything shipped is in
 [CHANGELOG.md](../CHANGELOG.md), and this page is the plan from 1.0.53 on.
 
-The plan has 80 items in six phases, ordered by risk first and value
+The plan has 114 items in seven phases, ordered by risk first and value
 second. Phase 0 makes eVi safe and correct to build on; Phase 1 lets eVi
 implement well-specified fixes to itself under review; Phases 2 to 5 are
-the features, each behind the foundations it needs.
+the features, each behind the foundations it needs; Phase 6 adds what
+other coding agents converged on in late 2026.
 
 **Status (2026-11-01):** 43 items shipped in 1.1.0 and 2 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
@@ -182,6 +183,66 @@ Sessions resume faithfully and become searchable. What eVi learns is staged for 
 | `ecosystem-extension-supply-chain` | Install safely: extension lockfile, pinning, advisory scan, explicit confirmation, PATH and env hardening | M | director | `safety-project-trust-gate`, `tool-result-pipeline` | Planned |
 | `mcp-oauth-and-secrets` | MCP OAuth with PKCE and keyring-backed secret references | M | director | `extensibility-interop-mcp-sdk2-migration`, `safety-secret-redaction` | Planned |
 
+## Phase 6 — From the November 2026 competitor review
+
+What other coding agents converged on between October and November 2026 (see [competitors.md](competitors.md)) that fits eVi's principles, in four tracks. The tracks run beside Phases 2 to 4 rather than after them: Track A before Phase 3, Track B alongside Phase 2 and gated by the evals like every prompt, repair or catalog change, Track C alongside Phase 3, and Track D after `agent-policy-and-profiles`. Two candidates wait on a decision (open question 14).
+
+**Why now:** Each item is small, depends only on shipped or already-planned work, and closes a gap that three or more products now ship. Most are S-sized and suit the delegation loop.
+
+### Track A — Safety controls
+
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `safety-workspace-only-fs` | A workspace-only setting that confines file reads and writes to the working folder in every mode | S | director | `fix-permission-engine`, `fix-shell-segment-split`, `safety-project-trust-gate` | Planned |
+| `safety-sandbox-required` | A required-sandbox setting: code execution refuses to run when no sandboxer is available, and doctor says so | S | director | `safety-code-exec-parity`, `loop-agent-cancel` | Planned |
+| `safety-protected-read-shell` | Protected-path checks extended to files a shell command reads | S | director | `fix-shell-segment-split`, `fix-permission-engine` | Planned |
+| `safety-secret-scan-cli` | `evi secrets scan` over a diff or the working tree, used by the verify gate and review | S | evi-local | `safety-secret-redaction` | Planned |
+| `safety-workflow-run-policy` | `evi workflow run` runs under a named policy, like Dispatch | M | director | `safety-unattended-default-deny`, `loop-implementer-policy`, `agent-policy-and-profiles` | Planned |
+| `safety-mcp-tool-policy` | Per-tool MCP `always_ask` / `always_deny`, and read-only auto-approval from `readOnlyHint` | S | director | `fix-permission-engine`, `extensibility-interop-mcp-sdk2-migration` | Planned |
+| `safety-secret-commit-guard` | Ask before `git commit`, `git push` or `gh pr create` when the change holds a secret | M | director | `safety-secret-scan-cli`, `fix-shell-segment-split` | Planned |
+| `safety-broad-allow-lint` | `evi lint` flags over-broad allow rules (interpreters, package runners, bare wildcards) | S | evi-local | `fix-permission-engine` | Planned |
+| `safety-approval-prompt-clarity` | Approval prompts that show each shell segment and make hidden characters visible | S | evi-frontier | `fix-shell-segment-split`, `fix-ui-render-and-desktop-ipc` | Planned |
+
+### Track B — Small-model loop reliability
+
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `loop-interactive-round-cap` | A configurable round cap for chat (`[llm] max_rounds`, `--max-rounds`) with a Continue action | S | director | `loop-tools-loop-guard-step-budget`, `loop-run-report`, `fix-history-validity` | Planned |
+| `ctx-compaction-hardening` | Compaction that rejects refusals and too-short summaries, retries once, and marks unverified claims | S | evi-frontier | `memory-sessions-structured-compaction`, `safety-secret-redaction` | Planned |
+| `tools-tool-search-auto` | Deferred tool search turns on by itself (`tool_search = "auto"`) when tool schemas crowd a small window | S | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names`, `loop-eval-gates` | Planned |
+| `tools-ripgrep-search` | Ripgrep-backed search with context lines and output modes, and notebook reading | S | evi-frontier | `tool-result-pipeline`, `loop-eval-gates` | Planned |
+| `ctx-shell-output-reducers` | Deterministic reducers for noisy shell and test output (ANSI, progress bars, repeated lines) | S | evi-local | `tool-result-pipeline` | Planned |
+| `loop-structured-output-validate` | `evi run --schema` validates the reply and retries once, with its own stop reason | S | evi-frontier | `loop-run-report` | Planned |
+| `loop-effort-keyword` | A per-turn effort keyword (`/think`, a leading "think hard") that raises reasoning for that turn only | S | evi-frontier | — | Planned |
+| `models-catalog-refresh-lite` | Catalog refresh limited to models the current runtime pin is shown to load and that pass `--verify` | M | director | `fix-runtime-download-integrity`, `loop-eval-gates` | Planned |
+| `models-fallback-check` | `evi models fallback check`: each fallback-chain entry must answer a completion and a tool call | S | evi-frontier | `loop-eval-gates` | Planned |
+| `tools-multifile-patch` | Multi-file `apply_patch`, validated whole and checked per path before any write | M | evi-frontier | `loop-tools-edit-recovery`, `tool-result-pipeline` | Planned |
+
+### Track C — Terminal-first everyday surfaces
+
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `surf-repl-at-mentions` | `@file` mentions with fuzzy completion in `evi chat`, and a slash list generated from the real commands | S | evi-frontier | `fix-command-file-inline`, `safety-project-trust-gate` | Planned |
+| `surf-terminal-first-run` | A guided first run in the terminal, sharing the web flow's ranking and verified switch | M | evi-frontier | `fix-runtime-download-integrity`, `fix-managed-runtime-ctx` | Planned |
+| `surf-repl-rewind` | `/rewind` and Esc Esc in the REPL: edit, fork, or restore code and conversation | M | evi-frontier | `fix-transcript-fidelity`, `fix-history-validity` | Planned |
+| `surf-desktop-shell-basics` | Desktop shell basics: single instance, window state, native notifications, opt-in keep-awake | S | evi-frontier | `fix-ui-render-and-desktop-ipc` | Planned |
+| `surf-repl-session-picker` | An interactive resume picker with search, folder filter and pins (CLI only) | M | evi-frontier | `fix-transcript-fidelity` | Planned |
+| `surf-cli-shell-completion` | Shell completion for `evi` in bash, zsh, fish and PowerShell | S | evi-local | — | Planned |
+| `surf-doctor-bundle` | `evi doctor --bundle`: a redacted diagnostic bundle for bug reports | S | evi-frontier | `safety-secret-redaction` | Planned |
+| `surf-doctor-fix` | `evi doctor --fix` for a short whitelist of in-process fixes to the user config | S | evi-frontier | `safety-secret-redaction` | Planned |
+| `surf-btw-side-question` | `/btw`: a side question answered without entering the main history | M | evi-frontier | `fix-history-validity` | Planned |
+| `surf-changelog-command` | `evi changelog` and `/release-notes`, shown once after an update | S | evi-frontier | — | Planned |
+
+### Track D — Automation and review under named policies
+
+| Item | What | Size | Owner | Depends on | Status |
+|---|---|---|---|---|---|
+| `rev-verify-severity` | Review findings that are verified, labelled by severity, and fixable one at a time (`--fix N`) | M | evi-frontier | `safety-project-trust-gate`, `loop-run-report`, `safety-git-hardening` | Planned |
+| `ext-hooks-v2` | Hooks v2: tighten-only decisions, input rewrites re-checked by policy, context injection as untrusted text, more events | M | director | `fix-permission-engine`, `tool-result-pipeline`, `prompt-prefix-and-kv` | Planned |
+| `auto-scheduler-v2` | Scheduler v2: intervals and one-shots, per-task policy and folder, catch-up, history, cancel | M | director | `agent-policy-and-profiles`, `loop-agent-cancel` | Planned |
+| `auto-failure-handling` | Automation failure handling: bounded retry, fallback backend, one alert per incident | S | evi-frontier | `auto-scheduler-v2`, `stream-loop-resilience-reasoning` | Planned |
+| `eval-skill-plugin-lift` | Evals that show a skill or plugin helps: with-versus-without runs and mocked MCP servers | M | evi-frontier | `loop-eval-gates`, `loop-implementer-policy` | Planned |
+
 ## Not doing this cycle
 
 Considered and deliberately left out, with the reason. Several are deferred, not rejected.
@@ -227,6 +288,7 @@ Decisions the maintainer still has to make; items that depend on them say so.
 11. Managed runtime next cycle: prioritize Vulkan/ROCm/Linux-CUDA builds and a 2026 model catalog?
 12. Editor strategy: once `evi acp` ships, keep maintaining the VS Code extension beyond the approval-handling fix, or deprecate it in favour of ACP-capable editors?
 13. vLLM nodes: is SSH (with the user's keys) the only way eVi reaches another machine, or should a small eVi node service cover machines without SSH? And which model and quantization become the vLLM reference for `vllm-baseline`? (Decided 2026-11-01: SSH, plus a small eVi node service for machines without it; the reference is an AWQ build of qwen2.5-coder:14b.)
+14. Held from Phase 6: local dictation in the composer and REPL (dictation only, so the echo-cancellation reason for leaving voice out does not apply), and scheduled jobs gated by a check script the user writes in user-level config. Reopen either now, or keep both deferred until `memory-learning-inbox` and `agent-policy-and-profiles` have shipped?
 
 ## Before this roadmap
 
