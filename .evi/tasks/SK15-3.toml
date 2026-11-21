@@ -8,29 +8,34 @@ files_in_scope = ["evi/apps/cli/main.py", "tests/test_secretscan.py"]
 required_checks = ["python -m pytest -q tests/test_secretscan.py tests/test_cli_help_brackets.py", "python -m ruff check evi/apps/cli/main.py tests/test_secretscan.py"]
 implementer = "evi-local"
 created = "2026-11-21T12:27:08Z"
-attempts = 3
+attempts = 4
 backend = "rtx"
 model = "gpt-oss:20b"
 worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK15-3"
 branch = "task/SK15-3"
 base = "fad6c1c4be68fc7dbc21c54519f2570acd1d230b"
-evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-3\\3"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-3\\4"
 reviewer_notes = []
 
 [evidence_summary]
-hash = "sha256:ce46fce42396e65d931c83667d72df0ce3bccaae8527d13f4c4465471c275deb"
+hash = "sha256:a7be00de2b8dda07a56c24167ff4f583795d4062d10f123fbf08cad70f80789b"
 files = 2
 insertions = 91
 deletions = 1
 checks_passed = 0
-checks_failed = 0
-checks_skipped = "the run stopped (loop_detected) before its checks, so eVi ran none"
+checks_failed = 2
+
+[evidence_summary.junit]
+tests = 1
+failures = 0
+errors = 1
+skipped = 0
 
 [lease]
 
 [last_result]
-stop_reason = "loop_detected"
-exit_code = 3
-report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-3\\3\\report.json"
-summary = "loop_detected"
+stop_reason = "checks_failed"
+exit_code = 5
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-3\\4\\report.json"
+summary = "required check failed: python -m pytest -q tests/test_secretscan.py tests/test_cli_help_brackets.py (exit 2)"
 out_of_scope = []

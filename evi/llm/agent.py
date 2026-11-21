@@ -2786,6 +2786,9 @@ class Agent:
         # One compact-and-retry per turn when the backend refuses a prompt as
         # too long; a second refusal is the turn's Error.
         overflow_retried = False
+        # Replies the server couldn't parse as a tool call, asked for again;
+        # see MALFORMED_CALL_RETRIES (this counts the ones that fail mid-stream).
+        malformed_retried = 0
 
         for turn_idx in range(max_turns):
             # A cancel that came in during the last tool round (or before the
@@ -3237,6 +3240,16 @@ class Agent:
                 if not tool_buf and not "".join(text_buf).strip():
                     # Nothing of a reply arrived: the request failed, as when
                     # create() raises. No assistant message is made up for it.
+                    # A tool call the server couldn't parse (Ollama sends it as
+                    # an error event once the model has thought) is the
+                    # model's sampling: the same step is asked for again.
+                    if (_malformed_call(stream_error)
+                            and malformed_retried < MALFORMED_CALL_RETRIES):
+                        malformed_retried += 1
+                        dlog("llm.malformed_call_retry",
+                             {"attempt": malformed_retried, "mid_stream": True,
+                              "msg": str(stream_error)[:300]})
+                        continue
                     yield Error(
                         f"LLM request failed: {type(stream_error).__name__}: {stream_error}"
                     )

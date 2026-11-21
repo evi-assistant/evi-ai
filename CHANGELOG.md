@@ -105,8 +105,8 @@ All notable user-visible changes to eVi. Format loosely follows
   nothing says the file already reads that way.
 - **A malformed tool call no longer ends the turn on Ollama.** Ollama
   answers a reply it can't parse as a tool call with a 500 ("error parsing
-  tool call"), which ended the turn with an error. The request is now made
-  again, up to twice.
+  tool call"), or with that error partway through a streamed reply, which
+  ended the turn with an error. The request is now made again, up to twice.
 - **Compaction on a saved Ollama backend no longer reloads the model.** An
   agent bound to a saved backend (`--backend <name>`, fan-out) built its
   client from the backend entry alone, which has no window, so a side

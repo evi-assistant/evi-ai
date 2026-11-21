@@ -113,3 +113,46 @@ def test_other_failures_are_not_retried(tmp_path, monkeypatch):
     client = _ScriptedClient(fail={"primary"})
     list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
     assert client.chat.completions.models_tried == ["primary"]
+
+
+class _BreaksMidStream:
+    """A stream that raises once iterated, the way Ollama's native stream
+    reports a malformed tool call after the model has thought."""
+
+    def __init__(self, msg: str) -> None:
+        self.msg = msg
+
+    def __iter__(self):
+        raise RuntimeError(self.msg)
+        yield  # pragma: no cover
+
+
+class _MidStreamMalformedThenOk:
+    def __init__(self, bad: int, msg: str = "Ollama: error parsing tool call: raw='{\"patch\"'") -> None:
+        self.bad, self.calls, self.msg = bad, 0, msg
+        self.chat = type("_Chat", (), {"completions": self})()
+
+    def create(self, **kwargs):
+        self.calls += 1
+        return _BreaksMidStream(self.msg) if self.calls <= self.bad else _EmptyStream()
+
+
+def test_a_malformed_call_failing_mid_stream_is_asked_for_again(tmp_path, monkeypatch):
+    cfg = _make_config(tmp_path, monkeypatch, model="m", fallbacks=[])
+    client = _MidStreamMalformedThenOk(bad=2)
+    events = list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.calls == 3 and not any(isinstance(e, Error) for e in events)
+
+
+def test_mid_stream_retries_give_up_and_other_breaks_are_not_retried(tmp_path, monkeypatch):
+    from evi.llm.agent import MALFORMED_CALL_RETRIES
+
+    cfg = _make_config(tmp_path, monkeypatch, model="m", fallbacks=[])
+    client = _MidStreamMalformedThenOk(bad=99)
+    events = list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.calls == MALFORMED_CALL_RETRIES + 1
+    assert any(isinstance(e, Error) for e in events)
+
+    client = _MidStreamMalformedThenOk(bad=99, msg="connection reset")
+    list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
+    assert client.calls == 1
