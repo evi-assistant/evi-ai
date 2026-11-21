@@ -137,7 +137,7 @@ history = [
 ]
 compact = true
 tags = ["recall", "compaction"]
-regex = '(?is)atlas-07.*8443|8443.*atlas-07'
+regex = '(?is)atlas[-\u2010-\u2015]07.*8443|8443.*atlas[-\u2010-\u2015]07'  # any dash: gpt-oss writes U+2011
 max_turns = 4
 fake = [
   { text = "We deploy to atlas-07 on port 8443." },

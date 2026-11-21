@@ -92,6 +92,18 @@ All notable user-visible changes to eVi. Format loosely follows
   rust-ini added), so the desktop shell skips it.
 
 ### Fixed
+- **Compaction on a saved Ollama backend no longer reloads the model.** An
+  agent bound to a saved backend (`--backend <name>`, fan-out) built its
+  client from the backend entry alone, which has no window, so a side
+  request such as the compaction summary asked Ollama for no `num_ctx`
+  while the turns asked for `[llm] context_size`. Ollama reloaded the model
+  for each, and a slow load ran past the request timeout ("compacting
+  summarised nothing"). The client now carries `context_size`.
+- **A reasoning model's thinking stays out of non-streamed replies on
+  Ollama.** With the native client, a non-streamed call (a compaction
+  summary, a router's verdict) got the model's thinking in `<think>` tags
+  at the start of its text, so gpt-oss summaries began with their
+  reasoning. It now comes beside the text, as Ollama's `/v1` sends it.
 - **A placeholder test file no longer passes a task's checks.** A required
   check like `pytest tests/test_new.py tests/test_old.py` passed when
   test_new.py held only imports and comments: pytest ran the other file's

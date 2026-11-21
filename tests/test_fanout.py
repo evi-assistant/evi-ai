@@ -95,3 +95,23 @@ def test_build_agent_backend_binds_config(tmp_path, monkeypatch):
     assert agent.config.llm.model == "grok-2-latest"
     # a client was built for the entry (not the default backend)
     assert agent.client is not None
+
+
+def test_build_agent_on_a_saved_ollama_backend_sends_the_configured_window(tmp_path,
+                                                                           monkeypatch):
+    # The client carries [llm] context_size, so a side request (compaction)
+    # asks Ollama for the same num_ctx as the turns and doesn't reload it.
+    import evi.config as config_mod
+    monkeypatch.setattr(config_mod, "HOME", tmp_path)
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", tmp_path / "config.toml")
+    (tmp_path / "config.toml").write_text("[llm]\ncontext_size = 32768\n", encoding="utf-8")
+
+    from evi.sdk.builder import build_agent
+
+    entry = R.BackendEntry(name="rtx", kind="ollama", base_url="http://gpu:11434/v1",
+                           request_timeout=99.0)
+    agent = build_agent(backend=entry, enable_project=False, enable_hooks=False,
+                        enable_guardrails=False)
+    assert type(agent.client).__name__ == "OllamaNativeClient"
+    assert agent.client.num_ctx == 32768
+    assert agent.config.llm.request_timeout == 99.0

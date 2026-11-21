@@ -146,14 +146,18 @@ def build_agent(
     # backend (its kind / base_url / api_key + a client for it). Used by fan-out to
     # route an agent to a different provider. Accepts a BackendEntry or a name.
     if backend is not None:
-        from evi.backends.registry import BackendEntry, client_for, get_entry
+        from evi.backends.registry import BackendEntry, get_entry
 
         entry = backend if isinstance(backend, BackendEntry) else get_entry(str(backend))
         if entry is not None:
             config = _replace(config, llm=_replace(
-                config.llm, backend=entry.kind, base_url=entry.base_url, api_key=entry.api_key))
-            if client is None:
-                client = client_for(entry)
+                config.llm, backend=entry.kind, base_url=entry.base_url, api_key=entry.api_key,
+                request_timeout=entry.request_timeout))
+            # The client is built from the merged [llm] below, not from the
+            # entry alone: the entry has no context_size, so an Ollama client
+            # built from it sent no num_ctx on the agent's side requests
+            # (compaction, routing), and Ollama reloaded the model at another
+            # window for each one while the turns asked for context_size.
     # Optional per-build model override (same endpoint, different model id) — used
     # e.g. by ultracode to route a stage to a cheaper/fast model.
     if model:

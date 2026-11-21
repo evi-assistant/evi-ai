@@ -112,6 +112,19 @@ def test_a_non_streamed_call_returns_one_message():
     assert fake.bodies[0]["options"]["num_predict"] == 50
 
 
+def test_a_non_streamed_reply_keeps_thinking_out_of_the_content():
+    # A compaction summary from a reasoning model (gpt-oss) must be the
+    # summary, not its reasoning followed by the summary.
+    from evi.reasoning import reasoning_text
+
+    fake = _Fake((200, json.dumps({"message": {"role": "assistant", "thinking": "hmm, facts",
+                                               "content": "## Summary"},
+                                   "done": True}).encode()))
+    msg = _client(fake).chat.completions.create(model="m", stream=False,
+                                                messages=[]).choices[0].message
+    assert msg.content == "## Summary" and reasoning_text(msg) == "hmm, facts"
+
+
 def test_a_side_call_asks_for_the_configured_window_too():
     # A summary or title call names no window; without one Ollama would
     # reload the model with its default and the next turn reload it again.
