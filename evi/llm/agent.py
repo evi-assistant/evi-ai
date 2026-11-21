@@ -3237,19 +3237,21 @@ class Agent:
                     for i, slot in tool_buf.items()
                     if slot["name"]
                 }
+                # A tool call the server couldn't parse (Ollama sends it as an
+                # error event once the model has thought, and maybe written a
+                # line) is the model's sampling: with no whole call kept, the
+                # same step is asked for again and what text came is dropped.
+                if (not tool_buf and _malformed_call(stream_error)
+                        and malformed_retried < MALFORMED_CALL_RETRIES):
+                    malformed_retried += 1
+                    dlog("llm.malformed_call_retry",
+                         {"attempt": malformed_retried, "mid_stream": True,
+                          "text_dropped": len("".join(text_buf)),
+                          "msg": str(stream_error)[:300]})
+                    continue
                 if not tool_buf and not "".join(text_buf).strip():
                     # Nothing of a reply arrived: the request failed, as when
                     # create() raises. No assistant message is made up for it.
-                    # A tool call the server couldn't parse (Ollama sends it as
-                    # an error event once the model has thought) is the
-                    # model's sampling: the same step is asked for again.
-                    if (_malformed_call(stream_error)
-                            and malformed_retried < MALFORMED_CALL_RETRIES):
-                        malformed_retried += 1
-                        dlog("llm.malformed_call_retry",
-                             {"attempt": malformed_retried, "mid_stream": True,
-                              "msg": str(stream_error)[:300]})
-                        continue
                     yield Error(
                         f"LLM request failed: {type(stream_error).__name__}: {stream_error}"
                     )

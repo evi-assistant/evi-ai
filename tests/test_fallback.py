@@ -156,3 +156,30 @@ def test_mid_stream_retries_give_up_and_other_breaks_are_not_retried(tmp_path, m
     client = _MidStreamMalformedThenOk(bad=99, msg="connection reset")
     list(Agent(client=client, config=cfg, tools=[]).chat("hi"))
     assert client.calls == 1
+
+
+class _TextThenBreak:
+    """One text chunk, then the malformed-call error: gpt-oss wrote a line
+    before the call Ollama couldn't parse."""
+
+    def __init__(self) -> None:
+        from types import SimpleNamespace as NS
+
+        self.chunk = NS(choices=[NS(delta=NS(content="Let me patch it.", tool_calls=None,
+                                             reasoning=None, reasoning_content=None),
+                                    finish_reason=None, logprobs=None)], usage=None)
+
+    def __iter__(self):
+        yield self.chunk
+        raise RuntimeError("Ollama: error parsing tool call: raw='{\"patch\"'")
+
+
+def test_a_malformed_call_after_some_text_is_asked_for_again(tmp_path, monkeypatch):
+    cfg = _make_config(tmp_path, monkeypatch, model="m", fallbacks=[])
+    client = _MidStreamMalformedThenOk(bad=1)
+    client.create = lambda **kw: (setattr(client, "calls", client.calls + 1)
+                                  or (_TextThenBreak() if client.calls == 1 else _EmptyStream()))
+    agent = Agent(client=client, config=cfg, tools=[])
+    events = list(agent.chat("hi"))
+    assert client.calls == 2 and not any(isinstance(e, Error) for e in events)
+    assert not any("Let me patch it." in str(m.get("content")) for m in agent.history)
