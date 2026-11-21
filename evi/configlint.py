@@ -206,17 +206,58 @@ def _lint_auto_approve(auto: dict) -> list[Issue]:
     )]
 
 
+# A command that runs whatever code its arguments name: an allow rule for it
+# with a trailing wildcard ("python*", "npx *") allows any code.
+_CODE_RUNNERS = frozenset({
+    "python", "python3", "py", "node", "deno", "bun", "ruby", "perl", "php",
+    "bash", "sh", "zsh", "pwsh", "powershell", "cmd", "npx", "bunx", "uvx",
+    "pipx", "uv run", "npm exec", "pnpm dlx", "yarn dlx", "env", "sudo", "xargs",
+})
+
+
+def _lint_broad_allows(auto: dict) -> list[Issue]:
+    """`rules` allow entries that approve far more than they look: every
+    tool, run_python (any code), every shell command, or a code runner
+    (an interpreter or package runner) with any arguments."""
+    from fnmatch import fnmatch
+
+    out: list[Issue] = []
+    for r in _str_list(auto.get("rules")):
+        words = r.split()
+        if len(words) < 2 or words[0].lower() != "allow":
+            continue
+        tool, arg = words[1], " ".join(words[2:]).strip()
+        why = ""
+        if tool in ("*", "**"):
+            why = "allows every tool, with any arguments"
+        elif fnmatch("run_python", tool) or tool == "code":
+            why = "allows run_python, which runs any code"
+        elif fnmatch("run_command", tool) or tool == "shell":
+            head = arg[:-1].strip().lower() if arg.endswith("*") else None
+            if arg in ("", "*"):
+                why = "allows every shell command"
+            elif head in _CODE_RUNNERS:
+                why = f"allows {head!r} with any arguments, which runs any code"
+        if why:
+            out.append(Issue("config.toml [auto] rules", "warn",
+                             f"rule {r!r} {why}; name the commands you mean, e.g. "
+                             "'allow run_command python -m pytest*'"))
+    return out
+
+
 def lint_auto(auto: object) -> list[Issue]:
     """Lint the `[auto]` permission settings as written in config.toml: an
-    auto_approve list from before "code_read", rules and hard_deny entries
-    that never apply, destructive_allow globs the guard ignores,
+    auto_approve list from before "code_read", allow rules that approve far
+    more than they look (every tool, run_python, every shell command, a code
+    runner with any arguments), rules and hard_deny entries that never
+    apply, destructive_allow globs the guard ignores,
     destructive_disable_rules ids that name no guard rule, and
     protected_paths_remove entries that remove nothing."""
     if not isinstance(auto, dict):
         return []
     from evi.shell_guard import RULE_IDS, rejected_allow_globs
 
-    out = _lint_auto_approve(auto) + _lint_rules(auto)
+    out = _lint_auto_approve(auto) + _lint_rules(auto) + _lint_broad_allows(auto)
     for g in rejected_allow_globs(_str_list(auto.get("destructive_allow"))):
         out.append(Issue("config.toml [auto] destructive_allow", "warn",
                          f"glob {g!r} has a wildcard in its command word and is ignored; "
