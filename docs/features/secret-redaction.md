@@ -79,8 +79,27 @@ shows either.
   or anything it starts; the shell guard refuses a command that sets or clears
   it.
 
+## Scanning for secrets: `evi secrets scan`
+
+The same patterns and known values find secrets in files, so a person, a CI
+job or a hook can check a change before it leaves the machine:
+
+```
+evi secrets scan                 # the git work tree: tracked and untracked, not ignored
+evi secrets scan src/ app.env    # the files and folders you name
+evi secrets scan --diff main     # only the lines `git diff main` adds
+evi secrets scan --json          # the findings as JSON
+```
+
+Each finding prints as `path:line: kind` (for example `config.py:12:
+github_token`), never the secret itself. Exit 0 means none were found, 1
+means some were, and 2 means the scan couldn't run (no git repository, a ref
+git doesn't know, or paths given with `--diff`). Files over a size limit and
+binary files are skipped.
+
 ## Relevant source files
 
+- `evi/secretscan.py`: `evi secrets scan` (files, the work tree, a diff)
 - `evi/redact.py`: the token formats, the known-value set, `Redactor` (and its
   `args` / `tool_calls` for tool-call arguments)
 - `evi/transcripts.py`, `evi/reporting.py`: transcripts and crash reports

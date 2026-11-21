@@ -967,7 +967,12 @@ used to say so. Two commands check the policy as written:
   `protected_paths_remove` entry that removes nothing, is also listed in
   `protected_paths`, or removes `~/.evi/**` without `.evi/**`. An MCP rule
   such as `deny github.delete_*` is checked by its server part only; the tool
-  part can't be checked without connecting.
+  part can't be checked without connecting. It also warns about an allow
+  rule that approves far more than it looks: every tool (`allow *`),
+  `run_python` (any code), every shell command (`allow run_command *`,
+  `allow shell *`), or a code runner with any arguments (`allow run_command
+  python*`, `npx *`, `uv run *`, `bash *` …). Name the commands you mean
+  instead, e.g. `allow run_command python -m pytest*`.
 - **`evi doctor`** has a `protected paths` check. It lists every protected
   pattern in force — `[auto] protected_paths`, plus the built-in
   write-protected ones, minus `protected_paths_remove` — and warns when a

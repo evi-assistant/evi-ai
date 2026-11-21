@@ -10,11 +10,11 @@ implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs; Phase 6 adds what
 other coding agents converged on in late 2026.
 
-**Status (2026-11-21):** 43 items shipped in 1.1.0 and 8 more are
+**Status (2026-11-21):** 43 items shipped in 1.1.0 and 9 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
 of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus five of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus six of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -189,7 +189,7 @@ What other coding agents converged on between October and November 2026 (see [co
 
 **Why now:** Each item is small, depends only on shipped or already-planned work, and closes a gap that three or more products now ship. Most are S-sized and suit the delegation loop.
 
-Progress: 5 of 34 items shipped or done.
+Progress: 6 of 34 items shipped or done.
 
 ### Track A — Safety controls
 
@@ -198,11 +198,11 @@ Progress: 5 of 34 items shipped or done.
 | `safety-workspace-only-fs` | A workspace-only setting that confines file reads and writes to the working folder in every mode | S | director | `fix-permission-engine`, `fix-shell-segment-split`, `safety-project-trust-gate` | Done (Phase 6 Track A, unreleased) |
 | `safety-sandbox-required` | A required-sandbox setting: code execution refuses to run when no sandboxer is available, and doctor says so | S | director | `safety-code-exec-parity`, `loop-agent-cancel` | Done (Phase 6 Track A, unreleased) |
 | `safety-protected-read-shell` | Protected-path checks extended to files a shell command reads | S | director | `fix-shell-segment-split`, `fix-permission-engine` | Done (Phase 6 Track A, unreleased) |
-| `safety-secret-scan-cli` | `evi secrets scan` over a diff or the working tree, used by the verify gate and review | S | evi-local | `safety-secret-redaction` | Planned |
+| `safety-secret-scan-cli` | `evi secrets scan` over a diff or the working tree, used by the verify gate and review | S | evi-local | `safety-secret-redaction` | In progress: the command is done (unreleased); the verify gate and review use it next |
 | `safety-workflow-run-policy` | `evi workflow run` runs under a named policy, like Dispatch | M | director | `safety-unattended-default-deny`, `loop-implementer-policy`, `agent-policy-and-profiles` | Done (Phase 6 Track A, unreleased) |
 | `safety-mcp-tool-policy` | Per-tool MCP `always_ask` / `always_deny`, and read-only auto-approval from `readOnlyHint` | S | director | `fix-permission-engine`, `extensibility-interop-mcp-sdk2-migration` | Done (Phase 6 Track A, unreleased) |
 | `safety-secret-commit-guard` | Ask before `git commit`, `git push` or `gh pr create` when the change holds a secret | M | director | `safety-secret-scan-cli`, `fix-shell-segment-split` | Planned |
-| `safety-broad-allow-lint` | `evi lint` flags over-broad allow rules (interpreters, package runners, bare wildcards) | S | evi-local | `fix-permission-engine` | Planned |
+| `safety-broad-allow-lint` | `evi lint` flags over-broad allow rules (interpreters, package runners, bare wildcards) | S | evi-local | `fix-permission-engine` | Done (Phase 6 Track A, unreleased) |
 | `safety-approval-prompt-clarity` | Approval prompts that show each shell segment and make hidden characters visible | S | evi-frontier | `fix-shell-segment-split`, `fix-ui-render-and-desktop-ipc` | Planned |
 
 ### Track B — Small-model loop reliability

@@ -6,6 +6,18 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`evi secrets scan`.** Scans the git work tree (tracked and untracked,
+  not ignored), the paths you name, or with `--diff REF` only the lines a
+  change adds, for what eVi's redaction would hide: tokens and keys by
+  their shape, and secrets this machine holds by their value. Each finding
+  prints as `path:line: kind`, never the secret; `--json` prints them as
+  JSON. Exit 0 when it finds none, 1 when it finds some, 2 when the scan
+  can't run (no git, a bad ref, paths with `--diff`).
+- **`evi lint` flags over-broad allow rules.** An `[auto] rules` allow
+  entry for every tool (`allow *`), run_python, every shell command, or a
+  code runner with any arguments (`allow run_command python*`, `npx *`,
+  `uv run *` …) gets a warning that says what it really approves and to
+  name the commands you mean.
 - **Per-tool MCP policy.** A server entry in `~/.evi/mcp.json` can list
   `always_deny` tools (never run, yolo included) and `always_ask` tools
   (ask in every mode, refused unattended), by name or glob, and can trust
