@@ -10,11 +10,11 @@ implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs; Phase 6 adds what
 other coding agents converged on in late 2026.
 
-**Status (2026-11-21):** 43 items shipped in 1.1.0 and 7 more are
+**Status (2026-11-21):** 43 items shipped in 1.1.0 and 8 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
 of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe and structured compaction, plus five of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus five of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -123,7 +123,7 @@ Make 8-32K local models reliable in the agent loop. Every budget comes from the 
 | `prompt-prefix-and-kv` | Byte-stable prompt prefix, KV-cache reuse, a lean small-model profile and a performance readout (on vLLM: reused-prefix tokens from `cached_tokens`, exact counts from `/tokenize`) | L | director | `models-ops-token-budget-recovery`, `loop-eval-gates`, `tool-result-pipeline`, `tool-schema-safe-names`, `vllm-backend` | Planned |
 | `loop-tools-windows-shell` | Environment-aware shell selection (pwsh on Windows) | S | evi-frontier | `loop-eval-gates`, `fix-shell-segment-split` | Shipped in 1.1.0 (Phase 2 batch 7) |
 | `stream-loop-resilience-reasoning` | Resilient streaming over local-server hiccups (the reasoning channel moved to `native-reasoning-channel`) | L | director | `loop-agent-cancel`, `models-ops-token-budget-recovery`, `loop-tools-tool-call-repair`, `native-reasoning-channel` | Planned |
-| `native-reasoning-channel` | A native reasoning channel: thinking sent as `reasoning_content` or `reasoning` (vLLM's reasoning parsers, llama.cpp, LM Studio, Ollama and similar servers) is read alongside `<think>` tags, shown as thinking and kept out of the answer and the history; when a server sends the thinking both ways, it is shown once | M | director | `loop-tools-tool-call-repair`, `fix-history-validity` | Planned; under way in Phase 2 batch 10. Split out of `stream-loop-resilience-reasoning` |
+| `native-reasoning-channel` | A native reasoning channel: thinking sent as `reasoning_content` or `reasoning` (vLLM's reasoning parsers, llama.cpp, LM Studio, Ollama and similar servers) is read alongside `<think>` tags, shown as thinking and kept out of the answer and the history; when a server sends the thinking both ways, it is shown once | M | director | `loop-tools-tool-call-repair`, `fix-history-validity` | Done (Phase 2 batch 10, unreleased). Split out of `stream-loop-resilience-reasoning` |
 | `reasoning-responses-api` | Reasoning on the opt-in Responses API path (`[llm] api = "responses"`): reasoning text and summary events shown as thinking, as on chat completions | S | evi-local | `native-reasoning-channel` | Planned |
 | `reasoning-cli-agent-adapters` | The Claude Code and Codex agent backends hand their thinking to the native reasoning channel instead of wrapping it in `<think>` tags | S | director | `native-reasoning-channel` | Planned |
 | `vllm-backend` | First-class vLLM backend: the true window from `/v1/models`, model and LoRA-adapter listing, health and version, an error that names missing tool-calling flags, a warning for a LAN endpoint without an API key, and the kind in every CLI, setup and web surface | M | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names` | Planned |

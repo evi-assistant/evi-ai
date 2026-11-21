@@ -99,11 +99,13 @@ All notable user-visible changes to eVi. Format loosely follows
   while the turns asked for `[llm] context_size`. Ollama reloaded the model
   for each, and a slow load ran past the request timeout ("compacting
   summarised nothing"). The client now carries `context_size`.
-- **A reasoning model's thinking stays out of non-streamed replies on
-  Ollama.** With the native client, a non-streamed call (a compaction
-  summary, a router's verdict) got the model's thinking in `<think>` tags
-  at the start of its text, so gpt-oss summaries began with their
-  reasoning. It now comes beside the text, as Ollama's `/v1` sends it.
+- **A reasoning model's thinking stays out of the answer on Ollama.** The
+  native client wrapped Ollama's thinking in `<think>` tags: thinking that
+  mentioned `</think>` ended the block early and leaked the rest into the
+  answer and the history, and a non-streamed call (a compaction summary, a
+  guardrail verdict) got the whole block in its text, so gpt-oss summaries
+  began with their reasoning. The thinking now goes out as the native
+  reasoning channel (`reasoning`), streamed or not.
 - **A placeholder test file no longer passes a task's checks.** A required
   check like `pytest tests/test_new.py tests/test_old.py` passed when
   test_new.py held only imports and comments: pytest ran the other file's

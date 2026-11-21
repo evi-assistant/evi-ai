@@ -1,6 +1,6 @@
 id = "SK14-2"
 title = "ollama_native: Ollama's thinking goes out as the native reasoning channel (`reasoning`), not wrapped in <think> tags"
-status = "open"
+status = "verified"
 why = "Part of roadmap item native-reasoning-channel. DEPENDS ON SK14-1 and on the director's wiring commits (the agent loop reading `reasoning` / `reasoning_content` off each delta as thinking): file it only once both are on phase-1, with the wiring as its base; before the wiring, Ollama's thinking would be dropped. evi.llm.ollama_native wraps Ollama's `message.thinking` in <think> tags for the agent's tag parser, so thinking that itself mentions `</think>` (eVi's own source does) ends the block early and leaks the rest into the answer and the history, and a non-streamed reply (a compaction summary, a title, a guardrail verdict that must start with ALLOW or BLOCK) gets the whole think block in its content. Sending the thinking as the delta's / message's `reasoning` fixes both. Nothing for the director to wire afterwards."
 hints = "Make exactly these six edits to evi/llm/ollama_native.py and nothing else (the code was run against every acceptance criterion before filing). Do not change evi/llm/cli_agent.py: delta_chunk stays as it is, and the reasoning is set on the delta it returns.\n\n1. In the module docstring, replace\n\n- replies: ``message.content`` as text, ``message.thinking`` inside\n  ``<think>`` tags (the agent's think parser takes it out), whole tool calls\n\nwith\n\n- replies: ``message.content`` as text, ``message.thinking`` as the delta's\n  or message's ``reasoning`` (the native reasoning channel the agent shows as\n  thinking, evi.reasoning.reasoning_text; never wrapped in ``<think>`` tags,\n  so a literal tag in either can't move text between them), whole tool calls\n\n2. Replace the two-line docstring of class _Stream\n\n    \"\"\"The streamed reply as chunks: text (thinking in <think> tags), whole\n    tool calls, a finish reason, then usage. `close` ends the request.\"\"\"\n\nwith\n\n    \"\"\"The streamed reply as chunks: text (thinking as the delta's `reasoning`),\n    whole tool calls, a finish reason, then usage. `close` ends the request.\"\"\"\n\n3. In _Stream._chunks, delete the line `        thinking = False` (directly above `        calls = 0`).\n\n4. In _Stream._chunks, directly after the line `                think_text, text = msg.get(\"thinking\") or \"\", msg.get(\"content\") or \"\"`, replace\n\n                piece = \"\"\n                if think_text:\n                    piece += (\"\" if thinking else \"<think>\") + think_text\n                    thinking = True\n                if text:\n                    piece += (\"</think>\" if thinking else \"\") + text\n                    thinking = False\n                if piece:\n                    yield delta_chunk(content=piece)\n\nwith\n\n                if think_text or text:\n                    chunk = delta_chunk(content=text or None)\n                    # Thinking goes out as the delta's `reasoning`: the native\n                    # reasoning channel (evi.reasoning.reasoning_text).\n                    chunk.choices[0].delta.reasoning = think_text or None\n                    yield chunk\n\n5. In _Stream._chunks, under `                if data.get(\"done\"):`, delete these two lines (the reason line after them stays):\n\n                    if thinking:\n                        yield delta_chunk(content=\"</think>\")\n\n6. In _Completions.create (the non-streamed reply), replace\n\n        content = msg.get(\"content\") or \"\"\n        if msg.get(\"thinking\"):\n            content = f\"<think>{msg['thinking']}</think>{content}\"\n        message = SimpleNamespace(role=\"assistant\", content=content,\n\nwith\n\n        message = SimpleNamespace(role=\"assistant\", content=msg.get(\"content\") or \"\",\n                                  reasoning=msg.get(\"thinking\") or None,\n\n(the next line, `                                  tool_calls=tool_calls or None)`, stays as it is).\n\nTests go in a NEW file tests/test_ollama_native_reasoning.py (do not edit other test files). Copy the helpers _ndjson, _Fake, _client and _done from tests/test_ollama_native.py into the new file (with `import evi.tools.fs  # noqa: F401` for read_file's registration), so every test goes through the real OllamaNativeClient over an httpx.MockTransport. For the streaming criteria call _client(fake).chat.completions.create(model=\"m\", stream=True, messages=[]), keep c.choices[0].delta of each chunk that has choices, and compare the list of (getattr(delta, \"reasoning\", None), delta.content) pairs (getattr: the finish chunk comes from the unchanged delta_chunk and has no reasoning attribute). For the agent criterion build Agent(client=_client(fake), config=cfg, transcripts=None, unattended_policy=\"allow\", tools=[REGISTRY[\"read_file\"]]) with cfg.llm.backend \"ollama\", base_url \"http://127.0.0.1:9/v1\" and model \"qwen3\", run list(agent.chat(\"q\", max_turns=2)) and join the ThinkingDelta and TextDelta texts. For the non-streamed criteria call create(model=\"m\", stream=False, messages=[]) and read .choices[0].message. Assert evi.reasoning.reasoning_text on the plain streamed delta and on the non-streamed message. Comments state why in one line."
 acceptance = ["A streamed reply of the NDJSON lines {content \"hi\"} and a done line gives a first delta with content \"hi\", reasoning None and reasoning_text(delta) == \"\".", "A streamed reply of the NDJSON lines {thinking \"let me \"}, {thinking \"see\", content \"4\"}, {content \"2\"} and a done line gives deltas whose (getattr(d, \"reasoning\", None), d.content) pairs are exactly [(\"let me \", None), (\"see\", \"4\"), (None, \"2\"), (None, None)] (the last is the finish chunk), and no delta's content contains \"think>\".", "Agent.chat over the OllamaNativeClient, for thinking \"the parser ends at </think> so\" then content \"42\": the joined ThinkingDelta text is exactly \"the parser ends at </think> so\", the joined TextDelta text is \"42\", and agent.history[-1] == {\"role\": \"assistant\", \"content\": \"42\"}.", "A non-streamed reply with content \"ALLOW\" and thinking \"pondering\" gives message.content == \"ALLOW\" and message.reasoning == \"pondering\" (and reasoning_text(message) == \"pondering\"); one without thinking gives message.reasoning None.", "The existing tests in tests/test_ollama_native.py (among them test_thinking_arrives_as_thinking_not_as_text) and tests/test_backends.py pass."]
@@ -8,13 +8,52 @@ files_in_scope = ["evi/llm/ollama_native.py", "tests/test_ollama_native_reasonin
 required_checks = ["python -m pytest -q tests/test_ollama_native_reasoning.py tests/test_ollama_native.py tests/test_backends.py", "python -m ruff check evi/llm/ollama_native.py tests/test_ollama_native_reasoning.py"]
 implementer = "evi-local"
 created = "2026-11-02T12:11:45Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 2
+backend = "ollama"
+model = "qwen2.5:14b-instruct-q4_K_M"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK14-2"
+branch = "task/SK14-2"
+base = "ded0b43530f4a582b7a3b091f9d6f1184c4c4d4f"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK14-2\\2"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:5e785b09c7f2b51cb166f3a3e47dc309bb8494ee806c1df01514d9f045603920"
+files = 2
+insertions = 119
+deletions = 20
+checks_passed = 2
+checks_failed = 0
+
+[evidence_summary.junit]
+tests = 29
+failures = 0
+errors = 0
+skipped = 0
+
 [lease]
+
+[last_result]
+stop_reason = "done"
+exit_code = 0
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK14-2\\2\\report.json"
+summary = "To implement task SK14-2, I'll make the necessary changes to `ollama_native.py` and add the new test file `test_ollama_native_reasoning.py`. Let's start with the edits to `ollama_native.py`."
+out_of_scope = []
+
+[attestation]
+v = 1
+task = "SK14-2"
+digest = "sha256:3037128e0a2e10bff9fd1b2cacb9cafb7bc7b8b03cc17d6cb64ad3dc82806222"
+head = "76903bb88e83dfd44d1bbb01a6783c61cadd7d73"
+evidence = "sha256:5e785b09c7f2b51cb166f3a3e47dc309bb8494ee806c1df01514d9f045603920"
+verdict = "verified"
+rounds = 1
+signer = "director"
+signed_at = "2026-11-21T12:19:12Z"
+key = "302b45cb92785c8d"
+sig = "95270110cc7a5b069728e30a736c29d0533603bb2ed1c3b6c2104c81b8449ed2"
+
+[attestation.review]
+base = "ded0b43530f4a582b7a3b091f9d6f1184c4c4d4f"
+exit_code = 0
+report_sha256 = "3627a0218fd544a46b25a517e8e1e75b779b1c69d7c66ed0c2c01648dac6c2cd"
