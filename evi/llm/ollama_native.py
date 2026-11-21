@@ -233,12 +233,10 @@ class _Completions:
                 arguments=json.dumps((tc.get("function") or {}).get("arguments") or {})))
             for i, tc in enumerate(msg.get("tool_calls") or [])
         ]
-        # The thinking goes beside the content, as Ollama's /v1 sends it
-        # (evi.reasoning.reasoning_text reads it): a caller that takes
-        # `content` as the answer (a compaction summary, a router's verdict)
-        # must not get the model's reasoning in it.
-        message = SimpleNamespace(role="assistant", content=msg.get("content") or "",
-                                  reasoning_content=msg.get("thinking") or None,
+        content = msg.get("content") or ""
+        if msg.get("thinking"):
+            content = f"<think>{msg['thinking']}</think>{content}"
+        message = SimpleNamespace(role="assistant", content=content,
                                   tool_calls=tool_calls or None)
         prompt, completion = int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0)
         usage = SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion,
