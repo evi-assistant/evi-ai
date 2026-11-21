@@ -99,6 +99,10 @@ All notable user-visible changes to eVi. Format loosely follows
   the run looped. `apply_patch` now takes that format too, for the one file
   its `path` names: hunks apply in order, each after the one before it and
   its `@@` anchor line, and an error names the hunk that doesn't fit.
+  When a patch's lines don't match the file (either format), the error now
+  names the first line that differs, so a model that miscopied one line
+  can fix it instead of resending the same patch; a patch that changes
+  nothing says the file already reads that way.
 - **A malformed tool call no longer ends the turn on Ollama.** Ollama
   answers a reply it can't parse as a tool call with a 500 ("error parsing
   tool call"), which ended the turn with an error. The request is now made

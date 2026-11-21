@@ -620,6 +620,36 @@ def _parse_v4a(patch: str) -> tuple[str, list[tuple[str, str, str]]] | str:
     return target, hunks
 
 
+def _near_miss(text: str, old: str, pos: int = 0) -> str:
+    """Where `old` (the lines a patch expects) comes closest to matching
+    `text` after `pos`, as a hint naming the first line that differs:
+    "; line 213 reads ... where the patch has ...". The run of lines that
+    matches for longest wins; "" when not even one line matches.
+    A model that miscopies one line otherwise resends the same patch."""
+    want = old.splitlines()
+    if not want or len(want) > 400:
+        return ""
+    start = text.count("\n", 0, pos)
+    have = text.splitlines()
+    best = (0, -1)  # (lines matched, at)
+    for at in range(start, len(have)):
+        n = 0
+        while n < len(want) and at + n < len(have) and have[at + n] == want[n]:
+            n += 1
+        if n > best[0]:
+            best = (n, at)
+            if n == len(want):
+                break
+    n, at = best
+    if n == 0 or n == len(want):
+        return ""
+    line = at + n
+    if line >= len(have):
+        return f"; the file ends after line {line}, where the patch still has {want[n].strip()!r}"
+    return (f"; line {line + 1} reads {have[line].strip()!r} "
+            f"where the patch has {want[n].strip()!r}: copy the file's lines exactly")
+
+
 def _apply_v4a(text: str, hunks: list[tuple[str, str, str]], eol: str) -> tuple[str, str]:
     """(`text` with `hunks` applied in order, "") or (`text`, "ERROR: ...").
     As in OpenAI's format, each hunk is looked for after the previous one,
@@ -647,6 +677,8 @@ def _apply_v4a(text: str, hunks: list[tuple[str, str, str]], eol: str) -> tuple[
                         "same lines in one hunk")
             elif new_n.strip() and new_n in text:
                 err += "; the file already holds the new lines, so this change may be in already"
+            else:
+                err += _near_miss(text, old_n, pos)
             return text, err
         text = text[:at] + new_n + text[at + len(old_n):]
         pos = at + len(new_n)
@@ -716,7 +748,7 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
             elif old in new_text:
                 target_old, target_new = old, new
             else:
-                return f"ERROR: block {i} SEARCH not found in {p}"
+                return f"ERROR: block {i} SEARCH not found in {p}{_near_miss(new_text, old_n)}"
 
             n = new_text.count(target_old)
             if n > 1:
@@ -726,7 +758,9 @@ def apply_patch(path: str, patch: str, ctx: ToolContext | None = None) -> str:
                 )
             new_text = new_text.replace(target_old, target_new, 1)
         if new_text == text:
-            return "ERROR: patch made no changes"
+            return ("ERROR: patch made no changes: its removed and added lines are the "
+                    "same, so the file already reads this way. Nothing to do here; go on "
+                    "to the next step")
         try:
             from evi.checkpoints import record_before_write
 

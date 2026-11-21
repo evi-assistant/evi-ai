@@ -119,3 +119,23 @@ def test_search_replace_blocks_win_over_a_quoted_header():
     assert not _is_v4a(sr)
     assert _is_v4a("*** Begin Patch\n*** Update File: a\n@@\n-a\n+b\n")
     assert _parse_v4a("*** Update File: a\n@@ def f\n-a\n+b\n") == ("a", [("def f", "a", "b")])
+
+
+def test_a_miscopied_context_line_is_named(here):
+    # SK15-1: gpt-oss moved a quote in one context line and resent the patch.
+    patch = ("*** Begin Patch\n*** Update File: evi/lint.py\n@@\n"
+             " def lint_auto(auto):\n     out = a()+b()\n+    x = 1\n*** End Patch")
+    out = apply_patch("evi/lint.py", patch)
+    assert "line 5 reads 'out = a() + b()' where the patch has 'out = a()+b()'" in out, out
+
+
+def test_a_search_block_off_by_one_line_is_named(here):
+    sr = "<<<<<<< SEARCH\nimport os\n\n\ndef lint_auto(x):\n=======\nX\n>>>>>>> REPLACE"
+    out = apply_patch("evi/lint.py", sr)
+    assert "line 4 reads 'def lint_auto(auto):'" in out, out
+
+
+def test_a_patch_that_changes_nothing_says_to_move_on(here):
+    patch = "*** Begin Patch\n*** Update File: evi/lint.py\n@@\n-import os\n+import os\n*** End Patch"
+    out = apply_patch("evi/lint.py", patch)
+    assert out.startswith("ERROR: patch made no changes") and "already reads this way" in out
