@@ -288,7 +288,7 @@ Decisions the maintainer still has to make; items that depend on them say so.
 11. Managed runtime next cycle: prioritize Vulkan/ROCm/Linux-CUDA builds and a 2026 model catalog?
 12. Editor strategy: once `evi acp` ships, keep maintaining the VS Code extension beyond the approval-handling fix, or deprecate it in favour of ACP-capable editors?
 13. vLLM nodes: is SSH (with the user's keys) the only way eVi reaches another machine, or should a small eVi node service cover machines without SSH? And which model and quantization become the vLLM reference for `vllm-baseline`? (Decided 2026-11-01: SSH, plus a small eVi node service for machines without it; the reference is an AWQ build of qwen2.5-coder:14b.)
-14. Held from Phase 6: local dictation in the composer and REPL (dictation only, so the echo-cancellation reason for leaving voice out does not apply), and scheduled jobs gated by a check script the user writes in user-level config. Reopen either now, or keep both deferred until `memory-learning-inbox` and `agent-policy-and-profiles` have shipped?
+14. Held from Phase 6: local dictation in the composer and REPL (dictation only, so the echo-cancellation reason for leaving voice out does not apply), and scheduled jobs gated by a check script the user writes in user-level config. Reopen either now, or keep both deferred until `memory-learning-inbox` and `agent-policy-and-profiles` have shipped? (Decided 2026-11-20: keep both deferred.)
 
 ## Before this roadmap
 

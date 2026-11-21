@@ -11,7 +11,8 @@ on. Sandboxers:
   workdir/tmp; deny network).
 - **Windows / no sandboxer**: not available — `wrap()` returns the argv
   unchanged (caller runs unsandboxed; `available()` reports False so the UI /
-  diagnostics can say so).
+  diagnostics can say so), unless `[tools] sandbox_required` is on: then
+  `refusal()` returns the message the tool answers with instead of running.
 
 `wrap()`/`available()`/`status()` are pure enough to unit-test by mocking the
 platform + PATH lookups; we don't execute a real sandbox in tests.
@@ -39,17 +40,59 @@ def available() -> bool:
     return False
 
 
-def requested(config: Any = None) -> bool:
-    """True iff `[tools] sandbox` is on in `config` (default: `Config.load()`).
-    False when the config can't be read."""
-    try:
-        if config is None:
-            from evi.config import Config
+def _tools(config: Any) -> Any:
+    """The `[tools]` settings of `config`: a Config, its ToolSettings itself,
+    or None for `Config.load()`."""
+    if config is None:
+        from evi.config import Config
 
-            config = Config.load()
-        return bool(getattr(getattr(config, "tools", None), "sandbox", False))
+        config = Config.load()
+    if hasattr(config, "sandbox"):
+        return config
+    return getattr(config, "tools", None)
+
+
+def required(config: Any = None) -> bool:
+    """True iff `[tools] sandbox_required` is on in `config` (default:
+    `Config.load()`): code execution must run sandboxed or not at all.
+    An unreadable config requires it, so code execution refuses rather than
+    running unsandboxed when eVi cannot tell what the user asked for."""
+    try:
+        return bool(getattr(_tools(config), "sandbox_required", False))
+    except Exception:  # noqa: BLE001 — fail closed
+        return True
+
+
+def requested(config: Any = None) -> bool:
+    """True iff `[tools] sandbox` (or `sandbox_required`, which implies it) is
+    on in `config` (default: `Config.load()`). False when the config can't be
+    read: `required` is what fails closed."""
+    try:
+        tools = _tools(config)
+        return bool(getattr(tools, "sandbox", False)
+                    or getattr(tools, "sandbox_required", False))
     except Exception:  # noqa: BLE001 — an unreadable config requests nothing
         return False
+
+
+def refusal(config: Any = None, tool: str = "this tool") -> str | None:
+    """The error `tool` answers with instead of running, or None to run.
+    Not None only when the sandbox is required and no sandboxer is on PATH:
+    `[tools] sandbox_required` turns the "ran unsandboxed" fallback into a
+    refusal."""
+    if not required(config) or available():
+        return None
+    s = _system()
+    how = {
+        "Linux": "install bubblewrap so `bwrap` is on PATH",
+        "Darwin": "`sandbox-exec` should ship with macOS; check PATH",
+    }.get(s, f"no sandboxer exists for {s or 'this OS'}")
+    return (
+        f"ERROR: {tool} did not run: [tools] sandbox_required is on and no OS "
+        f"sandboxer is available here ({how}). Nothing was executed. To run "
+        "code unsandboxed, the user must set sandbox_required = false in "
+        "~/.evi/config.toml."
+    )
 
 
 def active(config: Any = None) -> bool:
@@ -59,13 +102,14 @@ def active(config: Any = None) -> bool:
     return requested(config) and available()
 
 
-def status() -> dict:
+def status(config: Any = None) -> dict:
     s = _system()
     launcher = {"Linux": "bwrap", "Darwin": "sandbox-exec"}.get(s)
     return {
         "platform": s,
         "launcher": launcher or "",
         "available": available(),
+        "required": required(config),
     }
 
 

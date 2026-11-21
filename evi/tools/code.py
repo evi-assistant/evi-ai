@@ -85,9 +85,12 @@ def run_python(code: str, ctx: ToolContext | None = None) -> str:
         argv = [exe, str(script)]
         note = ""
         sandboxed = False
-        try:
-            from evi import sandbox
+        from evi import sandbox
 
+        refused = sandbox.refusal(tool="run_python")
+        if refused:
+            return refused
+        try:
             if sandbox.requested():
                 if sandbox.available():
                     argv = sandbox.wrap(argv, tmp, allow_network=False)

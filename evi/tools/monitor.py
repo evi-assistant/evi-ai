@@ -210,8 +210,13 @@ def monitor(
     poll = 0.2
     cancel_token = getattr(ctx, "cancel_token", None)
     if kind == "command":
+        from evi import sandbox
+
+        refused = sandbox.refusal(tools, tool="monitor")
+        if refused:
+            return refused
         return _watch_command(
-            target, until_rx, deadline, sandboxed=bool(getattr(tools, "sandbox", False)),
+            target, until_rx, deadline, sandboxed=sandbox.requested(tools),
             cancel_token=cancel_token, scrub=proc.runs_unattended(ctx),
         )
     return _tail_file(Path(target).expanduser(), until_rx, deadline, poll, cancel_token)

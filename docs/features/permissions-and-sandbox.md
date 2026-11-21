@@ -836,7 +836,8 @@ throwaway temp folder for `run_python`, the command's working folder for
   `file-write*` outside `/tmp` and the work dir, and denies network.
 - **Windows / no sandboxer on PATH** — **not available.** The wrapper returns
   the command unchanged, so it runs *unsandboxed*, with a note saying so in
-  front of its output.
+  front of its output — unless `[tools] sandbox_required = true`, which
+  makes the three tools refuse instead (below).
 
 The sandbox confines only those three. It is not the same thing as the
 permission policy — a call can be permitted and still be sandboxed, or permitted
@@ -942,6 +943,7 @@ computer = false    # mouse/keyboard control — never default-on
 #     transcripts, pdf, sqlite, index, git, federation, ocr, calendar ...
 
 sandbox  = false    # run_python, run_command and monitor commands under an OS sandbox where available
+sandbox_required = false  # implies sandbox; with no sandboxer, those tools refuse instead of running unsandboxed
 ```
 
 These are toggle categories: the policy checks each call under its own call
@@ -957,6 +959,17 @@ for the sandbox itself, but the OS launcher must be present:
 - macOS: `sandbox-exec` ships with the OS.
 - Windows: no sandboxer exists — `sandbox = true` is honored as "requested" but
   falls back to running unsandboxed with a printed note.
+
+To never run code unsandboxed, set `sandbox_required = true`. It turns the
+sandbox on, and where no sandboxer is available (always on Windows) the three
+tools answer with an error naming the setting and start no process. The
+permission mode does not change this: a call that yolo or an allow rule
+approves is still refused. A trusted repo's `.evi.toml` may set it to `true`
+but cannot set it back to `false`, and `evi doctor` reports the state on its
+"code sandbox" line (fail when required but missing, warn when requested but
+missing). Code that a refused tool would have run is not run any other way,
+but other tools are unaffected: hooks, MCP servers and formatters run as
+before.
 
 ### Where it can't prompt
 

@@ -156,12 +156,13 @@ def run_command(
     argv: list[str] | str = command
     note = ""
     sandboxed = False
+    from evi import sandbox
+
+    refused = sandbox.refusal(tool="run_command")
+    if refused:
+        return refused
     try:
-        from evi.config import Config
-
-        if Config.load().tools.sandbox:
-            from evi import sandbox
-
+        if sandbox.requested():
             if sandbox.available():
                 argv = sandbox.wrap(["/bin/sh", "-c", command], str(workdir_path),
                                     allow_network=False)

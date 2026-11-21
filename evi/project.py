@@ -405,12 +405,12 @@ _TOOLS_OFF_ONLY = frozenset({
     "git", "federation", "ocr", "calendar", "ask", "vision",
     "format_on_edit", "check_on_edit",  # these run repo-configured formatters
 })
-# ...and the run_python / run_command OS sandbox ON (its safe direction is
-# `true`). Every other [tools] key — transcripts (not a tool: turning it off
+# ...and the run_python / run_command OS sandbox ON, or required (their safe
+# direction is `true`). Every other [tools] key — transcripts (not a tool: turning it off
 # would stop eVi recording what happened in the repo), mcp_allow,
 # tool_search*, mcp_max_output_chars, cleanup_period_days (deletes
 # transcripts), search_backend, searxng_url — is ignored.
-_TOOLS_ON_ONLY = frozenset({"sandbox"})
+_TOOLS_ON_ONLY = frozenset({"sandbox", "sandbox_required"})
 
 # [auto]: only these permission keys, and only in the tightening direction —
 # merge_project_overlay combines them with the user's own values:

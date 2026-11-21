@@ -375,6 +375,11 @@ class ToolToggles:
     # temp workdir, no network) where one is available (bwrap / sandbox-exec).
     # Falls back to unsandboxed if no sandboxer is present. See evi/sandbox.py.
     sandbox: bool = False
+    # When true, code execution (run_python, run_command, monitor commands) only
+    # ever runs sandboxed: it implies `sandbox`, and with no sandboxer on this
+    # machine (always on Windows) those tools refuse instead of running
+    # unsandboxed. See evi/sandbox.py `refusal`.
+    sandbox_required: bool = False
     # Consume-side MCP allowlist: when non-empty, only these server names (from
     # mcp.json) load — lets a shared/synced mcp.json be gated per machine.
     mcp_allow: list[str] = field(default_factory=list)

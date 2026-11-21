@@ -6,6 +6,15 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Code runs sandboxed or not at all, if you ask.** `[tools]
+  sandbox_required = true` turns on the OS sandbox and makes `run_python`,
+  `run_command` and `monitor` commands refuse, with an error saying why,
+  when no sandboxer is available, instead of running unsandboxed with a
+  note. That is always the case on Windows, and on Linux without
+  bubblewrap. It holds in every permission mode, yolo included. A trusted
+  repo's `.evi.toml` can switch it on but not off, and `evi doctor` has a
+  new "code sandbox" line that fails when the sandbox is required but
+  missing.
 - **`/context` shows the system prompt by part.** The system prompt's tokens
   are split into its parts (the base prompt, identity, date, capabilities,
   the untrusted-text rule, output style, memory, skills and the project's

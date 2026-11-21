@@ -4853,7 +4853,7 @@ def create_app() -> FastAPI:
             },
             "backend": cfg.llm.backend,
             "current_model": cfg.llm.model,
-            "sandbox": {"enabled": cfg.tools.sandbox, **_sandbox.status()},
+            "sandbox": {"enabled": _sandbox.requested(cfg), **_sandbox.status(cfg)},
         }
 
     @app.get("/api/styles")

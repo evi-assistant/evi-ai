@@ -274,6 +274,42 @@ def _check_auto_approve() -> list[Check]:
     return [Check(name, "ok", f"run_python asks unless sandboxed ({listed})")]
 
 
+def _check_sandbox() -> list[Check]:
+    """The code-execution sandbox as in force: off, on with a sandboxer, on
+    without one (code runs unsandboxed), or required without one (run_python,
+    run_command and monitor commands refuse)."""
+    name = "code sandbox"
+    try:
+        from evi import config as _config
+        from evi import sandbox
+
+        cfg = _config.Config.load() if _config.CONFIG_PATH.is_file() else _config.Config()
+        required, requested, have = (sandbox.required(cfg), sandbox.requested(cfg),
+                                     sandbox.available())
+        launcher = sandbox.status(cfg)["launcher"]
+    except Exception:  # noqa: BLE001
+        return [Check(name, "warn", "skipped (config did not load)")]
+    install = {"bwrap": "apt install bubblewrap (or your distro's bubblewrap package)"}
+    if not requested:
+        return [Check(name, "ok", "off ([tools] sandbox = false)")]
+    if have:
+        return [Check(name, "ok", f"on, via {launcher}"
+                      + (" (required)" if required else ""))]
+    fix = (install[launcher],) if launcher in install else ()
+    if required:
+        return [Check(
+            name, "fail",
+            "required ([tools] sandbox_required = true) but no sandboxer is available, "
+            "so run_python, run_command and monitor commands refuse to run",
+            fix=fix or ("no sandboxer exists for this OS; set sandbox_required = false "
+                        "in config.toml [tools] to run code unsandboxed",),
+        )]
+    return [Check(name, "warn",
+                  "requested ([tools] sandbox = true) but no sandboxer is available, so "
+                  "code runs unsandboxed; set sandbox_required = true to refuse instead",
+                  fix=fix)]
+
+
 def _check_optional_deps() -> list[Check]:
     out: list[Check] = []
     for import_name, extra, what in _OPTIONAL_DEPS:
@@ -483,6 +519,7 @@ def run_checks() -> list[Check]:
     checks += _check_config()
     checks += _check_protected_paths()
     checks += _check_auto_approve()
+    checks += _check_sandbox()
     checks += _check_backend()
     checks += _check_hardware()
     checks += _check_binaries()
