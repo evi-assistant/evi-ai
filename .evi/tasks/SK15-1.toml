@@ -8,13 +8,29 @@ files_in_scope = ["evi/configlint.py", "tests/test_lint_broad_allow.py"]
 required_checks = ["python -m pytest -q tests/test_lint_broad_allow.py tests/test_permission_engine.py tests/test_shell_guard.py tests/test_code_exec_parity.py", "python -m ruff check evi/configlint.py tests/test_lint_broad_allow.py"]
 implementer = "evi-local"
 created = "2026-11-21T12:27:02Z"
-attempts = 0
-backend = ""
-model = ""
-worktree = ""
-branch = ""
-base = ""
-evidence = ""
+attempts = 2
+backend = "rtx"
+model = "gpt-oss:20b"
+worktree = "\\\\DESKTOP-6Q41SNJ\\projects\\evi\\.worktrees\\task__SK15-1"
+branch = "task/SK15-1"
+base = "46d26c03eda87cd59bd7dac85792460b14d0223a"
+evidence = "C:\\Users\\claude-2-user\\.evi-shakedown\\evidence\\ca22952f9f605303\\SK15-1\\2"
 reviewer_notes = []
 
+[evidence_summary]
+hash = "sha256:9517a7538e2793494f98a0e4bf5abf464e5748608496475575eb1be2baa2834f"
+files = 0
+insertions = 0
+deletions = 0
+checks_passed = 0
+checks_failed = 0
+checks_skipped = "the run stopped (error) before its checks, so eVi ran none"
+
 [lease]
+
+[last_result]
+stop_reason = "error"
+exit_code = 1
+report = "C:\\Users\\claude-2-user\\.evi-shakedown\\tasks\\ca22952f9f605303\\SK15-1\\2\\report.json"
+summary = "LLM request failed: OllamaError: Ollama 500: error parsing tool call: raw='The apply_patch tool expects a SEARCH/REPLACE block. We need to use the patch format with <<<<<<< SEARCH etc. Let's create patch with that format."
+out_of_scope = []
