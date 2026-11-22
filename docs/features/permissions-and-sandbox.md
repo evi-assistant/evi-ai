@@ -1340,8 +1340,8 @@ turn returns to your normal policy.
   name. `code`, `shell`, `subagent`, `computer`, and `web` are intentionally
   left out of the defaults because they run code, act broadly or reach the
   network.
-- **`monitor` commands and deferred tool search.** With `[tools] tool_search`
-  on, `run_command` may sit in the deferred catalog until the model looks it up
+- **`monitor` commands and deferred tool search.** With `[tools] tool_search
+  = true`, `run_command` may sit in the deferred catalog until the model looks it up
   with `search_tools`. Until then `monitor` with `kind=command` says the session
   has no shell tools and runs nothing, even with `[tools] shell = true`.
 - **Trusted-dir matching is path-resolved.** Only path arguments are checked,

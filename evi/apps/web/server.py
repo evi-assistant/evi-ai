@@ -1206,7 +1206,13 @@ def _apply_config_patch(cfg: Config, patch: dict[str, Any]) -> list[str]:
                 continue
             if key in secrets_ and raw == _SECRET_SENTINEL:
                 continue  # unchanged — user never saw the real value
-            setattr(target, key, _coerce_to(getattr(target, key), raw))
+            if section == "tools" and key == "tool_search":
+                # true / false / "auto": not the type of whatever is stored now.
+                from evi.tools.resolver import tool_search_mode
+
+                setattr(target, key, tool_search_mode(raw))
+            else:
+                setattr(target, key, _coerce_to(getattr(target, key), raw))
             changed = True
         if changed:
             touched.append(section)

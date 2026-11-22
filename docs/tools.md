@@ -280,17 +280,31 @@ This feeds `evi dream` and `evi sessions list/resume`.
 ## Tool search at scale
 
 With many tools enabled (especially several MCP servers), sending every tool
-schema on every turn bloats the context. Turn on **deferred tool search**:
+schema on every turn bloats the context. **Deferred tool search** sends only
+some of them, plus a `search_tools` tool that looks up the rest:
 
 ```toml
 [tools]
-tool_search = true            # off by default
-tool_search_threshold = 30    # only defers once the toolset exceeds this
+tool_search = "auto"          # the default; true / "on", false / "off"
+tool_search_threshold = 30    # "on" only: defers once the toolset exceeds this
 ```
 
-When active, the `fs` and `memory` tools stay loaded and the long tail moves
-behind a single `search_tools` meta-tool. The model calls
+- **`"auto"`** decides on each request. When the tool schemas together would
+  take more than a fifth of the context window (`[llm] context_size`, or the
+  smaller window the server reports), the request sends the `fs`, `shell`,
+  `code`, `git` and `memory` tools, any tool the model already looked up, and
+  `search_tools`; the rest wait to be looked up. With a roomy window, every
+  schema goes as before. Code mode's built-in tools take about 3,700 tokens,
+  so at a 32K window nothing is deferred until MCP servers add more.
+- **`true` / `"on"`** defers once the enabled toolset has more than
+  `tool_search_threshold` tools, whatever the window, keeping only `fs` and
+  `memory` loaded.
+- **`false` / `"off"`** always sends every schema.
+
+When deferring, the long tail sits behind a single `search_tools` meta-tool. The model calls
 `search_tools("git commit")` to surface matching tools; they're added to the
 live toolset and become callable on the next step — still subject to the normal
 per-category permission gating (`search_tools` only *exposes* tools, never runs
-them). Below the threshold it's a no-op, so it's safe to leave on.
+them). In `"auto"` mode a deferred tool the model calls by name without looking
+it up first still runs, gated the same way. Below the threshold (or with a
+roomy window) it's a no-op, so it's safe to leave on.

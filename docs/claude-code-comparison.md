@@ -174,7 +174,7 @@ on the roadmap's [Not doing](roadmap.md#not-doing-this-cycle) list).
 | Public Agent SDK (library) | `evi.sdk` — curated re-export + `build_agent()` + examples ([sdk.md](sdk.md)) | ✅ |
 | Session storage (S3/Redis) | local JSONL transcripts | 🚫 local-first |
 | OpenTelemetry / monitoring | opt-in OpenTelemetry traces + metrics for tool calls (`[telemetry]`, `[otel]` extra) + crash reporting (Sentry-compatible) | ⚠️ opt-in; no LLM-call spans |
-| Tool search (1000s of tools) | `[tools] tool_search` defers the long tail behind a `search_tools` meta-tool | ✅ opt-in |
+| Tool search (1000s of tools) | `[tools] tool_search` defers the long tail behind a `search_tools` meta-tool; `"auto"` (default) does so when the schemas would take over a fifth of the window | ✅ |
 | LSP tool (definitions, references, diagnostics) | `check_file` diagnostics and format-on-edit, `python_symbols` outline | ❌ |
 
 ## Org / enterprise / compliance

@@ -10,11 +10,11 @@ implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs; Phase 6 adds what
 other coding agents converged on in late 2026.
 
-**Status (2026-11-22):** 43 items shipped in 1.1.0 and 14 more are
+**Status (2026-11-22):** 43 items shipped in 1.1.0 and 15 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
 of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus all nine of Phase 6's safety controls its interactive round cap and compaction hardening. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus all nine of Phase 6's safety controls, its interactive round cap, compaction hardening and automatic tool search. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -189,7 +189,7 @@ What other coding agents converged on between October and November 2026 (see [co
 
 **Why now:** Each item is small, depends only on shipped or already-planned work, and closes a gap that three or more products now ship. Most are S-sized and suit the delegation loop.
 
-Progress: 11 of 34 items shipped or done.
+Progress: 12 of 34 items shipped or done.
 
 ### Track A — Safety controls
 
@@ -211,7 +211,7 @@ Progress: 11 of 34 items shipped or done.
 |---|---|---|---|---|---|
 | `loop-interactive-round-cap` | A configurable round cap for chat (`[llm] max_rounds`, `--max-rounds`) with a Continue action | S | director | `loop-tools-loop-guard-step-budget`, `loop-run-report`, `fix-history-validity` | Done (Phase 6 Track B, unreleased) |
 | `ctx-compaction-hardening` | Compaction that rejects refusals and too-short summaries, retries once, and marks unverified claims | S | evi-frontier | `memory-sessions-structured-compaction`, `safety-secret-redaction` | Done (Phase 6 Track B, unreleased) |
-| `tools-tool-search-auto` | Deferred tool search turns on by itself (`tool_search = "auto"`) when tool schemas crowd a small window | S | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names`, `loop-eval-gates` | Planned |
+| `tools-tool-search-auto` | Deferred tool search turns on by itself (`tool_search = "auto"`) when tool schemas crowd a small window | S | evi-frontier | `models-ops-context-window-probe`, `tool-schema-safe-names`, `loop-eval-gates` | Done (Phase 6 Track B, unreleased) |
 | `tools-ripgrep-search` | Ripgrep-backed search with context lines and output modes, and notebook reading | S | evi-frontier | `tool-result-pipeline`, `loop-eval-gates` | Planned |
 | `ctx-shell-output-reducers` | Deterministic reducers for noisy shell and test output (ANSI, progress bars, repeated lines) | S | evi-local | `tool-result-pipeline` | Planned |
 | `loop-structured-output-validate` | `evi run --schema` validates the reply and retries once, with its own stop reason | S | evi-frontier | `loop-run-report` | Planned |

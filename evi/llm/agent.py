@@ -4325,8 +4325,52 @@ class Agent:
                 schema = {**schema, "function": {**fn, "name": sent, "parameters": cache[key]}}
             from_wire[sent] = name
             out.append(schema)
+        out = self._deferred_view(out, from_wire)
         self._from_wire = from_wire
         return out
+
+    def _deferred_view(self, schemas: list[dict[str, Any]],
+                       from_wire: dict[str, str]) -> list[dict[str, Any]]:
+        """`schemas` as `[tools] tool_search = "auto"` sends them
+        (evi.tools.resolver): all of them, unless together they would take
+        more than AUTO_SHARE_PCT of the window; then the core categories',
+        the tools the model already looked up, and `search_tools`. Any other
+        mode sends `schemas` as they are (less the auto search tool)."""
+        from evi.tools import resolver
+
+        tools_cfg = getattr(self.config, "tools", None)
+        mode = resolver.tool_search_mode(getattr(tools_cfg, "tool_search", "auto"))
+
+        def tool_of(schema: dict[str, Any]) -> Tool | None:
+            fn = schema.get("function") if isinstance(schema, dict) else None
+            name = from_wire.get(fn.get("name")) if isinstance(fn, dict) else None
+            return self.tools.get(name) if name else None
+
+        full = [s for s in schemas
+                if not getattr(tool_of(s), "auto_search", False)]
+        if mode != "auto":
+            return full
+        try:
+            window = self.context_ceiling(probe=False)
+        except Exception:  # noqa: BLE001 — no window known: send them all
+            window = 0
+        if not resolver.crowds(len(json.dumps(full, ensure_ascii=False)) // 4, window):
+            return full
+        surfaced: set[str] = self.__dict__.setdefault("_surfaced_tools", set())
+        kept = [s for s in full
+                if (t := tool_of(s)) is not None and not resolver.deferrable(t, surfaced)]
+        if len(kept) == len(full):
+            return full
+        search = self.tools.get(resolver.AUTO_SEARCH_NAME)
+        if search is None:
+            search = self.tools[resolver.AUTO_SEARCH_NAME] = resolver.make_auto_search(self)
+        elif not getattr(search, "auto_search", False):
+            return full  # a tool of that name already ("on" mode's): leave it all be
+        from_wire[resolver.AUTO_SEARCH_NAME] = resolver.AUTO_SEARCH_NAME
+        if not any(tool_of(s) is search for s in kept):
+            kept.append(search.openai_schema())
+        dlog("tools.deferred", {"sent": len(kept), "of": len(full) + 1, "window": window})
+        return kept
 
     def _fit_output(
         self, name: str, args_json: str, call_id: str, output: ToolOutput

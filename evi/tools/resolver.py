@@ -103,6 +103,82 @@ def make_search_tools(agent: Any, catalog: dict[str, Tool]) -> Tool:
     )
 
 
+# --- tool_search = "auto" --------------------------------------------------
+#
+# Decided per request (Agent._wire_tool_schemas), so it holds whatever set the
+# tools (a mode preset, a workflow step) and follows the window the server
+# reports: when the tool schemas would take more than AUTO_SHARE_PCT of the
+# window, only AUTO_CORE_CATEGORIES, the tools the model already looked up and
+# a `search_tools` tool are sent. Every tool stays in agent.tools, so a call
+# to one is gated as ever; the deferred ones just aren't described each turn.
+
+TOOL_SEARCH_MODES = ("auto", "on", "off")
+AUTO_SHARE_PCT = 20
+# What a coding turn can't do without: files, the shell, running code, git,
+# and memory (kept loaded in "on" mode too).
+AUTO_CORE_CATEGORIES: frozenset[str] = CORE_CATEGORIES | {"shell", "code", "git", "meta"}
+AUTO_SEARCH_NAME = "search_tools"
+
+
+def tool_search_mode(value: Any) -> str:
+    """`[tools] tool_search` as one of TOOL_SEARCH_MODES: true / "on" →
+    "on" (defer past `tool_search_threshold` tools), false / "off" → "off",
+    anything else (the default) "auto"."""
+    if value is True:
+        return "on"
+    if value is False:
+        return "off"
+    text = str(value or "").strip().lower()
+    if text in ("on", "true", "yes", "always"):
+        return "on"
+    if text in ("off", "false", "no", "never"):
+        return "off"
+    return "auto"
+
+
+def crowds(schema_tokens: int, window: int) -> bool:
+    """Tool schemas of `schema_tokens` take more than AUTO_SHARE_PCT of a
+    `window`-token context (an unknown window, 0, never crowds)."""
+    return window > 0 and schema_tokens * 100 > window * AUTO_SHARE_PCT
+
+
+def deferrable(tool: Tool, surfaced: set[str]) -> bool:
+    """Whether "auto" leaves `tool`'s schema out: not a core category, not
+    looked up yet, not the search tool itself."""
+    return (tool.category not in AUTO_CORE_CATEGORIES and tool.name not in surfaced
+            and not getattr(tool, "auto_search", False))
+
+
+def make_auto_search(agent: Any) -> Tool:
+    """The `search_tools` of "auto" mode: ranks the agent's deferred tools
+    (`deferrable`) and marks the matches as looked up (`agent._surfaced_tools`),
+    so their schemas go with the next request."""
+
+    def search_tools(query: str, limit: int = 8) -> str:
+        surfaced: set[str] = agent.__dict__.setdefault("_surfaced_tools", set())
+        catalog = [t for t in agent.tools.values() if deferrable(t, surfaced)]
+        matches = rank_tools(catalog, query, limit)
+        if not matches:
+            return json.dumps({
+                "added": [],
+                "note": f"no deferred tools matched {query!r}; "
+                        f"{len(catalog)} tools available — try other keywords",
+            })
+        for t in matches:
+            surfaced.add(t.name)
+        return json.dumps({
+            "added": [{"name": t.name, "description": t.description, "category": t.category}
+                      for t in matches],
+            "note": f"{len(matches)} tool(s) now available — call them directly.",
+        })
+
+    tool = make_search_tools(agent, {})
+    tool = Tool(name=AUTO_SEARCH_NAME, description=tool.description, parameters=tool.parameters,
+                func=search_tools, category="meta")
+    tool.auto_search = True  # type: ignore[attr-defined]
+    return tool
+
+
 def apply_tool_search(agent: Any, tools: list[Tool], *, threshold: int) -> bool:
     """If ``tools`` exceeds ``threshold``, reconfigure ``agent`` for deferred tool
     search: keep CORE_CATEGORIES loaded, move the rest into a catalog behind a

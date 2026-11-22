@@ -6,6 +6,14 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Tool search turns itself on when tools crowd the window.**
+  `[tools] tool_search` now defaults to `"auto"`: when the tool schemas
+  would take more than a fifth of the context window (a small local window,
+  or many MCP servers), a request sends the file, shell, code, git and memory
+  tools, the ones the model already looked up and a `search_tools` tool, and
+  the rest wait to be looked up. `true` / `"on"` keeps the threshold
+  behaviour, `false` / `"off"` sends every schema, and the web settings page
+  has a select for it.
 - **Compaction checks its summary.** A summary reply that is empty, a
   refusal, missing most of its headings or too short is asked for once
   more (saying what was wrong), and if that fails too the history is kept

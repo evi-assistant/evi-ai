@@ -257,8 +257,8 @@ as](features/permissions-and-sandbox.md#what-a-call-counts-as).
 
 `monitor` with `kind=command` runs a shell command, so it runs only where
 `run_command` is offered: `[tools] shell = true`, or code mode (`evi chat -m
-code`, the web mode switcher). With `[tools] tool_search` on, `run_command`
-may still be in the deferred catalog: once the model looks it up with
+code`, the web mode switcher). With `[tools] tool_search = true`, `run_command`
+may still be in the deferred catalog (the default `"auto"` keeps it loaded): once the model looks it up with
 `search_tools`, `monitor` commands work too. Tailing a file (`kind=file`)
 needs neither.
 

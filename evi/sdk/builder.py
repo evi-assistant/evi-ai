@@ -253,11 +253,12 @@ def build_agent(
         unattended_policy=unattended_policy,
         **({"system_prompt": system_prompt} if system_prompt is not None else {}),
     )
-    # Tool-search-at-scale (opt-in): with many tools, defer the long tail behind
-    # a `search_tools` meta-tool so per-turn context stays small.
-    if getattr(config.tools, "tool_search", False):
-        from evi.tools.resolver import apply_tool_search
+    # Tool-search-at-scale "on": with many tools, defer the long tail behind a
+    # `search_tools` meta-tool so per-turn context stays small. ("auto" is
+    # decided per request, in Agent._wire_tool_schemas.)
+    from evi.tools.resolver import apply_tool_search, tool_search_mode
 
+    if tool_search_mode(getattr(config.tools, "tool_search", "auto")) == "on":
         apply_tool_search(
             agent, tools, threshold=getattr(config.tools, "tool_search_threshold", 30)
         )

@@ -3333,10 +3333,12 @@ resetBtn.addEventListener('click', async () => {
             help:'Run run_python under an OS sandbox (read-only FS, no network) where available (bwrap / sandbox-exec).' },
           { type:'lines', section:'tools', key:'mcp_allow', label:'MCP server allowlist',
             help:'If non-empty, only these mcp.json server names load (one per line). Empty = all enabled servers.' },
-          { type:'bool', section:'tools', key:'tool_search', label:'Tool search at scale',
-            help:'When the enabled toolset exceeds the threshold below, defer the long tail behind a search_tools meta-tool instead of sending every schema each turn (keeps context small with many MCP tools).' },
+          { type:'select', section:'tools', key:'tool_search', label:'Tool search',
+            options:['auto','on','off'],
+            map: v => v === true ? 'on' : v === false ? 'off' : (v || 'auto'),
+            help:'auto: when the tool schemas would take more than a fifth of the context window, send only the file, shell, code, git and memory tools plus a search_tools tool that looks up the rest. on: defer every tool past the threshold below. off: always send every schema.' },
           { type:'int', section:'tools', key:'tool_search_threshold', label:'Tool-search threshold',
-            help:'Enabled-tool count above which tool search kicks in (when the toggle above is on).' },
+            help:'Enabled-tool count above which tool search defers tools when it is on.' },
           { type:'int', section:'tools', key:'mcp_max_output_chars', label:'Max MCP output chars',
             help:'Truncate a single MCP tool result to this many characters before handing it to the model. 0 = no cap.' },
         ]) },
@@ -4233,7 +4235,8 @@ resetBtn.addEventListener('click', async () => {
         const op = document.createElement('option'); op.value = o; op.textContent = o; inp.appendChild(op);
       });
       inp.value = f.type === 'client-select'
-        ? (localStorage.getItem(THEME_KEY) || 'system') : getVal(f.section, f.key);
+        ? (localStorage.getItem(THEME_KEY) || 'system')
+        : (f.map ? f.map(getVal(f.section, f.key)) : getVal(f.section, f.key));
       inp.onchange = () => f.type === 'client-select'
         ? setThemePref(inp.value) : setVal(f.section, f.key, inp.value);
     } else if (f.type === 'model') {
