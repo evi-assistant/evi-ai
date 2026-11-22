@@ -1095,6 +1095,153 @@ def protected_read(
     return _first_protected([(v, base, v) for v in path_args if v], pats)
 
 
+# git's global options that take the next word as their value.
+# A commit, push or pull request named anywhere in a line's text: how a line
+# the splitter can't follow (an inline script) is read.
+_SENDS_IN_TEXT = re.compile(
+    r"(?i)\bgit(?:\.exe)?\b[^\n]*?\b(?:commit|push)\b|\bgh(?:\.exe)?\b[^\n]*?\bpr\s+(?:create|new)\b")
+# git's global options that take the next word as their value.
+_GIT_VALUED_GLOBALS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                                 "--super-prefix", "--config-env", "--exec-path"})
+# Shell words that come before the command they introduce (`if git commit`,
+# `then git push`, `! git commit`).
+_SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!",
+                             "time", "{", "(", "-not"})
+# Where a work tree the scan can't follow is: the call asks instead.
+_UNKNOWN = Path("?")
+
+
+def _git_step(words: tuple[str, ...], ci: int, here: Path) -> tuple[str, Path] | None:
+    """(subcommand, folder it works in) for a `git` command whose program
+    is `words[ci]`; the folder is `_UNKNOWN` when a ``-C`` / ``--work-tree``
+    value holds an expansion. None when it names no subcommand."""
+    i = ci + 1
+    while i < len(words):
+        w = words[i]
+        name, eq, value = w.partition("=")
+        if name in _GIT_VALUED_GLOBALS:
+            if not eq:
+                i += 1
+                value = words[i] if i < len(words) else ""
+            if name in ("-C", "--work-tree") and value:
+                if _EXPANSION.search(value) or here == _UNKNOWN:
+                    here = _UNKNOWN
+                else:
+                    try:
+                        here = here / Path(value).expanduser()
+                    except (OSError, RuntimeError, ValueError):
+                        here = _UNKNOWN
+            i += 1
+            continue
+        if w.startswith("-"):
+            i += 1
+            continue
+        return w.lower(), here
+    return None
+
+
+def _program_past_keywords(seg: shellsplit.Segment) -> tuple[int, str] | None:
+    """`_program`, past the shell keywords before it (`if`, `then`, `!` ...)."""
+    words = seg.words
+    ci = shellsplit._command_index(words)
+    while ci is not None and ci < len(words) and words[ci].lower() in _SHELL_KEYWORDS:
+        rest = shellsplit._command_index(words[ci + 1:])
+        ci = None if rest is None else ci + 1 + rest
+    return None if ci is None or ci >= len(words) else (ci, shellsplit._base(words[ci]))
+
+
+def shell_secret_send(
+    tool_name: str,
+    tool_category: str,
+    tool_args: str | dict,
+    *,
+    workdir: str | Path | None = None,
+    dialect: str | None = None,
+    split: shellsplit.Split | None = None,
+) -> str | None:
+    """What a shell line's ``git commit``, ``git push`` or ``gh pr create``
+    would send that holds a secret, as "git commit would send a github_token
+    (config.py:3)", or None: no such command, nothing found, or no git work
+    tree to look in (`evi.secretscan.scan_outgoing` says what each sends).
+    A work tree the line names in a way eVi can't follow (``cd $D``), or on
+    another host than the session's folder (a UNC path: scanning it would
+    connect there before anyone approved), is not scanned and reads as a
+    hit, so the call asks. Lexical, like the read checks: a script that
+    commits is not seen, and a push is taken to send the current branch."""
+    command = shell_command_of(tool_name, tool_category, tool_args)
+    if command is None or not re.search(r"(?i)\b(git|gh)\b", command):
+        return None
+    sp = split if split is not None else shellsplit.split(command, dialect)
+    base = _base_dir(workdir)
+    cwd = exec_cwd_of(tool_name, tool_args) or ""
+    try:
+        rbase = base / Path(cwd).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        rbase = _UNKNOWN
+    if rbase != _UNKNOWN and _EXPANSION.search(cwd):
+        rbase = _UNKNOWN
+    if sp.changes_dir and rbase != _UNKNOWN:
+        folders = _dir_changes(sp, rbase) or [_UNKNOWN]
+    else:
+        folders = [rbase]
+    # Per work tree: does the line commit, push, `git add`?
+    sends: dict[Path, dict[str, bool]] = {}
+    if sp.error and _SENDS_IN_TEXT.search(command):
+        # A line the splitter can't follow (`bash -c "git commit ..."`, `cmd
+        # /c ...`): what it sends is taken at its widest, from here.
+        sends[folders[0]] = {"commit": True, "push": True, "add": True}
+    for seg in sp.commands:
+        prog = _program_past_keywords(seg)
+        if prog is None:
+            continue
+        ci, name = prog
+        for folder in folders:
+            if name == "git":
+                step = _git_step(seg.words, ci, folder)
+                if step is None:
+                    continue
+                sub, here = step
+                if sub in ("commit", "push", "add"):
+                    sends.setdefault(here, {})[sub] = True
+            elif name == "gh":
+                rest = [w.lower() for w in seg.words[ci + 1:] if not w.startswith("-")]
+                if rest[:2] in (["pr", "create"], ["pr", "new"]):
+                    sends.setdefault(folder, {})["push"] = True
+    # Scanned afresh every time (no cache): the work tree may change between
+    # two asks about the same line, and only lines that commit or push pay.
+    for here, what in sends.items():
+        if not (what.get("commit") or what.get("push")):
+            continue
+        verb = "git push" if what.get("push") else "git commit"
+        if here == _UNKNOWN:
+            return (f"{verb} could not be scanned for secrets: eVi can't tell which "
+                    "work tree it runs in")
+        if _is_network_path(here) and here.drive.lower() != base.drive.lower():
+            return (f"{verb} could not be scanned for secrets: it runs in a network "
+                    "folder on another host")
+        found = _outgoing_secret(here, what)
+        if found:
+            return found
+    return None
+
+
+def _outgoing_secret(here: Path, what: dict[str, bool]) -> str | None:
+    from evi import secretscan
+
+    try:
+        found = secretscan.scan_outgoing(here, commit=bool(what.get("commit")),
+                                         push=bool(what.get("push")),
+                                         adds=bool(what.get("add")))
+    except (secretscan.ScanError, ValueError, OSError):
+        return None  # no work tree there: the command fails on its own
+    if not found:
+        return None
+    verb = "git push" if what.get("push") else "git commit"
+    first = found[0]
+    more = f" and {len(found) - 1} more" if len(found) > 1 else ""
+    return f"{verb} would send a {first.kind} ({first.path}:{first.line}){more}"
+
+
 def shell_protected_read(
     tool_name: str,
     tool_category: str,
@@ -1397,6 +1544,15 @@ def decide(
     if protected_write(
         tool_name, tool_category, tool_args, protected_paths, workdir=workdir,
         path_args=path_args, read_only=read_only, split=sp,
+    ) is not None:
+        return "deny" if mode == "plan" or rule_action() == "deny" else "ask"
+
+    # 2. A line that commits, pushes or opens a pull request with a secret in
+    #    what it sends (`git commit` with a token in the diff) is never silent
+    #    either: the secret would leave the machine. Yolo and allow rules
+    #    don't clear it; plan mode or a deny rule denies it.
+    if command is not None and shell_secret_send(
+        tool_name, tool_category, tool_args, workdir=workdir, dialect=dialect, split=sp,
     ) is not None:
         return "deny" if mode == "plan" or rule_action() == "deny" else "ask"
 

@@ -61,6 +61,12 @@ this order:
    `/auto on` included — and is **denied** when nothing can ask. Only `plan`
    mode or a matching `deny` rule changes that, to deny; an `allow` rule does
    not clear it. See [Protected paths](#protected-paths).
+
+   Then, the same way, a shell line that **sends a secret**: one that runs
+   `git commit`, `git push` or `gh pr create` when what it would send holds
+   a token, a key or a secret this machine holds asks, in every mode, and is
+   denied when nothing can ask. See [Commits and pushes that hold a
+   secret](#commits-and-pushes-that-hold-a-secret).
 2. **Mode** (`auto.mode`). Checked next and can short-circuit the rest:
    - `yolo` → **allow** every call (hard-deny, protected paths and the
      destructive-command guard still apply).
@@ -314,6 +320,43 @@ This is a guardrail, not a sandbox. Not inspected: command strings run through
 `core.hooksPath` folder such as `.husky/`, the contents of a recursive copy
 (`cp -r payload/. .`), hard links, and paths nested inside an MCP tool's
 arguments (`{"edits": [{"path": …}]}`).
+
+### Commits and pushes that hold a secret
+
+A shell line that runs `git commit`, `git push` or `gh pr create` is
+scanned before it runs, with the same patterns and known values as
+[`evi secrets scan`](secret-redaction.md#scanning-for-secrets-evi-secrets-scan).
+When what it would send holds a secret, the call asks: in every mode, `yolo`
+and `/auto on` included, and over any allow rule (`allow run_command git *`).
+A deny rule or `plan` mode denies it, and an unattended run refuses it. The
+model is told which kind of secret was found and where (`git commit would send
+a github_token (config.py:3)`), never the secret itself, and to take it out of
+the change.
+
+What counts as sent:
+
+- **`git commit`**: what is staged, and the changes to tracked files in the
+  work tree (as `git commit -a` would take them). When the same line runs
+  `git add`, the untracked files git doesn't ignore count too.
+- **`git push`, `gh pr create` and `gh pr new`**: every commit on the current
+  branch that is on no remote yet, each one, so a secret added and removed again
+  is still found. After a commit in the same line, that commit's changes count
+  too. Past 300 unsent commits (a first push of a long history), what the
+  branch's last commit holds is scanned instead.
+
+The work tree is scanned from its top folder, whatever the diff settings in
+your or the repository's git config. `git -C <folder>`, `--work-tree`, the
+call's `cwd` and a `cd` in the line are followed to the work tree the command
+runs in, past `if` / `then` / `do` / `!`. A folder eVi can't follow (`cd $D`,
+`git -C "$D"`) or a network folder on another host than the session's folder
+is not scanned: the call asks. A line eVi can't split (`bash -c "git commit
+..."`, `cmd /c ...`) that mentions a commit, push or pull request is scanned
+at its widest: a commit with `git add` and a push, from the current folder.
+
+Not covered: a script or alias that commits (`git ci` for a `commit` alias),
+a secret in the commit message, a push of a branch other than the current one,
+and secrets the patterns don't recognise. A folder that isn't a git work tree is
+not scanned (the command fails on its own).
 
 ### Workspace-only file access
 
@@ -1300,6 +1343,8 @@ turn returns to your normal policy.
 
 - `C:\evi\evi\permissions.py` — the `decide()` policy, rule/trust matching and
   protected paths (`effective_protected_paths`, `protected_write`).
+- `C:\evi\evi\secretscan.py` — what a commit or push would send (`scan_outgoing`),
+  scanned by `shell_secret_send` in permissions.py.
 - `C:\evi\evi\tools\base.py` — which arguments are paths (`Tool.path_args`),
   which tools only read (`READ_ONLY_TOOLS`) and a call's category
   (`Tool.category_for`, with `classify_call` in permissions.py).

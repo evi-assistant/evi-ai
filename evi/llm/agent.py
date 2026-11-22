@@ -1953,6 +1953,21 @@ class Agent:
         except Exception:  # noqa: BLE001 — a check that can't run must not allow
             return "(unreadable path arguments)"
 
+    def _secret_send_hit(self, tool: Tool, args_json: str) -> str | None:
+        """What this shell line's `git commit`, `git push` or `gh pr create`
+        would send that holds a secret, or None
+        (`permissions.shell_secret_send`). Confirmed like a secret read: no
+        category, `/auto on` or unattended policy lets it through."""
+        from evi.permissions import shell_secret_send
+
+        try:
+            return shell_secret_send(
+                tool.name, getattr(tool, "category", ""), args_json,
+                workdir=getattr(self, "cwd", "") or None,
+            )
+        except Exception:  # noqa: BLE001 — a check that can't run must not allow
+            return "(the change could not be scanned for secrets)"
+
     def _prompt_one(self, tool: Tool, args_json: str) -> bool:
         """Ask the user about one call: the per-call callback, else the batch
         one with a single item. False when there is neither, or it fails."""
@@ -2014,6 +2029,14 @@ class Agent:
                     "([auto] protected_paths), which needs the user's approval, and was "
                     "not approved — not run."
                 )
+            sending = self._secret_send_hit(tool, args_json)
+            if sending is not None:
+                return (
+                    f"PERMISSION DENIED: {sending}, which needs the user's approval, and "
+                    "was not approved — not run. Take the secret out of the change "
+                    "(read it from the environment or an ignored file instead); never "
+                    "print the secret itself."
+                )
         if not self._has_permission_ui():
             return (
                 f"PERMISSION DENIED: {name}({args_json}) was not run. This run is "
@@ -2050,6 +2073,9 @@ class Agent:
             if self._secret_read_hit(tool, args_json) is not None and (
                 decision == "ask" or self._decide(tool, args_json, "ask") != "allow"
             ):
+                return "deny"
+            # A commit or push sending a secret: refused, whatever allows it.
+            if self._secret_send_hit(tool, args_json) is not None:
                 return "deny"
         return decision
 
@@ -2168,6 +2194,7 @@ class Agent:
         if guard is None and (
             self._protected_hit(tool, args_json) is not None
             or self._secret_read_hit(tool, args_json) is not None
+            or self._secret_send_hit(tool, args_json) is not None
             or getattr(tool, "mcp_rule", "") == "ask"
         ):
             guard = ("ask", "protected path")  # never pre-approved: confirm it

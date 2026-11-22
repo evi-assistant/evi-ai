@@ -6,6 +6,16 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **A commit or push that holds a secret asks first.** A shell line that
+  runs `git commit`, `git push` or `gh pr create` is scanned before it runs
+  (as `evi secrets scan` does); when what it would send holds a token, a key
+  or a secret this machine holds, the call asks, in every mode (yolo and
+  `/auto on` too) and over any allow rule, and an unattended run refuses it.
+  The model is told the kind of secret and where, never the secret. A commit
+  counts what is staged and its tracked changes (and untracked files when
+  the line runs `git add`); a push counts each of the branch's commits on no
+  remote yet. A work tree eVi can't follow (`cd $D`) or a network folder on
+  another host isn't scanned: the call asks.
 - **`evi secrets scan`.** Scans the git work tree (tracked and untracked,
   not ignored), the paths you name, or with `--diff REF` only the lines a
   change adds, for what eVi's redaction would hide: tokens and keys by
