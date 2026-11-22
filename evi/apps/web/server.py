@@ -45,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from evi import approval
 from evi import events as _events
 from evi import hooks as hooks_mod
 from evi import safemode
@@ -1412,6 +1413,16 @@ def _turn_cancelled(sess: WebSession) -> bool:
     return isinstance(token, threading.Event) and token.is_set()
 
 
+def _approval_view(tool_name: str, category: str, args_json: str) -> dict | None:
+    """For a shell call, what the prompt shows of it (evi.approval); None for
+    any other call, or when it can't be built (the prompt still shows args)."""
+    try:
+        view = approval.describe(tool_name, category, args_json)
+    except Exception:  # noqa: BLE001 — never let the display block the question
+        return None
+    return view.as_dict() if view is not None else None
+
+
 def _make_permission_callback(bucket: "dict[str, WebSession]", session_id: str,
                               enqueue, timeout_s: float):
     """Build a permission_callback that bridges worker thread → SSE client.
@@ -1447,9 +1458,10 @@ def _make_permission_callback(bucket: "dict[str, WebSession]", session_id: str,
             "kind": "PermissionRequest",
             "decision_id": decision_id,
             "tool_name": tool_name,
-            "args": Redactor().args(args_json),
+            "args": approval.visible(Redactor().args(args_json), keep_newlines=True),
             "category": category,
             "timeout_s": timeout_s,
+            "shell": _approval_view(tool_name, category, args_json),
         })
         answered = pending.event.wait(timeout_s)
         sess.pending.pop(decision_id, None)

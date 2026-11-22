@@ -6,6 +6,16 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Approval prompts show each command a shell line runs.** The CLI's
+  prompts (one call and a batch), the web UI's card and the VS Code panel
+  show the whole command line, never cut short at 200 characters, and list
+  each command it chains on a line of its own, nested ones (`$( )`)
+  indented. A character that doesn't show as itself (a bidi override, a
+  zero-width space, a control character, a no-break space, the quotes and
+  dashes PowerShell reads as ASCII) is shown as its `\u` escape, and a
+  warning names it, in the command and in any other call's arguments. A line
+  eVi can't split says so. The web stream's `PermissionRequest` carries the
+  view as a new `shell` field.
 - **A commit or push that holds a secret asks first.** A shell line that
   runs `git commit`, `git push` or `gh pr create` is scanned before it runs
   (as `evi secrets scan` does); when what it would send holds a token, a key

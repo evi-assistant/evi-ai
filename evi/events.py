@@ -285,10 +285,25 @@ SCHEMA: dict[str, Any] = {
         # never in the history.
         "FilesChanged": _kind("FilesChanged", {"paths": _STRS}),
         # -- the web server's own --
+        # `shell`: for a shell call, what the prompt shows of it (evi.approval):
+        # the whole line, each command it runs, and any hidden character named.
         "PermissionRequest": _kind("PermissionRequest", {
             "decision_id": _STR, "tool_name": _STR, "args": _STR, "category": _STR,
             "timeout_s": _NUM,
-        }),
+            "shell": _nullable({
+                "type": "object",
+                "properties": {
+                    "command": _STR,
+                    "segments": {"type": "array", "items": {
+                        "type": "object",
+                        "properties": {"depth": _INT, "text": _STR},
+                        "required": ["depth", "text"],
+                    }},
+                    "hidden": _STRS, "note": _STR, "cut": _INT, "rest": {"type": "object"},
+                },
+                "required": ["command", "segments", "hidden", "note", "cut", "rest"],
+            }),
+        }, required=("decision_id", "tool_name", "args", "category", "timeout_s")),
         "PermissionExpired": _kind("PermissionExpired", {
             "decision_id": _STR, "tool_name": _STR, "timeout_s": _NUM,
         }),

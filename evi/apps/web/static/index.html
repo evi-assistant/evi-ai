@@ -420,6 +420,14 @@
     background: var(--bg); padding: 8px 10px; border-radius: 4px;
     margin: 10px 0; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto;
   }
+  /* Escaped by the server, but never let the text reorder itself. */
+  .perm-card .perm-args, .perm-card .perm-segs { direction: ltr; unicode-bidi: isolate; }
+  .perm-card .perm-segs {
+    font-family: ui-monospace, monospace; font-size: 12px; margin: 4px 0 10px;
+    padding-left: 22px; max-height: 160px; overflow: auto; word-break: break-all;
+  }
+  .perm-card .perm-sub, .perm-card .perm-note { font-size: 12px; color: var(--dim); margin: 4px 0; }
+  .perm-card .perm-warn { font-size: 12px; color: var(--err); margin: 4px 0; font-weight: 600; }
   .perm-actions { display: flex; gap: 8px; justify-content: flex-end; }
   .perm-actions button {
     border: 1px solid var(--border); background: transparent; color: var(--fg);

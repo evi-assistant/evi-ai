@@ -407,6 +407,47 @@ def _confirm_session_approval() -> bool:
     return True
 
 
+def _approval_detail(name: str, args: str, category: str, limit: int, red=None,
+                     indent: str = "  ") -> str:
+    """What a permission prompt shows after the tool's name (evi.approval).
+    A shell call: the whole command line, each command it runs on a line of
+    its own, and a warning naming any hidden character, all shown as escapes.
+    Any other call: ` args=` and its arguments, cut to `limit`, with hidden
+    characters escaped. Redacted, and escaped for Rich."""
+    import json
+
+    from rich.markup import escape
+
+    from evi import approval
+
+    try:
+        view = approval.describe(name, category, args)
+    except Exception:  # noqa: BLE001 — never let the display block the question
+        view = None
+    if view is None:
+        # _shown_args has escaped it for Rich; the escapes add no '['.
+        return f" args={approval.visible(_shown_args(args, limit, red), keep_newlines=True)}"
+    lines = [f"\n{indent}command: {escape(view.command)}"]
+    if view.cut:
+        lines.append(f"\n{indent}[red]… {view.cut} more characters not shown: "
+                     "deny unless you know what they are[/red]")
+    if len(view.segments) > 1 or any(d for d, _ in view.segments):
+        lines.append(f"\n{indent}runs {len(view.segments)} commands:")
+        for n, (depth, text) in enumerate(view.segments, 1):
+            lines.append(f"\n{indent}  {'  ' * depth}{n}. {escape(text)}")
+    if view.note:
+        lines.append(f"\n{indent}[yellow]note:[/yellow] {escape(view.note)}")
+    if view.hidden:
+        lines.append(f"\n{indent}[red]hidden characters (shown as escapes):[/red] "
+                     + escape(", ".join(view.hidden)))
+    if view.rest:
+        rest = approval.visible(json.dumps(view.rest))
+        if len(rest) > limit:
+            rest = rest[:limit] + "…"
+        lines.append(f"\n{indent}[dim]other args: {escape(rest)}[/dim]")
+    return "".join(lines)
+
+
 def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
     """Ask the user whether to allow a tool call. Default-deny on empty input.
     y / a approve this call only (as `a` approves the listed calls in the batch
@@ -418,8 +459,8 @@ def _cli_permission_prompt(name: str, args: str, category: str) -> bool:
 
     console.print(
         f"\n[yellow]permission:[/yellow] "
-        f"[bold]{escape(str(name))}[/bold] [dim]({escape(str(category))})[/dim] "
-        f"args={_shown_args(args, 200)}"
+        f"[bold]{escape(str(name))}[/bold] [dim]({escape(str(category))})[/dim]"
+        + _approval_detail(name, args, category, 200)
     )
     answer = _permission_answer(
         "  approve? [bold]y[/bold]/a (this call) / n / s (allow all this session): "
@@ -449,7 +490,8 @@ def _cli_permission_prompt_batch(calls: list[tuple[str, str, str]]) -> list[bool
     for i, (name, args, category) in enumerate(calls, 1):
         console.print(
             f"  [bold]{i}.[/bold] [bold]{escape(str(name))}[/bold] "
-            f"[dim]({escape(str(category))})[/dim] args={_shown_args(args, 160, red)}"
+            f"[dim]({escape(str(category))})[/dim]"
+            + _approval_detail(name, args, category, 160, red, indent="     ")
         )
     answer = _permission_answer(
         "  approve? [bold]a[/bold]ll (these calls) / [bold]n[/bold]one / "

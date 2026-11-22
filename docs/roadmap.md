@@ -10,11 +10,11 @@ implement well-specified fixes to itself under review; Phases 2 to 5 are
 the features, each behind the foundations it needs; Phase 6 adds what
 other coding agents converged on in late 2026.
 
-**Status (2026-11-21):** 43 items shipped in 1.1.0 and 10 more are
+**Status (2026-11-22):** 43 items shipped in 1.1.0 and 11 more are
 done (the security hotfix also shipped first, on its own, as 1.0.53): all
 of Phase 0, Phase 1's loop
 infrastructure and first shakedown batch (15 tasks, each verified), and
-Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus seven of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
+Phase 2's edit recovery, tool-call repair, loop guard, token budget, safe tool names, the tool-result pipeline, PowerShell on Windows, the context-window probe, structured compaction and the native reasoning channel, plus eight of Phase 6's safety controls. The second shakedown batch and the rest are planned. Each item ships with its own tests and docs, and each release lists
 what it contains in the CHANGELOG.
 
 - Sizes: **S** about an afternoon, **M** about a day, **L** a phase of its own.
@@ -189,7 +189,7 @@ What other coding agents converged on between October and November 2026 (see [co
 
 **Why now:** Each item is small, depends only on shipped or already-planned work, and closes a gap that three or more products now ship. Most are S-sized and suit the delegation loop.
 
-Progress: 7 of 34 items shipped or done.
+Progress: 8 of 34 items shipped or done.
 
 ### Track A — Safety controls
 
@@ -203,7 +203,7 @@ Progress: 7 of 34 items shipped or done.
 | `safety-mcp-tool-policy` | Per-tool MCP `always_ask` / `always_deny`, and read-only auto-approval from `readOnlyHint` | S | director | `fix-permission-engine`, `extensibility-interop-mcp-sdk2-migration` | Done (Phase 6 Track A, unreleased) |
 | `safety-secret-commit-guard` | Ask before `git commit`, `git push` or `gh pr create` when the change holds a secret | M | director | `safety-secret-scan-cli`, `fix-shell-segment-split` | Done (Phase 6 Track A, unreleased) |
 | `safety-broad-allow-lint` | `evi lint` flags over-broad allow rules (interpreters, package runners, bare wildcards) | S | evi-local | `fix-permission-engine` | Done (Phase 6 Track A, unreleased) |
-| `safety-approval-prompt-clarity` | Approval prompts that show each shell segment and make hidden characters visible | S | evi-frontier | `fix-shell-segment-split`, `fix-ui-render-and-desktop-ipc` | Planned |
+| `safety-approval-prompt-clarity` | Approval prompts that show each shell segment and make hidden characters visible | S | evi-frontier | `fix-shell-segment-split`, `fix-ui-render-and-desktop-ipc` | Done (Phase 6 Track A, unreleased) |
 
 ### Track B — Small-model loop reliability
 

@@ -182,15 +182,16 @@ def test_cli_permission_prompt_shows_the_arguments_redacted_before_cutting(cli, 
     answers.append("n")
     # The secret straddles the 200-character cut: cutting first would show
     # its first ten characters. Redacted first, the cut takes the marker's.
-    args = json.dumps({"command": "echo " + "x" * 172 + SECRET})
+    # (A shell command is never cut: tests/test_approval_prompt.py.)
+    args = json.dumps({"url": "x" * 181 + SECRET})
     assert args.index(SECRET) == 190
-    assert cli_main._cli_permission_prompt("run_command", args, "shell") is False
+    assert cli_main._cli_permission_prompt("web_fetch", args, "network") is False
     out = capsys.readouterr().out
     assert "permission:" in out and _no_prefix(out)
     assert "x[REDACTED:…" in out
     answers.append("n")
     cli_main._cli_permission_prompt("run_command", json.dumps({"command": SECRET}), "shell")
-    assert f'args={{"command": "{MARK}"}}' in capsys.readouterr().out
+    assert f"command: {MARK}" in capsys.readouterr().out
 
 
 def test_cli_batch_permission_prompt_shows_every_call_redacted(cli, capsys) -> None:
