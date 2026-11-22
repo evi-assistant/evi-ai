@@ -70,6 +70,11 @@ class LLMSettings:
     temperature: float = 0.7
     max_tokens: int = 4096
     request_timeout: float = 120.0
+    # Model round trips one chat turn may take (evi chat, the web UI): the last
+    # has no tools and asks for a hand-off, then /continue (the web UI's
+    # Continue) gives it as many again. `evi chat --max-rounds` overrides it for
+    # a session; `evi run --max-turns` has its own.
+    max_rounds: int = 6
     # Conversation grows boundless without compaction. When non-zero, the
     # Agent summarises oldest turns into a single system note once the
     # in-memory history exceeds this many messages. 0 = disabled.

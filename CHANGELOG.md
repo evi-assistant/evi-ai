@@ -6,6 +6,13 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **A round cap for chat, with Continue.** `[llm] max_rounds` (6, as
+  before) sets how many model round trips one chat turn may take, and
+  `evi chat --max-rounds N` sets it for a session. When a turn uses them
+  all, its last round asks for a hand-off, the REPL says
+  `stopped after N rounds … /continue goes on`, and the web UI shows a
+  **Continue** button. `/continue` (REPL and web) starts a turn that picks
+  up where it stopped.
 - **The verify gate and reviews scan for secrets.** When the checks run at
   the end of a turn, a secret the turn added to a file (not one the file
   already held) fails the round like a check named `secrets`, and the model

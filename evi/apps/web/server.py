@@ -1873,6 +1873,7 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
             ("/plan [task]", "next turn runs in plan-only mode"),
             ("/auto [on|off]", "auto-approve every tool call this session"),
             ("/compact [focus]", "summarise older history into one note"),
+            ("/continue", "go on after a turn the round cap ended ([llm] max_rounds)"),
             ("/reload", "re-read config.toml across the running session"),
         ]
         lines = ["**Built-in commands**"]
@@ -1884,6 +1885,11 @@ def _handle_slash(agent: Agent, raw: str, cmd_store: CommandStore) -> _SlashOutc
             for e in user_cmds:
                 lines.append(f"- `/{e.name}` — {e.summary}")
         return _SlashOutcome(handled=True, text="\n".join(lines))
+
+    if name == "continue":
+        from evi.llm.agent import CONTINUE_PROMPT
+
+        return _SlashOutcome(handled=False, expand_to=CONTINUE_PROMPT)
 
     if name == "reset":
         agent.reset()

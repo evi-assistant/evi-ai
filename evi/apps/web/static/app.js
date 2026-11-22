@@ -2087,6 +2087,27 @@ async function steerMessage(text) {
   }
 }
 
+// The note under a turn the round cap ended, with its Continue button (gone
+// once used; while another turn runs it does nothing).
+function roundCapNote() {
+  const b = addBubble('system');
+  b.classList.add('round-cap');
+  const msg = document.createElement('span');
+  msg.textContent = 'Stopped — the turn used its round cap ([llm] max_rounds). ';
+  const go = document.createElement('button');
+  go.className = 'continue-turn';
+  go.textContent = 'Continue';
+  go.title = 'Pick up where it stopped (/continue)';
+  go.onclick = () => {
+    if (turnInFlight) return;
+    go.remove();
+    sendMessage('/continue');
+  };
+  b.appendChild(msg);
+  b.appendChild(go);
+  return b;
+}
+
 async function sendMessage(text, images) {
   // Don't fire a real LLM turn into the void. Slash commands (/help, /reset,
   // …) are handled without a model, so only gate normal messages.
@@ -2422,6 +2443,10 @@ async function handleEvent(ev, assistant, sid) {
     } else if (ev.reason === 'stop_hook_exhausted') {
       addBubble('system').textContent =
         'Stopped — a stop hook kept blocking the end of the turn ([hooks] max_blocks).';
+    } else if (ev.reason === 'max_turns_reached') {
+      // The round cap ([llm] max_rounds) ended the turn with a hand-off:
+      // Continue starts a turn that picks it up (/continue).
+      roundCapNote();
     }
     // The turn's final assistant bubble is now the newest — move the re-roll
     // affordance onto it (and off any earlier ones).

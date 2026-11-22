@@ -37,6 +37,7 @@ from evi.llm.agent import (
     Error,
     Guardrail,
     LogProbs,
+    MAX_TURNS_REASON,
     StopBlocked,
     TextDelta,
     ThinkingDelta,
@@ -689,6 +690,14 @@ def _is_substantive(msg: str) -> bool:
 SlashResult = str  # "continue" | "exit" | <expanded prompt>
 
 
+def _handle_continue(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
+    """`/continue`: a new turn that picks up where the round cap stopped the
+    last one, with as many rounds again (Agent.round_cap)."""
+    from evi.llm.agent import CONTINUE_PROMPT
+
+    return CONTINUE_PROMPT
+
+
 def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResult:
     builtins = [
         ("/help", "show this list"),
@@ -700,6 +709,7 @@ def _handle_help(agent: Agent, args: str, cmd_store: CommandStore) -> SlashResul
         ("/plan [on|off]", "plan-only next turn; /plan on|off toggles persistent read-only plan mode"),
         ("/auto [on|off]", "auto-approve every tool call for this session"),
         ("/compact [focus]", "summarise older history into one note to free context"),
+        ("/continue", "go on after a turn the round cap ended ([llm] max_rounds)"),
         ("/context, /ctx", "show where the context window is being spent"),
         ("/recent [n]", "list recent sessions (resume via `evi sessions resume`)"),
         ("/image <path>", "attach an image to the next turn (VLM models)"),
@@ -1407,6 +1417,7 @@ _BUILTINS: dict[str, callable] = {
     "plan": _handle_plan,
     "auto": _handle_auto,
     "compact": _handle_compact,
+    "continue": _handle_continue,
     "image": _handle_image,
     "img": _handle_image,
     "effort": _handle_effort,
@@ -1754,6 +1765,11 @@ def _run_repl(agent: Agent) -> None:
                         if event.reason == "interrupted":
                             console.print("[yellow]interrupted[/yellow]")
                             break
+                        if event.reason == MAX_TURNS_REASON:
+                            console.print(
+                                f"[yellow]stopped after {agent.round_cap()} rounds "
+                                "(the round cap, [llm] max_rounds):[/yellow] "
+                                "/continue goes on")
                         # Ping when a turn finishes (off unless [notify] enabled) — lets
                         # you walk away from a long local turn. Best-effort, never raises.
                         try:
@@ -1787,6 +1803,11 @@ def chat(
         help="Tool preset for the session: chat | cowork | code (the web UI's "
              "modes). Default: the tools enabled in your config.",
     ),
+    max_rounds: int = typer.Option(
+        0, "--max-rounds", min=0,
+        help="Most model round trips one turn may take before it hands off "
+             "(/continue goes on). Default: [llm] max_rounds.",
+    ),
 ) -> None:
     """Start an interactive chat session with the local model."""
     from evi.modes import MODES, mode_tools
@@ -1797,6 +1818,8 @@ def chat(
     # Before the config is loaded, so a yes applies the project layer now.
     _project_trust_prompt()
     agent = _build_agent()
+    if max_rounds:
+        agent.round_cap_override = max_rounds
     if mode:
         # Same as `evi run --mode`: the preset replaces the tool list before the
         # first turn, so it is fixed for the whole session. mode_tools() reads

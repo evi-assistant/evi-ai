@@ -21,6 +21,7 @@ model           = "qwen2.5-7b-instruct"       # current active model
 temperature     = 0.7                         # lower (0.3) is friendlier to tool calling
 max_tokens      = 4096
 request_timeout = 120.0
+max_rounds      = 6                           # model round trips per chat turn; then a hand-off and /continue
 context_size    = 32768                       # token window; the managed llama.cpp runtime sets it itself
 compaction_model = ""                        # writes compaction summaries; empty = the chat model
 compact_keep_pct = 30                        # compaction keeps at most this % of the window verbatim (0 = no limit)
@@ -148,6 +149,19 @@ push with `run: true`) never runs code by category, even with `code` or
 `run_command` or a `monitor` command run there. See
 [Permissions & sandbox → Unattended
 runs](features/permissions-and-sandbox.md#unattended-runs).
+
+### The round cap — `max_rounds`
+
+One chat turn (`evi chat`, the web UI) takes at most `max_rounds` model
+round trips (6 unless you set it). The last one runs with no tools and asks
+the model for a hand-off: what is done, what isn't, and the next step. The
+turn then ends (`max_turns_reached`), and the REPL prints
+`stopped after N rounds … /continue goes on`; the web UI shows the same
+with a **Continue** button. `/continue` (or the button) starts a new turn
+that tells the model to pick up from its hand-off, with as many rounds
+again. `evi chat --max-rounds N` sets the cap for one session. A value that
+isn't a positive whole number means 6. `evi run` has its own cap,
+`--max-turns`.
 
 ### Unknown keys and how eVi saves `config.toml`
 

@@ -19,7 +19,7 @@ You'd use the web UI when you want a richer chat surface than the terminal (tabs
 
 `evi web` (or `python -m uvicorn evi.apps.web.server:app`) serves a single-page app from `evi/apps/web/static/`: `index.html` is the markup and styles, and `app.js` is all of the UI's code. Replies render as markdown with code highlighting and mermaid diagrams. The libraries for these ship with eVi under `static/vendor/`, so rendering works offline, and every reply goes through a sanitizer first, so model output can't run script or make the page load anything (see [Security → The web UI](../security.md#the-web-ui)). The browser POSTs to `/api/chat` with `{session_id, message}` and reads back an SSE stream of JSON event lines. Each `session_id` maps to one `WebSession` holding an `Agent`; sessions are revived from their on-disk transcript when first requested, so closing and reopening the app restores history.
 
-Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`, `/compact`, `/reload`, plus user commands from `~/.evi/commands/`) are dispatched **server-side** — the browser just types and reads; CLI and web behave identically.
+Slash commands (`/help`, `/reset`, `/tools`, `/model`, `/goal`, `/plan`, `/auto`, `/compact`, `/continue`, `/reload`, plus user commands from `~/.evi/commands/`) are dispatched **server-side** — the browser just types and reads; CLI and web behave identically.
 
 ### Notes and compaction in the chat
 

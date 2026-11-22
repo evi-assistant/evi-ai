@@ -911,6 +911,12 @@ def _malformed_call(err: BaseException) -> bool:
 
 # The note before a turn's last step, which runs with no tools: the hand-off
 # a run that is out of steps would otherwise end without.
+# Model round trips a chat turn may take when nothing says otherwise ([llm]
+# max_rounds, `evi chat --max-rounds`; Agent.round_cap).
+DEFAULT_ROUND_CAP = 6
+# What `/continue` sends after a turn the round cap ended.
+CONTINUE_PROMPT = ("Continue the task from where you stopped: the round cap ended the last "
+                   "turn, not the work. Pick up at the next step of your hand-off.")
 BUDGET_NOTE = ("This is your last step: the run's step budget is spent, and no tools are "
                "available now. Reply with a short hand-off: what is done, what is not done "
                "yet, and the next step.")
@@ -2384,10 +2390,23 @@ class Agent:
                 "content": self._compose_system_prompt(),
             }
 
+    def round_cap(self) -> int:
+        """How many model round trips a chat turn may take when its caller
+        names none: the session's `round_cap_override` (`evi chat
+        --max-rounds`), else [llm] max_rounds; a value that isn't a positive
+        whole number means DEFAULT_ROUND_CAP."""
+        value = getattr(self, "round_cap_override", None) or getattr(
+            getattr(self.config, "llm", None), "max_rounds", DEFAULT_ROUND_CAP)
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return DEFAULT_ROUND_CAP
+        return n if n >= 1 else DEFAULT_ROUND_CAP
+
     def chat(
         self,
         user_msg: str,
-        max_turns: int = 6,
+        max_turns: int | None = None,
         images: list[str] | None = None,
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
@@ -2398,8 +2417,10 @@ class Agent:
     ) -> Iterator[Event]:
         """Send a user message and yield events until the model is done.
 
-        Runs up to `max_turns` LLM round-trips so a runaway tool loop can't
-        spin forever. If a goal is set, prepends a reminder to the user
+        Runs up to `max_turns` LLM round-trips (default: `round_cap()`) so a
+        runaway tool loop can't spin forever; the last one has no tools and
+        asks for a hand-off, and the turn ends "max_turns_reached" (the
+        REPL's and the web UI's Continue, `/continue`, sends CONTINUE_PROMPT). If a goal is set, prepends a reminder to the user
         message. If plan-mode-once is set, tools are withheld for this turn
         and a planning suffix is appended to the user message.
 
@@ -2427,6 +2448,8 @@ class Agent:
         not at the first next(): a cancel sent in between still ends it.
         """
         self._begin_turn()
+        if max_turns is None:
+            max_turns = self.round_cap()
         return self._chat_turn(
             user_msg, max_turns, images, response_format, tool_choice, prediction,
             parallel_tool_calls, logit_bias, audio,
@@ -2649,14 +2672,14 @@ class Agent:
             except Exception:
                 return event in hooks_mod.VETO_EVENTS
 
-    def continue_chat(self, max_turns: int = 6) -> Iterator[Event]:
+    def continue_chat(self, max_turns: int | None = None) -> Iterator[Event]:
         """Resume inference against the current `history` without appending a
         new user message. Caller is responsible for setting history up — the
         typical use is re-roll: pop the last assistant message (and any
         intervening tool messages), then invoke this to regenerate. Like
         `chat`, the turn starts when this is called."""
         self._begin_turn()
-        return self._continue_turn(max_turns)
+        return self._continue_turn(self.round_cap() if max_turns is None else max_turns)
 
     def _continue_turn(self, max_turns: int) -> Iterator[Event]:
         """The events of the turn `continue_chat` started."""

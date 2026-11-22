@@ -27,6 +27,7 @@ The full set, from `evi chat` / `evi sessions resume`:
 | `/plan [task]` | Run the next turn in plan-only mode (no tools); optional inline task. |
 | `/auto [on\|off]` | Auto-approve every tool call for this session (no `on/off` = show state). |
 | `/compact` | Summarise older history into one note to free context. |
+| `/continue` | Go on after a turn the round cap ended (`[llm] max_rounds`): a new turn that picks up from the model's hand-off. |
 | `/context`, `/ctx` | Show where the context window is being spent (per-bucket breakdown). |
 | `/recent [n]` | List recent sessions (resume via `evi sessions resume`). |
 | `/image <path>` | Attach an image to the next turn (vision/VLM models). With Pillow installed it is turned upright, scaled to `[vision] max_px` on its longer side (1568; 0 = never) and sent without its EXIF data. |
@@ -55,7 +56,7 @@ The web chat understands a **subset** of the built-ins (the ones that make sense
 without a terminal), plus all your user/plugin commands:
 
 `/help` · `/reset` · `/tools` · `/model [id]` · `/goal [text|clear]` ·
-`/plan [task]` · `/auto [on|off]` · `/compact` · `/reload`
+`/plan [task]` · `/auto [on|off]` · `/compact` · `/continue` · `/reload`
 
 The remaining built-ins (`/context`, `/recent`, `/image`, `/effort`, `/fast`,
 `/json`, `/schema`, `/notools`, `/forcetool`, `/audio*`, `/speak`, `/predict`,
