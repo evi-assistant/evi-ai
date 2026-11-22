@@ -1380,7 +1380,10 @@ def _handle_review(agent: Agent, args: str, cmd_store: CommandStore) -> SlashRes
         "[dim]running parallel reviewers "
         "(correctness · security · performance · tests)…[/dim]"
     )
-    report = multi_review(diff)
+    from evi.review import secret_scan
+
+    scan = secret_scan(diff)
+    report = scan.report(multi_review(scan.diff, context=scan.context))
     console.print(Markdown(report))
     verdict = parse_verdict(report) or ("FAIL" if review_exit_code(report) else "PASS")
     console.print(f"[bold]verdict:[/bold] {verdict}")
@@ -2720,7 +2723,13 @@ def review(
         return
 
     # Repo-scoped review context (.evi/BUGBOT.md + learned rules) — Bugbot-style.
-    review_context = load_review_context()
+    # The model gets the diff with its secrets redacted; what the secret scan
+    # found leads the report and fails --exit-code (evi.review.secret_scan).
+    from evi.review import secret_scan
+
+    scan = secret_scan(diff, load_review_context())
+    review_context = scan.context
+    secrets = [{"path": f.path, "line": f.line, "kind": f.kind} for f in scan.findings]
 
     if multi:
         from evi.review import multi_review, parse_verdict, review_exit_code
@@ -2731,18 +2740,20 @@ def review(
                 "[dim]running parallel reviewers "
                 "(correctness · security · performance · tests)…[/dim]"
             )
-        review_text = multi_review(diff, tool_categories=cats, context=review_context)
+        review_text = scan.report(
+            multi_review(scan.diff, tool_categories=cats, context=review_context))
         if json_out:
             import json as _json
             console.print_json(_json.dumps({
                 "verdict": parse_verdict(review_text),
                 "exit_code": review_exit_code(review_text),
                 "review": review_text,
+                "secrets": secrets,
             }))
         else:
             console.print(Markdown(review_text))
         if fix and review_text.strip():
-            _apply_review_fixes(diff, review_text)
+            _apply_review_fixes(scan.diff, review_text)
         if exit_code:
             raise typer.Exit(review_exit_code(review_text))
         return
@@ -2793,8 +2804,10 @@ def review(
                 border_style="cyan",
             )
         )
+        if scan.findings:
+            console.print(Markdown(scan.section))
 
-    prompt = review_prompt(diff, context=review_context)
+    prompt = review_prompt(scan.diff, context=review_context)
     text_acc: list[str] = []
     for event in agent.chat(prompt):
         if isinstance(event, ThinkingDelta):
@@ -2829,7 +2842,7 @@ def review(
                     console.print(Markdown("".join(text_acc)))
             break
 
-    review_text = "".join(text_acc)
+    review_text = scan.report("".join(text_acc))
     if json_out:
         import json as _json
         from evi.review import parse_verdict, review_exit_code
@@ -2837,10 +2850,11 @@ def review(
             "verdict": parse_verdict(review_text),
             "exit_code": review_exit_code(review_text),
             "review": review_text,
+            "secrets": secrets,
         }))
 
     if fix and text_acc:
-        _apply_review_fixes(diff, review_text)
+        _apply_review_fixes(scan.diff, review_text)
 
     if exit_code:
         from evi.review import review_exit_code

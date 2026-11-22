@@ -6,6 +6,15 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **The verify gate and reviews scan for secrets.** When the checks run at
+  the end of a turn, a secret the turn added to a file (not one the file
+  already held) fails the round like a check named `secrets`, and the model
+  is told the file, line and kind, never the secret; it runs in untrusted
+  folders too, and `[checks] secrets = false` turns it off. `evi review`, the
+  REPL's `/review` and the task review gate scan the lines their diff adds:
+  the reviewers now read the diff with its secrets redacted, the report
+  starts with a `## Secret scan` section, and a finding fails `--exit-code`
+  whatever the verdict (`--json` lists them as `secrets`).
 - **Approval prompts show each command a shell line runs.** The CLI's
   prompts (one call and a batch), the web UI's card and the VS Code panel
   show the whole command line, never cut short at 200 characters, and list

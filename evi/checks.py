@@ -160,6 +160,7 @@ class Settings:
     tail_lines: int = DEFAULT_TAIL_LINES
     detect: bool = True
     commands: tuple[Any, ...] = ()
+    secrets: bool = True
 
 
 def _positive(value: Any, default: float, cast: type = int) -> Any:
@@ -183,6 +184,7 @@ def settings(config: Any) -> Settings:
         tail_lines=_positive(getattr(cs, "tail_lines", DEFAULT_TAIL_LINES), DEFAULT_TAIL_LINES),
         detect=getattr(cs, "detect", True) is not False,
         commands=tuple(commands) if isinstance(commands, (list, tuple)) else (),
+        secrets=getattr(cs, "secrets", True) is not False,
     )
 
 
@@ -721,6 +723,24 @@ def run_check(
     if empty:
         tail = tail_text(f"{tail}\n{empty_note(empty)}", tail_lines)
     return CheckRun(check, res.returncode, elapsed(), tail, round, empty=empty)
+
+
+# The secret scan's place in a round: no command runs (evi.secretscan.added).
+SECRETS = Check(name="secrets", argv=("evi", "secrets", "scan"), kind="lint", source="evi")
+
+
+def secrets_run(findings: Sequence[Any], round: int, duration_ms: int = 0) -> CheckRun:
+    """The secret scan's record for a round: exit 1 and each finding as
+    `path:line: kind` (never the secret), or exit 0 when there is none."""
+    if not findings:
+        return CheckRun(SECRETS, 0, duration_ms, "no secrets found", round)
+    lines = [f"{f.path}:{f.line}: {f.kind}" for f in findings]
+    lines.append(
+        "These files now hold a secret this turn added (a token, a key, or a value this "
+        "machine keeps secret). Take each one out: read it from an environment variable "
+        "or a file the user keeps out of git, and use a placeholder in examples and tests. "
+        "Never print the secret, and don't move it to another file.")
+    return CheckRun(SECRETS, 1, duration_ms, "\n".join(lines), round)
 
 
 def refused(check: Check, reason: str, round: int = 1) -> CheckRun:

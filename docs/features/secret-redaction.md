@@ -97,9 +97,27 @@ means some were, and 2 means the scan couldn't run (no git repository, a ref
 git doesn't know, or paths given with `--diff`). Files over a size limit and
 binary files are skipped.
 
+eVi runs the same scan itself in three places:
+
+- **Before a commit or push**: a `git commit`, `git push` or `gh pr create`
+  whose change holds a secret asks first
+  ([Commits and pushes that hold a secret](permissions-and-sandbox.md#commits-and-pushes-that-hold-a-secret)).
+- **In the verify gate**: when the checks run at the end of a turn, a secret
+  the turn added to a file fails the round, and the model is told where and
+  what kind ([`[checks] secrets`](../configuration.md#verify-before-done--checks-in-configtoml)).
+- **In a review**: `evi review` (one pass and `--multi`), the REPL's
+  `/review` and the task review gate scan the lines their diff adds. The
+  reviewers read the diff with every secret redacted, the report starts
+  with a `## Secret scan` section listing each finding as `BLOCKING`, and a
+  finding fails `--exit-code` (and the task's review gate) whatever the
+  reviewers' verdict. `evi review --json` lists them as `secrets`:
+  `[{path, line, kind}]`.
+
 ## Relevant source files
 
-- `evi/secretscan.py`: `evi secrets scan` (files, the work tree, a diff)
+- `evi/secretscan.py`: `evi secrets scan` (files, the work tree, a diff), and
+  what a turn added (`added`, `baseline`)
+- `evi/review.py`: the review's scan and redaction (`secret_scan`)
 - `evi/redact.py`: the token formats, the known-value set, `Redactor` (and its
   `args` / `tool_calls` for tool-call arguments)
 - `evi/transcripts.py`, `evi/reporting.py`: transcripts and crash reports

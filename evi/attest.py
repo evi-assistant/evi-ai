@@ -264,11 +264,14 @@ def review_gate(
     diff = review.get_diff(branch=base, cwd=cwd)
     if not diff.strip():
         return ReviewResult(0, base, "(no changes to review)")
-    context = review.load_review_context(Path(cwd) if cwd else None)
+    # The reviewers get the diff with its secrets redacted; what the secret
+    # scan found leads the report and fails the gate (evi.review.secret_scan).
+    scan = review.secret_scan(diff, review.load_review_context(Path(cwd) if cwd else None))
     if reviewer is not None:
-        report = reviewer(diff, context=context)
+        report = reviewer(scan.diff, context=scan.context)
     else:  # the reviewers read the tree the diff is of, not the session's folder
-        report = review.multi_review(diff, context=context, cwd=cwd)
+        report = review.multi_review(scan.diff, context=scan.context, cwd=cwd)
+    report = scan.report(report)
     return ReviewResult(review.review_exit_code(report), base, report)
 
 

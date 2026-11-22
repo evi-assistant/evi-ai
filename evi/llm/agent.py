@@ -959,11 +959,15 @@ class _TurnVerify:
     top); `written` the absolute paths the turn's write tools wrote, in
     order; `tracker` a ChangeTracker when checks are on (it catches what a
     command changed); `passed` the `evi.checks.fingerprint` of the changes
-    the last passing round checked (None before one)."""
+    the last passing round checked (None before one). `secrets_base`: the
+    secret lines of the files dirty at the start (evi.secretscan.baseline),
+    None when the secret scan is off; `secrets_failed`: a round found one."""
 
     root: Path
     checks: bool = False
     tracker: Any = None
+    secrets_base: Any = None
+    secrets_failed: bool = False
     written: list[str] = field(default_factory=list)
     iteration: int = 0
     blocks: int = 0
@@ -3772,7 +3776,45 @@ class Agent:
             state.tracker = ChangeTracker.start(root, exclude=(
                 _config.HOME, getattr(getattr(self, "transcripts", None), "root", None),
             ))
+            state.secrets_base = self._secrets_baseline(state)
         return state
+
+    def _secrets_baseline(self, state: _TurnVerify) -> dict | None:
+        """What the files dirty at the turn's start hold of secrets, so the
+        gate's scan flags only what the turn added (evi.secretscan.baseline).
+        None when [checks] secrets is off; {} outside git (no file is known)."""
+        from evi import checks, secretscan
+
+        try:
+            if not checks.settings(self.config).secrets:
+                return None
+            tracker = state.tracker
+            top = getattr(tracker, "top", None)
+            before = getattr(tracker, "before", None)
+            if top is None or not before:
+                return {}
+            root = Path(state.root)
+            dirty = []
+            for rel in before:
+                p = Path(top) / rel
+                if p.is_relative_to(root):
+                    dirty.append(p.relative_to(root).as_posix())
+            return secretscan.baseline(root, dirty)
+        except Exception:  # noqa: BLE001 — the scan then knows no file from before
+            return {}
+
+    def _turn_secrets(self, state: _TurnVerify, changed: list[str]) -> list:
+        """The secrets the turn's changes added ([checks] secrets), [] when
+        the scan is off or could not run."""
+        from evi import secretscan
+
+        if state.secrets_base is None:
+            return []
+        head = getattr(state.tracker, "head", None)
+        try:
+            return secretscan.added(state.root, changed, base=state.secrets_base, head=head)
+        except Exception:  # noqa: BLE001
+            return []
 
     def _record_write(self, state: _TurnVerify, tool: Tool | None, args_json: str,
                       output: str) -> None:
@@ -3891,19 +3933,22 @@ class Agent:
         if not changed:
             return None
         cfg = checks.settings(self.config)
-        if not self._folder_trusted(state.root):
-            if not state.skip_noted:
-                state.skip_noted = True
-                yield ChecksSkipped(
-                    f"{state.root} is not a trusted folder (`evi trust`), so no check ran: "
-                    "a check runs the folder's own code"
-                )
-            return None
+        # The secret scan runs no code, so it runs in any folder.
+        trusted = self._folder_trusted(state.root)
+        if not trusted and not state.skip_noted:
+            state.skip_noted = True
+            yield ChecksSkipped(
+                f"{state.root} is not a trusted folder (`evi trust`), so no check ran: "
+                "a check runs the folder's own code"
+            )
         snapshot = checks.fingerprint(state.root, changed)
         if state.passed is not None and snapshot == state.passed:
             return None
-        found = checks.detect(state.root, self.config, True, changed)
-        if not found:
+        started = time.monotonic()
+        secrets = self._turn_secrets(state, changed)
+        scan_ms = int((time.monotonic() - started) * 1000)
+        found = checks.detect(state.root, self.config, True, changed) if trusted else []
+        if not found and not secrets and not state.secrets_failed:
             return None
         round_no = state.rounds_run + 1
         state.rounds_run = round_no
@@ -3916,6 +3961,15 @@ class Agent:
             found = [dataclasses.replace(c, expect_tests=checks.expected_tests(c.argv, scope))
                      for c in found]
         runs = []
+        if secrets or state.secrets_failed:
+            # Shown when it finds one, and in each round after, so the
+            # report says when the secret was gone.
+            run = checks.secrets_run(secrets, round_no, scan_ms)
+            state.secrets_failed = state.secrets_failed or bool(secrets)
+            runs.append(run)
+            yield CheckResult(name=run.check.name, cmd=run.check.cmd, exit=run.exit,
+                              duration_ms=run.duration_ms, tail=run.tail, round=round_no,
+                              source=run.check.source)
         for check in found:
             if self._cancelled():
                 return INTERRUPTED_REASON

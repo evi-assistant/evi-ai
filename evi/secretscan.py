@@ -136,27 +136,32 @@ def _header_path(name: str) -> str:
     return name[2:] if name.startswith("b/") else name
 
 
-def _scan_patch(patch: str) -> list[Finding]:
+def scan_patch(patch: str) -> list[Finding]:
     """The secrets on the lines a patch (``git diff`` / ``git log -p`` with
     `_PATCH_FLAGS`) adds, each on its line in the new file. A hunk's lines
     are counted from its ``@@ -a,b +c,d @@`` header, so an added line that
-    reads like a header (``+++ x``) is still content."""
+    reads like a header (``+++ x``) is still content; context lines (a
+    patch made with them) count toward the line numbers."""
     out: list[Finding] = []
-    path, first = "", 0
+    path, line_no = "", 0
     old_left = new_left = 0
     added: list[str] = []
+    numbers: list[int] = []  # each added line's number in the new file
 
     def flush() -> None:
         if added:
             shown = path or "(unknown file)"
             for f in scan_text("\n".join(added), shown):
-                out.append(Finding(shown, first + f.line - 1, f.kind))
+                out.append(Finding(shown, numbers[f.line - 1], f.kind))
             added.clear()
+            numbers.clear()
 
     for raw in patch.splitlines():
         if old_left > 0 or new_left > 0:
             if raw.startswith("+"):
                 added.append(raw[1:])
+                numbers.append(line_no)
+                line_no += 1
                 new_left -= 1
                 continue
             if raw.startswith("-"):
@@ -164,6 +169,7 @@ def _scan_patch(patch: str) -> list[Finding]:
                 continue
             if raw.startswith(" "):
                 old_left, new_left = old_left - 1, new_left - 1
+                line_no += 1
                 continue
             if raw.startswith("\\"):
                 continue
@@ -182,7 +188,7 @@ def _scan_patch(patch: str) -> list[Finding]:
                 n = new.lstrip("+").split(",")
                 old_left = int(o[1]) if len(o) > 1 else 1
                 new_left = int(n[1]) if len(n) > 1 else 1
-                first = int(n[0])
+                line_no = int(n[0])
             except (IndexError, ValueError):
                 old_left = new_left = 0
     flush()
@@ -196,7 +202,7 @@ def scan_diff(repo: str | Path = ".", base: str = "HEAD", head: str | None = Non
     from evi.gitsafe import validate_ref
 
     revs = [validate_ref(base)] + ([validate_ref(head)] if head else [])
-    return _scan_patch(_git([*_QUOTE_PATH, "diff", *_PATCH_FLAGS, *revs, "--"], Path(repo)))
+    return scan_patch(_git([*_QUOTE_PATH, "diff", *_PATCH_FLAGS, *revs, "--"], Path(repo)))
 
 
 def _try_git(args: list[str], root: Path) -> str | None:
@@ -228,7 +234,7 @@ def scan_outgoing(repo: str | Path, *, commit: bool, push: bool, adds: bool = Fa
     out: list[Finding] = []
 
     def patch(*args: str) -> list[Finding]:
-        return _scan_patch(_git([*_QUOTE_PATH, *args], top))
+        return scan_patch(_git([*_QUOTE_PATH, *args], top))
 
     if commit:
         out += patch("diff", *_PATCH_FLAGS, "--cached", base, "--")
@@ -245,3 +251,80 @@ def scan_outgoing(repo: str | Path, *, commit: bool, push: bool, adds: bool = Fa
         elif count:
             out += patch("log", "-p", "-m", "--format=", *_PATCH_FLAGS, *revs, "--")
     return sorted(set(out), key=lambda f: (f.path, f.line, f.kind))
+
+
+# --- what a turn added (the verify gate) -------------------------------------
+
+# A turn's baseline reads at most this many files that were dirty when it
+# started; one past it is never flagged (it can't be told from before).
+MAX_BASELINE_FILES = 500
+
+
+def secret_lines(text: str) -> frozenset[tuple[str, str]]:
+    """Each (kind, line) of `text` a secret is on, the line stripped: what a
+    file held before, to tell the secrets a change added from those it kept
+    (wherever the line moved to)."""
+    lines = text.splitlines()
+    return frozenset((f.kind, lines[f.line - 1].strip() if f.line <= len(lines) else "")
+                     for f in scan_text(text))
+
+
+def baseline(root: str | Path, dirty: Iterable[str]) -> dict[str, frozenset | None]:
+    """The secret lines of the files `dirty` (relative to `root`, with ``/``)
+    as they are now, before a turn changes them: {path: secret_lines}, None
+    for one past MAX_BASELINE_FILES (never flagged). A file that is missing,
+    binary or too big has no secret lines."""
+    out: dict[str, frozenset | None] = {}
+    for n, rel in enumerate(dirty):
+        if n >= MAX_BASELINE_FILES:
+            out[rel] = None
+            continue
+        text = _readable(Path(root) / rel)
+        out[rel] = secret_lines(text) if text is not None else frozenset()
+    return out
+
+
+def _committed(root: Path, head: str, rel: str) -> str | None:
+    """`rel`'s text in commit `head` (None: not in it, or git failed)."""
+    from evi import gitsafe
+
+    try:
+        proc = gitsafe.run_git(["show", f"{head}:./{rel}"], cwd=root, timeout=60)
+    except Exception:  # noqa: BLE001 — no git, a timeout: nothing known of before
+        return None
+    if proc.returncode != 0 or "\0" in (proc.stdout or "")[:8192]:
+        return None
+    return proc.stdout
+
+
+def added(root: str | Path, changed: Iterable[str], *,
+          base: dict[str, frozenset | None] | None = None,
+          head: str | None = None) -> list[Finding]:
+    """The secrets the files `changed` (relative to `root`, with ``/``) hold
+    now that they did not hold before: a secret on a line that was there
+    before (same kind, same stripped text, wherever it moved) is not the
+    change's. Before is `base` for a file in it (one dirty at the start, see
+    `baseline`), else what commit `head` holds of it, else nothing (a new
+    file, or no git: the whole file counts)."""
+    root = Path(root)
+    out: list[Finding] = []
+    for rel in changed:
+        text = _readable(root / rel)
+        if text is None:
+            continue
+        now = scan_text(text, rel)
+        if not now:
+            continue
+        if base is not None and rel in base:
+            known = base[rel]
+            if known is None:
+                continue
+        else:
+            old = _committed(root, head, rel) if head else None
+            known = secret_lines(old) if old is not None else frozenset()
+        lines = text.splitlines()
+        for f in now:
+            line = lines[f.line - 1].strip() if f.line <= len(lines) else ""
+            if (f.kind, line) not in known:
+                out.append(f)
+    return out

@@ -796,6 +796,7 @@ timeout    = 300      # seconds per check command
 tail_lines = 40       # lines of each check's output kept (and shown to the model)
 detect     = true     # false: run only the commands below
 commands   = []       # your own checks: command lines ("make lint") or argv arrays
+secrets    = true     # false: no secret scan of what the turn added
 ```
 
 **When they run** (`verify`):
@@ -843,6 +844,20 @@ process tree at `timeout` or when you stop the turn, with no `*_KEY`,
 `*_TOKEN` or `*_SECRET` variables in its environment and no Python bytecode
 written. Their output is [redacted](features/secret-redaction.md) and cut to
 the last `tail_lines` lines.
+
+**The secret scan** (`secrets`) runs with the checks, in any folder, trusted
+or not, since it runs no code: the files the turn changed are scanned for a
+token, a key or a secret this machine holds (what [`evi secrets
+scan`](features/secret-redaction.md#scanning-for-secrets-evi-secrets-scan)
+finds), and one the turn added fails the round like a check named `secrets`
+(`cmd` `evi secrets scan`, exit 1), each finding listed as `path:line: kind`,
+never the secret. A secret the file already held does not count: one on a
+line that was in the committed file, or in the file as it was when the turn
+started if it had uncommitted changes then (the same kind on the same line
+text, wherever the line moved). A new file counts whole, and so does every
+changed file outside a git work tree, where nothing is known of before. In
+a round after one that found a secret the scan is listed again, so the
+report shows when it was gone.
 
 **Rounds.** If a check fails, eVi sends the model a framed note with each
 failing command, its exit code and the end of its output, and the turn goes

@@ -623,13 +623,16 @@ class CheckSettings:
     of a check's output is kept. `detect` = false runs only `commands`: your
     own command lines (or argv arrays), run whenever files changed. A
     project's .evi.toml [checks] commands count only in a trusted folder, and
-    no check runs at all in an untrusted one."""
+    no check runs at all in an untrusted one. `secrets`: the secret scan
+    (evi.secretscan.added) of what the turn added runs with them, in any
+    folder (it runs no code); a secret it finds fails the round like a check."""
 
     verify: str = "auto"  # auto | always | off
     max_rounds: int = 2
     timeout: int = 300
     tail_lines: int = 40
     detect: bool = True
+    secrets: bool = True
     commands: list[str] = field(default_factory=list)
 
 

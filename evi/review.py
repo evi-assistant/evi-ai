@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from evi import gitsafe
@@ -202,6 +203,72 @@ def _lens_blocks(body: str) -> bool:
     return bool(_FILE_LINE_RE.search(body))
 
 
+# --- the secret scan (evi.secretscan) ----------------------------------------
+# Every review scans the lines its diff adds. The model gets the diff with the
+# secrets redacted, the report starts with what the scan found, and a finding
+# fails the gate whatever the reviewers say.
+
+SECRETS_HEADING = "## Secret scan"
+SECRETS_CONTEXT = (
+    "eVi redacted the secrets in this diff (shown as [REDACTED:<kind>]) and reports "
+    "them itself: don't report a redaction marker as a finding."
+)
+
+
+@dataclass(frozen=True)
+class SecretScan:
+    """What a review sends and reports of its diff's secrets (`secret_scan`)."""
+
+    diff: str  # the diff with every secret redacted: what the model reads
+    findings: tuple = ()  # evi.secretscan.Finding, on the lines the diff adds
+    context: str = ""  # the review context, with SECRETS_CONTEXT when there are findings
+
+    @property
+    def section(self) -> str:
+        return secrets_section(self.findings)
+
+    def report(self, text: str) -> str:
+        """The review's report with the secret scan's section first."""
+        return f"{self.section}\n\n{text}" if self.findings else text
+
+
+def secret_scan(diff: str, context: str = "") -> SecretScan:
+    """Scan the lines `diff` adds for secrets, and redact them all (the
+    added ones and any on a removed or context line) for the model."""
+    from evi import secretscan
+    from evi.redact import redact
+
+    try:
+        found = tuple(secretscan.scan_patch(diff))
+    except Exception:  # noqa: BLE001 — the review still runs, on the redacted diff
+        found = ()
+    shown = redact(diff)
+    note = (f"{context.strip()}\n\n{SECRETS_CONTEXT}".strip()
+            if found or shown != diff else context)
+    return SecretScan(shown, found, note)
+
+
+def secrets_section(findings) -> str:
+    """The report's section for the secret scan's findings, each a
+    ``BLOCKING:`` line (path:line: kind, never the secret); "" for none."""
+    if not findings:
+        return ""
+    lines = [SECRETS_HEADING, ""]
+    lines += [f"- BLOCKING: {f.path}:{f.line}: {f.kind}: a secret this diff adds. Take it out "
+              "(read it from the environment or a file kept out of git) and rotate it if it "
+              "was pushed." for f in findings]
+    return "\n".join(lines)
+
+
+def _secrets_block(text: str) -> bool:
+    """`text` holds the secret scan's section with a finding in it."""
+    i = text.find(SECRETS_HEADING + "\n")
+    if i < 0 or (i and text[i - 1] != "\n"):
+        return False
+    body = re.split(r"(?m)^## .*$", text[i + len(SECRETS_HEADING):], maxsplit=1)[0]
+    return bool(_BLOCKING_RE.search(body))
+
+
 def review_exit_code(text: str) -> int:
     """Map a review report to a process exit code for CI gating (`--exit-code`).
 
@@ -210,7 +277,10 @@ def review_exit_code(text: str) -> int:
     (`_lens_blocks`): a ``BLOCKING:`` finding, a lens that failed, or an
     unmarked ``file:line``; ``SUGGESTION:`` findings alone pass. Anything
     else without a verdict gates on a ``file:line`` reference. Mirrors
-    `/ultrareview` used as a gate."""
+    `/ultrareview` used as a gate. The secret scan's section (`secret_scan`)
+    with a finding in it blocks first, whatever the verdict."""
+    if _secrets_block(text):
+        return 1
     v = parse_verdict(text)
     if v == "APPROVE":
         return 0
