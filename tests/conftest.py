@@ -74,6 +74,22 @@ def _restore_evi_agent():
 
 
 @pytest.fixture(autouse=True)
+def _summaries_accepted(request, monkeypatch):
+    """Tests stub a compaction summary with a word or two ("SUMMARY"), which
+    evi.summary_check would turn down as too short. Its checks run only in a
+    test that asks for the `summary_checks` fixture."""
+    if "summary_checks" in request.fixturenames:
+        return
+    monkeypatch.setattr("evi.summary_check.problem", lambda *_a, **_k: "")
+
+
+@pytest.fixture
+def summary_checks():
+    """Run evi.summary_check's reply checks in this test (see _summaries_accepted)."""
+    return None
+
+
+@pytest.fixture(autouse=True)
 def _isolate_session_contextvars(monkeypatch):
     from evi import hooks, skillscope, workdir
 

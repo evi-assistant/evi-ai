@@ -56,6 +56,7 @@ if TYPE_CHECKING:
 from evi import hooks as hooks_mod
 from evi import otel
 from evi import skillscope
+from evi import summary_check
 from evi import workdir
 from evi.memory import MemoryStore
 from evi.project import ProjectContext
@@ -579,8 +580,10 @@ def _summary_prompt(rendered: str, previous: str = "", focus: str = "") -> str:
         "Summarise the conversation below so the assistant can carry on from the "
         "summary alone. Use exactly these headings, with a few short lines under each "
         "('none' when there is nothing), and keep concrete facts: file paths, "
-        "commands, names, numbers and decisions. Do not invent details. Aim for "
-        "under 400 words.\n\n" + headings,
+        "commands, names, numbers and decisions. Do not invent details. Write "
+        "UNVERIFIED: before a claim that something works, passes or is fixed when no "
+        "tool result in the conversation shows it. Aim for under 400 words.\n\n"
+        + headings,
     ]
     if previous:
         parts.append("The conversation before this part was already summarised. Update "
@@ -1729,10 +1732,16 @@ class Agent:
         # its start is updated rather than summarised again, and so is each
         # chunk's summary by the next chunk.
         summary, fresh = previous_summary(middle)
+        earlier = summary
         for chunk in pack_blocks(_summary_blocks(fresh), self._summary_chunk_chars()) or [""]:
-            summary = self._summarise(_summary_prompt(chunk, summary, focus.strip()))
+            summary = self._checked_summary(_summary_prompt(chunk, summary, focus.strip()), chunk)
             if not summary:
                 return 0
+        # A claim that a check passed, with no command output in the stretch
+        # to show it, is marked (evi.summary_check); the earlier summary's
+        # lines were judged when it was made.
+        summary = summary_check.mark_unverified(
+            summary, summary_check.has_evidence(fresh), earlier.splitlines())
 
         notes = compaction_messages(
             summary, len(middle), next_role=tail[0].get("role") if tail else None
@@ -1763,6 +1772,22 @@ class Agent:
         if ceiling <= 0:
             return 0
         return max(1024, ceiling - SUMMARY_OVERHEAD_TOKENS) * 4
+
+    def _checked_summary(self, prompt: str, source: str) -> str:
+        """A summary of `source` that `evi.summary_check.problem` accepts: the
+        reply to `prompt`, else to it asked once more with what was wrong;
+        "" when neither is (the history is then left as it was)."""
+        reply = self._summarise(prompt)
+        why = summary_check.problem(reply, source, SUMMARY_SECTIONS)
+        if not why:
+            return reply
+        dlog("compaction.summary_rejected", {"why": why, "retry": True})
+        reply = self._summarise(f"{summary_check.retry_note(why, SUMMARY_SECTIONS)}\n\n{prompt}")
+        again = summary_check.problem(reply, source, SUMMARY_SECTIONS)
+        if again:
+            dlog("compaction.summary_rejected", {"why": again, "retry": False})
+            return ""
+        return reply
 
     def _summarise(self, prompt: str) -> str:
         """One compaction summary request; "" when it fails or comes back

@@ -6,6 +6,13 @@ All notable user-visible changes to eVi. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Compaction checks its summary.** A summary reply that is empty, a
+  refusal, missing most of its headings or too short is asked for once
+  more (saying what was wrong), and if that fails too the history is kept
+  as it was. A summary line that claims tests, a build or lint pass is
+  marked `UNVERIFIED:` unless a command's output in the summarised stretch
+  shows it, and the summary request asks the model to mark its own
+  unshown claims the same way.
 - **A round cap for chat, with Continue.** `[llm] max_rounds` (6, as
   before) sets how many model round trips one chat turn may take, and
   `evi chat --max-rounds N` sets it for a session. When a turn uses them
